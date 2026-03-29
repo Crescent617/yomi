@@ -1,7 +1,7 @@
 use crate::event::ContentChunk;
+use crate::types::{Message, ToolDefinition};
 use anyhow::Result;
 use async_trait::async_trait;
-use nekoclaw_shared::types::{Message, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
@@ -25,6 +25,22 @@ pub struct ToolCallRequest {
     pub arguments: serde_json::Value,
 }
 
+/// Thinking configuration for supported models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    pub enabled: bool,
+    pub budget_tokens: u32,
+}
+
+impl Default for ThinkingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            budget_tokens: 1024,
+        }
+    }
+}
+
 /// Model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
@@ -35,6 +51,7 @@ pub struct ModelConfig {
     pub temperature: Option<f32>,
     pub fallback_model_id: Option<String>,
     pub sse_timeout_secs: u64,
+    pub thinking: ThinkingConfig,
 }
 
 impl Default for ModelConfig {
@@ -47,6 +64,7 @@ impl Default for ModelConfig {
             temperature: None,
             fallback_model_id: None,
             sse_timeout_secs: 30,
+            thinking: ThinkingConfig::default(),
         }
     }
 }
@@ -76,7 +94,7 @@ pub struct RetryingProvider<P: ModelProvider> {
 }
 
 impl<P: ModelProvider> RetryingProvider<P> {
-    pub fn new(inner: P) -> Self {
+    pub const fn new(inner: P) -> Self {
         Self {
             inner,
             max_retries: 3,
@@ -84,7 +102,7 @@ impl<P: ModelProvider> RetryingProvider<P> {
         }
     }
 
-    pub fn with_retries(mut self, max_retries: u32) -> Self {
+    pub const fn with_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
         self
     }

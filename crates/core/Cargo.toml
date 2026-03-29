@@ -5,9 +5,13 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-[dependencies]
-nekoclaw-shared = { workspace = true }
+[features]
+default = ["providers", "storage", "tools"]
+providers = ["dep:reqwest", "dep:eventsource-stream"]
+storage = ["dep:sqlx"]
+tools = []
 
+[dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,7 +21,13 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
 futures = { workspace = true, features = ["std"] }
+
+# Optional dependencies for features
+reqwest = { workspace = true, optional = true }
+eventsource-stream = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -1,6 +1,7 @@
+use crate::config::DEFAULT_DATA_DIR;
+use crate::types::{Message, SessionRecord, SessionId};
 use anyhow::Result;
 use async_trait::async_trait;
-use nekoclaw_shared::types::{Message, SessionRecord, SessionId};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -29,6 +30,12 @@ pub trait Storage: Send + Sync {
     ) -> Result<Option<String>>;
 }
 
+pub mod fs;
+pub mod sqlite;
+
+pub use fs::FsStorage;
+pub use sqlite::SqliteStorage;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub url: String,
@@ -38,7 +45,7 @@ pub struct StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            url: "~/.nekoclaw/sessions.db".to_string(),
+            url: format!("{DEFAULT_DATA_DIR}/sessions.db"),
             compaction_threshold: 100,
         }
     }

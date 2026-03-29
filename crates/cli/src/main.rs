@@ -1,16 +1,17 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use nekoclaw_adapters::{BashTool, FileTool, OpenAIProvider, SqliteStorage};
 use nekoclaw_app::{Coordinator, SessionConfig};
 use nekoclaw_core::{
     agent::AgentConfig,
-    bus::EventBus,
-    storage::StorageConfig,
-    tool::{ToolRegistry, ToolSandbox, enable_yolo_mode},
+    config::{env_names, Config, ModelProvider, DEFAULT_DATA_DIR},
+    storage::FsStorage,
+    tool::{enable_yolo_mode, ToolRegistry, ToolSandbox},
 };
+use nekoclaw_core::{AnthropicProvider, BashTool, FileTool, OpenAIProvider};
 use nekoclaw_tui::App;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
 #[command(name = "nekoclaw")]
@@ -18,23 +19,41 @@ use std::sync::Arc;
 struct Args {
     #[arg(short, long)]
     directory: Option<PathBuf>,
+
+    /// Provider to use (openai, anthropic)
+    #[arg(short, long)]
+    provider: Option<String>,
+
+    /// Model ID (e.g., gpt-4, claude-3-5-sonnet-20241022)
     #[arg(short, long)]
     model: Option<String>,
+
+    /// API endpoint URL
     #[arg(long)]
     endpoint: Option<String>,
+
+    /// API key (or set env var)
     #[arg(long)]
     api_key: Option<String>,
+
+    /// Enable sandbox mode for tools
     #[arg(long)]
     sandbox: bool,
+
+    /// Skip all confirmations (YOLO mode)
     #[arg(long)]
     yolo: bool,
+
+    /// Config file path (not yet implemented)
     #[arg(short, long)]
     config: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    // Initialize logging with file output and env filter
+    init_logging()?;
+
     let args = Args::parse();
 
     if args.yolo {
@@ -42,54 +61,88 @@ async fn main() -> Result<()> {
         tracing::warn!("YOLO mode enabled - all confirmations skipped!");
     }
 
-    let working_dir = args.directory
+    let working_dir = args
+        .directory
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let working_dir = working_dir.canonicalize()?;
 
-    let mut agent_config = AgentConfig::default();
+    // Load configuration from environment variables
+    let mut config = Config::from_env();
+
+    // Set platform-specific data directory if not overridden by env
+    if std::env::var(env_names::DATA_DIR).is_err() {
+        let data_dir = directories::ProjectDirs::from("ai", "nekoclaw", "nekoclaw")
+            .map(|d| d.data_dir().to_path_buf());
+        config = config.with_data_dir(data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR)));
+    }
+
+    // CLI arguments override environment variables
+    if let Some(provider_str) = args.provider {
+        if let Ok(provider) = provider_str.parse::<ModelProvider>() {
+            config.provider = provider;
+            // Reload provider-specific settings after changing provider
+            config = reload_for_provider(config);
+        }
+    }
+
     if let Some(model) = args.model {
-        agent_config.model.model_id = model;
+        config.model.model_id = model;
     }
+
     if let Some(endpoint) = args.endpoint {
-        agent_config.model.endpoint = endpoint;
+        config.model.endpoint = endpoint;
     }
+
     if let Some(api_key) = args.api_key {
-        agent_config.model.api_key = api_key;
-    } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        agent_config.model.api_key = key;
+        config.model.api_key = api_key;
     }
 
-    let data_dir = directories::ProjectDirs::from("ai", "nekoclaw", "nekoclaw")
-        .map(|d| d.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("~/.nekoclaw"));
-    tokio::fs::create_dir_all(&data_dir).await?;
+    if args.sandbox {
+        config.sandbox = true;
+    }
 
-    let storage_config = StorageConfig {
-        url: data_dir.join("sessions.db").to_string_lossy().to_string(),
-        compaction_threshold: 100,
+    // Create data directory
+    tokio::fs::create_dir_all(&config.data_dir).await?;
+
+    // Validate API key
+    if !config.has_api_key() {
+        eprintln!("Error: API key not configured.");
+        eprintln!(
+            "Set {} or {}_API_KEY environment variable.",
+            env_names::API_KEY,
+            env_names::OPENAI_PREFIX,
+        );
+        std::process::exit(1);
+    }
+
+    // Create storage
+    let storage = Arc::new(FsStorage::new(config.data_dir.clone())?);
+
+    // Create provider based on configuration
+    let provider: Arc<dyn nekoclaw_core::provider::ModelProvider> = match config.provider {
+        ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
+        ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
-    let storage = Arc::new(SqliteStorage::new(&storage_config).await?);
-    let provider = Arc::new(OpenAIProvider::new()?);
 
+    // Create tool registry
     let mut tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(BashTool::new(&working_dir)));
     tool_registry.register(Arc::new(FileTool::new(&working_dir)));
 
-    let sandbox = if args.sandbox {
+    // Create sandbox
+    let sandbox = if config.sandbox {
         ToolSandbox::new().enable()
     } else {
         ToolSandbox::default()
     };
 
-    let event_bus = EventBus::new(1000);
-
-    let coordinator = Coordinator::new(
-        event_bus.clone(),
-        storage,
-        provider,
-        tool_registry,
-        sandbox,
+    let coordinator = Arc::new(
+        Coordinator::new(storage, provider, tool_registry, sandbox)
     );
+
+    // Build agent config
+    let mut agent_config = AgentConfig::default();
+    agent_config.model = config.model.clone();
 
     let session_config = SessionConfig {
         agent: agent_config,
@@ -99,26 +152,138 @@ async fn main() -> Result<()> {
 
     println!("Nekoclaw session started: {}", session_id.0);
     println!("Working directory: {}", working_dir.display());
+    println!("Provider: {}", config.provider);
+    println!("Model: {}", config.model.model_id);
+    println!("Endpoint: {}", config.model.endpoint);
+    let key_preview = if config.api_key().len() > 8 {
+        format!("{}...", &config.api_key()[..8])
+    } else {
+        "not set".to_string()
+    };
+    println!("API Key: {key_preview}");
     println!("Starting TUI...\n");
 
     // Create channel for input forwarding
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
 
     // Spawn task to forward input to coordinator
-    let coord_for_input = Arc::new(coordinator);
+    let coord_for_input = coordinator.clone();
     let session_id_for_input = session_id.clone();
     tokio::spawn(async move {
         while let Some(content) = input_rx.recv().await {
-            if let Err(e) = coord_for_input.send_message(&session_id_for_input, content).await {
+            if let Err(e) = coord_for_input
+                .send_message(&session_id_for_input, content)
+                .await
+            {
                 tracing::error!("Failed to send message: {}", e);
             }
         }
     });
 
+    // Get event receiver from coordinator for the session
+    let event_rx = coordinator.take_session_event_receiver(&session_id).await
+        .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
+
     // Run TUI
-    let mut app = App::new(&event_bus, input_tx);
+    let mut app = App::new(event_rx, input_tx)?;
     app.run().await?;
 
     println!("Goodbye!");
+    Ok(())
+}
+
+/// Reload provider-specific settings after provider change
+fn reload_for_provider(mut config: Config) -> Config {
+    let provider_prefix = config.provider.env_prefix();
+
+    // Re-check provider-specific API key: NEKOCLAW_{PROVIDER}_API_KEY
+    if let Ok(key) = std::env::var(format!("{provider_prefix}API_KEY")) {
+        config.model.api_key = key;
+    }
+
+    // Re-check provider-specific model: NEKOCLAW_{PROVIDER}_MODEL
+    if let Ok(model) = std::env::var(format!("{provider_prefix}MODEL")) {
+        config.model.model_id = model;
+    } else if config.model.model_id.is_empty() {
+        // Set default model for new provider
+        config.model.model_id = match config.provider {
+            ModelProvider::OpenAI => "gpt-4".to_string(),
+            ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
+        };
+    }
+
+    // Re-check provider-specific endpoint: NEKOCLAW_{PROVIDER}_ENDPOINT
+    if let Ok(endpoint) = std::env::var(format!("{provider_prefix}ENDPOINT")) {
+        config.model.endpoint = endpoint;
+    } else if config.model.endpoint.is_empty() {
+        // Set default endpoint for new provider
+        config.model.endpoint = match config.provider {
+            ModelProvider::OpenAI => "https://api.openai.com/v1".to_string(),
+            ModelProvider::Anthropic => "https://api.anthropic.com".to_string(),
+        };
+    }
+
+    config
+}
+
+/// Initialize logging with console and file output
+///
+/// Environment variables:
+/// - `RUST_LOG`: Set log level (e.g., "debug", "info", "warn", "error")
+/// - `NEKOCLAW_LOG_DIR`: Log directory (default: "~/.nekoclaw/logs")
+fn init_logging() -> Result<()> {
+    // Get log directory from env or default to ~/.nekoclaw/logs
+    let log_dir = std::env::var(env_names::LOG_DIR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            directories::ProjectDirs::from("ai", "nekoclaw", "nekoclaw")
+                .map(|d| d.data_dir().join("logs"))
+                .unwrap_or_else(|| PathBuf::from("/tmp/nekoclaw_logs"))
+        });
+
+    // Ensure log directory exists
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
+
+    // Create rolling file appender - single file nekoclaw.log with rotation
+    // Max 10MB per file, keep 5 backups (nekoclaw.log.1, nekoclaw.log.2, etc.)
+    let log_path = log_dir.join("nekoclaw.log");
+    let file_appender = tracing_rolling_file::RollingFileAppenderBase::builder()
+        .filename(log_path.to_string_lossy().to_string())
+        .condition_max_file_size(10 * 1024 * 1024) // 10MB
+        .max_filecount(5)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {}", e))?;
+
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Leak the guard to keep it alive for the program duration
+    Box::leak(Box::new(_guard));
+
+    // Build env filter - try RUST_LOG first, then default to info
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .context("Failed to create env filter")?;
+
+    // Initialize subscriber with both console and file layers
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_target(false)
+                .with_thread_ids(false),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_target(true)
+                .with_thread_ids(true),
+        )
+        .init();
+
+    tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
+
     Ok(())
 }

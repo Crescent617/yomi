@@ -1,1 +1,0 @@
-// Anthropic provider implementation - placeholder

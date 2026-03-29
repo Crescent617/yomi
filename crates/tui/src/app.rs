@@ -1,192 +1,529 @@
-use crate::theme::Theme;
+//! Main application - alt screen with transparent background
+
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
-    execute,
+    event::{self, Event, KeyCode, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand,
 };
-use nekoclaw_core::bus::EventBus;
-use nekoclaw_core::event::{Event as AppEvent, ContentChunk, AgentEvent, ModelEvent, ToolEvent, UserEvent};
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
-    text::Text,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame, Terminal,
+    layout::{Constraint, Direction, Layout, Margin, Position},
+    style::{Color, Modifier, Style, Stylize},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    DefaultTerminal, Frame,
 };
-use std::io;
-use tokio::sync::broadcast;
+use std::io::{self, stdout};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+
+use nekoclaw_core::event::Event as AppEvent;
+
+use crate::model::{ChatMessage, Model, Role};
 
 pub struct App {
-    input: String,
-    events: Vec<DisplayEvent>,
-    theme: Theme,
-    event_rx: broadcast::Receiver<AppEvent>,
-    input_tx: tokio::sync::mpsc::Sender<String>,
+    event_rx: mpsc::Receiver<AppEvent>,
+    input_tx: mpsc::Sender<String>,
+    model: Model,
     should_quit: bool,
-}
-
-#[derive(Debug, Clone)]
-enum DisplayEvent {
-    User(String),
-    Assistant { text: String, thinking: Option<String> },
-    Thinking(String),
-    Tool { name: String, output: String },
-    System(String),
-    Error(String),
+    last_ctrl_c: Option<Instant>,
+    input_buffer: String,
+    cursor_pos: usize,
+    scroll_offset: usize,
+    viewport_height: usize,
 }
 
 impl App {
-    pub fn new(
-        event_bus: &EventBus,
-        input_tx: tokio::sync::mpsc::Sender<String>,
-    ) -> Self {
-        Self {
-            input: String::new(),
-            events: Vec::new(),
-            theme: Theme::default(),
-            event_rx: event_bus.subscribe(),
+    pub fn new(event_rx: mpsc::Receiver<AppEvent>, input_tx: mpsc::Sender<String>) -> Result<Self> {
+        Ok(Self {
+            event_rx,
             input_tx,
+            model: Model::default(),
             should_quit: false,
-        }
+            last_ctrl_c: None,
+            input_buffer: String::new(),
+            cursor_pos: 0,
+            scroll_offset: 0,
+            viewport_height: 10,
+        })
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
+        // Setup terminal
         enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
+        stdout().execute(EnterAlternateScreen)?;
+        let mut terminal = ratatui::init();
+
         let result = self.run_loop(&mut terminal).await;
+
+        // Restore terminal
+        ratatui::restore();
+        stdout().execute(LeaveAlternateScreen)?;
         disable_raw_mode()?;
-        execute!(
-            terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        )?;
-        terminal.show_cursor()?;
+
         result
     }
 
-    async fn run_loop<B: Backend>(
-        &mut self, terminal: &mut Terminal<B>
-    ) -> Result<()> {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
-        while !self.should_quit {
-            terminal.draw(|f| self.draw(f))?;
-            tokio::select! {
-                _ = interval.tick() => {}
-                Ok(event) = self.event_rx.recv() => {
-                    self.handle_app_event(event);
-                }
-                _ = tokio::task::spawn_blocking(|| {
-                    event::poll(std::time::Duration::from_millis(10))
-                }) => {
-                    if let Ok(true) = event::poll(std::time::Duration::from_millis(0)) {
-                        if let Ok(Event::Key(key)) = event::read() {
-                            if key.kind == KeyEventKind::Press {
-                                self.handle_key(key.code).await?;
-                            }
-                        }
+    async fn run_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let mut last_tick = Instant::now();
+
+        loop {
+            if self.should_quit {
+                break;
+            }
+
+            // Draw UI
+            terminal.draw(|frame| self.draw(frame))?;
+
+            // Handle events
+            let timeout = Duration::from_millis(50);
+            if event::poll(timeout)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == event::KeyEventKind::Press {
+                        self.handle_key(key.code, key.modifiers).await?;
                     }
                 }
             }
+
+            // Check for app events from core
+            if let Ok(event) = self.event_rx.try_recv() {
+                self.handle_app_event(&event).await?;
+            }
+
+            // Auto-scroll to bottom on new content
+            if self.model.streaming.is_active || self.scroll_offset == 0 {
+                self.scroll_offset = 0;
+            }
         }
+
         Ok(())
     }
 
-    fn handle_app_event(&mut self, event: AppEvent) {
-        match event {
-            AppEvent::User(UserEvent::Message { content }) => {
-                self.events.push(DisplayEvent::User(content));
-            }
-            AppEvent::Model(ModelEvent::Chunk { content: ContentChunk::Text(text), .. }) => {
-                if let Some(DisplayEvent::Assistant { text: ref mut existing, .. }) = self.events.last_mut() {
-                    existing.push_str(&text);
-                } else {
-                    self.events.push(DisplayEvent::Assistant { text, thinking: None });
-                }
-            }
-            AppEvent::Model(ModelEvent::Chunk { content: ContentChunk::Thinking { thinking, .. }, .. }) => {
-                if let Some(DisplayEvent::Assistant { thinking: ref mut existing, .. }) = self.events.last_mut() {
-                    if let Some(ref mut t) = existing {
-                        t.push_str(&thinking);
-                    } else {
-                        *existing = Some(thinking);
-                    }
-                } else {
-                    self.events.push(DisplayEvent::Thinking(thinking));
-                }
-            }
-            AppEvent::Model(ModelEvent::Chunk { content: ContentChunk::RedactedThinking, .. }) => {
-                self.events.push(DisplayEvent::Thinking("[Thinking redacted]".to_string()));
-            }
-            AppEvent::Tool(ToolEvent::Output { tool_id, output, .. }) => {
-                self.events.push(DisplayEvent::Tool { name: tool_id, output });
-            }
-            AppEvent::Tool(ToolEvent::Error { error, .. }) => {
-                self.events.push(DisplayEvent::Error(error));
-            }
-            AppEvent::Agent(AgentEvent::Failed { error, .. }) => {
-                self.events.push(DisplayEvent::Error(error));
-            }
-            _ => {}
-        }
-    }
+    fn draw(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+        self.viewport_height = area.height as usize;
 
-    async fn handle_key(&mut self, key: KeyCode) -> Result<()> {
-        match key {
-            KeyCode::Char('q') => { self.should_quit = true; }
-            KeyCode::Char('c') => { self.input.clear(); }
-            KeyCode::Char(c) => { self.input.push(c); }
-            KeyCode::Backspace => { self.input.pop(); }
-            KeyCode::Enter => {
-                if !self.input.is_empty() {
-                    let content = self.input.clone();
-                    self.input.clear();
-                    self.input_tx.send(content).await?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn draw(&self, frame: &mut Frame) {
+        // Layout: chat area (top) + status (optional) + input (bottom)
+        let input_height = self.input_buffer.lines().count().max(1) as u16 + 1; // +1 for border
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
-            .split(frame.area());
-        let event_items: Vec<ListItem> = self.events.iter().map(|event| {
-            let (prefix, style, content): (&str, _, String) = match event {
-                DisplayEvent::User(text) => ("You: ", self.theme.user(), text.clone()),
-                DisplayEvent::Assistant { text, thinking } => {
-                    let display = if let Some(t) = thinking {
-                        format!("[Thinking] {}\n\n{}", t, text)
-                    } else {
-                        text.clone()
-                    };
-                    ("AI: ", self.theme.assistant(), display)
+            .constraints([
+                Constraint::Min(3),         // Chat area
+                Constraint::Length(input_height), // Input area
+            ])
+            .split(area);
+
+        let chat_area = chunks[0];
+        let input_area = chunks[1];
+
+        // Draw chat messages
+        self.draw_chat(frame, chat_area);
+
+        // Draw input
+        self.draw_input(frame, input_area);
+    }
+
+    fn draw_chat(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+        // Build message lines
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Add welcome if no messages
+        if self.model.messages.is_empty() && !self.model.streaming.is_active {
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                Span::styled("Welcome to Nekoclaw", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            ));
+            lines.push(Line::from(
+                Span::styled("Your AI coding assistant", Style::default().fg(Color::DarkGray))
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                Span::styled("Press Ctrl+C twice to exit", Style::default().fg(Color::DarkGray))
+            ));
+        }
+
+        // Add messages
+        for msg in &self.model.messages {
+            lines.extend(self.message_to_lines(msg));
+            lines.push(Line::from("")); // spacing between messages
+        }
+
+        // Add streaming content if active
+        if self.model.streaming.is_active {
+            lines.extend(self.streaming_to_lines());
+        }
+
+        // Calculate scroll
+        let total_lines = lines.len();
+        let visible_lines = area.height as usize;
+        let scroll = if total_lines > visible_lines {
+            (total_lines - visible_lines).saturating_sub(self.scroll_offset)
+        } else {
+            0
+        };
+
+        // Create paragraph with scroll
+        let paragraph = Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll as u16, 0));
+
+        frame.render_widget(paragraph, area);
+    }
+
+    fn message_to_lines(&self, msg: &ChatMessage) -> Vec<Line> {
+        let mut lines = Vec::new();
+
+        let (prefix, prefix_color) = match msg.role {
+            Role::User => ("❯", Color::Magenta),
+            Role::Assistant => ("◆", Color::Cyan),
+            Role::System => ("▪", Color::DarkGray),
+        };
+
+        // Thinking block
+        if let Some(ref thinking) = msg.thinking {
+            if !thinking.is_empty() && !msg.thinking_folded {
+                let tokens = thinking.len() / 4;
+                lines.push(Line::from(vec![
+                    Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("Thinking ({} tokens)", tokens),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                ]));
+                for line in thinking.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                    ]));
                 }
-                DisplayEvent::Thinking(t) => ("Thinking: ", self.theme.thinking(), t.clone()),
-                DisplayEvent::Tool { name, output } => {
-                    let prefix = format!("Tool {}: ", name);
-                    ("", self.theme.system(), format!("{}{}", prefix, output))
+                lines.push(Line::from(""));
+            } else if !thinking.is_empty() {
+                let tokens = thinking.len() / 4;
+                lines.push(Line::from(vec![
+                    Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("Thinking ({} tokens)", tokens),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                ]));
+            }
+        }
+
+        // Content
+        for (i, line) in msg.content.lines().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{} ", prefix),
+                        Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            } else {
+                let indent = if matches!(msg.role, Role::User) { "│ " } else { "  " };
+                lines.push(Line::from(vec![
+                    Span::styled(indent, Style::default().fg(prefix_color)),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+        }
+
+        lines
+    }
+
+    fn streaming_to_lines(&self) -> Vec<Line> {
+        let mut lines = Vec::new();
+        let streaming = &self.model.streaming;
+
+        // Thinking
+        if !streaming.thinking.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("Thinking ({} tokens)", streaming.thinking.len() / 4),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            ]));
+            for line in streaming.thinking.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Content with spinner
+        for (i, line) in streaming.content.lines().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("◆ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+        }
+
+        // Add spinner at end
+        if !lines.is_empty() {
+            let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let spinner_char = spinner[(streaming.spinner_frame / 2) % spinner.len()];
+            if let Some(last) = lines.last_mut() {
+                last.spans.push(Span::styled(
+                    format!(" {}", spinner_char),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+        }
+
+        lines
+    }
+
+    fn draw_input(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+        let lines: Vec<Line> = self.input_buffer
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                let prefix = if i == 0 { "❯ " } else { "│ " };
+                Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ])
+            })
+            .collect();
+
+        let text = if lines.is_empty() {
+            Text::from(vec![Line::from(vec![
+                Span::styled("❯ ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("Type a message...", Style::default().fg(Color::DarkGray)),
+            ])])
+        } else {
+            Text::from(lines)
+        };
+
+        let input_widget = Paragraph::new(text)
+            .block(Block::default().borders(Borders::TOP).border_style(Color::DarkGray));
+
+        frame.render_widget(input_widget, area);
+
+        // Position cursor
+        let cursor_line = self.input_buffer[..self.cursor_pos.min(self.input_buffer.len())]
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
+        let line_start = self.input_buffer[..self.cursor_pos.min(self.input_buffer.len())]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let col = self.cursor_pos.saturating_sub(line_start);
+
+        let cursor_x = if cursor_line == 0 { 2 } else { 2 } + col;
+        let cursor_y = area.y + cursor_line as u16 + 1; // +1 for border
+
+        if cursor_y < area.y + area.height {
+            frame.set_cursor_position(Position::new(cursor_x as u16, cursor_y));
+        }
+    }
+
+    async fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
+        let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+
+        match (code, ctrl) {
+            (KeyCode::Char('c'), true) => {
+                if self.handle_ctrl_c() {
+                    return Ok(());
                 }
-                DisplayEvent::System(text) => ("System: ", self.theme.system(), text.clone()),
-                DisplayEvent::Error(text) => ("Error: ", self.theme.error(), text.clone()),
-            };
-            let text = Text::styled(format!("{}{}", prefix, content), style);
-            ListItem::new(text)
-        }).collect();
-        let events_widget = List::new(event_items)
-            .block(Block::default().borders(Borders::ALL).title("Nekoclaw").border_style(self.theme.border()))
-            .style(self.theme.base());
-        frame.render_widget(events_widget, chunks[0]);
-        let input_widget = Paragraph::new(self.input.as_str())
-            .block(Block::default().borders(Borders::ALL).title("Input (Enter to send, q to quit)").border_style(self.theme.border()))
-            .style(self.theme.base());
-        frame.render_widget(input_widget, chunks[1]);
+            }
+            (KeyCode::Char('j'), true) => self.insert_char('\n'),
+            (KeyCode::Char('w'), true) => self.delete_word(),
+            (KeyCode::Char('u'), true) => self.delete_to_start(),
+            (KeyCode::Char('k'), true) => self.delete_to_end(),
+            (KeyCode::Char('a'), true) => self.move_to_start(),
+            (KeyCode::Char('e'), true) => self.move_to_end(),
+            (KeyCode::Char('p'), true) => self.scroll_up(),
+            (KeyCode::Char('n'), true) => self.scroll_down(),
+            (KeyCode::Up, false) => self.scroll_up(),
+            (KeyCode::Down, false) => self.scroll_down(),
+            (KeyCode::PageUp, false) => self.scroll_page_up(),
+            (KeyCode::PageDown, false) => self.scroll_page_down(),
+            (KeyCode::Enter, false) => {
+                if !self.input_buffer.is_empty() {
+                    let content = self.input_buffer.clone();
+                    self.input_tx.send(content.clone()).await?;
+                    self.input_buffer.clear();
+                    self.cursor_pos = 0;
+                    self.model.add_user_message(content);
+                }
+            }
+            (KeyCode::Char(c), false) => self.insert_char(c),
+            (KeyCode::Backspace, false) => self.backspace(),
+            (KeyCode::Delete, false) => self.delete_char(),
+            (KeyCode::Left, false) => self.move_left(),
+            (KeyCode::Right, false) => self.move_right(),
+            (KeyCode::Tab, false) => self.toggle_fold(),
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn handle_ctrl_c(&mut self) -> bool {
+        let now = Instant::now();
+        const THRESHOLD: Duration = Duration::from_millis(500);
+
+        if let Some(last) = self.last_ctrl_c {
+            if now.duration_since(last) < THRESHOLD {
+                self.should_quit = true;
+                return true;
+            }
+        }
+
+        self.last_ctrl_c = Some(now);
+
+        if self.model.streaming.is_active {
+            let _ = self.input_tx.try_send("__CANCEL__".to_string());
+        }
+
+        false
+    }
+
+    async fn handle_app_event(&mut self, event: &AppEvent) -> Result<()> {
+        match event {
+            AppEvent::Model(nekoclaw_core::event::ModelEvent::Chunk { content, .. }) => {
+                match content {
+                    nekoclaw_core::event::ContentChunk::Text(_) => {
+                        if !self.model.streaming.is_active {
+                            self.model.start_streaming();
+                        }
+                        // Text is appended in streaming model, UI reads from there
+                    }
+                    nekoclaw_core::event::ContentChunk::Thinking { thinking, .. } => {
+                        if !self.model.streaming.is_active {
+                            self.model.start_streaming();
+                        }
+                        self.model.append_stream_thinking(thinking);
+                    }
+                    _ => {}
+                }
+            }
+            AppEvent::Model(nekoclaw_core::event::ModelEvent::Complete { .. }) => {
+                if self.model.streaming.is_active {
+                    let (content, thinking) = self.model.stop_streaming();
+                    let thinking_opt = if thinking.is_empty() { None } else { Some(thinking) };
+                    self.model.add_assistant_message(content, thinking_opt);
+                }
+            }
+            AppEvent::Model(nekoclaw_core::event::ModelEvent::Error { error, .. }) => {
+                if self.model.streaming.is_active {
+                    self.model.stop_streaming();
+                }
+                self.model.add_system_message(format!("Error: {}", error));
+            }
+            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Started { tool_name, .. }) => {
+                self.model.add_system_message(format!("Running: {}", tool_name));
+            }
+            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Output { output, .. }) => {
+                self.model.add_system_message(output.clone());
+            }
+            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Error { error, .. }) => {
+                self.model.add_system_message(format!("Tool error: {}", error));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // Input operations
+    fn insert_char(&mut self, c: char) {
+        self.input_buffer.insert(self.cursor_pos, c);
+        self.cursor_pos += 1;
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+            self.input_buffer.remove(self.cursor_pos);
+        }
+    }
+
+    fn delete_char(&mut self) {
+        if self.cursor_pos < self.input_buffer.len() {
+            self.input_buffer.remove(self.cursor_pos);
+        }
+    }
+
+    fn move_left(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+        }
+    }
+
+    fn move_right(&mut self) {
+        if self.cursor_pos < self.input_buffer.len() {
+            self.cursor_pos += 1;
+        }
+    }
+
+    fn move_to_start(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    fn move_to_end(&mut self) {
+        self.cursor_pos = self.input_buffer.len();
+    }
+
+    fn delete_word(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let end = self.cursor_pos;
+        while self.cursor_pos > 0
+            && self.input_buffer
+                .chars()
+                .nth(self.cursor_pos - 1)
+                .map_or(false, |c| c.is_whitespace())
+        {
+            self.cursor_pos -= 1;
+        }
+        while self.cursor_pos > 0
+            && self.input_buffer
+                .chars()
+                .nth(self.cursor_pos - 1)
+                .map_or(false, |c| !c.is_whitespace())
+        {
+            self.cursor_pos -= 1;
+        }
+        self.input_buffer.drain(self.cursor_pos..end);
+    }
+
+    fn delete_to_start(&mut self) {
+        self.input_buffer.drain(0..self.cursor_pos);
+        self.cursor_pos = 0;
+    }
+
+    fn delete_to_end(&mut self) {
+        self.input_buffer.truncate(self.cursor_pos);
+    }
+
+    // Scroll operations
+    fn scroll_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(1);
+    }
+
+    fn scroll_down(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+    }
+
+    fn scroll_page_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_add(self.viewport_height / 2);
+    }
+
+    fn scroll_page_down(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(self.viewport_height / 2);
+    }
+
+    fn toggle_fold(&mut self) {
+        if let Some(last) = self.model.messages.last_mut() {
+            if last.thinking.is_some() {
+                last.thinking_folded = !last.thinking_folded;
+            }
+        }
     }
 }
+

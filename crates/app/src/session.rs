@@ -1,25 +1,24 @@
 use anyhow::Result;
 use nekoclaw_core::{
-    agent::{Agent, AgentConfig},
-    bus::EventBus,
+    agent::{Agent, AgentConfig, AgentHandle, AgentState},
+    event::Event,
     provider::ModelProvider,
     storage::Storage,
     tool::{ToolRegistry, ToolSandbox},
 };
-use nekoclaw_shared::types::{SessionId, AgentId};
+use nekoclaw_core::types::{SessionId, AgentId};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub struct Session {
     id: SessionId,
     config: SessionConfig,
-    event_bus: EventBus,
     storage: Arc<dyn Storage>,
     provider: Arc<dyn ModelProvider>,
     tool_registry: ToolRegistry,
     sandbox: ToolSandbox,
-    main_agent: Option<AgentId>,
-    input_tx: Option<mpsc::Sender<String>>,
+    main_agent: Option<AgentHandle>,
+    event_rx: Option<mpsc::Receiver<Event>>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +31,6 @@ impl Session {
     pub fn new(
         id: SessionId,
         config: SessionConfig,
-        event_bus: EventBus,
         storage: Arc<dyn Storage>,
         provider: Arc<dyn ModelProvider>,
         tool_registry: ToolRegistry,
@@ -41,13 +39,12 @@ impl Session {
         Self {
             id,
             config,
-            event_bus,
             storage,
             provider,
             tool_registry,
             sandbox,
             main_agent: None,
-            input_tx: None,
+            event_rx: None,
         }
     }
 
@@ -58,40 +55,54 @@ impl Session {
     }
 
     async fn spawn_main_agent(&mut self) -> Result<()> {
-        let (input_tx, input_rx) = mpsc::channel(100);
-        self.input_tx = Some(input_tx);
-        let agent = Agent::new(
+        let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
             self.config.agent.clone(),
-            self.event_bus.clone(),
             self.provider.clone(),
-            self.storage.clone(),
             self.tool_registry.clone(),
             self.sandbox.clone(),
-            input_rx,
         );
-        let agent_id = agent.id().clone();
-        agent.spawn();
+        let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id.0, self.id.0);
-        self.main_agent = Some(agent_id);
+        self.main_agent = Some(handle);
+        self.event_rx = Some(event_rx);
         Ok(())
     }
 
-    pub async fn send_message(&self, content: String
-    ) -> Result<()> {
-        if let Some(ref tx) = self.input_tx {
-            tx.send(content).await?;
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Session not initialized"))
+    pub async fn send_message(&self, content: String) -> Result<()> {
+        tracing::debug!("Session {} sending message ({} bytes)", self.id.0, content.len());
+        match &self.main_agent {
+            Some(handle) => {
+                let result = handle.send_message(content).await;
+                if let Err(ref e) = result {
+                    tracing::error!("Session {} failed to send message: {}", self.id.0, e);
+                }
+                result
+            }
+            None => Err(anyhow::anyhow!("Session not initialized")),
         }
     }
 
-    pub fn id(&self) -> &SessionId {
+    pub fn cancel(&self) {
+        if let Some(handle) = &self.main_agent {
+            tracing::info!("Cancelling session {}", self.id.0);
+            handle.cancel();
+        }
+    }
+
+    pub fn agent_state(&self) -> Option<AgentState> {
+        self.main_agent.as_ref().map(|h| h.state())
+    }
+
+    pub const fn id(&self) -> &SessionId {
         &self.id
     }
 
     pub fn main_agent_id(&self) -> Option<&AgentId> {
-        self.main_agent.as_ref()
+        self.main_agent.as_ref().map(|h| &h.id)
+    }
+
+    pub fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<Event>> {
+        self.event_rx.take()
     }
 }

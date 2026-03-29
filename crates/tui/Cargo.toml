@@ -6,16 +6,19 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-nekoclaw-shared = { workspace = true }
 nekoclaw-core = { workspace = true }
 
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+unicode-width = "0.2"
 pulldown-cmark = { workspace = true }
 
+# TUI Realm - declarative component framework
+tuirealm = "2.0"
+tui-realm-stdlib = "2.0"
+
+
+
 tokio = { workspace = true }
-tokio-util = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true }
-unicode-width = "0.1"

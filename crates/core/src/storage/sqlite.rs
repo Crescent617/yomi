@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use nekoclaw_core::storage::{Storage, StorageConfig};
-use nekoclaw_shared::types::{Message, SessionRecord, SessionId};
+use crate::storage::{Storage, StorageConfig};
+use crate::types::{Message, SessionRecord, SessionId};
 use sqlx::{migrate::MigrateDatabase, sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::Path;
 
@@ -30,7 +30,7 @@ impl SqliteStorage {
 
     async fn migrate(&self) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -51,7 +51,7 @@ impl SqliteStorage {
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-            "#
+            "
         ).execute(&self.pool).await?;
         Ok(())
     }
@@ -72,13 +72,13 @@ impl Storage for SqliteStorage {
     async fn fork_session(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            r#"INSERT INTO sessions (id, project_path, parent_session_id, message_count)
-            SELECT ?, project_path, id, message_count FROM sessions WHERE id = ?"#
+            r"INSERT INTO sessions (id, project_path, parent_session_id, message_count)
+            SELECT ?, project_path, id, message_count FROM sessions WHERE id = ?"
         ).bind(&new_id.0).bind(&parent_id.0).execute(&self.pool).await?;
         sqlx::query(
-            r#"INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, created_at)
+            r"INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, created_at)
             SELECT ?, role, content, tool_calls, tool_call_id, created_at
-            FROM messages WHERE session_id = ?"#
+            FROM messages WHERE session_id = ?"
         ).bind(&new_id.0).bind(&parent_id.0).execute(&self.pool).await?;
         Ok(new_id)
     }
@@ -90,12 +90,12 @@ impl Storage for SqliteStorage {
             FROM sessions WHERE id = ?"
         ).bind(&id.0).fetch_optional(&self.pool).await?;
         Ok(row.map(|r| SessionRecord {
-            id: r.id,
+            id: SessionId(r.id),
             created_at: r.created_at,
             updated_at: r.updated_at,
-            project_path: r.project_path,
-            message_count: r.message_count,
-            parent_session_id: r.parent_session_id,
+            project_path: r.project_path.into(),
+            message_count: r.message_count as usize,
+            parent_session_id: r.parent_session_id.map(SessionId),
         }))
     }
 
@@ -107,9 +107,9 @@ impl Storage for SqliteStorage {
             FROM sessions WHERE project_path = ? ORDER BY updated_at DESC"
         ).bind(path_str.as_ref()).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| SessionRecord {
-            id: r.id, created_at: r.created_at, updated_at: r.updated_at,
-            project_path: r.project_path, message_count: r.message_count,
-            parent_session_id: r.parent_session_id,
+            id: SessionId(r.id), created_at: r.created_at, updated_at: r.updated_at,
+            project_path: r.project_path.into(), message_count: r.message_count as usize,
+            parent_session_id: r.parent_session_id.map(SessionId),
         }).collect())
     }
 
@@ -157,10 +157,10 @@ impl Storage for SqliteStorage {
             FROM messages WHERE session_id = ? ORDER BY id ASC"
         ).bind(&session_id.0).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| {
-            let content = if let Ok(blocks) = serde_json::from_str::<Vec<nekoclaw_shared::types::ContentBlock>>(&r.content) {
+            let content = if let Ok(blocks) = serde_json::from_str::<Vec<crate::types::ContentBlock>>(&r.content) {
                 blocks
             } else {
-                vec![nekoclaw_shared::types::ContentBlock::Text { text: r.content }]
+                vec![crate::types::ContentBlock::Text { text: r.content }]
             };
             Message {
                 role: parse_role(&r.role),
@@ -212,18 +212,18 @@ struct MessageRow {
 fn expand_path(path: &str) -> String {
     if path.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {
-            return path.replacen("~", &home, 1);
+            return path.replacen('~', &home, 1);
         }
     }
     path.to_string()
 }
 
-fn parse_role(role: &str) -> nekoclaw_shared::types::Role {
+fn parse_role(role: &str) -> crate::types::Role {
     match role {
-        "system" => nekoclaw_shared::types::Role::System,
-        "user" => nekoclaw_shared::types::Role::User,
-        "assistant" => nekoclaw_shared::types::Role::Assistant,
-        "tool" => nekoclaw_shared::types::Role::Tool,
-        _ => nekoclaw_shared::types::Role::User,
+        "system" => crate::types::Role::System,
+        "user" => crate::types::Role::User,
+        "assistant" => crate::types::Role::Assistant,
+        "tool" => crate::types::Role::Tool,
+        _ => crate::types::Role::User,
     }
 }

@@ -1,4 +1,4 @@
-use nekoclaw_shared::types::{AgentId, Message, SessionId};
+use crate::types::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// Top-level event wrapper - modular design prevents enum explosion

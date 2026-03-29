@@ -1,6 +1,6 @@
+use crate::types::{ToolDefinition, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
-use nekoclaw_shared::types::{ToolDefinition, ToolOutput};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,33 +64,25 @@ impl ToolRegistry {
 
 /// Tool sandbox for permission management
 #[derive(Clone)]
+#[derive(Default)]
 pub struct ToolSandbox {
     enabled: bool,
     require_confirmation: HashMap<String, bool>,
     yolo_mode: bool,
 }
 
-impl Default for ToolSandbox {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            require_confirmation: HashMap::new(),
-            yolo_mode: false,
-        }
-    }
-}
 
 impl ToolSandbox {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn enable(mut self) -> Self {
+    pub const fn enable(mut self) -> Self {
         self.enabled = true;
         self
     }
 
-    pub fn yolo(mut self) -> Self {
+    pub const fn yolo(mut self) -> Self {
         self.yolo_mode = true;
         self
     }
@@ -109,7 +101,13 @@ impl ToolSandbox {
         }
         tool_requires
     }
+
+    pub const fn default_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(30)
+    }
 }
+
+// parallel execution is re-exported from tools module
 
 /// Global YOLO mode flag
 static YOLO_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

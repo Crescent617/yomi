@@ -1,4 +1,4 @@
-use nekoclaw_shared::types::Message;
+use crate::types::Message;
 
 #[derive(Debug, Default)]
 pub struct PromptBuilder {

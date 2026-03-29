@@ -8,7 +8,7 @@ pub struct AgentId(pub String);
 
 impl AgentId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
+        Self(Uuid::now_v7().to_string())
     }
 }
 
@@ -24,7 +24,7 @@ pub struct SessionId(pub String);
 
 impl SessionId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
+        Self(Uuid::now_v7().to_string())
     }
 }
 
@@ -44,7 +44,7 @@ pub enum Role {
     Tool,
 }
 
-/// Content block - similar to OpenAI's content format
+/// Content block - similar to `OpenAI`'s content format
 /// Supports text, thinking, images, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -65,7 +65,7 @@ impl ContentBlock {
     /// Get text content if this is a text block
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            ContentBlock::Text { text } => Some(text),
+            Self::Text { text } => Some(text),
             _ => None,
         }
     }
@@ -73,31 +73,31 @@ impl ContentBlock {
     /// Get thinking content if this is a thinking block
     pub fn as_thinking(&self) -> Option<&str> {
         match self {
-            ContentBlock::Thinking { thinking, .. } => Some(thinking),
+            Self::Thinking { thinking, .. } => Some(thinking),
             _ => None,
         }
     }
 
     /// Check if this is a text block
-    pub fn is_text(&self) -> bool {
-        matches!(self, ContentBlock::Text { .. })
+    pub const fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
     }
 
     /// Check if this is a thinking block
-    pub fn is_thinking(&self) -> bool {
-        matches!(self, ContentBlock::Thinking { .. })
+    pub const fn is_thinking(&self) -> bool {
+        matches!(self, Self::Thinking { .. })
     }
 }
 
 impl From<String> for ContentBlock {
     fn from(text: String) -> Self {
-        ContentBlock::Text { text }
+        Self::Text { text }
     }
 }
 
 impl From<&str> for ContentBlock {
     fn from(text: &str) -> Self {
-        ContentBlock::Text { text: text.to_string() }
+        Self::Text { text: text.to_string() }
     }
 }
 
@@ -247,6 +247,17 @@ impl Message {
         }
         self.content.push(ContentBlock::Text { text });
     }
+
+    /// Create a tool result message
+    pub fn tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: vec![ContentBlock::Text { text: output.into() }],
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+            created_at: Utc::now(),
+        }
+    }
 }
 
 /// Custom serialization for content to support both string and array formats
@@ -317,7 +328,7 @@ impl ToolOutput {
         }
     }
 
-    pub fn success(&self) -> bool {
+    pub const fn success(&self) -> bool {
         self.exit_code == 0
     }
 }
@@ -333,10 +344,77 @@ pub struct ToolDefinition {
 /// Session record metadata
 #[derive(Debug, Clone)]
 pub struct SessionRecord {
-    pub id: String,
+    pub id: SessionId,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub project_path: String,
-    pub message_count: i32,
-    pub parent_session_id: Option<String>,
+    pub project_path: std::path::PathBuf,
+    pub message_count: usize,
+    pub parent_session_id: Option<SessionId>,
+}
+
+/// Token usage tracking
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+impl TokenUsage {
+    pub const fn add(&mut self, other: &Self) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.total_tokens += other.total_tokens;
+    }
+}
+
+/// 单个会话事件 - 存储在 JSONL 中
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event_type", rename_all = "snake_case")]
+pub enum SessionEvent {
+    Created {
+        session_id: SessionId,
+        project_path: std::path::PathBuf,
+        created_at: DateTime<Utc>,
+    },
+    MessageAdded {
+        message: Message,
+        timestamp: DateTime<Utc>,
+    },
+    Forked {
+        parent_id: SessionId,
+        new_session_id: SessionId,
+        timestamp: DateTime<Utc>,
+    },
+    SummaryUpdated {
+        summary: String,
+        updated_at: DateTime<Utc>,
+    },
+    Completed {
+        completed_at: DateTime<Utc>,
+    },
+}
+
+impl SessionEvent {
+    pub fn created(session_id: SessionId, project_path: std::path::PathBuf) -> Self {
+        Self::Created {
+            session_id,
+            project_path,
+            created_at: Utc::now(),
+        }
+    }
+
+    pub fn message_added(message: Message) -> Self {
+        Self::MessageAdded {
+            message,
+            timestamp: Utc::now(),
+        }
+    }
+}
+
+/// 用于 JSONL 存储的包装类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEventRecord {
+    pub timestamp: DateTime<Utc>,
+    pub event: SessionEvent,
 }

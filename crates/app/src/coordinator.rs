@@ -1,18 +1,17 @@
 use crate::session::{Session, SessionConfig};
 use anyhow::Result;
 use nekoclaw_core::{
-    bus::EventBus,
+    event::Event,
     provider::ModelProvider,
     storage::Storage,
     tool::{ToolRegistry, ToolSandbox},
 };
-use nekoclaw_shared::types::SessionId;
+use nekoclaw_core::types::SessionId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct Coordinator {
-    event_bus: EventBus,
     storage: Arc<dyn Storage>,
     provider: Arc<dyn ModelProvider>,
     tool_registry: ToolRegistry,
@@ -22,14 +21,12 @@ pub struct Coordinator {
 
 impl Coordinator {
     pub fn new(
-        event_bus: EventBus,
         storage: Arc<dyn Storage>,
         provider: Arc<dyn ModelProvider>,
         tool_registry: ToolRegistry,
         sandbox: ToolSandbox,
     ) -> Self {
         Self {
-            event_bus,
             storage,
             provider,
             tool_registry,
@@ -45,7 +42,6 @@ impl Coordinator {
         let mut session = Session::new(
             id.clone(),
             config,
-            self.event_bus.clone(),
             self.storage.clone(),
             self.provider.clone(),
             self.tool_registry.clone(),
@@ -73,13 +69,22 @@ impl Coordinator {
     pub async fn send_message(
         &self, session_id: &SessionId, content: String
     ) -> Result<()> {
+        tracing::debug!("Sending message to session {} ({} bytes)", session_id.0, content.len());
         let session = self.get_session(session_id).await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
         let result = session.read().await.send_message(content).await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to send message to session {}: {}", session_id.0, e);
+        }
         result
     }
 
-    pub fn event_bus(&self) -> &EventBus {
-        &self.event_bus
+    pub async fn take_session_event_receiver(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<tokio::sync::mpsc::Receiver<Event>> {
+        let session = self.get_session(session_id).await?;
+        let rx = session.write().await.take_event_receiver();
+        rx
     }
 }
