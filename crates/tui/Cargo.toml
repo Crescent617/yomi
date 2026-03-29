@@ -1,0 +1,21 @@
+[package]
+name = "nekoclaw-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+nekoclaw-shared = { workspace = true }
+nekoclaw-core = { workspace = true }
+
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+pulldown-cmark = { workspace = true }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+unicode-width = "0.1"

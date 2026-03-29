@@ -1,0 +1,25 @@
+[package]
+name = "nekoclaw-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nekoclaw"
+path = "src/main.rs"
+
+[dependencies]
+nekoclaw-shared = { workspace = true }
+nekoclaw-core = { workspace = true }
+nekoclaw-adapters = { workspace = true }
+nekoclaw-app = { workspace = true }
+nekoclaw-tui = { workspace = true }
+
+clap = { workspace = true }
+config = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+directories = "5.0"

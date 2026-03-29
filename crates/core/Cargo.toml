@@ -1,0 +1,23 @@
+[package]
+name = "nekoclaw-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+nekoclaw-shared = { workspace = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
