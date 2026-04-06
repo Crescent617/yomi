@@ -88,7 +88,7 @@ impl Default for ThemeConfig {
 
 impl ThemeConfig {
     /// Create a light theme
-    pub fn light() -> Self {
+    pub const fn light() -> Self {
         Self {
             background: Color::Rgb(250, 250, 252),
             surface: Color::Rgb(255, 255, 255),
@@ -115,7 +115,7 @@ impl ThemeConfig {
     }
 
     /// Create a high-contrast theme
-    pub fn high_contrast() -> Self {
+    pub const fn high_contrast() -> Self {
         Self {
             background: Color::Black,
             surface: Color::Rgb(20, 20, 20),
@@ -142,7 +142,7 @@ impl ThemeConfig {
     }
 
     /// Create a warm theme (amber/orange accents)
-    pub fn warm() -> Self {
+    pub const fn warm() -> Self {
         Self {
             background: Color::Rgb(25, 20, 18),
             surface: Color::Rgb(35, 28, 25),
@@ -169,7 +169,7 @@ impl ThemeConfig {
     }
 
     /// Create a forest/green theme
-    pub fn forest() -> Self {
+    pub const fn forest() -> Self {
         Self {
             background: Color::Rgb(15, 25, 20),
             surface: Color::Rgb(22, 35, 28),
@@ -242,19 +242,19 @@ pub mod presets {
         ThemeConfig::default()
     }
 
-    pub fn light() -> ThemeConfig {
+    pub const fn light() -> ThemeConfig {
         ThemeConfig::light()
     }
 
-    pub fn high_contrast() -> ThemeConfig {
+    pub const fn high_contrast() -> ThemeConfig {
         ThemeConfig::high_contrast()
     }
 
-    pub fn warm() -> ThemeConfig {
+    pub const fn warm() -> ThemeConfig {
         ThemeConfig::warm()
     }
 
-    pub fn forest() -> ThemeConfig {
+    pub const fn forest() -> ThemeConfig {
         ThemeConfig::forest()
     }
 }
@@ -441,7 +441,7 @@ pub fn spinner_char(frame: usize) -> &'static str {
 }
 
 /// Helper to create a custom color from RGB values
-pub fn rgb(r: u8, g: u8, b: u8) -> Color {
+pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
 }
 

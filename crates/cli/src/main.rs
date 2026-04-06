@@ -182,7 +182,7 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
     // Run TUI
-    let mut app = App::new(event_rx, input_tx)?;
+    let app = App::new(event_rx, input_tx)?;
     app.run().await?;
 
     println!("Goodbye!");
@@ -231,9 +231,7 @@ fn init_logging() -> Result<()> {
     let log_dir = std::env::var(env_names::LOG_DIR)
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            directories::ProjectDirs::from("ai", "yomi", "yomi")
-                .map(|d| d.data_dir().join("logs"))
-                .unwrap_or_else(|| PathBuf::from("/tmp/yomi_logs"))
+            directories::ProjectDirs::from("ai", "yomi", "yomi").map_or_else(|| PathBuf::from("/tmp/yomi_logs"), |d| d.data_dir().join("logs"))
         });
 
     // Ensure log directory exists
@@ -248,7 +246,7 @@ fn init_logging() -> Result<()> {
         .condition_max_file_size(10 * 1024 * 1024) // 10MB
         .max_filecount(5)
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {e}"))?;
 
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 

@@ -43,6 +43,6 @@ sqlx = { version = "0.8", features = [
 futures = "0.3"
 
 # Internal - renamed for generic use in code
-kernel = { path = "crates/kernel", package = "yomi-core" }
-app = { path = "crates/app", package = "yomi-app" }
-tui = { path = "crates/tui", package = "yomi-tui" }
+kernel = { path = "crates/kernel", package = "kernel" }
+app = { path = "crates/app", package = "app" }
+tui = { path = "crates/tui", package = "tui" }

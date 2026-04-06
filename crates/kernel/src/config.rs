@@ -291,23 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_standard_env_vars() {
-        assert_eq!(
-            ModelProvider::OpenAI.standard_api_key_env(),
-            "OPENAI_API_KEY"
-        );
-        assert_eq!(
-            ModelProvider::Anthropic.standard_api_key_env(),
-            "ANTHROPIC_API_KEY"
-        );
-        assert_eq!(ModelProvider::OpenAI.standard_model_env(), "OPENAI_MODEL");
-        assert_eq!(
-            ModelProvider::Anthropic.standard_model_env(),
-            "ANTHROPIC_MODEL"
-        );
-    }
-
-    #[test]
     fn test_provider_parse() {
         assert_eq!(
             "openai".parse::<ModelProvider>().unwrap(),

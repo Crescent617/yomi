@@ -7,13 +7,13 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin, Position},
+    layout::{Constraint, Direction, Layout, Position},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
-use std::io::{self, stdout};
+use std::io::stdout;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -65,7 +65,7 @@ impl App {
     }
 
     async fn run_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        let mut last_tick = Instant::now();
+        let last_tick = Instant::now();
 
         loop {
             if self.should_quit {
@@ -170,7 +170,7 @@ impl App {
         frame.render_widget(paragraph, area);
     }
 
-    fn message_to_lines(&self, msg: &ChatMessage) -> Vec<Line> {
+    fn message_to_lines(&self, msg: &ChatMessage) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
 
         let (prefix, prefix_color) = match msg.role {
@@ -185,7 +185,7 @@ impl App {
                 let tokens = thinking.len() / 4;
                 lines.push(Line::from(vec![
                     Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("Thinking ({} tokens)", tokens),
+                    Span::styled(format!("Thinking ({tokens} tokens)"),
                         Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
                 ]));
                 for line in thinking.lines() {
@@ -199,7 +199,7 @@ impl App {
                 let tokens = thinking.len() / 4;
                 lines.push(Line::from(vec![
                     Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("Thinking ({} tokens)", tokens),
+                    Span::styled(format!("Thinking ({tokens} tokens)"),
                         Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
                 ]));
             }
@@ -209,7 +209,7 @@ impl App {
         for (i, line) in msg.content.lines().enumerate() {
             if i == 0 {
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{} ", prefix),
+                    Span::styled(format!("{prefix} "),
                         Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
                     Span::styled(line.to_string(), Style::default().fg(Color::White)),
                 ]));
@@ -225,7 +225,7 @@ impl App {
         lines
     }
 
-    fn streaming_to_lines(&self) -> Vec<Line> {
+    fn streaming_to_lines(&self) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         let streaming = &self.model.streaming;
 
@@ -266,7 +266,7 @@ impl App {
             let spinner_char = spinner[(streaming.spinner_frame / 2) % spinner.len()];
             if let Some(last) = lines.last_mut() {
                 last.spans.push(Span::styled(
-                    format!(" {}", spinner_char),
+                    format!(" {spinner_char}"),
                     Style::default().fg(Color::Magenta),
                 ));
             }
@@ -309,8 +309,7 @@ impl App {
             .count();
         let line_start = self.input_buffer[..self.cursor_pos.min(self.input_buffer.len())]
             .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+            .map_or(0, |i| i + 1);
         let col = self.cursor_pos.saturating_sub(line_start);
 
         let cursor_x = if cursor_line == 0 { 2 } else { 2 } + col;
@@ -413,16 +412,16 @@ impl App {
                 if self.model.streaming.is_active {
                     self.model.stop_streaming();
                 }
-                self.model.add_system_message(format!("Error: {}", error));
+                self.model.add_system_message(format!("Error: {error}"));
             }
             AppEvent::Tool(kernel::event::ToolEvent::Started { tool_name, .. }) => {
-                self.model.add_system_message(format!("Running: {}", tool_name));
+                self.model.add_system_message(format!("Running: {tool_name}"));
             }
             AppEvent::Tool(kernel::event::ToolEvent::Output { output, .. }) => {
                 self.model.add_system_message(output.clone());
             }
             AppEvent::Tool(kernel::event::ToolEvent::Error { error, .. }) => {
-                self.model.add_system_message(format!("Tool error: {}", error));
+                self.model.add_system_message(format!("Tool error: {error}"));
             }
             _ => {}
         }
@@ -448,23 +447,23 @@ impl App {
         }
     }
 
-    fn move_left(&mut self) {
+    const fn move_left(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
         }
     }
 
-    fn move_right(&mut self) {
+    const fn move_right(&mut self) {
         if self.cursor_pos < self.input_buffer.len() {
             self.cursor_pos += 1;
         }
     }
 
-    fn move_to_start(&mut self) {
+    const fn move_to_start(&mut self) {
         self.cursor_pos = 0;
     }
 
-    fn move_to_end(&mut self) {
+    const fn move_to_end(&mut self) {
         self.cursor_pos = self.input_buffer.len();
     }
 
@@ -477,7 +476,7 @@ impl App {
             && self.input_buffer
                 .chars()
                 .nth(self.cursor_pos - 1)
-                .map_or(false, |c| c.is_whitespace())
+                .is_some_and(|c| c.is_whitespace())
         {
             self.cursor_pos -= 1;
         }
@@ -485,7 +484,7 @@ impl App {
             && self.input_buffer
                 .chars()
                 .nth(self.cursor_pos - 1)
-                .map_or(false, |c| !c.is_whitespace())
+                .is_some_and(|c| !c.is_whitespace())
         {
             self.cursor_pos -= 1;
         }
@@ -502,19 +501,19 @@ impl App {
     }
 
     // Scroll operations
-    fn scroll_up(&mut self) {
+    const fn scroll_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_add(1);
     }
 
-    fn scroll_down(&mut self) {
+    const fn scroll_down(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
     }
 
-    fn scroll_page_up(&mut self) {
+    const fn scroll_page_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_add(self.viewport_height / 2);
     }
 
-    fn scroll_page_down(&mut self) {
+    const fn scroll_page_down(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(self.viewport_height / 2);
     }
 

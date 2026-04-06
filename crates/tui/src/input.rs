@@ -10,6 +10,12 @@ pub struct InputBuffer {
     max_history: usize,
 }
 
+impl Default for InputBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputBuffer {
     pub fn new() -> Self {
         Self {
@@ -27,8 +33,7 @@ impl InputBuffer {
         let line = &mut self.lines[self.cursor_line];
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
         line.insert(byte_idx, c);
         self.cursor_col += 1;
     }
@@ -38,8 +43,7 @@ impl InputBuffer {
         let line = &mut self.lines[self.cursor_line];
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
         let remainder: String = line.split_off(byte_idx);
         self.cursor_line += 1;
         self.cursor_col = 0;
@@ -63,8 +67,7 @@ impl InputBuffer {
 
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
 
         // Find word boundary
         let prev_text = &line[..byte_idx];
@@ -77,8 +80,7 @@ impl InputBuffer {
 
         let new_byte_idx = line.char_indices()
             .nth(new_col)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
 
         self.lines[self.cursor_line].drain(new_byte_idx..byte_idx);
         self.cursor_col = new_col;
@@ -89,8 +91,7 @@ impl InputBuffer {
         let line = &mut self.lines[self.cursor_line];
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
         line.drain(..byte_idx);
         self.cursor_col = 0;
     }
@@ -100,8 +101,7 @@ impl InputBuffer {
         let line = &mut self.lines[self.cursor_line];
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
         line.truncate(byte_idx);
     }
 
@@ -122,21 +122,19 @@ impl InputBuffer {
         let line = &mut self.lines[self.cursor_line];
         let byte_idx = line.char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(line.len());
+            .map_or(line.len(), |(i, _)| i);
 
         // Find the previous character's byte position
         let prev_byte_idx = line.char_indices()
             .nth(self.cursor_col - 1)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
 
         line.drain(prev_byte_idx..byte_idx);
         self.cursor_col -= 1;
     }
 
     /// Move cursor to line start (Ctrl+A)
-    pub fn move_to_start(&mut self) {
+    pub const fn move_to_start(&mut self) {
         self.cursor_col = 0;
     }
 
@@ -174,8 +172,7 @@ impl InputBuffer {
     pub fn history_prev(&mut self) {
         if self.history.is_empty() { return; }
 
-        let idx = self.history_index.map(|i| (i + 1).min(self.history.len() - 1))
-            .unwrap_or(0);
+        let idx = self.history_index.map_or(0, |i| (i + 1).min(self.history.len() - 1));
 
         if idx < self.history.len() {
             self.history_index = Some(idx);
@@ -219,13 +216,12 @@ impl InputBuffer {
         self.lines[self.cursor_line]
             .char_indices()
             .nth(self.cursor_col)
-            .map(|(i, _)| i)
-            .unwrap_or(self.lines[self.cursor_line].len())
+            .map_or(self.lines[self.cursor_line].len(), |(i, _)| i)
     }
 
     pub fn lines(&self) -> &[String] { &self.lines }
-    pub fn cursor_line(&self) -> usize { self.cursor_line }
-    pub fn cursor_col(&self) -> usize { self.cursor_col }
+    pub const fn cursor_line(&self) -> usize { self.cursor_line }
+    pub const fn cursor_col(&self) -> usize { self.cursor_col }
 }
 
 #[cfg(test)]

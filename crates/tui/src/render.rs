@@ -51,8 +51,7 @@ pub fn render_assistant(
     // Render thinking section if present (collapsible)
     if let Some(thinking) = thinking {
         let is_expanded = fold_manager
-            .map(|fm| fm.is_expanded(msg_id))
-            .unwrap_or(false);
+            .is_some_and(|fm| fm.is_expanded(msg_id));
 
         let indicator = if is_expanded {
             chars::FOLD_EXPANDED
@@ -61,7 +60,7 @@ pub fn render_assistant(
         };
 
         let tokens = thinking.len() / 4;
-        let header = format!("{} Thinking ({} tokens)", indicator, tokens);
+        let header = format!("{indicator} Thinking ({tokens} tokens)");
 
         lines.push(Line::from(vec![Span::styled(
             header,
@@ -102,7 +101,7 @@ pub fn render_tool(
     };
 
     // Tool header line
-    let header = format!("{} Tool: {}", indicator, tool_name);
+    let header = format!("{indicator} Tool: {tool_name}");
     lines.push(Line::from(vec![Span::styled(header, Styles::tool_header())]));
 
     if !tool_input.is_empty() && !is_expanded {
@@ -117,7 +116,7 @@ pub fn render_tool(
             .to_string();
         let ellipsis = if tool_input.len() > 40 { "..." } else { "" };
         lines.push(Line::from(vec![Span::styled(
-            format!("  {}{}", truncated, ellipsis),
+            format!("  {truncated}{ellipsis}"),
             Style::default().fg(colors::text_muted()),
         )]));
     }
@@ -168,7 +167,7 @@ pub fn render_system(lines: &mut Vec<Line>, content: &str) {
 pub fn render_streaming_indicator(lines: &mut Vec<Line>, frame: usize) {
     let spinner = crate::theme::spinner_char(frame);
     lines.push(Line::from(vec![Span::styled(
-        format!("{}", spinner),
+        spinner.to_string(),
         Styles::spinner(),
     )]));
 }

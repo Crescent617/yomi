@@ -1,5 +1,5 @@
 [package]
-name = "yomi-tui"
+name = "tui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

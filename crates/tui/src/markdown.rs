@@ -53,7 +53,7 @@ impl MarkdownRenderer {
                         Tag::Item => {
                             let indent = "  ".repeat(list_stack.len().saturating_sub(1));
                             let prefix = match list_stack.last().copied().flatten() {
-                                Some(num) => format!("{indent}{}. ", num),
+                                Some(num) => format!("{indent}{num}. "),
                                 None => format!("{indent}{} ", chars::BULLET),
                             };
                             current_line.push(Span::styled(
@@ -187,7 +187,7 @@ impl MarkdownRenderer {
                 MdEvent::Code(code) => {
                     // Inline code
                     current_line.push(Span::styled(
-                        format!(" `{}` ", code),
+                        format!(" `{code}` "),
                         Styles::inline_code(),
                     ));
                 }

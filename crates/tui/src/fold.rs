@@ -25,7 +25,7 @@ pub struct FoldManager {
 }
 
 impl FoldManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             folds: Vec::new(),
             focused_index: None,
@@ -73,11 +73,11 @@ impl FoldManager {
 
     /// Check if expanded
     pub fn is_expanded(&self, id: MessageId) -> bool {
-        self.get(id).map(|f| f.is_expanded).unwrap_or(false)
+        self.get(id).is_some_and(|f| f.is_expanded)
     }
 
     /// Navigate to next fold (for Tab navigation)
-    pub fn next_fold(&mut self) {
+    pub const fn next_fold(&mut self) {
         self.focused_index = match self.focused_index {
             None => Some(0),
             Some(i) => Some((i + 1) % self.folds.len()),
@@ -100,9 +100,9 @@ impl FoldManager {
             }
             FoldableType::Thinking => {
                 let tokens = fold.token_count
-                    .map(|n| format!("({} tokens)", n))
+                    .map(|n| format!("({n} tokens)"))
                     .unwrap_or_default();
-                format!("{} Thinking {}", icon, tokens)
+                format!("{icon} Thinking {tokens}")
             }
         }
     }

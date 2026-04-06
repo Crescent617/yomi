@@ -71,7 +71,7 @@ impl Agent {
             id: id.clone(),
             config,
             message_buffer,
-            event_tx: event_tx.clone(),
+            event_tx: event_tx,
             provider,
             tool_registry,
             sandbox,
@@ -312,8 +312,7 @@ impl Agent {
                 .unwrap()
                 .tool_calls
                 .as_ref()
-                .map(|c| c.len())
-                .unwrap_or(0);
+                .map_or(0, |c| c.len());
             tracing::info!(
                 "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
                 self.id.0,

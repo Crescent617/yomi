@@ -102,7 +102,7 @@ impl Session {
         self.main_agent.as_ref().map(|h| &h.id)
     }
 
-    pub fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<Event>> {
+    pub const fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<Event>> {
         self.event_rx.take()
     }
 }

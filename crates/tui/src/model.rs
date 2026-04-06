@@ -32,7 +32,7 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    pub fn new(id: MessageId, role: Role, content: String) -> Self {
+    pub const fn new(id: MessageId, role: Role, content: String) -> Self {
         Self {
             id,
             role,
@@ -57,7 +57,7 @@ impl ChatMessage {
         }
     }
 
-    pub fn prefix(&self) -> &'static str {
+    pub const fn prefix(&self) -> &'static str {
         match self.role {
             Role::User => "❯",
             Role::Assistant => "◆",
@@ -68,6 +68,7 @@ impl ChatMessage {
 
 /// Input buffer state with cursor and history
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct InputState {
     pub content: String,
     pub cursor_pos: usize,
@@ -75,16 +76,6 @@ pub struct InputState {
     pub history_index: Option<usize>,
 }
 
-impl Default for InputState {
-    fn default() -> Self {
-        Self {
-            content: String::new(),
-            cursor_pos: 0,
-            history: Vec::new(),
-            history_index: None,
-        }
-    }
-}
 
 impl InputState {
     pub fn insert(&mut self, c: char) {
@@ -120,7 +111,7 @@ impl InputState {
                 .content
                 .chars()
                 .nth(self.cursor_pos - 1)
-                .map_or(false, |c| c.is_whitespace())
+                .is_some_and(|c| c.is_whitespace())
         {
             self.cursor_pos -= 1;
         }
@@ -130,7 +121,7 @@ impl InputState {
                 .content
                 .chars()
                 .nth(self.cursor_pos - 1)
-                .map_or(false, |c| !c.is_whitespace())
+                .is_some_and(|c| !c.is_whitespace())
         {
             self.cursor_pos -= 1;
         }
@@ -146,23 +137,23 @@ impl InputState {
         self.content.truncate(self.cursor_pos);
     }
 
-    pub fn move_left(&mut self) {
+    pub const fn move_left(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
         }
     }
 
-    pub fn move_right(&mut self) {
+    pub const fn move_right(&mut self) {
         if self.cursor_pos < self.content.len() {
             self.cursor_pos += 1;
         }
     }
 
-    pub fn move_to_start(&mut self) {
+    pub const fn move_to_start(&mut self) {
         self.cursor_pos = 0;
     }
 
-    pub fn move_to_end(&mut self) {
+    pub const fn move_to_end(&mut self) {
         self.cursor_pos = self.content.len();
     }
 
@@ -227,7 +218,7 @@ impl InputState {
         content
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.content.is_empty()
     }
 
@@ -247,6 +238,7 @@ pub struct StreamingState {
 
 /// Application state model
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct Model {
     pub messages: Vec<ChatMessage>,
     pub input: InputState,
@@ -257,19 +249,6 @@ pub struct Model {
     pub should_quit: bool,
 }
 
-impl Default for Model {
-    fn default() -> Self {
-        Self {
-            messages: Vec::new(),
-            input: InputState::default(),
-            streaming: StreamingState::default(),
-            scroll_offset: 0,
-            next_msg_id: 0,
-            last_ctrl_c: None,
-            should_quit: false,
-        }
-    }
-}
 
 impl Model {
     pub fn add_user_message(&mut self, content: String) -> MessageId {
