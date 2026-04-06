@@ -245,17 +245,6 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-/// Build env var name with suffix efficiently using pre-allocated string
-/// Format: {prefix}{suffix} (e.g., "`YOMI_OPENAI`" + "_`API_KEY`")
-#[inline]
-fn env_var_with_suffix(prefix: &str, suffix: &str) -> Option<String> {
-    // Pre-calculate capacity to avoid reallocations
-    let mut name = String::with_capacity(prefix.len() + suffix.len());
-    name.push_str(prefix);
-    name.push_str(suffix);
-    std::env::var(&name).ok()
-}
-
 /// Parse boolean from environment variable
 #[inline]
 fn env_bool(name: &str) -> bool {
@@ -367,16 +356,5 @@ mod tests {
         ] {
             std::env::remove_var(key);
         }
-    }
-
-    #[test]
-    fn test_env_var_with_suffix() {
-        // Test the efficient string building
-        std::env::set_var("YOMI_TEST_SUFFIX", "test_value");
-
-        let result = env_var_with_suffix("YOMI_", "TEST_SUFFIX");
-        assert_eq!(result, Some("test_value".to_string()));
-
-        std::env::remove_var("YOMI_TEST_SUFFIX");
     }
 }

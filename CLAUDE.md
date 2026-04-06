@@ -20,6 +20,7 @@ crates/
 
 ### Constitution
 
+- Occam's Razor: Prefer the simplest solution that works
 - SOLID: Follow SOLID principles for maintainable code
 - DRY: Avoid code duplication; extract common logic into functions or traits
 - KISS: Keep it simple; prefer straightforward solutions over clever ones

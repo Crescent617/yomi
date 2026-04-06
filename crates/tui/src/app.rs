@@ -310,7 +310,9 @@ impl App {
         let line_start = self.input_buffer[..self.cursor_pos.min(self.input_buffer.len())]
             .rfind('\n')
             .map_or(0, |i| i + 1);
-        let col = self.cursor_pos.saturating_sub(line_start);
+        // Calculate display column by counting Unicode width up to cursor
+        let line_content = &self.input_buffer[line_start..self.cursor_pos.min(self.input_buffer.len())];
+        let col = unicode_width::UnicodeWidthStr::width(line_content);
 
         let cursor_x = if cursor_line == 0 { 2 } else { 2 } + col;
         let cursor_y = area.y + cursor_line as u16 + 1; // +1 for border
@@ -431,31 +433,51 @@ impl App {
     // Input operations
     fn insert_char(&mut self, c: char) {
         self.input_buffer.insert(self.cursor_pos, c);
-        self.cursor_pos += 1;
+        self.cursor_pos += c.len_utf8();
     }
 
     fn backspace(&mut self) {
         if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
-            self.input_buffer.remove(self.cursor_pos);
+            // Find the start of the previous UTF-8 character
+            let mut idx = self.cursor_pos - 1;
+            while idx > 0 && !self.input_buffer.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            self.input_buffer.drain(idx..self.cursor_pos);
+            self.cursor_pos = idx;
         }
     }
 
     fn delete_char(&mut self) {
         if self.cursor_pos < self.input_buffer.len() {
-            self.input_buffer.remove(self.cursor_pos);
+            // Find the end of the current UTF-8 character
+            let mut idx = self.cursor_pos + 1;
+            while idx < self.input_buffer.len() && !self.input_buffer.is_char_boundary(idx) {
+                idx += 1;
+            }
+            self.input_buffer.drain(self.cursor_pos..idx);
         }
     }
 
-    const fn move_left(&mut self) {
+    fn move_left(&mut self) {
         if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
+            // Move to the start of the previous UTF-8 character
+            let mut idx = self.cursor_pos - 1;
+            while idx > 0 && !self.input_buffer.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            self.cursor_pos = idx;
         }
     }
 
-    const fn move_right(&mut self) {
+    fn move_right(&mut self) {
         if self.cursor_pos < self.input_buffer.len() {
-            self.cursor_pos += 1;
+            // Skip current character bytes to reach next character boundary
+            let mut idx = self.cursor_pos + 1;
+            while idx < self.input_buffer.len() && !self.input_buffer.is_char_boundary(idx) {
+                idx += 1;
+            }
+            self.cursor_pos = idx;
         }
     }
 
@@ -472,21 +494,38 @@ impl App {
             return;
         }
         let end = self.cursor_pos;
-        while self.cursor_pos > 0
-            && self.input_buffer
-                .chars()
-                .nth(self.cursor_pos - 1)
-                .is_some_and(|c| c.is_whitespace())
-        {
-            self.cursor_pos -= 1;
+
+        // Helper to get previous character
+        let prev_char = |pos: usize| -> Option<char> {
+            if pos == 0 {
+                return None;
+            }
+            let mut idx = pos - 1;
+            while idx > 0 && !self.input_buffer.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            self.input_buffer[idx..pos].chars().next()
+        };
+
+        // Helper to move to previous character boundary
+        let prev_boundary = |pos: usize| -> usize {
+            if pos == 0 {
+                return 0;
+            }
+            let mut idx = pos - 1;
+            while idx > 0 && !self.input_buffer.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            idx
+        };
+
+        // Skip whitespace
+        while self.cursor_pos > 0 && prev_char(self.cursor_pos).is_some_and(|c| c.is_whitespace()) {
+            self.cursor_pos = prev_boundary(self.cursor_pos);
         }
-        while self.cursor_pos > 0
-            && self.input_buffer
-                .chars()
-                .nth(self.cursor_pos - 1)
-                .is_some_and(|c| !c.is_whitespace())
-        {
-            self.cursor_pos -= 1;
+        // Delete word chars
+        while self.cursor_pos > 0 && prev_char(self.cursor_pos).is_some_and(|c| !c.is_whitespace()) {
+            self.cursor_pos = prev_boundary(self.cursor_pos);
         }
         self.input_buffer.drain(self.cursor_pos..end);
     }

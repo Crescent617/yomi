@@ -11,7 +11,7 @@ pub mod markdown;
 pub mod render;
 
 pub use app::App;
-pub use model::{ChatMessage, InputState, MessageId, Role, StreamingState, ToolCall};
+pub use model::{ChatMessage, MessageId, Role, StreamingState, ToolCall};
 pub use theme::{
     chars, colors, current_theme, hex, presets, reset_theme, rgb, set_theme, spinner_char, Styles,
     ThemeConfig,
