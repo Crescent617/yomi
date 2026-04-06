@@ -1,15 +1,15 @@
-//! nekoclaw-core - Core library for the nekoclaw AI coding assistant
+//! yomi-core - Core library for the yomi AI coding assistant
 
 /// Environment variable prefix - change this to rebrand the entire CLI
-/// Default: "NEKOCLAW_" (produces env vars like `NEKOCLAW_API_KEY`)
-pub const ENV_PREFIX: &str = "NEKOCLAW_";
+/// Default: "YOMI_" (produces env vars like `YOMI_API_KEY`)
+pub const ENV_PREFIX: &str = "YOMI_";
 
 /// Compile-time string concatenation for env var names
-/// Usage: `env_name!("API_KEY")` expands to `"NEKOCLAW_API_KEY"`
+/// Usage: `env_name!("API_KEY")` expands to `"YOMI_API_KEY"`
 #[macro_export]
 macro_rules! env_name {
     ($suffix:expr) => {
-        std::concat!("NEKOCLAW_", $suffix)
+        std::concat!("YOMI_", $suffix)
     };
 }
 

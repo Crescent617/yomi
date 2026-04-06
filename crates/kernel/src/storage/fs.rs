@@ -19,16 +19,16 @@ impl FsStorage {
         Ok(Self { base_dir })
     }
 
-    /// Default storage path: ~/.local/share/nekoclaw/sessions/
+    /// Default storage path: ~/.local/share/yomi/sessions/
     pub fn default_path() -> PathBuf {
-        // Use ~/.local/share/nekoclaw/sessions as default
+        // Use ~/.local/share/yomi/sessions as default
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
         PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("nekoclaw")
+            .join("yomi")
             .join("sessions")
     }
 

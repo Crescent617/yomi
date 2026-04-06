@@ -1,20 +1,20 @@
 use anyhow::{Context, Result};
+use app::{Coordinator, SessionConfig};
 use clap::Parser;
-use nekoclaw_app::{Coordinator, SessionConfig};
-use nekoclaw_core::{
+use kernel::{
     agent::AgentConfig,
     config::{env_names, Config, ModelProvider, DEFAULT_DATA_DIR},
     storage::FsStorage,
     tool::{enable_yolo_mode, ToolRegistry, ToolSandbox},
 };
-use nekoclaw_core::{AnthropicProvider, BashTool, FileTool, OpenAIProvider};
-use nekoclaw_tui::App;
+use kernel::{AnthropicProvider, BashTool, FileTool, OpenAIProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tui::App;
 
 #[derive(Parser)]
-#[command(name = "nekoclaw")]
+#[command(name = "yomi")]
 #[command(about = "AI coding assistant CLI")]
 struct Args {
     #[arg(short, long)]
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 
     // Set platform-specific data directory if not overridden by env
     if std::env::var(env_names::DATA_DIR).is_err() {
-        let data_dir = directories::ProjectDirs::from("ai", "nekoclaw", "nekoclaw")
+        let data_dir = directories::ProjectDirs::from("ai", "yomi", "yomi")
             .map(|d| d.data_dir().to_path_buf());
         config = config.with_data_dir(data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR)));
     }
@@ -107,11 +107,6 @@ async fn main() -> Result<()> {
     // Validate API key
     if !config.has_api_key() {
         eprintln!("Error: API key not configured.");
-        eprintln!(
-            "Set {} or {}_API_KEY environment variable.",
-            env_names::API_KEY,
-            env_names::OPENAI_PREFIX,
-        );
         std::process::exit(1);
     }
 
@@ -119,7 +114,7 @@ async fn main() -> Result<()> {
     let storage = Arc::new(FsStorage::new(config.data_dir.clone())?);
 
     // Create provider based on configuration
-    let provider: Arc<dyn nekoclaw_core::provider::ModelProvider> = match config.provider {
+    let provider: Arc<dyn kernel::provider::ModelProvider> = match config.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
@@ -136,13 +131,13 @@ async fn main() -> Result<()> {
         ToolSandbox::default()
     };
 
-    let coordinator = Arc::new(
-        Coordinator::new(storage, provider, tool_registry, sandbox)
-    );
+    let coordinator = Arc::new(Coordinator::new(storage, provider, tool_registry, sandbox));
 
     // Build agent config
-    let mut agent_config = AgentConfig::default();
-    agent_config.model = config.model.clone();
+    let agent_config = AgentConfig {
+        model: config.model.clone(),
+        ..Default::default()
+    };
 
     let session_config = SessionConfig {
         agent: agent_config,
@@ -150,7 +145,7 @@ async fn main() -> Result<()> {
     };
     let session_id = coordinator.create_session(session_config).await?;
 
-    println!("Nekoclaw session started: {}", session_id.0);
+    println!("yomi session started: {}", session_id.0);
     println!("Working directory: {}", working_dir.display());
     println!("Provider: {}", config.provider);
     println!("Model: {}", config.model.model_id);
@@ -181,7 +176,9 @@ async fn main() -> Result<()> {
     });
 
     // Get event receiver from coordinator for the session
-    let event_rx = coordinator.take_session_event_receiver(&session_id).await
+    let event_rx = coordinator
+        .take_session_event_receiver(&session_id)
+        .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
     // Run TUI
@@ -194,34 +191,32 @@ async fn main() -> Result<()> {
 
 /// Reload provider-specific settings after provider change
 fn reload_for_provider(mut config: Config) -> Config {
-    let provider_prefix = config.provider.env_prefix();
+    let provider = config.provider;
 
-    // Re-check provider-specific API key: NEKOCLAW_{PROVIDER}_API_KEY
-    if let Ok(key) = std::env::var(format!("{provider_prefix}API_KEY")) {
-        config.model.api_key = key;
-    }
+    // Re-check provider-specific API key: YOMI_{PROVIDER}_API_KEY > {PROVIDER}_API_KEY
+    config.model.api_key = std::env::var(provider.standard_api_key_env())
+        .ok()
+        .unwrap_or_else(|| config.model.api_key.clone());
 
-    // Re-check provider-specific model: NEKOCLAW_{PROVIDER}_MODEL
-    if let Ok(model) = std::env::var(format!("{provider_prefix}MODEL")) {
-        config.model.model_id = model;
-    } else if config.model.model_id.is_empty() {
-        // Set default model for new provider
-        config.model.model_id = match config.provider {
-            ModelProvider::OpenAI => "gpt-4".to_string(),
-            ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
-        };
-    }
+    // Re-check provider-specific model: YOMI_{PROVIDER}_MODEL > {PROVIDER}_MODEL
+    config.model.model_id = std::env::var(provider.standard_model_env())
+        .ok()
+        .unwrap_or_else(|| {
+            if config.model.model_id.is_empty() {
+                // Set default model for new provider
+                match provider {
+                    ModelProvider::OpenAI => "gpt-4".to_string(),
+                    ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
+                }
+            } else {
+                config.model.model_id.clone()
+            }
+        });
 
-    // Re-check provider-specific endpoint: NEKOCLAW_{PROVIDER}_ENDPOINT
-    if let Ok(endpoint) = std::env::var(format!("{provider_prefix}ENDPOINT")) {
-        config.model.endpoint = endpoint;
-    } else if config.model.endpoint.is_empty() {
-        // Set default endpoint for new provider
-        config.model.endpoint = match config.provider {
-            ModelProvider::OpenAI => "https://api.openai.com/v1".to_string(),
-            ModelProvider::Anthropic => "https://api.anthropic.com".to_string(),
-        };
-    }
+    // Re-check provider-specific endpoint: YOMI_{PROVIDER}_ENDPOINT > {PROVIDER}_ENDPOINT
+    config.model.endpoint = std::env::var(provider.standard_api_base_env())
+        .ok()
+        .unwrap_or_else(|| config.model.endpoint.clone());
 
     config
 }
@@ -230,24 +225,24 @@ fn reload_for_provider(mut config: Config) -> Config {
 ///
 /// Environment variables:
 /// - `RUST_LOG`: Set log level (e.g., "debug", "info", "warn", "error")
-/// - `NEKOCLAW_LOG_DIR`: Log directory (default: "~/.nekoclaw/logs")
+/// - `YOMI_LOG_DIR`: Log directory (default: "~/.yomi/logs")
 fn init_logging() -> Result<()> {
-    // Get log directory from env or default to ~/.nekoclaw/logs
+    // Get log directory from env or default to ~/.yomi/logs
     let log_dir = std::env::var(env_names::LOG_DIR)
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            directories::ProjectDirs::from("ai", "nekoclaw", "nekoclaw")
+            directories::ProjectDirs::from("ai", "yomi", "yomi")
                 .map(|d| d.data_dir().join("logs"))
-                .unwrap_or_else(|| PathBuf::from("/tmp/nekoclaw_logs"))
+                .unwrap_or_else(|| PathBuf::from("/tmp/yomi_logs"))
         });
 
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
 
-    // Create rolling file appender - single file nekoclaw.log with rotation
-    // Max 10MB per file, keep 5 backups (nekoclaw.log.1, nekoclaw.log.2, etc.)
-    let log_path = log_dir.join("nekoclaw.log");
+    // Create rolling file appender - single file yomi.log with rotation
+    // Max 10MB per file, keep 5 backups (yomi.log.1, yomi.log.2, etc.)
+    let log_path = log_dir.join("yomi.log");
     let file_appender = tracing_rolling_file::RollingFileAppenderBase::builder()
         .filename(log_path.to_string_lossy().to_string())
         .condition_max_file_size(10 * 1024 * 1024) // 10MB

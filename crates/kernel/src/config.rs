@@ -1,31 +1,3 @@
-//! Configuration management for nekoclaw
-//!
-//! Environment variables (all prefixed with NEKOCLAW_):
-//!
-//! # Provider Selection
-//! - `NEKOCLAW_PROVIDER`: Provider to use (openai, anthropic)
-//!
-//! # Generic API Settings (used for selected provider)
-//! - `NEKOCLAW_API_KEY`: API key for the selected provider
-//! - `NEKOCLAW_MODEL`: Model ID (e.g., gpt-4, claude-3-opus-20240229)
-//! - `NEKOCLAW_ENDPOINT`: Custom API endpoint URL
-//! - `NEKOCLAW_MAX_TOKENS`: Maximum tokens per request
-//! - `NEKOCLAW_TEMPERATURE`: Temperature (0.0 - 2.0)
-//!
-//! # Provider-Specific Settings (optional, takes precedence over generic)
-//! - `NEKOCLAW_OPENAI_API_KEY` / `NEKOCLAW_ANTHROPIC_API_KEY`
-//! - `NEKOCLAW_OPENAI_MODEL` / `NEKOCLAW_ANTHROPIC_MODEL`
-//! - `NEKOCLAW_OPENAI_ENDPOINT` / `NEKOCLAW_ANTHROPIC_ENDPOINT`
-//!
-//! # Application Settings
-//! - `NEKOCLAW_SANDBOX`: Enable sandbox mode (true/false)
-//! - `NEKOCLAW_YOLO`: Skip all confirmations (true/false)
-//! - `NEKOCLAW_DATA_DIR`: Data directory path (see `DEFAULT_DATA_DIR`)
-//! - `NEKOCLAW_MAX_ITERATIONS`: Max agent iterations (default: 50)
-//! - `NEKOCLAW_ENABLE_SUB_AGENTS`: Enable sub-agents (true/false)
-//!
-//! Priority: CLI args > Provider-specific env > Generic env > Defaults
-
 use crate::agent::AgentConfig;
 use crate::env_name;
 use crate::provider::ModelConfig;
@@ -33,7 +5,7 @@ use crate::storage::StorageConfig;
 use std::path::PathBuf;
 
 /// Default data directory path
-pub const DEFAULT_DATA_DIR: &str = "~/.nekoclaw";
+pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
@@ -45,14 +17,21 @@ pub mod env_names {
     /// Generic API settings
     pub const API_KEY: &str = env_name!("API_KEY");
     pub const MODEL: &str = env_name!("MODEL");
-    pub const ENDPOINT: &str = env_name!("ENDPOINT");
     pub const API_BASE: &str = env_name!("API_BASE");
     pub const MAX_TOKENS: &str = env_name!("MAX_TOKENS");
     pub const TEMPERATURE: &str = env_name!("TEMPERATURE");
 
-    /// Provider-specific prefixes
+    /// Provider-specific prefixes (YOMI_ prefixed)
     pub const OPENAI_PREFIX: &str = env_name!("OPENAI_");
     pub const ANTHROPIC_PREFIX: &str = env_name!("ANTHROPIC_");
+
+    /// Standard non-prefixed provider-specific env vars
+    pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
+    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+    pub const OPENAI_API_MODEL: &str = "OPENAI_API_MODEL";
+    pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
+    pub const OPENAI_API_BASE: &str = "OPENAI_API_BASE";
+    pub const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 
     /// Application settings
     pub const SANDBOX: &str = env_name!("SANDBOX");
@@ -79,12 +58,30 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
-    /// Get the env prefix for this provider (e.g., "`NEKOCLAW_OPENAI`_")
+    /// Get the standard (non-prefixed) API key env var name
     #[inline]
-    pub const fn env_prefix(&self) -> &'static str {
+    pub const fn standard_api_key_env(&self) -> &'static str {
         match self {
-            Self::OpenAI => env_names::OPENAI_PREFIX,
-            Self::Anthropic => env_names::ANTHROPIC_PREFIX,
+            Self::OpenAI => env_names::OPENAI_API_KEY,
+            Self::Anthropic => env_names::ANTHROPIC_API_KEY,
+        }
+    }
+
+    /// Get the standard (non-prefixed) model env var name
+    #[inline]
+    pub const fn standard_model_env(&self) -> &'static str {
+        match self {
+            Self::OpenAI => env_names::OPENAI_API_MODEL,
+            Self::Anthropic => env_names::ANTHROPIC_MODEL,
+        }
+    }
+
+    /// Get the standard (non-prefixed) API base env var name
+    #[inline]
+    pub const fn standard_api_base_env(&self) -> &'static str {
+        match self {
+            Self::OpenAI => env_names::OPENAI_API_BASE,
+            Self::Anthropic => env_names::ANTHROPIC_BASE_URL,
         }
     }
 }
@@ -120,7 +117,7 @@ impl std::fmt::Display for ModelProvider {
     }
 }
 
-/// Complete nekoclaw configuration from environment
+/// Complete yomi configuration from environment
 #[derive(Debug, Clone)]
 pub struct Config {
     pub provider: ModelProvider,
@@ -159,24 +156,22 @@ impl Config {
         }
 
         // Load provider-specific or generic API settings
-        let provider_env_prefix = config.provider.env_prefix();
+        // Priority: Provider-specific (YOMI_) > Provider-specific (standard) > Generic (YOMI_) > Defaults
+        let provider = config.provider;
 
-        // API Key: {PREFIX}{PROVIDER}_API_KEY > {PREFIX}API_KEY
-        config.model.api_key = env_var_with_suffix(provider_env_prefix, "API_KEY")
+        config.model.api_key = env_var(provider.standard_api_key_env())
             .or_else(|| env_var(env_names::API_KEY))
             .unwrap_or_default();
 
-        // Model: {PREFIX}{PROVIDER}_MODEL > {PREFIX}MODEL > defaults
-        config.model.model_id = env_var_with_suffix(provider_env_prefix, "MODEL")
+        // Model: YOMI_OPENAI_MODEL > OPENAI_MODEL > YOMI_MODEL > defaults
+        config.model.model_id = env_var(provider.standard_model_env())
             .or_else(|| env_var(env_names::MODEL))
-            .unwrap_or_else(|| default_model(config.provider));
+            .unwrap_or_else(|| default_model(provider));
 
-        // Endpoint: {PREFIX}{PROVIDER}_ENDPOINT > {PREFIX}ENDPOINT > defaults
-        config.model.endpoint = env_var_with_suffix(provider_env_prefix, "ENDPOINT")
-            .or_else(|| env_var(env_names::ENDPOINT))
-            .or_else(|| env_var_with_suffix(provider_env_prefix, "API_BASE")) // Provider-specific API_BASE
-            .or_else(|| env_var(env_names::API_BASE)) // Support legacy API_BASE for backward compatibility
-            .unwrap_or_else(|| default_endpoint(config.provider));
+        // Endpoint: YOMI_OPENAI_ENDPOINT > OPENAI_ENDPOINT > YOMI_ENDPOINT > YOMI_OPENAI_API_BASE > OPENAI_API_BASE > YOMI_API_BASE > defaults
+        config.model.endpoint = env_var(env_names::API_BASE)
+            .or_else(|| env_var(provider.standard_api_base_env()))
+            .unwrap_or_else(|| default_endpoint(provider));
 
         // Max tokens
         if let Some(tokens) = env_var(env_names::MAX_TOKENS).and_then(|s| s.parse().ok()) {
@@ -251,7 +246,7 @@ fn env_var(name: &str) -> Option<String> {
 }
 
 /// Build env var name with suffix efficiently using pre-allocated string
-/// Format: {prefix}{suffix} (e.g., "`NEKOCLAW_OPENAI`" + "_`API_KEY`")
+/// Format: {prefix}{suffix} (e.g., "`YOMI_OPENAI`" + "_`API_KEY`")
 #[inline]
 fn env_var_with_suffix(prefix: &str, suffix: &str) -> Option<String> {
     // Pre-calculate capacity to avoid reallocations
@@ -292,21 +287,24 @@ mod tests {
 
     #[test]
     fn test_env_prefix_constant() {
-        assert_eq!(ENV_PREFIX, "NEKOCLAW_");
+        assert_eq!(ENV_PREFIX, "YOMI_");
     }
 
     #[test]
-    fn test_env_names() {
-        assert_eq!(env_names::PROVIDER, "NEKOCLAW_PROVIDER");
-        assert_eq!(env_names::API_KEY, "NEKOCLAW_API_KEY");
-        assert_eq!(env_names::OPENAI_PREFIX, "NEKOCLAW_OPENAI_");
-        assert_eq!(env_names::ANTHROPIC_PREFIX, "NEKOCLAW_ANTHROPIC_");
-    }
-
-    #[test]
-    fn test_provider_env_prefix() {
-        assert_eq!(ModelProvider::OpenAI.env_prefix(), "NEKOCLAW_OPENAI_");
-        assert_eq!(ModelProvider::Anthropic.env_prefix(), "NEKOCLAW_ANTHROPIC_");
+    fn test_provider_standard_env_vars() {
+        assert_eq!(
+            ModelProvider::OpenAI.standard_api_key_env(),
+            "OPENAI_API_KEY"
+        );
+        assert_eq!(
+            ModelProvider::Anthropic.standard_api_key_env(),
+            "ANTHROPIC_API_KEY"
+        );
+        assert_eq!(ModelProvider::OpenAI.standard_model_env(), "OPENAI_MODEL");
+        assert_eq!(
+            ModelProvider::Anthropic.standard_model_env(),
+            "ANTHROPIC_MODEL"
+        );
     }
 
     #[test]
@@ -391,11 +389,11 @@ mod tests {
     #[test]
     fn test_env_var_with_suffix() {
         // Test the efficient string building
-        std::env::set_var("NEKOCLAW_TEST_SUFFIX", "test_value");
+        std::env::set_var("YOMI_TEST_SUFFIX", "test_value");
 
-        let result = env_var_with_suffix("NEKOCLAW_", "TEST_SUFFIX");
+        let result = env_var_with_suffix("YOMI_", "TEST_SUFFIX");
         assert_eq!(result, Some("test_value".to_string()));
 
-        std::env::remove_var("NEKOCLAW_TEST_SUFFIX");
+        std::env::remove_var("YOMI_TEST_SUFFIX");
     }
 }

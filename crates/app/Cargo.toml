@@ -1,12 +1,12 @@
 [package]
-name = "nekoclaw-app"
+name = "yomi-app"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
-nekoclaw-core = { workspace = true }
+kernel = { workspace = true }
 
 tokio = { workspace = true }
 async-trait = { workspace = true }

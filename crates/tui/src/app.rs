@@ -17,7 +17,7 @@ use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use nekoclaw_core::event::Event as AppEvent;
+use kernel::event::Event as AppEvent;
 
 use crate::model::{ChatMessage, Model, Role};
 
@@ -131,7 +131,7 @@ impl App {
         if self.model.messages.is_empty() && !self.model.streaming.is_active {
             lines.push(Line::from(""));
             lines.push(Line::from(
-                Span::styled("Welcome to Nekoclaw", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                Span::styled("Welcome to yomi", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
             ));
             lines.push(Line::from(
                 Span::styled("Your AI coding assistant", Style::default().fg(Color::DarkGray))
@@ -385,15 +385,15 @@ impl App {
 
     async fn handle_app_event(&mut self, event: &AppEvent) -> Result<()> {
         match event {
-            AppEvent::Model(nekoclaw_core::event::ModelEvent::Chunk { content, .. }) => {
+            AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                 match content {
-                    nekoclaw_core::event::ContentChunk::Text(_) => {
+                    kernel::event::ContentChunk::Text(text) => {
                         if !self.model.streaming.is_active {
                             self.model.start_streaming();
                         }
-                        // Text is appended in streaming model, UI reads from there
+                        self.model.append_stream_content(text);
                     }
-                    nekoclaw_core::event::ContentChunk::Thinking { thinking, .. } => {
+                    kernel::event::ContentChunk::Thinking { thinking, .. } => {
                         if !self.model.streaming.is_active {
                             self.model.start_streaming();
                         }
@@ -402,26 +402,26 @@ impl App {
                     _ => {}
                 }
             }
-            AppEvent::Model(nekoclaw_core::event::ModelEvent::Complete { .. }) => {
+            AppEvent::Model(kernel::event::ModelEvent::Complete { .. }) => {
                 if self.model.streaming.is_active {
                     let (content, thinking) = self.model.stop_streaming();
                     let thinking_opt = if thinking.is_empty() { None } else { Some(thinking) };
                     self.model.add_assistant_message(content, thinking_opt);
                 }
             }
-            AppEvent::Model(nekoclaw_core::event::ModelEvent::Error { error, .. }) => {
+            AppEvent::Model(kernel::event::ModelEvent::Error { error, .. }) => {
                 if self.model.streaming.is_active {
                     self.model.stop_streaming();
                 }
                 self.model.add_system_message(format!("Error: {}", error));
             }
-            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Started { tool_name, .. }) => {
+            AppEvent::Tool(kernel::event::ToolEvent::Started { tool_name, .. }) => {
                 self.model.add_system_message(format!("Running: {}", tool_name));
             }
-            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Output { output, .. }) => {
+            AppEvent::Tool(kernel::event::ToolEvent::Output { output, .. }) => {
                 self.model.add_system_message(output.clone());
             }
-            AppEvent::Tool(nekoclaw_core::event::ToolEvent::Error { error, .. }) => {
+            AppEvent::Tool(kernel::event::ToolEvent::Error { error, .. }) => {
                 self.model.add_system_message(format!("Tool error: {}", error));
             }
             _ => {}

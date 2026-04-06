@@ -1,12 +1,12 @@
 use anyhow::Result;
-use nekoclaw_core::{
+use kernel::{
     agent::{Agent, AgentConfig, AgentHandle, AgentState},
     event::Event,
     provider::ModelProvider,
     storage::Storage,
     tool::{ToolRegistry, ToolSandbox},
 };
-use nekoclaw_core::types::{SessionId, AgentId};
+use kernel::types::{SessionId, AgentId};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

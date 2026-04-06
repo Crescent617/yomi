@@ -1,12 +1,12 @@
 use crate::session::{Session, SessionConfig};
 use anyhow::Result;
-use nekoclaw_core::{
+use kernel::{
     event::Event,
     provider::ModelProvider,
     storage::Storage,
     tool::{ToolRegistry, ToolSandbox},
 };
-use nekoclaw_core::types::SessionId;
+use kernel::types::SessionId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

@@ -10,7 +10,7 @@ Nekoclaw is a production-grade AI coding assistant CLI tool written in Rust. It 
 crates/
 ├── core/       # Core business logic + async agent runtime + trait definitions
 ├── app/        # Application orchestration (Coordinator, Session)
-├── cli/        # CLI entry point (binary: nekoclaw)
+├── cli/        # CLI entry point (binary: yomi)
 └── tui/        # Terminal UI (ratatui-based)
 ```
 

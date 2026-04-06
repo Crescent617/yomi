@@ -22,13 +22,13 @@ test:
 
 # Run tests for a specific crate (e.g., `just test-core`)
 test-core:
-    cargo test -p nekoclaw-core
+    cargo test -p yomi-core
 
 test-app:
-    cargo test -p nekoclaw-app
+    cargo test -p yomi-app
 
 test-tui:
-    cargo test -p nekoclaw-tui
+    cargo test -p yomi-tui
 
 # Run clippy linting
 clippy:
@@ -46,13 +46,13 @@ fmt:
 fmt-check:
     cargo fmt -- --check
 
-# Run the nekoclaw CLI (pass args with `just run -- --directory ./my-project --yolo`)
+# Run the yomi CLI (pass args with `just run -- --directory ./my-project --yolo`)
 run *ARGS:
-    cargo run --bin nekoclaw -- {{ARGS}}
+    cargo run --bin yomi -- {{ARGS}}
 
-# Run nekoclaw in YOLO mode for current directory
+# Run yomi in YOLO mode for current directory
 run-yolo:
-    cargo run --bin nekoclaw -- --yolo
+    cargo run --bin yomi -- --yolo
 
 # Clean build artifacts
 clean:
@@ -75,8 +75,8 @@ update:
 
 # Run with tracing debug logging
 debug *ARGS:
-    RUST_LOG=debug cargo run --bin nekoclaw -- {{ARGS}}
+    RUST_LOG=debug cargo run --bin yomi -- {{ARGS}}
 
 # Run with tracing info logging (less verbose)
 info *ARGS:
-    RUST_LOG=info cargo run --bin nekoclaw -- {{ARGS}}
+    RUST_LOG=info cargo run --bin yomi -- {{ARGS}}

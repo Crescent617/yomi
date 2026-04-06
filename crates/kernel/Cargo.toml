@@ -1,5 +1,5 @@
 [package]
-name = "nekoclaw-core"
+name = "yomi-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
