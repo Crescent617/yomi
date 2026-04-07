@@ -8,7 +8,7 @@ use crossterm::{
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Position},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
     DefaultTerminal, Frame,
@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 
 use kernel::event::Event as AppEvent;
 
+use crate::markdown::MarkdownRenderer;
 use crate::model::{ChatMessage, Model, Role};
 
 pub struct App {
@@ -65,7 +66,7 @@ impl App {
     }
 
     async fn run_loop(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        let last_tick = Instant::now();
+        let _last_tick = Instant::now();
 
         loop {
             if self.should_quit {
@@ -172,6 +173,7 @@ impl App {
 
     fn message_to_lines(&self, msg: &ChatMessage) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
+        let markdown = MarkdownRenderer::new();
 
         let (prefix, prefix_color) = match msg.role {
             Role::User => ("❯", Color::Magenta),
@@ -205,20 +207,40 @@ impl App {
             }
         }
 
-        // Content
-        for (i, line) in msg.content.lines().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{prefix} "),
-                        Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                ]));
-            } else {
-                let indent = if matches!(msg.role, Role::User) { "│ " } else { "  " };
-                lines.push(Line::from(vec![
-                    Span::styled(indent, Style::default().fg(prefix_color)),
-                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                ]));
+        // Content - use markdown for assistant, plain text for user/system
+        match msg.role {
+            Role::Assistant => {
+                let md_lines = markdown.render(&msg.content);
+                for (i, line) in md_lines.into_iter().enumerate() {
+                    if i == 0 {
+                        let mut first_line = vec![
+                            Span::styled(format!("{prefix} "),
+                                Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
+                        ];
+                        first_line.extend(line.spans);
+                        lines.push(Line::from(first_line));
+                    } else {
+                        lines.push(line);
+                    }
+                }
+            }
+            _ => {
+                // User and System: plain text rendering
+                for (i, line) in msg.content.lines().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{prefix} "),
+                                Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        ]));
+                    } else {
+                        let indent = if matches!(msg.role, Role::User) { "│ " } else { "  " };
+                        lines.push(Line::from(vec![
+                            Span::styled(indent, Style::default().fg(prefix_color)),
+                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        ]));
+                    }
+                }
             }
         }
 
@@ -228,8 +250,9 @@ impl App {
     fn streaming_to_lines(&self) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         let streaming = &self.model.streaming;
+        let markdown = MarkdownRenderer::new();
 
-        // Thinking
+        // Thinking section
         if !streaming.thinking.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
@@ -245,31 +268,46 @@ impl App {
             lines.push(Line::from(""));
         }
 
-        // Content with spinner
-        for (i, line) in streaming.content.lines().enumerate() {
-            if i == 0 {
+        // Content with markdown rendering
+        // Add assistant indicator prefix to first line
+        let content = &streaming.content;
+        if !content.is_empty() {
+            let md_lines = markdown.render(content);
+
+            if md_lines.is_empty() {
+                // Empty content, show indicator only
                 lines.push(Line::from(vec![
                     Span::styled("◆ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
                 ]));
             } else {
-                lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                ]));
+                for (i, line) in md_lines.into_iter().enumerate() {
+                    if i == 0 {
+                        // First line: prepend assistant indicator
+                        let mut first_line = vec![
+                            Span::styled("◆ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        ];
+                        first_line.extend(line.spans);
+                        lines.push(Line::from(first_line));
+                    } else {
+                        lines.push(line);
+                    }
+                }
             }
+        } else {
+            // No content yet, just show indicator
+            lines.push(Line::from(vec![
+                Span::styled("◆ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]));
         }
 
         // Add spinner at end
-        if !lines.is_empty() {
-            let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let spinner_char = spinner[(streaming.spinner_frame / 2) % spinner.len()];
-            if let Some(last) = lines.last_mut() {
-                last.spans.push(Span::styled(
-                    format!(" {spinner_char}"),
-                    Style::default().fg(Color::Magenta),
-                ));
-            }
+        let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let spinner_char = spinner[(streaming.spinner_frame / 2) % spinner.len()];
+        if let Some(last) = lines.last_mut() {
+            last.spans.push(Span::styled(
+                format!(" {spinner_char}"),
+                Style::default().fg(Color::Magenta),
+            ));
         }
 
         lines

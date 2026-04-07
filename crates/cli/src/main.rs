@@ -258,15 +258,9 @@ fn init_logging() -> Result<()> {
         .or_else(|_| EnvFilter::try_new("info"))
         .context("Failed to create env filter")?;
 
-    // Initialize subscriber with both console and file layers
+    // Initialize subscriber with file layer only (TUI uses stdout for display)
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .compact()
-                .with_target(false)
-                .with_thread_ids(false),
-        )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(non_blocking)

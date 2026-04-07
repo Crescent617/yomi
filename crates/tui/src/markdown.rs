@@ -1,4 +1,4 @@
-use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -17,13 +17,23 @@ impl MarkdownRenderer {
     /// Render markdown content to ratatui Lines
     pub fn render(&self, content: &str) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        let parser = Parser::new(content);
+        // Enable GFM extensions: tables, task lists, strikethrough
+        let options = Options::ENABLE_TABLES
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_STRIKETHROUGH;
+        let parser = Parser::new_ext(content, options);
 
         let mut current_line: Vec<Span> = Vec::new();
         let mut current_style = Style::default().fg(colors::text_primary());
         let mut in_code_block = false;
         let mut list_stack: Vec<Option<u64>> = Vec::new();
         let mut code_language: Option<String> = None;
+        let mut table_header = false;
+        let mut table_cell_count = 0;
+        // Store table rows as (is_header, cells) tuples
+        let mut table_rows: Vec<(bool, Vec<String>)> = Vec::new();
+        let mut table_cell_widths: Vec<usize> = Vec::new();
+        let mut current_row_cells: Vec<String> = Vec::new();
 
         for event in parser {
             match event {
@@ -31,6 +41,9 @@ impl MarkdownRenderer {
                     match tag {
                         Tag::Strong => {
                             current_style = current_style.add_modifier(Modifier::BOLD);
+                        }
+                        Tag::Strikethrough => {
+                            current_style = current_style.add_modifier(Modifier::CROSSED_OUT);
                         }
                         Tag::Emphasis => {
                             current_style = current_style.add_modifier(Modifier::ITALIC);
@@ -90,6 +103,22 @@ impl MarkdownRenderer {
                                 Style::default().fg(colors::border()),
                             ));
                         }
+                        Tag::Table(_) => {
+                            table_header = true;
+                            table_cell_count = 0;
+                            table_rows = Vec::new();
+                            table_cell_widths = Vec::new();
+                            current_row_cells = Vec::new();
+                        }
+                        Tag::TableHead => {
+                            table_header = true;
+                            table_cell_count = 0;
+                        }
+                        Tag::TableRow => {
+                            current_row_cells = Vec::new();
+                            table_cell_count = 0;
+                        }
+                        Tag::TableCell => {}
                         _ => {}
                     }
                 }
@@ -97,6 +126,9 @@ impl MarkdownRenderer {
                     match tag_end {
                         TagEnd::Strong => {
                             current_style = current_style.remove_modifier(Modifier::BOLD);
+                        }
+                        TagEnd::Strikethrough => {
+                            current_style = current_style.remove_modifier(Modifier::CROSSED_OUT);
                         }
                         TagEnd::Emphasis => {
                             current_style = current_style.remove_modifier(Modifier::ITALIC);
@@ -139,6 +171,109 @@ impl MarkdownRenderer {
                                 current_line = Vec::new();
                             }
                             lines.push(Line::from(""));
+                        }
+                        TagEnd::TableCell => {
+                            // Accumulate cell content
+                            let cell_content: String = current_line
+                                .iter()
+                                .map(|s| s.content.clone())
+                                .collect();
+                            current_row_cells.push(cell_content);
+                            current_line = Vec::new();
+                            table_cell_count += 1;
+
+                            // Track max width for this column
+                            let cell_text: String = current_row_cells.last().unwrap().clone();
+                            let width = unicode_width::UnicodeWidthStr::width(cell_text.trim());
+                            if table_cell_widths.len() < table_cell_count {
+                                table_cell_widths.push(width);
+                            } else {
+                                table_cell_widths[table_cell_count - 1] =
+                                    table_cell_widths[table_cell_count - 1].max(width);
+                            }
+                        }
+                        TagEnd::TableRow => {
+                            // Store row for later rendering when we know column widths
+                            if !current_row_cells.is_empty() {
+                                table_rows.push((table_header, current_row_cells.clone()));
+                            }
+                            current_row_cells = Vec::new();
+                        }
+                        TagEnd::TableHead => {
+                            table_header = false;
+                        }
+                        TagEnd::Table => {
+                            // Render the table
+                            if !table_rows.is_empty() {
+                                // Add spacing before table
+                                lines.push(Line::from(""));
+
+                                // Ensure minimum column widths
+                                for width in &mut table_cell_widths {
+                                    *width = (*width).max(3); // At least 3 chars wide
+                                }
+
+                                // Render each row
+                                for (is_header, row_cells) in &table_rows {
+                                    let mut row_line = Vec::new();
+                                    row_line.push(Span::styled(
+                                        "│ ",
+                                        Style::default().fg(colors::border()),
+                                    ));
+
+                                    for (i, cell) in row_cells.iter().enumerate() {
+                                        let width = table_cell_widths.get(i).copied().unwrap_or(10);
+                                        let trimmed = cell.trim();
+                                        let padded = format!("{:width$}", trimmed, width = width);
+
+                                        let style = if *is_header {
+                                            Style::default()
+                                                .fg(colors::accent_user())
+                                                .add_modifier(Modifier::BOLD)
+                                        } else {
+                                            Style::default().fg(colors::text_primary())
+                                        };
+                                        row_line.push(Span::styled(padded, style));
+
+                                        if i < row_cells.len().saturating_sub(1) {
+                                            row_line.push(Span::styled(
+                                                " │ ",
+                                                Style::default().fg(colors::border()),
+                                            ));
+                                        }
+                                    }
+
+                                    row_line.push(Span::styled(
+                                        " │",
+                                        Style::default().fg(colors::border()),
+                                    ));
+                                    lines.push(Line::from(row_line));
+
+                                    // Add separator line after header
+                                    if *is_header {
+                                        let mut sep = String::from("├─");
+                                        for (i, width) in table_cell_widths.iter().enumerate() {
+                                            sep.push_str(&"─".repeat(*width));
+                                            if i < table_cell_widths.len().saturating_sub(1) {
+                                                sep.push_str("─┼─");
+                                            }
+                                        }
+                                        sep.push_str("─┤");
+                                        lines.push(Line::from(Span::styled(
+                                            sep,
+                                            Style::default().fg(colors::border()),
+                                        )));
+                                    }
+                                }
+
+                                lines.push(Line::from(""));
+                            }
+
+                            table_header = false;
+                            table_cell_count = 0;
+                            table_rows = Vec::new();
+                            table_cell_widths = Vec::new();
+                            current_row_cells = Vec::new();
                         }
                         _ => {}
                     }
@@ -189,6 +324,14 @@ impl MarkdownRenderer {
                     current_line.push(Span::styled(
                         format!(" `{code}` "),
                         Styles::inline_code(),
+                    ));
+                }
+                MdEvent::TaskListMarker(checked) => {
+                    // Task list checkbox
+                    let checkbox = if checked { "[x]" } else { "[ ]" };
+                    current_line.push(Span::styled(
+                        format!("{checkbox} "),
+                        Style::default().fg(if checked { colors::accent_user() } else { colors::text_secondary() }),
                     ));
                 }
                 MdEvent::SoftBreak | MdEvent::HardBreak => {
