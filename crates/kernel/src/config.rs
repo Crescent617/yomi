@@ -182,11 +182,7 @@ impl Config {
         // Temperature
         if let Some(temp) = env_var(env_names::TEMPERATURE).and_then(|s| s.parse().ok()) {
             config.model.temperature = Some(temp);
-            config.agent.model.temperature = Some(temp);
         }
-
-        // Update agent config model
-        config.agent.model = config.model.clone();
 
         // Sandbox mode
         config.sandbox = env_bool(env_names::SANDBOX);
@@ -210,11 +206,13 @@ impl Config {
             env_var(env_names::ENABLE_SUB_AGENTS).as_deref() != Some("false");
 
         // Thinking configuration
-        config.model.thinking.enabled = env_bool(env_names::THINKING);
+        config.model.thinking.enabled = env_bool_opt(env_names::THINKING).unwrap_or(true);
         if let Some(budget) = env_var(env_names::THINKING_BUDGET).and_then(|s| s.parse().ok()) {
             config.model.thinking.budget_tokens = budget;
-            config.agent.model.thinking.budget_tokens = budget;
         }
+
+        // Update agent config model (must be after all model config)
+        config.agent.model = config.model.clone();
 
         config
     }
@@ -251,6 +249,13 @@ fn env_bool(name: &str) -> bool {
     std::env::var(name)
         .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
         .unwrap_or(false)
+}
+
+#[inline]
+fn env_bool_opt(name: &str) -> Option<bool> {
+    std::env::var(name)
+        .ok()
+        .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
 }
 
 #[inline]

@@ -37,6 +37,13 @@ pub enum ModelEvent {
     Complete { agent_id: AgentId },
     Error { agent_id: AgentId, error: String },
     Fallback { agent_id: AgentId, from: String, to: String },
+    /// Token usage update from provider
+    TokenUsage {
+        agent_id: AgentId,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+    },
 }
 
 /// Content chunk for streaming

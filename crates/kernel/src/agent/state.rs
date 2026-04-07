@@ -20,12 +20,15 @@ impl AgentState {
         match self {
             Self::Idle => &[Self::WaitingForInput],
             Self::WaitingForInput => &[Self::Streaming, Self::Cancelled],
-            Self::Streaming => &[Self::ExecutingTool, Self::WaitingForInput, Self::Failed, Self::Cancelled],
+            Self::Streaming => &[
+                Self::ExecutingTool,
+                Self::WaitingForInput,
+                Self::Failed,
+                Self::Cancelled,
+            ],
             Self::ExecutingTool => &[Self::Streaming, Self::Failed, Self::Cancelled],
             // Terminal states - no valid transitions
-            Self::Completed => &[],
-            Self::Failed => &[],
-            Self::Cancelled => &[],
+            Self::Completed | Self::Failed | Self::Cancelled => &[],
         }
     }
 
@@ -75,7 +78,8 @@ mod tests {
         assert!(AgentState::Streaming.can_transition_to(AgentState::ExecutingTool));
         assert!(AgentState::Streaming.can_transition_to(AgentState::WaitingForInput));
         assert!(AgentState::Streaming.can_transition_to(AgentState::Failed));
-        assert!(!AgentState::Streaming.can_transition_to(AgentState::Completed)); // 必须经过 WaitingForInput
+        assert!(!AgentState::Streaming.can_transition_to(AgentState::Completed));
+        // 必须经过 WaitingForInput
     }
 
     #[test]

@@ -77,7 +77,7 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
 
             // Handle events
-            let timeout = Duration::from_millis(50);
+            let timeout = Duration::from_millis(10);
             if event::poll(timeout)? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == event::KeyEventKind::Press {
@@ -86,8 +86,8 @@ impl App {
                 }
             }
 
-            // Check for app events from core
-            if let Ok(event) = self.event_rx.try_recv() {
+            // Check for app events from core - process all pending events
+            while let Ok(event) = self.event_rx.try_recv() {
                 self.handle_app_event(&event).await?;
             }
 

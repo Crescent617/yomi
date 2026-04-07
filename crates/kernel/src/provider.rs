@@ -15,6 +15,7 @@ pub enum ModelStreamItem {
     ToolCall(ToolCallRequest),
     Complete,
     Fallback { from: String, to: String },
+    TokenUsage { prompt_tokens: u32, completion_tokens: u32 },
 }
 
 /// Tool call request from model
@@ -35,7 +36,7 @@ pub struct ThinkingConfig {
 impl Default for ThinkingConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             budget_tokens: 1024,
         }
     }

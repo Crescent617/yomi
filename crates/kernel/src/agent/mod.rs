@@ -71,7 +71,7 @@ impl Agent {
             id: id.clone(),
             config,
             message_buffer,
-            event_tx: event_tx,
+            event_tx,
             provider,
             tool_registry,
             sandbox,
@@ -270,8 +270,28 @@ impl Agent {
                         }))
                         .await;
                 }
+                ModelStreamItem::TokenUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                } => {
+                    let total_tokens = prompt_tokens + completion_tokens;
+                    self.token_usage.fetch_add(
+                        total_tokens as u64,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    let _ = self
+                        .event_tx
+                        .send(Event::Model(ModelEvent::TokenUsage {
+                            agent_id: self.id.clone(),
+                            prompt_tokens,
+                            completion_tokens,
+                            total_tokens,
+                        }))
+                        .await;
+                }
             }
-            if (current_text.len() + current_thinking.len()) % 1000 == 0 {
+            // Yield every 100 chars to keep UI responsive
+            if (current_text.len() + current_thinking.len()) % 100 == 0 {
                 tokio::task::yield_now().await;
             }
         }

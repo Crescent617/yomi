@@ -313,8 +313,14 @@ impl AnthropicStreamState {
                     }));
                 }
             }
-            AnthropicStreamEvent::MessageDelta { .. } => {
-                // Handle stop reason if needed
+            AnthropicStreamEvent::MessageDelta { usage, .. } => {
+                // Extract token usage from the message delta
+                if let Some(usage) = usage {
+                    items.push(ModelStreamItem::TokenUsage {
+                        prompt_tokens: usage.input_tokens,
+                        completion_tokens: usage.output_tokens,
+                    });
+                }
             }
             AnthropicStreamEvent::MessageStop => {
                 items.push(ModelStreamItem::Complete);
