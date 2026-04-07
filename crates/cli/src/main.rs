@@ -11,7 +11,7 @@ use kernel::{AnthropicProvider, BashTool, FileTool, OpenAIProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tui::App;
+use tui::run_tui;
 
 #[derive(Parser)]
 #[command(name = "yomi")]
@@ -182,8 +182,7 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
     // Run TUI
-    let app = App::new(event_rx, input_tx)?;
-    app.run().await?;
+    run_tui(event_rx, input_tx).await?;
 
     println!("Goodbye!");
     Ok(())

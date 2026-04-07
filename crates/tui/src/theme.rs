@@ -1,7 +1,7 @@
 //! Theme and styling configuration for the TUI
 //! All colors are configurable at runtime through semantic color names
 
-use ratatui::style::{Color, Modifier, Style};
+use tuirealm::ratatui::style::{Color, Modifier, Style};
 use std::sync::RwLock;
 
 /// Semantic color configuration - modify these to customize the theme
@@ -262,7 +262,7 @@ pub mod presets {
 /// Color accessors - use these to get current theme colors
 pub mod colors {
     use super::current_theme;
-    use ratatui::style::Color;
+    use tuirealm::ratatui::style::Color;
 
     pub fn background() -> Color { current_theme().background }
     pub fn surface() -> Color { current_theme().surface }

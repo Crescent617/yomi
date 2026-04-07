@@ -46,7 +46,7 @@ pub enum Role {
 
 /// Content block - similar to `OpenAI`'s content format
 /// Supports text, thinking, images, etc.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Plain text content
@@ -102,7 +102,7 @@ impl From<&str> for ContentBlock {
 }
 
 /// Image URL structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageUrl {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,14 +110,14 @@ pub struct ImageUrl {
 }
 
 /// Audio data structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioData {
     pub data: String, // base64 encoded
     pub format: String, // mp3, wav, etc.
 }
 
 /// Chat message with content blocks (OpenAI-style)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     /// Content blocks - can be single string (simple) or array of blocks (rich)
@@ -304,7 +304,7 @@ mod content_serde {
 }
 
 /// Tool call from model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -334,7 +334,7 @@ impl ToolOutput {
 }
 
 /// Tool definition for model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
@@ -369,7 +369,7 @@ impl TokenUsage {
 }
 
 /// 单个会话事件 - 存储在 JSONL 中
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum SessionEvent {
     Created {
@@ -413,7 +413,7 @@ impl SessionEvent {
 }
 
 /// 用于 JSONL 存储的包装类型
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEventRecord {
     pub timestamp: DateTime<Utc>,
     pub event: SessionEvent,

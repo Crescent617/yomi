@@ -2,7 +2,7 @@ use crate::types::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// Top-level event wrapper - modular design prevents enum explosion
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     User(UserEvent),
     Agent(AgentEvent),
@@ -11,14 +11,14 @@ pub enum Event {
     System(SystemEvent),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
     Message { content: String },
     Confirm { tool_id: String, approved: bool },
     Interrupt,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
     Started { agent_id: AgentId },
     StateChanged { agent_id: AgentId, state: String },
@@ -29,7 +29,7 @@ pub enum AgentEvent {
     Progress { agent_id: AgentId, update: ProgressUpdate },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelEvent {
     Request { agent_id: AgentId, message_count: usize },
     /// Content chunk (text or thinking)
@@ -47,21 +47,21 @@ pub enum ModelEvent {
 }
 
 /// Content chunk for streaming
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentChunk {
     Text(String),
     Thinking { thinking: String, signature: Option<String> },
     RedactedThinking,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEvent {
     Started { agent_id: AgentId, tool_id: String, tool_name: String },
     Output { agent_id: AgentId, tool_id: String, output: String },
     Error { agent_id: AgentId, tool_id: String, error: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SystemEvent {
     Shutdown,
     ConfigReloaded,
@@ -69,14 +69,14 @@ pub enum SystemEvent {
 }
 
 /// Agent execution result
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentResult {
     pub messages: Vec<Message>,
     pub tool_calls: usize,
 }
 
 /// Progress update for long-running operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgressUpdate {
     pub step: usize,
     pub total: Option<usize>,
