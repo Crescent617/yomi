@@ -15,7 +15,7 @@ use tuirealm::{
 use kernel::event::Event as AppEvent;
 
 use crate::{
-    components::{ChatViewComponent, InputComponent},
+    components::{ChatViewComponent, InputComponent, StatusBarComponent},
     id::Id,
     msg::{Msg, UserEvent},
 };
@@ -74,6 +74,7 @@ impl Model {
                 .constraints(
                     [
                         Constraint::Min(3),     // Main content area
+                        Constraint::Length(1),  // Status bar
                         Constraint::Length(3),  // Input area
                     ]
                     .as_ref(),
@@ -82,8 +83,10 @@ impl Model {
 
             // Always show ChatView (unified history + streaming)
             self.app.view(&Id::ChatView, f, chunks[0]);
+            // Status bar shows streaming progress
+            self.app.view(&Id::StatusBar, f, chunks[1]);
             // InputBox renders last and sets cursor position
-            self.app.view(&Id::InputBox, f, chunks[1]);
+            self.app.view(&Id::InputBox, f, chunks[2]);
         });
     }
 
@@ -99,6 +102,13 @@ impl Model {
         app.mount(
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
+            vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+        )?;
+
+        // Mount status bar component
+        app.mount(
+            Id::StatusBar,
+            Box::new(StatusBarComponent::new()),
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
         )?;
 
@@ -127,7 +137,15 @@ impl Model {
                             self.app.attr(
                                 &Id::ChatView,
                                 Attribute::Custom("append_content"),
-                                AttrValue::String(text),
+                                AttrValue::String(text.clone()),
+                            )?;
+                            // Update status bar with token counts
+                            let content_tokens = self.current_content.len() / 4;
+                            let thinking_tokens = self.current_thinking.len() / 4;
+                            self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("set_tokens"),
+                                AttrValue::String(format!("{}, {}", content_tokens, thinking_tokens)),
                             )?;
                         }
                         kernel::event::ContentChunk::Thinking { thinking, .. } => {
@@ -140,7 +158,15 @@ impl Model {
                             self.app.attr(
                                 &Id::ChatView,
                                 Attribute::Custom("append_thinking"),
-                                AttrValue::String(thinking),
+                                AttrValue::String(thinking.clone()),
+                            )?;
+                            // Update status bar with token counts
+                            let content_tokens = self.current_content.len() / 4;
+                            let thinking_tokens = self.current_thinking.len() / 4;
+                            self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("set_tokens"),
+                                AttrValue::String(format!("{}, {}", content_tokens, thinking_tokens)),
                             )?;
                         }
                         _ => {}
@@ -149,6 +175,13 @@ impl Model {
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Complete { .. }) => {
                     self.is_streaming = false;
+
+                    // Stop status bar
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("stop_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
 
                     // Add completed assistant message to history
                     if !self.current_content.is_empty() {
@@ -208,6 +241,8 @@ impl Model {
                     self.current_content.clear();
                     self.current_thinking.clear();
                     self.thinking_start_time = None;
+                    // Note: Status bar already started in InputSubmit
+                    // Start ChatView streaming
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("start_streaming"),
@@ -298,6 +333,18 @@ impl Update<Msg> for Model {
                         &Id::ChatView,
                         Attribute::Custom("add_user_message"),
                         AttrValue::String(content.clone()),
+                    );
+                    // Scroll to bottom after adding user message
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
+                        AttrValue::Flag(true),
+                    );
+                    // Start streaming status immediately when sending request
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("start_streaming"),
+                        AttrValue::Flag(true),
                     );
                     // Send to kernel
                     let _ = self.input_tx.try_send(content);

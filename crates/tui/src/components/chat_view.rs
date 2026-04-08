@@ -14,6 +14,8 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
@@ -44,6 +46,8 @@ pub struct ChatView {
     is_streaming: bool,
     tick_frame: usize,
     md_renderer: StreamingMarkdownRenderer,
+    // Track if user manually scrolled up (to pause auto-scroll)
+    user_scrolled: bool,
 }
 
 impl Default for ChatView {
@@ -57,6 +61,7 @@ impl Default for ChatView {
             is_streaming: false,
             tick_frame: 0,
             md_renderer: StreamingMarkdownRenderer::new(),
+            user_scrolled: false,
         }
     }
 }
@@ -69,7 +74,7 @@ impl ChatView {
     pub fn add_user_message(&mut self, content: String) {
         self.messages.push(HistoryMessage::User(content));
         // Auto scroll to bottom on new message
-        self.scroll_offset = 0;
+        self.scroll_to_bottom();
     }
 
     pub fn add_assistant_message(
@@ -84,7 +89,8 @@ impl ChatView {
             thinking_folded: false,
             thinking_elapsed_ms: elapsed_ms,
         });
-        self.scroll_offset = 0;
+        // Auto scroll to bottom on new message
+        self.scroll_to_bottom();
     }
 
     pub fn start_streaming(&mut self) {
@@ -94,6 +100,8 @@ impl ChatView {
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.tick_frame = 0;
         self.scroll_offset = 0;
+        // Reset user scrolled state for new streaming session
+        self.user_scrolled = false;
     }
 
     pub fn stop_streaming(&mut self) {
@@ -110,11 +118,18 @@ impl ChatView {
     pub fn append_streaming_content(&mut self, text: &str) {
         self.streaming_content.push_str(text);
         self.md_renderer.append(text);
-        self.scroll_offset = 0; // Auto scroll to bottom
+        // Auto scroll to bottom only if user hasn't manually scrolled up
+        if !self.user_scrolled {
+            self.scroll_offset = 0;
+        }
     }
 
     pub fn append_streaming_thinking(&mut self, text: &str) {
         self.streaming_thinking.push_str(text);
+        // Auto scroll to bottom only if user hasn't manually scrolled up
+        if !self.user_scrolled {
+            self.scroll_offset = 0;
+        }
     }
 
     pub fn tick(&mut self) {
@@ -127,14 +142,22 @@ impl ChatView {
         let total_lines = self.calculate_total_lines();
         let max_scroll = total_lines.saturating_sub(5); // Keep at least 5 lines visible
         self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
+        // User manually scrolled up, pause auto-scroll
+        self.user_scrolled = true;
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+        // If scrolled to bottom, resume auto-scroll
+        if self.scroll_offset == 0 {
+            self.user_scrolled = false;
+        }
     }
 
     pub fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
+        // User scrolled to bottom, resume auto-scroll
+        self.user_scrolled = false;
     }
 
     pub fn toggle_last_thinking(&mut self) {
@@ -269,26 +292,16 @@ impl ChatView {
                     }
                 }
 
-                // Render content with markdown
-                let prefix_style = Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD);
-
+                // Render content with markdown (no indicator)
                 if content.is_empty() {
-                    lines.push(Line::from(vec![Span::styled("◆ ", prefix_style)]));
+                    lines.push(Line::from(""));
                 } else {
                     let mut md_renderer = StreamingMarkdownRenderer::new();
                     md_renderer.set_content(content.clone());
                     let md_lines = md_renderer.lines();
 
-                    for (i, line) in md_lines.iter().enumerate() {
-                        if i == 0 {
-                            let mut first_line = vec![Span::styled("◆ ", prefix_style)];
-                            first_line.extend(line.spans.clone());
-                            lines.push(Line::from(first_line));
-                        } else {
-                            lines.push(line.clone());
-                        }
+                    for line in md_lines.iter() {
+                        lines.push(line.clone());
                     }
                 }
             }
@@ -322,32 +335,16 @@ impl ChatView {
             lines.push(Line::from(""));
         }
 
-        // Render content with blinking indicator
-        let indicator_style = if self.is_streaming {
-            let visible = (self.tick_frame / 8) % 2 == 0;
-            if visible {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
-            }
-        } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        };
-
+        // Render content (no indicator, status shown in status bar)
         let md_lines = self.md_renderer.lines();
 
+        for line in md_lines.iter() {
+            lines.push(line.clone());
+        }
+
+        // Add empty line placeholder when no content yet
         if md_lines.is_empty() {
-            lines.push(Line::from(vec![Span::styled("◆ ", indicator_style)]));
-        } else {
-            for (i, line) in md_lines.iter().enumerate() {
-                if i == 0 {
-                    let mut first_line = vec![Span::styled("◆ ", indicator_style)];
-                    first_line.extend(line.spans.clone());
-                    lines.push(Line::from(first_line));
-                } else {
-                    lines.push(line.clone());
-                }
-            }
+            lines.push(Line::from(""));
         }
 
         lines.push(Line::from(""));
@@ -369,17 +366,43 @@ impl MockComponent for ChatView {
             all_lines.extend(self.render_streaming());
         }
 
-        // Calculate scroll position
+        // Calculate scroll position with wrap support
         let visible_height = area.height as usize;
-        let total_lines = all_lines.len();
+        let width = area.width as usize;
 
-        let start_line = if total_lines > visible_height + self.scroll_offset {
-            total_lines - visible_height - self.scroll_offset
+        // Calculate wrapped line counts and find start line
+        let start_line = if self.scroll_offset == 0 {
+            // At bottom: work backwards to find which lines fit
+            let mut wrapped_lines = 0;
+            let mut start = 0;
+            for (i, line) in all_lines.iter().enumerate().rev() {
+                let line_width: usize = line.spans.iter()
+                    .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                let wrapped_height = (line_width + width.saturating_sub(1)) / width.max(1);
+                let wrapped_height = wrapped_height.max(1);
+
+                if wrapped_lines + wrapped_height > visible_height {
+                    start = i + 1;
+                    break;
+                }
+                wrapped_lines += wrapped_height;
+                if i == 0 {
+                    break;
+                }
+            }
+            start
         } else {
-            0
+            // Manual scroll: use simple line-based calculation
+            let total_lines = all_lines.len();
+            if total_lines > visible_height + self.scroll_offset {
+                total_lines - visible_height - self.scroll_offset
+            } else {
+                0
+            }
         };
 
-        let end_line = (start_line + visible_height).min(total_lines);
+        let end_line = (start_line + visible_height).min(all_lines.len());
         let visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
 
         let paragraph = Paragraph::new(Text::from(visible_lines))

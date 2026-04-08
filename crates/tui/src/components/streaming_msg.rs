@@ -4,7 +4,6 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    event::{Key, KeyEvent, KeyModifiers},
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
@@ -18,7 +17,6 @@ use tuirealm::{
 use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
-    theme::colors,
 };
 
 /// Mock component that displays streaming AI response
