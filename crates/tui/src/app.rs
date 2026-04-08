@@ -250,8 +250,35 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Started { tool_name: _, .. }) => {
-                    // TODO: Show tool execution status
+                AppEvent::Tool(kernel::event::ToolEvent::Started { tool_id, tool_name, .. }) => {
+                    // Show tool execution start in chat view
+                    let combined = format!("{}\x00{}", tool_id, tool_name);
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("start_tool"),
+                        AttrValue::String(combined),
+                    )?;
+                    self.redraw = true;
+                }
+                AppEvent::Tool(kernel::event::ToolEvent::Output { tool_id, output, .. }) => {
+                    // Show tool output in chat view
+                    let combined = format!("{}\x00{}", tool_id, output);
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("complete_tool"),
+                        AttrValue::String(combined),
+                    )?;
+                    self.redraw = true;
+                }
+                AppEvent::Tool(kernel::event::ToolEvent::Error { tool_id, error, .. }) => {
+                    // Show tool error in chat view
+                    let combined = format!("{}\x00{}", tool_id, error);
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("fail_tool"),
+                        AttrValue::String(combined),
+                    )?;
+                    self.redraw = true;
                 }
                 _ => {}
             }
@@ -273,7 +300,6 @@ impl Model {
         // Cleanup
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
-        self.terminal.clear_screen()?;
 
         result
     }

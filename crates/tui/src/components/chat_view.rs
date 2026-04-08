@@ -22,6 +22,14 @@ use crate::{
     theme::colors,
 };
 
+/// Tool execution status
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
 /// A chat message in history
 #[derive(Debug, Clone)]
 pub enum HistoryMessage {
@@ -31,6 +39,14 @@ pub enum HistoryMessage {
         thinking: Option<String>,
         thinking_folded: bool,
         thinking_elapsed_ms: Option<u64>,
+    },
+    Tool {
+        tool_name: String,
+        tool_id: String,
+        status: ToolStatus,
+        output: Option<String>,
+        error: Option<String>,
+        folded: bool,
     },
 }
 
@@ -48,6 +64,8 @@ pub struct ChatView {
     md_renderer: StreamingMarkdownRenderer,
     // Track if user manually scrolled up (to pause auto-scroll)
     user_scrolled: bool,
+    // Track active tool executions
+    active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
 }
 
 impl Default for ChatView {
@@ -62,6 +80,7 @@ impl Default for ChatView {
             tick_frame: 0,
             md_renderer: StreamingMarkdownRenderer::new(),
             user_scrolled: false,
+            active_tools: std::collections::HashMap::new(),
         }
     }
 }
@@ -91,6 +110,61 @@ impl ChatView {
         });
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
+    }
+
+    pub fn start_tool(&mut self, tool_id: String, tool_name: String) {
+        self.active_tools.insert(tool_id.clone(), (tool_name.clone(), ToolStatus::Running));
+        self.messages.push(HistoryMessage::Tool {
+            tool_name,
+            tool_id,
+            status: ToolStatus::Running,
+            output: None,
+            error: None,
+            folded: false,
+        });
+        if !self.user_scrolled {
+            self.scroll_offset = 0;
+        }
+    }
+
+    pub fn complete_tool(&mut self, tool_id: String, output: String) {
+        // Update the tool message in history
+        for msg in self.messages.iter_mut().rev() {
+            if let HistoryMessage::Tool { tool_id: id, status, output: out, .. } = msg {
+                if id == &tool_id {
+                    *status = ToolStatus::Completed;
+                    *out = Some(output);
+                    break;
+                }
+            }
+        }
+        // Update active tools tracking
+        if let Some((name, _)) = self.active_tools.remove(&tool_id) {
+            self.active_tools.insert(tool_id, (name, ToolStatus::Completed));
+        }
+        if !self.user_scrolled {
+            self.scroll_offset = 0;
+        }
+    }
+
+    pub fn fail_tool(&mut self, tool_id: String, error: String) {
+        // Update the tool message in history
+        for msg in self.messages.iter_mut().rev() {
+            if let HistoryMessage::Tool { tool_id: id, status, error: err, .. } = msg {
+                if id == &tool_id {
+                    *status = ToolStatus::Failed;
+                    *err = Some(error);
+                    break;
+                }
+            }
+        }
+        // Update active tools tracking
+        if let Some((name, _)) = self.active_tools.remove(&tool_id) {
+            self.active_tools.insert(tool_id, (name, ToolStatus::Failed));
+        }
+        if !self.user_scrolled {
+            self.scroll_offset = 0;
+        }
     }
 
     pub fn start_streaming(&mut self) {
@@ -210,6 +284,24 @@ impl ChatView {
                     count += md_renderer.lines().len();
                 }
             }
+            HistoryMessage::Tool {
+                output,
+                error,
+                folded,
+                ..
+            } => {
+                count += 1; // Header line
+                if !*folded {
+                    if let Some(err) = error {
+                        count += err.lines().count();
+                    } else if let Some(out) = output {
+                        count += out.lines().count();
+                    } else {
+                        count += 1; // "Running..." placeholder
+                    }
+                    count += 1; // Extra line after content
+                }
+            }
         }
         count += 1; // spacing
         count
@@ -303,6 +395,54 @@ impl ChatView {
                     for line in md_lines.iter() {
                         lines.push(line.clone());
                     }
+                }
+            }
+            HistoryMessage::Tool {
+                tool_name,
+                status,
+                output,
+                error,
+                folded,
+                ..
+            } => {
+                let (icon, color) = match status {
+                    ToolStatus::Running => ("⚡", Color::Yellow),
+                    ToolStatus::Completed => ("✓", Color::Green),
+                    ToolStatus::Failed => ("✗", Color::Red),
+                };
+
+                let fold_icon = if *folded { "▶ " } else { "▼ " };
+
+                lines.push(Line::from(vec![
+                    Span::styled(fold_icon, Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{} {} ", icon, tool_name),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+
+                if !*folded {
+                    if let Some(err) = error {
+                        for line in err.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(Color::Red)),
+                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                            ]));
+                        }
+                    } else if let Some(out) = output {
+                        for line in out.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(colors::accent_system())),
+                                Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                    } else if *status == ToolStatus::Running {
+                        lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled("Running...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                        ]));
+                    }
+                    lines.push(Line::from(""));
                 }
             }
         }
@@ -461,6 +601,30 @@ impl MockComponent for ChatView {
             }
             Attribute::Custom(s) if s == "toggle_thinking" => {
                 self.toggle_last_thinking();
+            }
+            Attribute::Custom(s) if s == "start_tool" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
+                    let tool_name = parts.get(1).unwrap_or(&"tool").to_string();
+                    self.start_tool(tool_id, tool_name);
+                }
+            }
+            Attribute::Custom(s) if s == "complete_tool" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
+                    let output = parts.get(1).unwrap_or(&"").to_string();
+                    self.complete_tool(tool_id, output);
+                }
+            }
+            Attribute::Custom(s) if s == "fail_tool" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
+                    let error = parts.get(1).unwrap_or(&"").to_string();
+                    self.fail_tool(tool_id, error);
+                }
             }
             _ => {
                 self.props.set(attr, value);

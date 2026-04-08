@@ -61,6 +61,8 @@ impl Session {
             self.provider.clone(),
             self.tool_registry.clone(),
             self.sandbox.clone(),
+            Some(self.storage.clone()),
+            Some(self.id.0.clone()),
         );
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id.0, self.id.0);

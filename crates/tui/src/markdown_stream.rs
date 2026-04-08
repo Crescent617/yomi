@@ -12,11 +12,18 @@ use tuirealm::ratatui::{
 use crate::theme::{chars, colors, Styles};
 
 /// Tracks the state of markdown parsing for incremental rendering
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
+enum ListState {
+    /// (start_num, current_num) for ordered lists
+    Ordered(u64, u64),
+    Unordered,
+}
+
+#[derive(Debug)]
 struct ParseState {
     in_code_block: bool,
     code_language: Option<String>,
-    list_stack: Vec<Option<u64>>,
+    list_stack: Vec<ListState>,
     current_style: Style,
     // Table state - simple raw output
     in_table: bool,
@@ -29,7 +36,7 @@ impl Default for ParseState {
         Self {
             in_code_block: false,
             code_language: None,
-            list_stack: Vec::new(),
+            list_stack: Vec::<ListState>::new(),
             current_style: Style::default().fg(colors::text_primary()),
             in_table: false,
             in_table_head: false,
@@ -98,7 +105,7 @@ impl StreamingMarkdownRenderer {
         let mut current_line: Vec<Span> = Vec::new();
         let mut in_code_block = self.state.in_code_block;
         let mut code_language = self.state.code_language.clone();
-        let mut list_stack: Vec<Option<u64>> = self.state.list_stack.clone();
+        let mut list_stack: Vec<ListState> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
         // Table state
         let mut in_table = self.state.in_table;
@@ -129,13 +136,24 @@ impl StreamingMarkdownRenderer {
                             }
                         }
                         Tag::List(start_num) => {
-                            list_stack.push(start_num);
+                            let state = match start_num {
+                                Some(n) => ListState::Ordered(n, n),
+                                None => ListState::Unordered,
+                            };
+                            list_stack.push(state);
                         }
                         Tag::Item => {
                             let indent = "  ".repeat(list_stack.len().saturating_sub(1));
-                            let prefix = match list_stack.last().copied().flatten() {
-                                Some(num) => format!("{indent}{num}. "),
-                                None => format!("{indent}{} ", chars::BULLET),
+                            let prefix = match list_stack.last_mut() {
+                                Some(ListState::Ordered(start, current)) => {
+                                    let num = *current;
+                                    *current += 1;
+                                    format!("{indent}{num}. ")
+                                }
+                                Some(ListState::Unordered) => {
+                                    format!("{indent}{} ", chars::BULLET)
+                                }
+                                None => format!("{} ", chars::BULLET),
                             };
                             current_line.push(Span::styled(
                                 prefix,
@@ -347,8 +365,9 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Rule => {
+                    // Horizontal divider line using box-drawing character
                     self.lines.push(Line::from(Span::styled(
-                        format!("{} ", chars::BULLET).repeat(20).trim_end().to_string(),
+                        "─".repeat(60),
                         Style::default().fg(colors::divider()),
                     )));
                 }

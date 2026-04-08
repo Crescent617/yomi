@@ -66,6 +66,8 @@ impl SubAgentManager {
             self.provider.clone(),
             self.tool_registry.clone(),
             self.sandbox.clone(),
+            None, // Sub-agents don't persist to storage
+            None,
         );
 
         let id = handle.id.clone();

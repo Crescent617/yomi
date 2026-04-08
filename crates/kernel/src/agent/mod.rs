@@ -49,6 +49,9 @@ pub struct Agent {
     context: AgentExecutionContext,
     cancel_token: CancelToken,
     token_usage: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    // Storage for message persistence
+    storage: Option<Arc<dyn crate::storage::Storage>>,
+    session_id: Option<String>,
 }
 
 impl Agent {
@@ -58,6 +61,8 @@ impl Agent {
         provider: Arc<dyn ModelProvider>,
         tool_registry: ToolRegistry,
         sandbox: ToolSandbox,
+        storage: Option<Arc<dyn crate::storage::Storage>>,
+        session_id: Option<String>,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
         let (event_tx, event_rx) = mpsc::channel(1000);
@@ -80,6 +85,8 @@ impl Agent {
             context,
             cancel_token: cancel_token.clone(),
             token_usage: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            storage,
+            session_id,
         };
 
         let handle_id = id.clone();
@@ -93,8 +100,33 @@ impl Agent {
         (handle, event_rx)
     }
 
+    /// Persist a single message to storage
+    async fn persist_message(&self, message: &Message) {
+        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id
+        ) {
+            let session_id = crate::types::SessionId(session_id.clone());
+            let _ = storage.append_messages(&session_id, &[message.clone()]).await;
+        }
+    }
+
     async fn run(mut self) -> Result<()> {
         tracing::info!("Agent {} started", self.id.0);
+
+        // Load historical messages if storage and session_id are provided
+        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id
+        ) {
+            let session_id_wrapped = crate::types::SessionId(session_id.clone());
+            if let Ok(messages) = storage.get_messages(&session_id_wrapped).await {
+                for msg in messages {
+                    // Skip system message as it's already in the buffer
+                    if msg.role != Role::System {
+                        self.message_buffer.push(msg);
+                    }
+                }
+                tracing::info!("Loaded {} messages from storage", self.message_buffer.len());
+            }
+        }
+
         self.context.transition_to(AgentState::WaitingForInput);
         loop {
             let state = self.context.current_state();
@@ -176,13 +208,16 @@ impl Agent {
                         content: content.clone(),
                     }))
                     .await;
-                self.message_buffer.push(Message::user(content));
+                let msg = Message::user(content);
+                self.message_buffer.push(msg.clone());
+                self.persist_message(&msg).await;
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
             Some(AgentInput::ToolResult { tool_id, output }) => {
-                self.message_buffer
-                    .push(Message::tool_result(&tool_id, output));
+                let msg = Message::tool_result(&tool_id, output);
+                self.message_buffer.push(msg.clone());
+                self.persist_message(&msg).await;
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
@@ -315,7 +350,8 @@ impl Agent {
             if !pending_tool_calls.is_empty() {
                 msg.tool_calls = Some(pending_tool_calls);
             }
-            self.message_buffer.push(msg);
+            self.message_buffer.push(msg.clone());
+            self.persist_message(&msg).await;
         }
 
         if self
@@ -385,7 +421,8 @@ impl Agent {
 
         for result in results {
             let _ = self.event_tx.send(Event::Tool(result.event)).await;
-            self.message_buffer.push(result.message);
+            self.message_buffer.push(result.message.clone());
+            self.persist_message(&result.message).await;
         }
 
         self.context.transition_to(AgentState::Streaming);

@@ -76,10 +76,10 @@ impl Default for ThemeConfig {
             // Code colors
             code_bg: Color::Rgb(35, 35, 45),
             code_fg: Color::Rgb(140, 220, 240),
-            code_border: Color::Rgb(50, 50, 65),
+            code_border: Color::Rgb(90, 90, 105),
 
             // UI elements
-            border: Color::Rgb(45, 45, 58),
+            border: Color::Rgb(80, 80, 95),
             border_active: Color::Rgb(80, 80, 100),
             divider: Color::Rgb(40, 40, 52),
         }
@@ -211,8 +211,8 @@ static THEME_CONFIG: RwLock<ThemeConfig> = RwLock::new(ThemeConfig {
     accent_error: Color::Rgb(255, 100, 100),
     code_bg: Color::Rgb(35, 35, 45),
     code_fg: Color::Rgb(140, 220, 240),
-    code_border: Color::Rgb(50, 50, 65),
-    border: Color::Rgb(45, 45, 58),
+    code_border: Color::Rgb(90, 90, 105),
+    border: Color::Rgb(80, 80, 95),
     border_active: Color::Rgb(80, 80, 100),
     divider: Color::Rgb(40, 40, 52),
 });
