@@ -179,7 +179,7 @@ impl Model {
                     // Stop status bar
                     self.app.attr(
                         &Id::StatusBar,
-                        Attribute::Custom("stop_streaming"),
+                        Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
 
@@ -226,7 +226,7 @@ impl Model {
 
                     self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("stop_streaming"),
+                        Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
                     self.app.attr(
@@ -294,6 +294,103 @@ impl Model {
                         &Id::ChatView,
                         Attribute::Custom("fail_tool"),
                         AttrValue::String(combined),
+                    )?;
+                    self.redraw = true;
+                }
+                AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
+                    self.is_streaming = false;
+
+                    // Flush any partial content to history
+                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
+                        let elapsed_ms = self
+                            .thinking_start_time
+                            .map(|start| start.elapsed().as_millis() as u64);
+
+                        let combined = if self.current_thinking.is_empty() {
+                            if let Some(ms) = elapsed_ms {
+                                format!("{}\x00\x00{}", self.current_content, ms)
+                            } else {
+                                self.current_content.clone()
+                            }
+                        } else {
+                            format!(
+                                "{}\x00{}\x00{}",
+                                self.current_content,
+                                self.current_thinking,
+                                elapsed_ms.unwrap_or(0)
+                            )
+                        };
+                        // Save partial content
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom("add_assistant_with_thinking"),
+                            AttrValue::String(combined),
+                        )?;
+                    }
+
+                    // Clear tracking
+                    self.current_content.clear();
+                    self.current_thinking.clear();
+                    self.thinking_start_time = None;
+
+                    // Cancel streaming in ChatView
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("cancel_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
+
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("cancel_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
+                    self.redraw = true;
+                }
+                AppEvent::Agent(kernel::event::AgentEvent::Failed { .. }) => {
+                    self.is_streaming = false;
+
+                    // Similar to Cancelled - save partial content
+                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
+                        let elapsed_ms = self
+                            .thinking_start_time
+                            .map(|start| start.elapsed().as_millis() as u64);
+
+                        let combined = if self.current_thinking.is_empty() {
+                            if let Some(ms) = elapsed_ms {
+                                format!("{}\x00\x00{}", self.current_content, ms)
+                            } else {
+                                self.current_content.clone()
+                            }
+                        } else {
+                            format!(
+                                "{}\x00{}\x00{}",
+                                self.current_content,
+                                self.current_thinking,
+                                elapsed_ms.unwrap_or(0)
+                            )
+                        };
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom("add_assistant_with_thinking"),
+                            AttrValue::String(combined),
+                        )?;
+                    }
+
+                    self.current_content.clear();
+                    self.current_thinking.clear();
+                    self.thinking_start_time = None;
+
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("cancel_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
+
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("cancel_streaming"),
+                        AttrValue::Flag(true),
                     )?;
                     self.redraw = true;
                 }

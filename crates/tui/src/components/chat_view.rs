@@ -22,6 +22,7 @@ pub enum ToolStatus {
     Running,
     Completed,
     Failed,
+    Cancelled,
 }
 
 /// A chat message in history
@@ -237,6 +238,29 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
+    }
+
+    /// Cancel streaming - flush partial content and mark running tools as cancelled
+    pub fn cancel_streaming(&mut self) {
+        // Note: Content is already saved by app.rs via add_assistant_with_thinking
+        // Just clear streaming buffers without flushing to avoid duplicates
+        self.streaming_content.clear();
+        self.streaming_thinking.clear();
+        self.md_renderer = StreamingMarkdownRenderer::new();
+        self.is_streaming = false;
+        // Mark any running tools as cancelled
+        for (tool_id, (_, status)) in &mut self.active_tools {
+            if *status == ToolStatus::Running {
+                *status = ToolStatus::Cancelled;
+                for msg in &mut self.messages {
+                    if let HistoryMessage::Tool { tool_id: id, status: s, .. } = msg {
+                        if id == tool_id {
+                            *s = ToolStatus::Cancelled;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn append_streaming_content(&mut self, text: &str) {
@@ -488,6 +512,7 @@ impl ChatView {
                     ToolStatus::Running => ("", colors::accent_warning()),
                     ToolStatus::Completed => ("", colors::accent_success()),
                     ToolStatus::Failed => ("", colors::accent_error()),
+                    ToolStatus::Cancelled => ("", colors::text_secondary()),
                 };
 
                 // Build header with execution time (only show if >= 1s)
@@ -620,6 +645,16 @@ impl ChatView {
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
                                 "Running...",
+                                Style::default()
+                                    .fg(colors::text_secondary())
+                                    .add_modifier(Modifier::ITALIC),
+                            ),
+                        ]));
+                    } else if *status == ToolStatus::Cancelled {
+                        lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(
+                                "Cancelled",
                                 Style::default()
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
@@ -786,6 +821,44 @@ impl MockComponent for ChatView {
             }
             Attribute::Custom(s) if s == "clear_streaming" => {
                 self.clear_streaming();
+            }
+            Attribute::Custom(s) if s == "cancel_streaming" => {
+                self.cancel_streaming();
+            }
+            Attribute::Custom(s) if s == "cancel_streaming_with_content" => {
+                if let AttrValue::String(combined) = value {
+                    let parts: Vec<&str> = combined.split(' ').collect();
+                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let thinking = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    
+                    // Add to history with cancelled flag
+                    self.messages.push(HistoryMessage::Assistant {
+                        content,
+                        thinking,
+                        thinking_folded: !self.expand_all,
+                        thinking_elapsed_ms: parts.get(2).and_then(|s| s.parse().ok()),
+                    });
+                    
+                    // Mark running tools as cancelled
+                    for (tool_id, (_, status)) in self.active_tools.iter_mut() {
+                        if *status == ToolStatus::Running {
+                            *status = ToolStatus::Cancelled;
+                            for msg in &mut self.messages {
+                                if let HistoryMessage::Tool { tool_id: id, status: s, .. } = msg {
+                                    if id == tool_id {
+                                        *s = ToolStatus::Cancelled;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Clear streaming state
+                    self.streaming_content.clear();
+                    self.streaming_thinking.clear();
+                    self.md_renderer = StreamingMarkdownRenderer::new();
+                    self.is_streaming = false;
+                }
             }
             Attribute::Custom(s) if s == "append_content" => {
                 if let AttrValue::String(text) = value {

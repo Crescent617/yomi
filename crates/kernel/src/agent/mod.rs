@@ -6,7 +6,7 @@ mod message_buffer;
 mod state;
 mod subagent;
 
-pub use cancel::CancellationToken;
+pub use cancel::CancelToken;
 pub use config::{AgentConfig, SubAgentMode};
 pub use context::AgentExecutionContext;
 pub use handle::AgentHandle;
@@ -47,7 +47,7 @@ pub struct Agent {
     input_tx: mpsc::Sender<AgentInput>,
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
-    cancel_token: CancellationToken,
+    cancel_token: CancelToken,
     token_usage: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Storage for message persistence
     storage: Option<Arc<dyn crate::storage::Storage>>,
@@ -66,7 +66,7 @@ impl Agent {
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
         let (event_tx, event_rx) = mpsc::channel(1000);
-        let cancel_token = CancellationToken::new();
+        let cancel_token = CancelToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         let mut message_buffer = MessageBuffer::new(100);
@@ -141,11 +141,8 @@ impl Agent {
                 break;
             }
 
-            if self.cancel_token.is_cancelled() {
-                tracing::info!("Agent {} cancelled", self.id.0);
-                self.context.transition_to(AgentState::Cancelled);
-                break;
-            }
+            // Note: cancel is handled during streaming via select!, not here
+            // This prevents the token from getting stuck in cancelled state
 
             match state {
                 AgentState::WaitingForInput => {
@@ -185,23 +182,47 @@ impl Agent {
             tool_calls
         );
 
-        let result = AgentResult {
-            messages: self.message_buffer.messages().to_vec(),
-            tool_calls,
-        };
-        let _ = self
-            .event_tx
-            .send(Event::Agent(AgentEvent::Completed {
-                agent_id: self.id.clone(),
-                result,
-            }))
-            .await;
+        // Send appropriate event based on final state
+        match final_state {
+            AgentState::Cancelled => {
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::Cancelled {
+                        agent_id: self.id.clone(),
+                    }))
+                    .await;
+            }
+            AgentState::Failed => {
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::Failed {
+                        agent_id: self.id.clone(),
+                        error: "Agent failed".to_string(),
+                    }))
+                    .await;
+            }
+            _ => {
+                let result = AgentResult {
+                    messages: self.message_buffer.messages().to_vec(),
+                    tool_calls,
+                };
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::Completed {
+                        agent_id: self.id.clone(),
+                        result,
+                    }))
+                    .await;
+            }
+        }
         Ok(())
     }
 
     async fn handle_wait_for_input(&mut self) -> Result<()> {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
+                // Reset cancel token for new request
+                self.cancel_token.reset();
                 let _ = self
                     .event_tx
                     .send(Event::User(crate::event::UserEvent::Message {
@@ -260,18 +281,26 @@ impl Agent {
         let mut current_thinking = String::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
 
-        // Stream with hard cancellation support
+        // Stream with hard cancellation support using select!
         loop {
             tokio::select! {
-                biased;  // Check cancel first for lower latency
+                biased;
                 _ = self.cancel_token.cancelled() => {
                     tracing::info!("Agent {} streaming cancelled (hard)", self.id.0);
                     drop(stream);
+                    // Send Cancelled event immediately
+                    let _ = self
+                        .event_tx
+                        .send(Event::Agent(AgentEvent::Cancelled {
+                            agent_id: self.id.clone(),
+                        }))
+                        .await;
+                    // Transition to WaitingForInput so agent can handle new requests
+                    self.context.transition_to(AgentState::WaitingForInput);
                     return Ok(());
                 }
-                item = stream.try_next() => {
-                    match item {
-                        Ok(Some(item)) => match item {
+                item = stream.try_next() => match item {
+                    Ok(Some(item)) => match item {
                             ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
                                 current_text.push_str(&text);
                                 let _ = self
@@ -338,10 +367,9 @@ impl Agent {
                                     }))
                                     .await;
                             }
-                        },
-                        Ok(None) => break,
-                        Err(e) => return Err(e),
-                    }
+                    },
+                    Ok(None) => break,
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -439,6 +467,14 @@ impl Agent {
         for result in results {
             if self.cancel_token.is_cancelled() {
                 tracing::info!("Agent {} tool execution cancelled", self.id.0);
+                // Send Cancelled event immediately
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::Cancelled {
+                        agent_id: self.id.clone(),
+                    }))
+                    .await;
+                self.context.transition_to(AgentState::WaitingForInput);
                 return Ok(());
             }
             let _ = self.event_tx.send(Event::Tool(result.event)).await;

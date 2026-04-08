@@ -1,4 +1,4 @@
-use crate::agent::{AgentInput, AgentState, CancellationToken};
+use crate::agent::{AgentInput, AgentState, CancelToken};
 use crate::types::AgentId;
 use tokio::sync::mpsc;
 
@@ -8,7 +8,7 @@ pub struct AgentHandle {
     pub id: AgentId,
     pub(super) input_tx: mpsc::Sender<AgentInput>,
     pub(super) state_rx: tokio::sync::watch::Receiver<AgentState>,
-    cancel_token: CancellationToken,
+    cancel_token: CancelToken,
 }
 
 impl AgentHandle {
@@ -16,7 +16,7 @@ impl AgentHandle {
         id: AgentId,
         input_tx: mpsc::Sender<AgentInput>,
         state_rx: tokio::sync::watch::Receiver<AgentState>,
-        cancel_token: CancellationToken,
+        cancel_token: CancelToken,
     ) -> Self {
         Self {
             id,

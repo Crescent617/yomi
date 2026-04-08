@@ -17,11 +17,21 @@ use tuirealm::{
 use crate::msg::Msg;
 use crate::theme::colors;
 
+/// Status state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusState {
+    #[default]
+    Idle,
+    Streaming,
+    Completed,
+    Cancelled,
+}
+
 /// Status bar component showing streaming progress
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
-    is_streaming: bool,
+    state: StatusState,
     tick_frame: usize,
     content_tokens: usize,
     thinking_tokens: usize,
@@ -33,17 +43,19 @@ impl StatusBar {
         Self::default()
     }
 
-    pub fn start_streaming(&mut self) {
-        self.is_streaming = true;
-        self.tick_frame = 0;
-        self.content_tokens = 0;
-        self.thinking_tokens = 0;
-        self.start_time = Some(std::time::Instant::now());
-    }
-
-    pub const fn stop_streaming(&mut self) {
-        self.is_streaming = false;
-        self.start_time = None;
+    pub fn set_state(&mut self, state: StatusState) {
+        self.state = state;
+        match state {
+            StatusState::Streaming => {
+                self.tick_frame = 0;
+                self.content_tokens = 0;
+                self.thinking_tokens = 0;
+                self.start_time = Some(std::time::Instant::now());
+            }
+            StatusState::Idle | StatusState::Completed | StatusState::Cancelled => {
+                self.start_time = None;
+            }
+        }
     }
 
     pub const fn set_tokens(&mut self, content_tokens: usize, thinking_tokens: usize) {
@@ -51,37 +63,47 @@ impl StatusBar {
         self.thinking_tokens = thinking_tokens;
     }
 
-    pub const fn tick(&mut self) {
-        if self.is_streaming {
+    pub fn tick(&mut self) {
+        if self.state == StatusState::Streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
     }
 
     fn render(&self) -> Line<'static> {
         // Show when streaming or has tokens (keep showing after complete)
-        if !self.is_streaming && self.content_tokens == 0 && self.thinking_tokens == 0 {
+        if self.state == StatusState::Idle
+            && self.content_tokens == 0
+            && self.thinking_tokens == 0
+        {
             return Line::from("");
         }
 
         let mut spans = Vec::new();
 
-        // Spinner when streaming, checkmark when done
-        let indicator = if self.is_streaming {
-            const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
-            let frame_idx = (self.tick_frame / 3) % FRAMES.len();
-            FRAMES[frame_idx]
-        } else {
-            "✓"
-        };
-
-        let indicator_style = if self.is_streaming {
-            Style::default()
-                .fg(colors::accent_system())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(colors::accent_success())
-                .add_modifier(Modifier::BOLD)
+        // Indicator based on state
+        let (indicator, indicator_style) = match self.state {
+            StatusState::Streaming => {
+                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
+                let frame_idx = (self.tick_frame / 3) % FRAMES.len();
+                (
+                    FRAMES[frame_idx],
+                    Style::default()
+                        .fg(colors::accent_system())
+                        .add_modifier(Modifier::BOLD),
+                )
+            }
+            StatusState::Cancelled => (
+                "✕",
+                Style::default()
+                    .fg(colors::accent_error())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            StatusState::Completed | StatusState::Idle => (
+                "✓",
+                Style::default()
+                    .fg(colors::accent_success())
+                    .add_modifier(Modifier::BOLD),
+            ),
         };
 
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
@@ -100,7 +122,7 @@ impl StatusBar {
         }
 
         // Elapsed time (only when streaming)
-        if self.is_streaming {
+        if self.state == StatusState::Streaming {
             if let Some(start) = self.start_time {
                 let elapsed = start.elapsed().as_secs_f64();
                 let time_str = if elapsed < 60.0 {
@@ -120,7 +142,6 @@ impl StatusBar {
 
 impl MockComponent for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        // Always render to clear previous content when stopped
         let line = self.render();
         let paragraph = Paragraph::new(line);
         frame.render_widget(paragraph, area);
@@ -133,10 +154,13 @@ impl MockComponent for StatusBar {
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
             Attribute::Custom(s) if s == "start_streaming" => {
-                self.start_streaming();
+                self.set_state(StatusState::Streaming);
             }
             Attribute::Custom(s) if s == "stop_streaming" => {
-                self.stop_streaming();
+                self.set_state(StatusState::Completed);
+            }
+            Attribute::Custom(s) if s == "cancel_streaming" => {
+                self.set_state(StatusState::Cancelled);
             }
             Attribute::Custom(s) if s == "set_tokens" => {
                 if let AttrValue::String(text) = value {
@@ -215,7 +239,6 @@ impl Component<Msg, crate::msg::UserEvent> for StatusBarComponent {
             tuirealm::Event::User(crate::msg::UserEvent::AppEvent(
                 kernel::event::Event::Model(kernel::event::ModelEvent::Chunk { .. }),
             )) => {
-                // Trigger redraw on new content to update token count
                 Some(Msg::Redraw)
             }
             _ => None,
