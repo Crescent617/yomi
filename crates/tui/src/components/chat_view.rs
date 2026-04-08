@@ -66,6 +66,8 @@ pub struct ChatView {
     user_scrolled: bool,
     // Track active tool executions
     active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
+    // Expand all mode (ctrl-o): show all thinking and tool details
+    expand_all: bool,
 }
 
 impl Default for ChatView {
@@ -81,6 +83,7 @@ impl Default for ChatView {
             md_renderer: StreamingMarkdownRenderer::new(),
             user_scrolled: false,
             active_tools: std::collections::HashMap::new(),
+            expand_all: false,
         }
     }
 }
@@ -105,7 +108,7 @@ impl ChatView {
         self.messages.push(HistoryMessage::Assistant {
             content,
             thinking,
-            thinking_folded: false,
+            thinking_folded: !self.expand_all,
             thinking_elapsed_ms: elapsed_ms,
         });
         // Auto scroll to bottom on new message
@@ -120,7 +123,7 @@ impl ChatView {
             status: ToolStatus::Running,
             output: None,
             error: None,
-            folded: false,
+            folded: !self.expand_all,
         });
         if !self.user_scrolled {
             self.scroll_offset = 0;
@@ -243,6 +246,22 @@ impl ChatView {
         }
     }
 
+    pub fn toggle_expand_all(&mut self) {
+        self.expand_all = !self.expand_all;
+        // Update all messages to reflect expand_all state
+        for msg in &mut self.messages {
+            match msg {
+                HistoryMessage::Assistant { thinking_folded, .. } => {
+                    *thinking_folded = !self.expand_all;
+                }
+                HistoryMessage::Tool { folded, .. } => {
+                    *folded = !self.expand_all;
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn calculate_total_lines(&mut self) -> usize {
         let mut count = 0;
         for msg in &self.messages {
@@ -360,6 +379,7 @@ impl ChatView {
                                         .add_modifier(Modifier::ITALIC),
                                 ),
                             ]));
+                            lines.push(Line::from(""));
                         } else {
                             lines.push(Line::from(vec![
                                 Span::styled("▼ ", Style::default().fg(Color::DarkGray)),
@@ -454,11 +474,12 @@ impl ChatView {
     fn render_streaming(&mut self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
-        // Render thinking if present
+        // Render thinking if present (collapsed by default, expanded in expand_all mode)
         if !self.streaming_thinking.is_empty() {
             let tokens = self.streaming_thinking.len() / 4;
+            let icon = if self.expand_all { "▼ " } else { "▶ " };
             lines.push(Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(icon, Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("Thinking ({tokens} tokens)"),
                     Style::default()
@@ -466,11 +487,14 @@ impl ChatView {
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
-            for line in self.streaming_thinking.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
-                ]));
+            // Show thinking content only in expand_all mode
+            if self.expand_all {
+                for line in self.streaming_thinking.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
             }
             lines.push(Line::from(""));
         }
@@ -601,6 +625,9 @@ impl MockComponent for ChatView {
             }
             Attribute::Custom(s) if s == "toggle_thinking" => {
                 self.toggle_last_thinking();
+            }
+            Attribute::Custom(s) if s == "toggle_expand_all" => {
+                self.toggle_expand_all();
             }
             Attribute::Custom(s) if s == "start_tool" => {
                 if let AttrValue::String(text) = value {

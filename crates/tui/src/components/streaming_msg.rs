@@ -85,13 +85,6 @@ impl StreamingMessageMock {
             ),
         ]));
 
-        for line in self.thinking.lines() {
-            lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
         lines.push(Line::from(""));
         lines
     }

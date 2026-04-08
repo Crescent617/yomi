@@ -322,6 +322,10 @@ impl Component<Msg, crate::msg::UserEvent> for InputComponent {
                 code: Key::Tab,
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ToggleThinking),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => Some(Msg::ToggleExpandAll),
             // Mouse scroll events
             tuirealm::Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,

@@ -33,6 +33,7 @@ pub enum Msg {
     ScrollUp,
     ScrollDown,
     ToggleThinking,
+    ToggleExpandAll,
 
     // UI
     Tick,

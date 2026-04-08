@@ -400,6 +400,14 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::ToggleExpandAll => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("toggle_expand_all"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
                 Msg::Redraw => {
                     self.redraw = true;
                     None
