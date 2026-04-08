@@ -51,9 +51,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging with file output and env filter
-    init_logging()?;
-
     let args = Args::parse();
 
     if args.yolo {
@@ -96,6 +93,9 @@ async fn main() -> Result<()> {
 
     // Create data directory
     tokio::fs::create_dir_all(&config.data_dir).await?;
+
+    // Initialize logging with file output and env filter
+    init_logging(&config)?;
 
     // Validate API key
     if !config.has_api_key() {
@@ -231,16 +231,11 @@ fn reload_for_provider(mut config: Config) -> Config {
 /// Environment variables:
 /// - `RUST_LOG`: Set log level (e.g., "debug", "info", "warn", "error")
 /// - `YOMI_LOG_DIR`: Log directory (default: "~/.yomi/logs")
-fn init_logging() -> Result<()> {
+fn init_logging(config: &Config) -> Result<()> {
     // Get log directory from env or default to ~/.yomi/logs
     let log_dir = std::env::var(env_names::LOG_DIR)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            directories::ProjectDirs::from("ai", "yomi", "yomi").map_or_else(
-                || PathBuf::from("/tmp/yomi_logs"),
-                |d| d.data_dir().join("logs"),
-            )
-        });
+        .unwrap_or_else(|_| config.data_dir.join("logs"));
 
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir)

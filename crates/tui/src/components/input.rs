@@ -12,6 +12,7 @@ use tuirealm::{
     },
     Component, Frame, MockComponent, State, StateValue,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{msg::Msg, theme::colors};
 
@@ -211,7 +212,26 @@ impl MockComponent for InputMock {
             area
         };
 
-        let lines: Vec<Line> = self
+        // Calculate cursor position
+        let cursor_line = self.content[..self.cursor_pos.min(self.content.len())]
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
+
+        // Calculate scroll offset to keep cursor visible
+        let visible_height = input_area.height.saturating_sub(1) as usize; // -1 for border
+        let total_lines = self.content.lines().count().max(1);
+        let scroll_offset = if total_lines > visible_height {
+            // Scroll so cursor is visible (prefer showing cursor near bottom)
+            cursor_line
+                .saturating_sub(visible_height - 1)
+                .min(total_lines - visible_height)
+        } else {
+            0
+        };
+
+        // Render only visible lines
+        let all_lines: Vec<Line> = self
             .content
             .lines()
             .enumerate()
@@ -232,7 +252,16 @@ impl MockComponent for InputMock {
             })
             .collect();
 
-        let text = if lines.is_empty() {
+        // Slice visible lines based on scroll offset
+        let visible_lines: Vec<Line> = if all_lines.is_empty() {
+            vec![]
+        } else {
+            let start = scroll_offset.min(all_lines.len());
+            let end = (scroll_offset + visible_height).min(all_lines.len());
+            all_lines[start..end].to_vec()
+        };
+
+        let text = if visible_lines.is_empty() {
             tuirealm::ratatui::text::Text::from(vec![Line::from(vec![
                 Span::styled(
                     "❯ ",
@@ -246,7 +275,7 @@ impl MockComponent for InputMock {
                 ),
             ])])
         } else {
-            tuirealm::ratatui::text::Text::from(lines)
+            tuirealm::ratatui::text::Text::from(visible_lines)
         };
 
         let paragraph = Paragraph::new(text).block(
@@ -259,16 +288,13 @@ impl MockComponent for InputMock {
 
         // Render exit hint if active
         if self.show_exit_hint && area.height > 1 {
-            let hint_y = area.y + area.height - 1;
-            let hint_line = Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    "Press Ctrl+C again to exit",
-                    Style::default()
-                        .fg(colors::text_secondary())
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]);
+            let hint_y = area.y + area.height;
+            let hint_line = Line::from(vec![Span::styled(
+                "Press Ctrl+C again to exit",
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            )]);
             let hint_paragraph = Paragraph::new(hint_line);
             frame.render_widget(
                 hint_paragraph,
@@ -281,19 +307,15 @@ impl MockComponent for InputMock {
             );
         }
 
-        // Set cursor position
-        let cursor_line = self.content[..self.cursor_pos.min(self.content.len())]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
+        // Set cursor position (adjusted for scroll)
         let line_start = self.content[..self.cursor_pos.min(self.content.len())]
             .rfind('\n')
             .map_or(0, |i| i + 1);
         let line_content = &self.content[line_start..self.cursor_pos.min(self.content.len())];
-        let col = unicode_width::UnicodeWidthStr::width(line_content);
+        let col = line_content.width();
 
         let cursor_x = area.x + 2 + col as u16; // 2 for "❯ " prefix
-        let cursor_y = input_area.y + 1 + cursor_line as u16; // +1 for border
+        let cursor_y = input_area.y + 1 + (cursor_line - scroll_offset) as u16; // +1 for border, adjusted for scroll
 
         if cursor_y < area.y + area.height {
             frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
