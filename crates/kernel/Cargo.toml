@@ -24,6 +24,7 @@ uuid = { workspace = true }
 
 futures = { workspace = true, features = ["std"] }
 tokio-util = { workspace = true }
+smol_str = { version = "0.3", features = ["serde"] }
 
 # Optional dependencies for features
 reqwest = { workspace = true, optional = true }

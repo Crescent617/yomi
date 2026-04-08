@@ -1,14 +1,15 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 use uuid::Uuid;
 
 /// Unique identifier for agents
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AgentId(pub String);
+pub struct AgentId(pub SmolStr);
 
 impl AgentId {
     pub fn new() -> Self {
-        Self(Uuid::now_v7().to_string())
+        Self(SmolStr::new(Uuid::now_v7().to_string()))
     }
 }
 
