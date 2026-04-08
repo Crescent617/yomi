@@ -112,6 +112,9 @@ impl ChatView {
     }
 
     pub fn start_tool(&mut self, tool_id: String, tool_name: String, arguments: Option<String>) {
+        // Flush any pending streaming content before starting tool
+        self.flush_streaming();
+
         self.active_tools
             .insert(tool_id.clone(), (tool_name.clone(), ToolStatus::Running));
         self.messages.push(HistoryMessage::Tool {
@@ -184,6 +187,33 @@ impl ChatView {
         }
         if !self.user_scrolled {
             self.scroll_offset = 0;
+        }
+    }
+
+    /// Flush pending streaming content to history
+    /// Called when a new block starts (tool, code block, etc.) to preserve current content
+    pub fn flush_streaming(&mut self) {
+        // If there's pending thinking content, save it as an assistant message
+        if !self.streaming_thinking.is_empty() {
+            self.messages.push(HistoryMessage::Assistant {
+                content: String::new(),
+                thinking: Some(self.streaming_thinking.clone()),
+                thinking_folded: !self.expand_all,
+                thinking_elapsed_ms: None,
+            });
+            self.streaming_thinking.clear();
+        }
+
+        // If there's pending content, save it as an assistant message
+        if !self.streaming_content.is_empty() {
+            self.messages.push(HistoryMessage::Assistant {
+                content: self.streaming_content.clone(),
+                thinking: None,
+                thinking_folded: true,
+                thinking_elapsed_ms: None,
+            });
+            self.streaming_content.clear();
+            self.md_renderer = StreamingMarkdownRenderer::new();
         }
     }
 
@@ -404,7 +434,6 @@ impl ChatView {
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
                             )]));
-                            lines.push(Line::from(""));
                         } else {
                             lines.push(Line::from(vec![Span::styled(
                                 format!("Thinking ({tokens} tokens){elapsed_str}"),
@@ -424,15 +453,18 @@ impl ChatView {
                                     ),
                                 ]));
                             }
-                            lines.push(Line::from(""));
                         }
                     }
                 }
 
-                // Render content with markdown (no indicator)
-                if content.is_empty() {
+                // Add separator between thinking and content if both exist
+                if thinking.as_ref().map_or(false, |t| !t.is_empty()) && !content.is_empty() {
                     lines.push(Line::from(""));
-                } else {
+                }
+
+                // Render content with markdown (no indicator)
+                // Note: no empty line here, thinking already adds one if present
+                if !content.is_empty() {
                     let mut md_renderer = StreamingMarkdownRenderer::new();
                     md_renderer.set_content(content.clone());
                     let md_lines = md_renderer.lines();
@@ -535,12 +567,10 @@ impl ChatView {
                             ),
                         ]));
                     }
-                    lines.push(Line::from(""));
                 }
             }
         }
 
-        lines.push(Line::from(""));
         lines
     }
 
@@ -568,22 +598,24 @@ impl ChatView {
                     ]));
                 }
             }
-            lines.push(Line::from(""));
         }
 
         // Render content (no indicator, status shown in status bar)
+        // Add separator between thinking and content
+        if !self.streaming_thinking.is_empty() && !self.streaming_content.is_empty() {
+            lines.push(Line::from(""));
+        }
         let md_lines = self.md_renderer.lines();
 
         for line in md_lines {
             lines.push(line.clone());
         }
 
-        // Add empty line placeholder when no content yet
-        if md_lines.is_empty() {
+        // Add empty line placeholder only if no thinking (thinking already adds one)
+        if md_lines.is_empty() && self.streaming_thinking.is_empty() {
             lines.push(Line::from(""));
         }
 
-        lines.push(Line::from(""));
         lines
     }
 }
@@ -592,13 +624,24 @@ impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let mut all_lines: Vec<Line> = Vec::new();
 
-        // Render history
-        for msg in &self.messages {
+        // Render history with unified spacing
+        for (i, msg) in self.messages.iter().enumerate() {
             all_lines.extend(self.render_message(msg));
+            // Add spacing between messages (but not after the last one)
+            if i < self.messages.len() - 1 {
+                all_lines.push(Line::from(""));
+            }
         }
 
         // Render streaming content (if any)
-        // Note: also check streaming_thinking to ensure think block is visible during tool execution
+        // Add spacing if there's history before streaming
+        if !self.messages.is_empty()
+            && (self.is_streaming
+                || !self.streaming_content.is_empty()
+                || !self.streaming_thinking.is_empty())
+        {
+            all_lines.push(Line::from(""));
+        }
         if self.is_streaming
             || !self.streaming_content.is_empty()
             || !self.streaming_thinking.is_empty()
