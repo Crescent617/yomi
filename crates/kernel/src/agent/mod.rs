@@ -404,7 +404,7 @@ impl Agent {
             .unwrap_or_default();
 
         for call in &tool_calls {
-            let args_str = serde_json::to_string_pretty(&call.arguments).ok();
+            let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
                 .event_tx
                 .send(Event::Tool(ToolEvent::Started {

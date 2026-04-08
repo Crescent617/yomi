@@ -490,14 +490,73 @@ impl ChatView {
                     ToolStatus::Failed => ("", colors::accent_error()),
                 };
 
-                // Build header with execution time if available
+                // Build header with execution time (only show if >= 1s)
                 let time_str = elapsed_ms
+                    .filter(|ms| *ms >= 1000)
                     .map(|ms| format!(" {:.1}s", ms as f64 / 1000.0))
                     .unwrap_or_default();
-                lines.push(Line::from(vec![Span::styled(
-                    format!("{icon} {tool_name}{time_str} "),
+
+                // Peek args in folded mode (max 30 chars, compact whitespace)
+                let peek_args = if *folded {
+                    arguments.as_ref().and_then(|args| {
+                        // Compact whitespace: replace newlines/tabs with single space
+                        let compact = args;
+                        if compact.is_empty() {
+                            None
+                        } else {
+                            let peek = if compact.len() > 80 {
+                                format!("{}...", &compact[..77])
+                            } else {
+                                compact.to_string()
+                            };
+                            Some(peek)
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                // Build header line
+                // Capitalize first letter of tool_name
+                let mut chars = tool_name.chars();
+                let tool_name_capitalized = chars
+                    .next()
+                    .map(|c| c.to_uppercase().to_string() + chars.as_str())
+                    .unwrap_or_default();
+                let mut header_spans = vec![Span::styled(
+                    format!("{icon} {tool_name_capitalized}{time_str}"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )]));
+                )];
+                if let Some(peek) = peek_args {
+                    header_spans.push(Span::styled(
+                        format!(" {peek}"),
+                        Style::default().fg(colors::text_secondary()),
+                    ));
+                }
+                lines.push(Line::from(header_spans));
+
+                // Output peek in folded mode (max 50 chars, indented)
+                if *folded {
+                    let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
+                        let trimmed = out.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            let peek = if trimmed.len() > 200 {
+                                format!("{}...", &trimmed[..197])
+                            } else {
+                                trimmed.to_string()
+                            };
+                            Some(peek.split_whitespace().collect::<Vec<_>>().join(" "))
+                        }
+                    });
+                    if let Some(peek) = peek_output {
+                        lines.push(Line::from(vec![
+                            Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(peek, Style::default().fg(colors::text_secondary())),
+                        ]));
+                    }
+                }
 
                 if !*folded {
                     // Show tool arguments if available

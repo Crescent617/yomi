@@ -74,7 +74,10 @@ impl Tool for ReadTool {
         let total_lines = lines.len();
 
         let start = offset.saturating_sub(1); // Convert to 0-based
-        let end = limit.map(|l| start + l).unwrap_or(total_lines).min(total_lines);
+        let end = limit
+            .map(|l| start + l)
+            .unwrap_or(total_lines)
+            .min(total_lines);
 
         if start >= total_lines {
             return Ok(ToolOutput::new(

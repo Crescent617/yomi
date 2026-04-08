@@ -36,7 +36,11 @@ pub async fn execute_tools_parallel(
         let agent_id = agent_id.clone();
         let tool_opt = tool_registry.get(&call.name);
         if tool_opt.is_none() {
-            tracing::error!("Tool '{}' not found in registry. Available tools: {:?}", call.name, tool_registry.list());
+            tracing::error!(
+                "Tool '{}' not found in registry. Available tools: {:?}",
+                call.name,
+                tool_registry.list()
+            );
         }
 
         join_set.spawn(async move {
@@ -101,9 +105,21 @@ pub async fn execute_tools_parallel(
     let mut results = Vec::new();
     while let Some(Ok(result)) = join_set.join_next().await {
         if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
-            tracing::debug!("Tool {} completed successfully in {}ms", result.tool_call_id, elapsed_ms);
-        } else if let ToolEvent::Error { error, elapsed_ms, .. } = &result.event {
-            tracing::warn!("Tool {} failed in {}ms: {}", result.tool_call_id, elapsed_ms, error);
+            tracing::debug!(
+                "Tool {} completed successfully in {}ms",
+                result.tool_call_id,
+                elapsed_ms
+            );
+        } else if let ToolEvent::Error {
+            error, elapsed_ms, ..
+        } = &result.event
+        {
+            tracing::warn!(
+                "Tool {} failed in {}ms: {}",
+                result.tool_call_id,
+                elapsed_ms,
+                error
+            );
         }
         results.push(result);
     }

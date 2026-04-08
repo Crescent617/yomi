@@ -145,9 +145,7 @@ impl Model {
                             self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!(
-                                    "{content_tokens}, {thinking_tokens}"
-                                )),
+                                AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
                             )?;
                         }
                         kernel::event::ContentChunk::Thinking { thinking, .. } => {
@@ -168,9 +166,7 @@ impl Model {
                             self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!(
-                                    "{content_tokens}, {thinking_tokens}"
-                                )),
+                                AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
                             )?;
                         }
                         _ => {}
@@ -256,7 +252,10 @@ impl Model {
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
-                    tool_id, tool_name, arguments, ..
+                    tool_id,
+                    tool_name,
+                    arguments,
+                    ..
                 }) => {
                     // Show tool execution start in chat view
                     let args_str = arguments.unwrap_or_default();
@@ -269,7 +268,10 @@ impl Model {
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
-                    tool_id, output, elapsed_ms, ..
+                    tool_id,
+                    output,
+                    elapsed_ms,
+                    ..
                 }) => {
                     // Show tool output in chat view
                     let combined = format!("{tool_id}\x00{output}\x00{elapsed_ms}");
@@ -280,7 +282,12 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Error { tool_id, error, elapsed_ms, .. }) => {
+                AppEvent::Tool(kernel::event::ToolEvent::Error {
+                    tool_id,
+                    error,
+                    elapsed_ms,
+                    ..
+                }) => {
                     // Show tool error in chat view
                     let combined = format!("{tool_id}\x00{error}\x00{elapsed_ms}");
                     self.app.attr(

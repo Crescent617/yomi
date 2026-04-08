@@ -18,8 +18,7 @@ use crate::msg::Msg;
 use crate::theme::colors;
 
 /// Status bar component showing streaming progress
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
     is_streaming: bool,
@@ -28,7 +27,6 @@ pub struct StatusBar {
     thinking_tokens: usize,
     start_time: Option<std::time::Instant>,
 }
-
 
 impl StatusBar {
     pub fn new() -> Self {
@@ -98,10 +96,7 @@ impl StatusBar {
                 token_style,
             ));
         } else {
-            spans.push(Span::styled(
-                format!("{total_tokens} tokens"),
-                token_style,
-            ));
+            spans.push(Span::styled(format!("{total_tokens} tokens"), token_style));
         }
 
         // Elapsed time (only when streaming)
