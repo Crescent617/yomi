@@ -34,6 +34,8 @@ pub struct Model {
     pub event_rx: mpsc::Receiver<AppEvent>,
     /// Channel to send input to kernel
     pub input_tx: mpsc::Sender<String>,
+    /// Channel to send cancel requests
+    pub cancel_tx: mpsc::Sender<()>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -48,6 +50,7 @@ impl Model {
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<String>,
+        cancel_tx: mpsc::Sender<()>,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
@@ -59,6 +62,7 @@ impl Model {
             terminal,
             event_rx,
             input_tx,
+            cancel_tx,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -73,9 +77,9 @@ impl Model {
                 .margin(1)
                 .constraints(
                     [
-                        Constraint::Min(3),     // Main content area
-                        Constraint::Length(1),  // Status bar
-                        Constraint::Length(3),  // Input area
+                        Constraint::Min(3),    // Main content area
+                        Constraint::Length(1), // Status bar
+                        Constraint::Length(3), // Input area
                     ]
                     .as_ref(),
                 )
@@ -113,11 +117,7 @@ impl Model {
         )?;
 
         // Mount input component
-        app.mount(
-            Id::InputBox,
-            Box::new(InputComponent::new()),
-            vec![],
-        )?;
+        app.mount(Id::InputBox, Box::new(InputComponent::new()), vec![])?;
 
         // Set focus to input box
         app.active(&Id::InputBox)?;
@@ -145,7 +145,9 @@ impl Model {
                             self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!("{}, {}", content_tokens, thinking_tokens)),
+                                AttrValue::String(format!(
+                                    "{content_tokens}, {thinking_tokens}"
+                                )),
                             )?;
                         }
                         kernel::event::ContentChunk::Thinking { thinking, .. } => {
@@ -166,7 +168,9 @@ impl Model {
                             self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!("{}, {}", content_tokens, thinking_tokens)),
+                                AttrValue::String(format!(
+                                    "{content_tokens}, {thinking_tokens}"
+                                )),
                             )?;
                         }
                         _ => {}
@@ -186,9 +190,9 @@ impl Model {
                     // Add completed assistant message to history
                     if !self.current_content.is_empty() {
                         // Calculate thinking elapsed time
-                        let elapsed_ms = self.thinking_start_time.map(|start| {
-                            start.elapsed().as_millis() as u64
-                        });
+                        let elapsed_ms = self
+                            .thinking_start_time
+                            .map(|start| start.elapsed().as_millis() as u64);
 
                         // Combine content, thinking and elapsed with null separator
                         let combined = if self.current_thinking.is_empty() {
@@ -250,9 +254,11 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Started { tool_id, tool_name, .. }) => {
+                AppEvent::Tool(kernel::event::ToolEvent::Started {
+                    tool_id, tool_name, ..
+                }) => {
                     // Show tool execution start in chat view
-                    let combined = format!("{}\x00{}", tool_id, tool_name);
+                    let combined = format!("{tool_id}\x00{tool_name}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("start_tool"),
@@ -260,9 +266,11 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Output { tool_id, output, .. }) => {
+                AppEvent::Tool(kernel::event::ToolEvent::Output {
+                    tool_id, output, ..
+                }) => {
                     // Show tool output in chat view
-                    let combined = format!("{}\x00{}", tool_id, output);
+                    let combined = format!("{tool_id}\x00{output}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("complete_tool"),
@@ -272,7 +280,7 @@ impl Model {
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Error { tool_id, error, .. }) => {
                     // Show tool error in chat view
-                    let combined = format!("{}\x00{}", tool_id, error);
+                    let combined = format!("{tool_id}\x00{error}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("fail_tool"),
@@ -408,6 +416,10 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::CancelRequest => {
+                    let _ = self.cancel_tx.try_send(());
+                    None
+                }
                 Msg::Redraw => {
                     self.redraw = true;
                     None
@@ -424,7 +436,8 @@ impl Update<Msg> for Model {
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,
+    cancel_tx: mpsc::Sender<()>,
 ) -> Result<()> {
-    let model = Model::new(event_rx, input_tx)?;
+    let model = Model::new(event_rx, input_tx, cancel_tx)?;
     model.run().await
 }

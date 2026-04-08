@@ -3,7 +3,7 @@ use app::{Coordinator, SessionConfig};
 use clap::Parser;
 use kernel::{
     agent::AgentConfig,
-    config::{env_names, Config, ModelProvider, DEFAULT_DATA_DIR},
+    config::{env_names, Config, ModelProvider},
     storage::FsStorage,
     tool::{enable_yolo_mode, ToolRegistry, ToolSandbox},
 };
@@ -69,13 +69,6 @@ async fn main() -> Result<()> {
     // Load configuration from environment variables
     let mut config = Config::from_env();
 
-    // Set platform-specific data directory if not overridden by env
-    if std::env::var(env_names::DATA_DIR).is_err() {
-        let data_dir = directories::ProjectDirs::from("ai", "yomi", "yomi")
-            .map(|d| d.data_dir().to_path_buf());
-        config = config.with_data_dir(data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR)));
-    }
-
     // CLI arguments override environment variables
     if let Some(provider_str) = args.provider {
         if let Ok(provider) = provider_str.parse::<ModelProvider>() {
@@ -111,7 +104,7 @@ async fn main() -> Result<()> {
     }
 
     // Create storage
-    let storage = Arc::new(FsStorage::new(config.data_dir.clone())?);
+    let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
 
     // Create provider based on configuration
     let provider: Arc<dyn kernel::provider::ModelProvider> = match config.provider {
@@ -160,6 +153,8 @@ async fn main() -> Result<()> {
 
     // Create channel for input forwarding
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
+    // Create channel for cancel requests
+    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
 
     // Spawn task to forward input to coordinator
     let coord_for_input = coordinator.clone();
@@ -175,6 +170,17 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn task to handle cancel requests
+    let coord_for_cancel = coordinator.clone();
+    let session_id_for_cancel = session_id.clone();
+    tokio::spawn(async move {
+        while cancel_rx.recv().await == Some(()) {
+            if let Err(e) = coord_for_cancel.cancel(&session_id_for_cancel).await {
+                tracing::error!("Failed to cancel request: {}", e);
+            }
+        }
+    });
+
     // Get event receiver from coordinator for the session
     let event_rx = coordinator
         .take_session_event_receiver(&session_id)
@@ -182,7 +188,7 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
     // Run TUI
-    run_tui(event_rx, input_tx).await?;
+    run_tui(event_rx, input_tx, cancel_tx).await?;
 
     println!("Goodbye!");
     Ok(())
@@ -230,7 +236,10 @@ fn init_logging() -> Result<()> {
     let log_dir = std::env::var(env_names::LOG_DIR)
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            directories::ProjectDirs::from("ai", "yomi", "yomi").map_or_else(|| PathBuf::from("/tmp/yomi_logs"), |d| d.data_dir().join("logs"))
+            directories::ProjectDirs::from("ai", "yomi", "yomi").map_or_else(
+                || PathBuf::from("/tmp/yomi_logs"),
+                |d| d.data_dir().join("logs"),
+            )
         });
 
     // Ensure log directory exists

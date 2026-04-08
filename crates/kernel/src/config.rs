@@ -4,6 +4,17 @@ use crate::provider::ModelConfig;
 use crate::storage::StorageConfig;
 use std::path::PathBuf;
 
+/// Expand `~` to the user's home directory
+pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
+    let path = path.as_ref();
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    }
+    PathBuf::from(path)
+}
+
 /// Default data directory path
 pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
@@ -131,14 +142,15 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
             provider: ModelProvider::default(),
             model: ModelConfig::default(),
-            storage: StorageConfig::default(),
+            storage: StorageConfig::with_data_dir(&data_dir),
             agent: AgentConfig::default(),
             sandbox: false,
             yolo: false,
-            data_dir: PathBuf::from(DEFAULT_DATA_DIR),
+            data_dir,
         }
     }
 }
@@ -192,7 +204,7 @@ impl Config {
 
         // Data directory
         if let Some(dir) = env_var(env_names::DATA_DIR) {
-            config.data_dir = PathBuf::from(dir);
+            config.data_dir = expand_tilde(dir);
             config.storage.url = config.data_dir.to_string_lossy().to_string();
         }
 
@@ -361,5 +373,38 @@ mod tests {
         ] {
             std::env::remove_var(key);
         }
+    }
+
+    #[test]
+    fn test_expand_tilde() {
+        let home = std::env::var("HOME").unwrap_or_default();
+
+        // Test tilde expansion
+        assert_eq!(expand_tilde("~/foo"), PathBuf::from(format!("{home}/foo")));
+        assert_eq!(
+            expand_tilde("~/.yomi"),
+            PathBuf::from(format!("{home}/.yomi"))
+        );
+
+        // Test paths without tilde are unchanged
+        assert_eq!(
+            expand_tilde("/absolute/path"),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            expand_tilde("relative/path"),
+            PathBuf::from("relative/path")
+        );
+
+        // Test tilde not at start
+        assert_eq!(expand_tilde("/foo~/bar"), PathBuf::from("/foo~/bar"));
+    }
+
+    #[test]
+    fn test_default_data_dir_expanded() {
+        let config = Config::default();
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(config.data_dir, PathBuf::from(format!("{home}/.yomi")));
+        assert!(!config.storage.url.starts_with('~'));
     }
 }

@@ -102,10 +102,11 @@ impl Agent {
 
     /// Persist a single message to storage
     async fn persist_message(&self, message: &Message) {
-        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id
-        ) {
+        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
             let session_id = crate::types::SessionId(session_id.clone());
-            let _ = storage.append_messages(&session_id, &[message.clone()]).await;
+            let _ = storage
+                .append_messages(&session_id, &[message.clone()])
+                .await;
         }
     }
 
@@ -113,8 +114,7 @@ impl Agent {
         tracing::info!("Agent {} started", self.id.0);
 
         // Load historical messages if storage and session_id are provided
-        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id
-        ) {
+        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
             let session_id_wrapped = crate::types::SessionId(session_id.clone());
             if let Ok(messages) = storage.get_messages(&session_id_wrapped).await {
                 for msg in messages {
@@ -310,10 +310,8 @@ impl Agent {
                     completion_tokens,
                 } => {
                     let total_tokens = prompt_tokens + completion_tokens;
-                    self.token_usage.fetch_add(
-                        total_tokens as u64,
-                        std::sync::atomic::Ordering::SeqCst,
-                    );
+                    self.token_usage
+                        .fetch_add(u64::from(total_tokens), std::sync::atomic::Ordering::SeqCst);
                     let _ = self
                         .event_tx
                         .send(Event::Model(ModelEvent::TokenUsage {

@@ -7,17 +7,14 @@ use tuirealm::{
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span, Text},
         widgets::Paragraph,
     },
-    Component, Frame, MockComponent, State, StateValue,
+    Component, Frame, MockComponent, State,
 };
 
-use crate::{
-    msg::Msg,
-    theme::colors,
-};
+use crate::{msg::Msg, theme::colors};
 
 /// A chat message in history
 #[derive(Debug, Clone)]
@@ -48,7 +45,12 @@ impl ChatHistory {
         self.messages.push(HistoryMessage::User(content));
     }
 
-    pub fn add_assistant_message(&mut self, content: String, thinking: Option<String>, elapsed_ms: Option<u64>) {
+    pub fn add_assistant_message(
+        &mut self,
+        content: String,
+        thinking: Option<String>,
+        elapsed_ms: Option<u64>,
+    ) {
         self.messages.push(HistoryMessage::Assistant {
             content,
             thinking,
@@ -57,15 +59,15 @@ impl ChatHistory {
         });
     }
 
-    pub fn scroll_up(&mut self, amount: usize) {
+    pub const fn scroll_up(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(amount);
     }
 
-    pub fn scroll_down(&mut self, amount: usize) {
+    pub const fn scroll_down(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
     }
 
-    pub fn scroll_to_bottom(&mut self) {
+    pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
     }
 
@@ -83,7 +85,10 @@ impl ChatHistory {
                                 .fg(colors::accent_user())
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(colors::text_primary()),
+                        ),
                     ]));
                 }
             }
@@ -104,28 +109,22 @@ impl ChatHistory {
                         if *thinking_folded {
                             // Folded: just show summary line
                             lines.push(Line::from(vec![
+                                Span::styled("▶ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
-                                    "▶ ",
-                                    Style::default().fg(Color::DarkGray),
-                                ),
-                                Span::styled(
-                                    format!("Thinking ({tokens} tokens){}", elapsed_str),
+                                    format!("Thinking ({tokens} tokens){elapsed_str}"),
                                     Style::default()
-                                        .fg(Color::DarkGray)
+                                        .fg(colors::text_secondary())
                                         .add_modifier(Modifier::ITALIC),
                                 ),
                             ]));
                         } else {
                             // Expanded: show all thinking content
                             lines.push(Line::from(vec![
+                                Span::styled("▼ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
-                                    "▼ ",
-                                    Style::default().fg(Color::DarkGray),
-                                ),
-                                Span::styled(
-                                    format!("Thinking ({tokens} tokens){}", elapsed_str),
+                                    format!("Thinking ({tokens} tokens){elapsed_str}"),
                                     Style::default()
-                                        .fg(Color::DarkGray)
+                                        .fg(colors::text_secondary())
                                         .add_modifier(Modifier::ITALIC),
                                 ),
                             ]));
@@ -133,11 +132,11 @@ impl ChatHistory {
                                 lines.push(Line::from(vec![
                                     Span::styled(
                                         "│ ",
-                                        Style::default().fg(Color::DarkGray),
+                                        Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
                                         line.to_string(),
-                                        Style::default().fg(Color::DarkGray),
+                                        Style::default().fg(colors::text_secondary()),
                                     ),
                                 ]));
                             }
@@ -148,7 +147,7 @@ impl ChatHistory {
 
                 // Render content
                 let prefix_style = Style::default()
-                    .fg(Color::Cyan)
+                    .fg(colors::accent_system())
                     .add_modifier(Modifier::BOLD);
 
                 if content.is_empty() {
@@ -160,13 +159,13 @@ impl ChatHistory {
                                 Span::styled("◆ ", prefix_style),
                                 Span::styled(
                                     line.to_string(),
-                                    Style::default().fg(Color::White),
+                                    Style::default().fg(colors::text_primary()),
                                 ),
                             ]));
                         } else {
                             lines.push(Line::from(Span::styled(
                                 line.to_string(),
-                                Style::default().fg(Color::White),
+                                Style::default().fg(colors::text_primary()),
                             )));
                         }
                     }
@@ -182,7 +181,10 @@ impl ChatHistory {
 
     pub fn toggle_last_thinking(&mut self) {
         for msg in self.messages.iter_mut().rev() {
-            if let HistoryMessage::Assistant { thinking_folded, .. } = msg {
+            if let HistoryMessage::Assistant {
+                thinking_folded, ..
+            } = msg
+            {
                 *thinking_folded = !*thinking_folded;
                 break;
             }
@@ -237,8 +239,11 @@ impl MockComponent for ChatHistory {
                 // Format: "content\x00thinking\x00elapsed_ms" where \x00 is a separator
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
-                    let content = parts.get(0).unwrap_or(&"").to_string();
-                    let thinking = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let thinking = parts
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok());
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }

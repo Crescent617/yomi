@@ -34,9 +34,7 @@ pub async fn execute_tools_parallel(
 
         join_set.spawn(async move {
             let result = match tool_opt {
-                Some(tool) => {
-                    execute_single_tool(tool, call.clone(), timeout).await
-                }
+                Some(tool) => execute_single_tool(tool, call.clone(), timeout).await,
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
@@ -61,8 +59,10 @@ pub async fn execute_tools_parallel(
                     },
                 )
             } else {
-                let error = format!("Exit code: {}\n{}\n{}",
-                    result.exit_code, result.stdout, result.stderr);
+                let error = format!(
+                    "Exit code: {}\n{}\n{}",
+                    result.exit_code, result.stdout, result.stderr
+                );
                 (
                     ToolEvent::Error {
                         agent_id: agent_id.clone(),
@@ -97,7 +97,10 @@ pub async fn execute_tools_parallel(
         results.push(result);
     }
 
-    let success_count = results.iter().filter(|r| matches!(r.event, ToolEvent::Output { .. })).count();
+    let success_count = results
+        .iter()
+        .filter(|r| matches!(r.event, ToolEvent::Output { .. }))
+        .count();
     tracing::info!(
         "Tool execution completed: {}/{} succeeded",
         success_count,

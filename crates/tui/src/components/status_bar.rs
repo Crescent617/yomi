@@ -7,7 +7,7 @@ use tuirealm::{
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
     },
@@ -15,9 +15,11 @@ use tuirealm::{
 };
 
 use crate::msg::Msg;
+use crate::theme::colors;
 
 /// Status bar component showing streaming progress
 #[derive(Debug)]
+#[derive(Default)]
 pub struct StatusBar {
     props: Props,
     is_streaming: bool,
@@ -27,18 +29,6 @@ pub struct StatusBar {
     start_time: Option<std::time::Instant>,
 }
 
-impl Default for StatusBar {
-    fn default() -> Self {
-        Self {
-            props: Props::default(),
-            is_streaming: false,
-            tick_frame: 0,
-            content_tokens: 0,
-            thinking_tokens: 0,
-            start_time: None,
-        }
-    }
-}
 
 impl StatusBar {
     pub fn new() -> Self {
@@ -53,17 +43,17 @@ impl StatusBar {
         self.start_time = Some(std::time::Instant::now());
     }
 
-    pub fn stop_streaming(&mut self) {
+    pub const fn stop_streaming(&mut self) {
         self.is_streaming = false;
         self.start_time = None;
     }
 
-    pub fn set_tokens(&mut self, content_tokens: usize, thinking_tokens: usize) {
+    pub const fn set_tokens(&mut self, content_tokens: usize, thinking_tokens: usize) {
         self.content_tokens = content_tokens;
         self.thinking_tokens = thinking_tokens;
     }
 
-    pub fn tick(&mut self) {
+    pub const fn tick(&mut self) {
         if self.is_streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
@@ -88,18 +78,18 @@ impl StatusBar {
 
         let indicator_style = if self.is_streaming {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(colors::accent_system())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(Color::Green)
+                .fg(colors::accent_success())
                 .add_modifier(Modifier::BOLD)
         };
 
-        spans.push(Span::styled(format!("{} ", indicator), indicator_style));
+        spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
         // Token count with separate thinking count
-        let token_style = Style::default().fg(Color::DarkGray);
+        let token_style = Style::default().fg(colors::text_secondary());
         let total_tokens = self.content_tokens + self.thinking_tokens;
 
         if self.thinking_tokens > 0 {
@@ -109,7 +99,7 @@ impl StatusBar {
             ));
         } else {
             spans.push(Span::styled(
-                format!("{} tokens", total_tokens),
+                format!("{total_tokens} tokens"),
                 token_style,
             ));
         }
@@ -119,11 +109,11 @@ impl StatusBar {
             if let Some(start) = self.start_time {
                 let elapsed = start.elapsed().as_secs_f64();
                 let time_str = if elapsed < 60.0 {
-                    format!(" · {:.1}s", elapsed)
+                    format!(" · {elapsed:.1}s")
                 } else {
                     let mins = (elapsed / 60.0) as u64;
                     let secs = (elapsed % 60.0) as u64;
-                    format!(" · {}m{:02}s", mins, secs)
+                    format!(" · {mins}m{secs:02}s")
                 };
                 spans.push(Span::styled(time_str, token_style));
             }
@@ -156,7 +146,7 @@ impl MockComponent for StatusBar {
             Attribute::Custom(s) if s == "set_tokens" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split(',').collect();
-                    let content = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    let content = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
                     let thinking = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                     self.set_tokens(content, thinking);
                 }
@@ -179,7 +169,7 @@ impl MockComponent for StatusBar {
     }
 }
 
-/// Component wrapper for StatusBar
+/// Component wrapper for `StatusBar`
 pub struct StatusBarComponent {
     component: StatusBar,
 }

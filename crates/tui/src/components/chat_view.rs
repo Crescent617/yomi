@@ -7,7 +7,7 @@ use tuirealm::{
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span, Text},
         widgets::Paragraph,
     },
@@ -16,11 +16,7 @@ use tuirealm::{
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::{
-    markdown_stream::StreamingMarkdownRenderer,
-    msg::Msg,
-    theme::colors,
-};
+use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +112,8 @@ impl ChatView {
     }
 
     pub fn start_tool(&mut self, tool_id: String, tool_name: String) {
-        self.active_tools.insert(tool_id.clone(), (tool_name.clone(), ToolStatus::Running));
+        self.active_tools
+            .insert(tool_id.clone(), (tool_name.clone(), ToolStatus::Running));
         self.messages.push(HistoryMessage::Tool {
             tool_name,
             tool_id,
@@ -133,7 +130,13 @@ impl ChatView {
     pub fn complete_tool(&mut self, tool_id: String, output: String) {
         // Update the tool message in history
         for msg in self.messages.iter_mut().rev() {
-            if let HistoryMessage::Tool { tool_id: id, status, output: out, .. } = msg {
+            if let HistoryMessage::Tool {
+                tool_id: id,
+                status,
+                output: out,
+                ..
+            } = msg
+            {
                 if id == &tool_id {
                     *status = ToolStatus::Completed;
                     *out = Some(output);
@@ -143,7 +146,8 @@ impl ChatView {
         }
         // Update active tools tracking
         if let Some((name, _)) = self.active_tools.remove(&tool_id) {
-            self.active_tools.insert(tool_id, (name, ToolStatus::Completed));
+            self.active_tools
+                .insert(tool_id, (name, ToolStatus::Completed));
         }
         if !self.user_scrolled {
             self.scroll_offset = 0;
@@ -153,7 +157,13 @@ impl ChatView {
     pub fn fail_tool(&mut self, tool_id: String, error: String) {
         // Update the tool message in history
         for msg in self.messages.iter_mut().rev() {
-            if let HistoryMessage::Tool { tool_id: id, status, error: err, .. } = msg {
+            if let HistoryMessage::Tool {
+                tool_id: id,
+                status,
+                error: err,
+                ..
+            } = msg
+            {
                 if id == &tool_id {
                     *status = ToolStatus::Failed;
                     *err = Some(error);
@@ -163,7 +173,8 @@ impl ChatView {
         }
         // Update active tools tracking
         if let Some((name, _)) = self.active_tools.remove(&tool_id) {
-            self.active_tools.insert(tool_id, (name, ToolStatus::Failed));
+            self.active_tools
+                .insert(tool_id, (name, ToolStatus::Failed));
         }
         if !self.user_scrolled {
             self.scroll_offset = 0;
@@ -181,7 +192,7 @@ impl ChatView {
         self.user_scrolled = false;
     }
 
-    pub fn stop_streaming(&mut self) {
+    pub const fn stop_streaming(&mut self) {
         self.is_streaming = false;
     }
 
@@ -209,7 +220,7 @@ impl ChatView {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub const fn tick(&mut self) {
         if self.is_streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
@@ -223,7 +234,7 @@ impl ChatView {
         self.user_scrolled = true;
     }
 
-    pub fn scroll_down(&mut self, amount: usize) {
+    pub const fn scroll_down(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
         // If scrolled to bottom, resume auto-scroll
         if self.scroll_offset == 0 {
@@ -231,7 +242,7 @@ impl ChatView {
         }
     }
 
-    pub fn scroll_to_bottom(&mut self) {
+    pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
         // User scrolled to bottom, resume auto-scroll
         self.user_scrolled = false;
@@ -239,7 +250,10 @@ impl ChatView {
 
     pub fn toggle_last_thinking(&mut self) {
         for msg in self.messages.iter_mut().rev() {
-            if let HistoryMessage::Assistant { thinking_folded, .. } = msg {
+            if let HistoryMessage::Assistant {
+                thinking_folded, ..
+            } = msg
+            {
                 *thinking_folded = !*thinking_folded;
                 break;
             }
@@ -251,7 +265,9 @@ impl ChatView {
         // Update all messages to reflect expand_all state
         for msg in &mut self.messages {
             match msg {
-                HistoryMessage::Assistant { thinking_folded, .. } => {
+                HistoryMessage::Assistant {
+                    thinking_folded, ..
+                } => {
                     *thinking_folded = !self.expand_all;
                 }
                 HistoryMessage::Tool { folded, .. } => {
@@ -351,7 +367,10 @@ impl ChatView {
                                 .fg(colors::accent_user())
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(colors::text_primary()),
+                        ),
                     ]));
                 }
             }
@@ -371,31 +390,34 @@ impl ChatView {
 
                         if *thinking_folded {
                             lines.push(Line::from(vec![
-                                Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+                                Span::styled("▶ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
-                                    format!("Thinking ({tokens} tokens){}", elapsed_str),
+                                    format!("Thinking ({tokens} tokens){elapsed_str}"),
                                     Style::default()
-                                        .fg(Color::DarkGray)
+                                        .fg(colors::text_secondary())
                                         .add_modifier(Modifier::ITALIC),
                                 ),
                             ]));
                             lines.push(Line::from(""));
                         } else {
                             lines.push(Line::from(vec![
-                                Span::styled("▼ ", Style::default().fg(Color::DarkGray)),
+                                Span::styled("▼ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
-                                    format!("Thinking ({tokens} tokens){}", elapsed_str),
+                                    format!("Thinking ({tokens} tokens){elapsed_str}"),
                                     Style::default()
-                                        .fg(Color::DarkGray)
+                                        .fg(colors::text_secondary())
                                         .add_modifier(Modifier::ITALIC),
                                 ),
                             ]));
                             for line in thinking.lines() {
                                 lines.push(Line::from(vec![
-                                    Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                                    Span::styled(
+                                        "│ ",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
                                     Span::styled(
                                         line.to_string(),
-                                        Style::default().fg(Color::DarkGray),
+                                        Style::default().fg(colors::text_secondary()),
                                     ),
                                 ]));
                             }
@@ -412,7 +434,7 @@ impl ChatView {
                     md_renderer.set_content(content.clone());
                     let md_lines = md_renderer.lines();
 
-                    for line in md_lines.iter() {
+                    for line in md_lines {
                         lines.push(line.clone());
                     }
                 }
@@ -426,17 +448,17 @@ impl ChatView {
                 ..
             } => {
                 let (icon, color) = match status {
-                    ToolStatus::Running => ("⚡", Color::Yellow),
-                    ToolStatus::Completed => ("✓", Color::Green),
-                    ToolStatus::Failed => ("✗", Color::Red),
+                    ToolStatus::Running => ("⚡", colors::accent_warning()),
+                    ToolStatus::Completed => ("✓", colors::accent_success()),
+                    ToolStatus::Failed => ("✗", colors::accent_error()),
                 };
 
                 let fold_icon = if *folded { "▶ " } else { "▼ " };
 
                 lines.push(Line::from(vec![
-                    Span::styled(fold_icon, Style::default().fg(Color::DarkGray)),
+                    Span::styled(fold_icon, Style::default().fg(colors::text_secondary())),
                     Span::styled(
-                        format!("{} {} ", icon, tool_name),
+                        format!("{icon} {tool_name} "),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 ]));
@@ -445,21 +467,32 @@ impl ChatView {
                     if let Some(err) = error {
                         for line in err.lines() {
                             lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(Color::Red)),
-                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                                Span::styled("│ ", Style::default().fg(colors::accent_error())),
+                                Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(colors::accent_error()),
+                                ),
                             ]));
                         }
                     } else if let Some(out) = output {
                         for line in out.lines() {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_system())),
-                                Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                                Span::styled(
+                                    line.to_string(),
+                                    Style::default().fg(colors::text_primary()),
+                                ),
                             ]));
                         }
                     } else if *status == ToolStatus::Running {
                         lines.push(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                            Span::styled("Running...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+                            Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(
+                                "Running...",
+                                Style::default()
+                                    .fg(colors::text_secondary())
+                                    .add_modifier(Modifier::ITALIC),
+                            ),
                         ]));
                     }
                     lines.push(Line::from(""));
@@ -479,11 +512,11 @@ impl ChatView {
             let tokens = self.streaming_thinking.len() / 4;
             let icon = if self.expand_all { "▼ " } else { "▶ " };
             lines.push(Line::from(vec![
-                Span::styled(icon, Style::default().fg(Color::DarkGray)),
+                Span::styled(icon, Style::default().fg(colors::text_secondary())),
                 Span::styled(
                     format!("Thinking ({tokens} tokens)"),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(colors::text_secondary())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -491,8 +524,11 @@ impl ChatView {
             if self.expand_all {
                 for line in self.streaming_thinking.lines() {
                     lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                        Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(colors::text_secondary()),
+                        ),
                     ]));
                 }
             }
@@ -502,7 +538,7 @@ impl ChatView {
         // Render content (no indicator, status shown in status bar)
         let md_lines = self.md_renderer.lines();
 
-        for line in md_lines.iter() {
+        for line in md_lines {
             lines.push(line.clone());
         }
 
@@ -540,7 +576,9 @@ impl MockComponent for ChatView {
             let mut wrapped_lines = 0;
             let mut start = 0;
             for (i, line) in all_lines.iter().enumerate().rev() {
-                let line_width: usize = line.spans.iter()
+                let line_width: usize = line
+                    .spans
+                    .iter()
                     .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
                     .sum();
                 let wrapped_height = (line_width + width.saturating_sub(1)) / width.max(1);
@@ -589,8 +627,11 @@ impl MockComponent for ChatView {
             Attribute::Custom(s) if s == "add_assistant_with_thinking" => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
-                    let content = parts.get(0).unwrap_or(&"").to_string();
-                    let thinking = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let thinking = parts
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok());
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
@@ -632,24 +673,24 @@ impl MockComponent for ChatView {
             Attribute::Custom(s) if s == "start_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
-                    let tool_name = parts.get(1).unwrap_or(&"tool").to_string();
+                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
+                    let tool_name = (*parts.get(1).unwrap_or(&"tool")).to_string();
                     self.start_tool(tool_id, tool_name);
                 }
             }
             Attribute::Custom(s) if s == "complete_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
-                    let output = parts.get(1).unwrap_or(&"").to_string();
+                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
+                    let output = (*parts.get(1).unwrap_or(&"")).to_string();
                     self.complete_tool(tool_id, output);
                 }
             }
             Attribute::Custom(s) if s == "fail_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = parts.get(0).unwrap_or(&"").to_string();
-                    let error = parts.get(1).unwrap_or(&"").to_string();
+                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
+                    let error = (*parts.get(1).unwrap_or(&"")).to_string();
                     self.fail_tool(tool_id, error);
                 }
             }
@@ -723,7 +764,7 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Keyboard events are handled at app level via InputComponent
         // Only handle Tick here for the blinking indicator
-        if let tuirealm::Event::Tick = ev {
+        if ev == tuirealm::Event::Tick {
             self.component.tick();
             Some(Msg::Redraw)
         } else {

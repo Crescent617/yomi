@@ -28,12 +28,17 @@ pub mod providers;
 pub mod tools;
 
 // Re-export commonly used types
-pub use config::{Config, ModelProvider, DEFAULT_DATA_DIR, env_names};
-pub use event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent, ToolEvent, UserEvent};
-pub use provider::{ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig, ToolCallRequest};
-pub use storage::{Storage, StorageConfig};
-pub use tool::{Tool, ToolRegistry, ToolSandbox, enable_yolo_mode, is_yolo_mode};
+pub use config::{env_names, expand_tilde, Config, ModelProvider, DEFAULT_DATA_DIR};
+pub use event::{
+    AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
+    ToolEvent, UserEvent,
+};
 pub use prompt::PromptBuilder;
+pub use provider::{
+    ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig, ToolCallRequest,
+};
+pub use storage::{Storage, StorageConfig};
+pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry, ToolSandbox};
 pub use types::*;
 
 // Conditional re-exports for convenience
@@ -42,4 +47,4 @@ pub use providers::{AnthropicProvider, OpenAIProvider};
 #[cfg(feature = "storage")]
 pub use storage::sqlite::SqliteStorage;
 #[cfg(feature = "tools")]
-pub use tools::{BashTool, FileTool, execute_tools_parallel};
+pub use tools::{execute_tools_parallel, BashTool, FileTool};

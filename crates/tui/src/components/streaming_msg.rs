@@ -7,17 +7,14 @@ use tuirealm::{
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span, Text},
         widgets::Paragraph,
     },
     Component, Frame, MockComponent, State, StateValue,
 };
 
-use crate::{
-    markdown_stream::StreamingMarkdownRenderer,
-    msg::Msg,
-};
+use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
 
 /// Mock component that displays streaming AI response
 #[derive(Debug, Default)]
@@ -57,11 +54,11 @@ impl StreamingMessageMock {
         self.md_renderer.append(text);
     }
 
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         self.is_active
     }
 
-    pub fn tick(&mut self) {
+    pub const fn tick(&mut self) {
         if self.is_active {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
@@ -76,11 +73,11 @@ impl StreamingMessageMock {
 
         let tokens = self.thinking.len() / 4;
         lines.push(Line::from(vec![
-            Span::styled("▶ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("▶ ", Style::default().fg(colors::text_secondary())),
             Span::styled(
                 format!("Thinking ({tokens} tokens)"),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(colors::text_secondary())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -100,31 +97,25 @@ impl StreamingMessageMock {
             let visible = (self.tick_frame / 8) % 2 == 0;
             if visible {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(colors::accent_system())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(colors::text_secondary())
                     .add_modifier(Modifier::DIM)
             }
         } else {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(colors::accent_system())
                 .add_modifier(Modifier::BOLD)
         };
 
         if md_lines.is_empty() {
-            lines.push(Line::from(vec![Span::styled(
-                "◆ ",
-                indicator_style,
-            )]));
+            lines.push(Line::from(vec![Span::styled("◆ ", indicator_style)]));
         } else {
             for (i, line) in md_lines.into_iter().enumerate() {
                 if i == 0 {
-                    let mut first_line = vec![Span::styled(
-                        "◆ ",
-                        indicator_style,
-                    )];
+                    let mut first_line = vec![Span::styled("◆ ", indicator_style)];
                     first_line.extend(line.spans);
                     lines.push(Line::from(first_line));
                 } else {
@@ -201,7 +192,7 @@ impl MockComponent for StreamingMessageMock {
     }
 }
 
-/// Component wrapper for StreamingMessageMock
+/// Component wrapper for `StreamingMessageMock`
 pub struct StreamingMessageComponent {
     component: StreamingMessageMock,
 }
@@ -245,7 +236,7 @@ impl MockComponent for StreamingMessageComponent {
 impl Component<Msg, crate::msg::UserEvent> for StreamingMessageComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Handle tick events for spinner animation
-        if let tuirealm::Event::Tick = ev {
+        if ev == tuirealm::Event::Tick {
             self.component.tick();
             return Some(Msg::Redraw);
         }

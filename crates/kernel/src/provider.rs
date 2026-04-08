@@ -14,8 +14,14 @@ pub enum ModelStreamItem {
     Chunk(ContentChunk),
     ToolCall(ToolCallRequest),
     Complete,
-    Fallback { from: String, to: String },
-    TokenUsage { prompt_tokens: u32, completion_tokens: u32 },
+    Fallback {
+        from: String,
+        to: String,
+    },
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    },
 }
 
 /// Tool call request from model

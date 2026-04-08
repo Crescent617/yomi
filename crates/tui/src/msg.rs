@@ -9,7 +9,7 @@ pub enum UserEvent {
     Tick,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
     // App events from kernel
     AppEvent(AppEvent),
@@ -39,10 +39,13 @@ pub enum Msg {
     Tick,
     Quit,
     Redraw,
+
+    // Request control
+    CancelRequest,
 }
 
 impl From<AppEvent> for Msg {
     fn from(event: AppEvent) -> Self {
-        Msg::AppEvent(event)
+        Self::AppEvent(event)
     }
 }

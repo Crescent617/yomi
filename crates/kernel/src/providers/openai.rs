@@ -179,11 +179,14 @@ impl ModelProvider for OpenAIProvider {
                             return Err(anyhow!("SSE error: {e}"));
                         }
                         Err(_) => {
-                            tracing::error!("OpenAI SSE idle timeout after {}s", IDLE_TIMEOUT.as_secs());
+                            tracing::error!(
+                                "OpenAI SSE idle timeout after {}s",
+                                IDLE_TIMEOUT.as_secs()
+                            );
                             return Err(anyhow!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ))
+                            ));
                         }
                     }
                 }

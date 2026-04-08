@@ -1,12 +1,12 @@
 use crate::session::{Session, SessionConfig};
 use anyhow::Result;
+use kernel::types::SessionId;
 use kernel::{
     event::Event,
     provider::ModelProvider,
     storage::Storage,
     tool::{ToolRegistry, ToolSandbox},
 };
-use kernel::types::SessionId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -35,9 +35,7 @@ impl Coordinator {
         }
     }
 
-    pub async fn create_session(
-        &self, config: SessionConfig
-    ) -> Result<SessionId> {
+    pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
         let id = SessionId::new();
         let mut session = Session::new(
             id.clone(),
@@ -49,28 +47,31 @@ impl Coordinator {
         );
         session.init().await?;
         let session_id = session.id().clone();
-        self.sessions.write().await
+        self.sessions
+            .write()
+            .await
             .insert(session_id.clone(), Arc::new(RwLock::new(session)));
         tracing::info!("Session {} created", session_id.0);
         Ok(session_id)
     }
 
-    pub async fn get_session(
-        &self, id: &SessionId
-    ) -> Option<Arc<RwLock<Session>>> {
+    pub async fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
         self.sessions.read().await.get(id).cloned()
     }
 
-    pub async fn list_sessions(&self
-    ) -> Vec<SessionId> {
+    pub async fn list_sessions(&self) -> Vec<SessionId> {
         self.sessions.read().await.keys().cloned().collect()
     }
 
-    pub async fn send_message(
-        &self, session_id: &SessionId, content: String
-    ) -> Result<()> {
-        tracing::debug!("Sending message to session {} ({} bytes)", session_id.0, content.len());
-        let session = self.get_session(session_id).await
+    pub async fn send_message(&self, session_id: &SessionId, content: String) -> Result<()> {
+        tracing::debug!(
+            "Sending message to session {} ({} bytes)",
+            session_id.0,
+            content.len()
+        );
+        let session = self
+            .get_session(session_id)
+            .await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
         let result = session.read().await.send_message(content).await;
         if let Err(ref e) = result {
@@ -86,5 +87,14 @@ impl Coordinator {
         let session = self.get_session(session_id).await?;
         let rx = session.write().await.take_event_receiver();
         rx
+    }
+
+    pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        session.read().await.cancel();
+        Ok(())
     }
 }

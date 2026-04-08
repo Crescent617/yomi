@@ -36,7 +36,9 @@ impl MessageBuffer {
 
     fn truncate_oldest(&mut self) {
         // 保留系统消息和最近的消息
-        let system_count = self.messages.iter()
+        let system_count = self
+            .messages
+            .iter()
             .take_while(|m| matches!(m.role, crate::types::Role::System))
             .count();
 
@@ -53,9 +55,10 @@ impl MessageBuffer {
             self.messages.drain(start_idx..end_idx);
 
             // 添加摘要提示
-            self.messages.insert(system_count + 1, Message::system(
-                "(Earlier conversation history has been truncated due to length)"
-            ));
+            self.messages.insert(
+                system_count + 1,
+                Message::system("(Earlier conversation history has been truncated due to length)"),
+            );
         }
     }
 
@@ -77,7 +80,9 @@ mod tests {
     fn create_message(role: Role, text: &str) -> Message {
         Message {
             role,
-            content: vec![ContentBlock::Text { text: text.to_string() }],
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
             tool_calls: None,
             tool_call_id: None,
             created_at: chrono::Utc::now(),
@@ -108,8 +113,9 @@ mod tests {
         buffer.push(create_message(Role::User, "Another user"));
 
         // 系统消息应该保留
-        assert!(buffer.messages().iter().any(|m| {
-            matches!(m.role, Role::System)
-        }));
+        assert!(buffer
+            .messages()
+            .iter()
+            .any(|m| { matches!(m.role, Role::System) }));
     }
 }

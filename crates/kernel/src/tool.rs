@@ -63,14 +63,12 @@ impl ToolRegistry {
 }
 
 /// Tool sandbox for permission management
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolSandbox {
     enabled: bool,
     require_confirmation: HashMap<String, bool>,
     yolo_mode: bool,
 }
-
 
 impl ToolSandbox {
     pub fn new() -> Self {

@@ -202,11 +202,14 @@ impl ModelProvider for AnthropicProvider {
                             return Err(anyhow!("SSE error: {e}"));
                         }
                         Err(_) => {
-                            tracing::error!("Anthropic SSE idle timeout after {}s", IDLE_TIMEOUT.as_secs());
+                            tracing::error!(
+                                "Anthropic SSE idle timeout after {}s",
+                                IDLE_TIMEOUT.as_secs()
+                            );
                             return Err(anyhow!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ))
+                            ));
                         }
                     }
                 }

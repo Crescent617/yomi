@@ -1,7 +1,7 @@
+use crate::storage::{Storage, StorageConfig};
+use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
 use async_trait::async_trait;
-use crate::storage::{Storage, StorageConfig};
-use crate::types::{Message, SessionRecord, SessionId};
 use sqlx::{migrate::MigrateDatabase, sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::Path;
 
@@ -51,21 +51,24 @@ impl SqliteStorage {
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-            "
-        ).execute(&self.pool).await?;
+            ",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
 
 #[async_trait]
 impl Storage for SqliteStorage {
-    async fn create_session(&self, project_path: &Path
-    ) -> Result<SessionId> {
+    async fn create_session(&self, project_path: &Path) -> Result<SessionId> {
         let id = SessionId::new();
         let path_str = project_path.to_string_lossy();
-        sqlx::query(
-            "INSERT INTO sessions (id, project_path, message_count) VALUES (?, ?, 0)"
-        ).bind(&id.0).bind(path_str.as_ref()).execute(&self.pool).await?;
+        sqlx::query("INSERT INTO sessions (id, project_path, message_count) VALUES (?, ?, 0)")
+            .bind(&id.0)
+            .bind(path_str.as_ref())
+            .execute(&self.pool)
+            .await?;
         Ok(id)
     }
 
@@ -73,22 +76,32 @@ impl Storage for SqliteStorage {
         let new_id = SessionId::new();
         sqlx::query(
             r"INSERT INTO sessions (id, project_path, parent_session_id, message_count)
-            SELECT ?, project_path, id, message_count FROM sessions WHERE id = ?"
-        ).bind(&new_id.0).bind(&parent_id.0).execute(&self.pool).await?;
+            SELECT ?, project_path, id, message_count FROM sessions WHERE id = ?",
+        )
+        .bind(&new_id.0)
+        .bind(&parent_id.0)
+        .execute(&self.pool)
+        .await?;
         sqlx::query(
             r"INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, created_at)
             SELECT ?, role, content, tool_calls, tool_call_id, created_at
-            FROM messages WHERE session_id = ?"
-        ).bind(&new_id.0).bind(&parent_id.0).execute(&self.pool).await?;
+            FROM messages WHERE session_id = ?",
+        )
+        .bind(&new_id.0)
+        .bind(&parent_id.0)
+        .execute(&self.pool)
+        .await?;
         Ok(new_id)
     }
 
-    async fn get_session(&self, id: &SessionId
-    ) -> Result<Option<SessionRecord>> {
+    async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>> {
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT id, created_at, updated_at, project_path, message_count, parent_session_id
-            FROM sessions WHERE id = ?"
-        ).bind(&id.0).fetch_optional(&self.pool).await?;
+            FROM sessions WHERE id = ?",
+        )
+        .bind(&id.0)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|r| SessionRecord {
             id: SessionId(r.id),
             created_at: r.created_at,
@@ -99,48 +112,62 @@ impl Storage for SqliteStorage {
         }))
     }
 
-    async fn list_sessions(&self, project_path: &Path
-    ) -> Result<Vec<SessionRecord>> {
+    async fn list_sessions(&self, project_path: &Path) -> Result<Vec<SessionRecord>> {
         let path_str = project_path.to_string_lossy();
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT id, created_at, updated_at, project_path, message_count, parent_session_id
-            FROM sessions WHERE project_path = ? ORDER BY updated_at DESC"
-        ).bind(path_str.as_ref()).fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|r| SessionRecord {
-            id: SessionId(r.id), created_at: r.created_at, updated_at: r.updated_at,
-            project_path: r.project_path.into(), message_count: r.message_count as usize,
-            parent_session_id: r.parent_session_id.map(SessionId),
-        }).collect())
+            FROM sessions WHERE project_path = ? ORDER BY updated_at DESC",
+        )
+        .bind(path_str.as_ref())
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| SessionRecord {
+                id: SessionId(r.id),
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                project_path: r.project_path.into(),
+                message_count: r.message_count as usize,
+                parent_session_id: r.parent_session_id.map(SessionId),
+            })
+            .collect())
     }
 
-    async fn delete_session(&self, id: &SessionId
-    ) -> Result<()> {
+    async fn delete_session(&self, id: &SessionId) -> Result<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(&id.0).execute(&self.pool).await?;
+            .bind(&id.0)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn append_messages(
-        &self, session_id: &SessionId, messages: &[Message]
-    ) -> Result<()> {
+    async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
         for msg in messages {
             let content = if msg.content.len() == 1 {
-                msg.content.first().and_then(|c| c.as_text())
-                    .map(|t| t.to_string()).unwrap_or_default()
+                msg.content
+                    .first()
+                    .and_then(|c| c.as_text())
+                    .map(|t| t.to_string())
+                    .unwrap_or_default()
             } else {
                 serde_json::to_string(&msg.content).unwrap_or_default()
             };
-            let tool_calls_json = msg.tool_calls.as_ref()
+            let tool_calls_json = msg
+                .tool_calls
+                .as_ref()
                 .map(|tc| serde_json::to_string(tc).unwrap_or_default());
             sqlx::query(
                 "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-                VALUES (?, ?, ?, ?, ?)"
-            ).bind(&session_id.0)
-             .bind(format!("{:?}", msg.role).to_lowercase())
-             .bind(content)
-             .bind(tool_calls_json)
-             .bind(&msg.tool_call_id)
-             .execute(&self.pool).await?;
+                VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&session_id.0)
+            .bind(format!("{:?}", msg.role).to_lowercase())
+            .bind(content)
+            .bind(tool_calls_json)
+            .bind(&msg.tool_call_id)
+            .execute(&self.pool)
+            .await?;
         }
         sqlx::query(
             "UPDATE sessions SET message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?),
@@ -149,43 +176,49 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    async fn get_messages(
-        &self, session_id: &SessionId
-    ) -> Result<Vec<Message>> {
+    async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
         let rows = sqlx::query_as::<_, MessageRow>(
             "SELECT role, content, tool_calls, tool_call_id, created_at
-            FROM messages WHERE session_id = ? ORDER BY id ASC"
-        ).bind(&session_id.0).fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|r| {
-            let content = if let Ok(blocks) = serde_json::from_str::<Vec<crate::types::ContentBlock>>(&r.content) {
-                blocks
-            } else {
-                vec![crate::types::ContentBlock::Text { text: r.content }]
-            };
-            Message {
-                role: parse_role(&r.role),
-                content,
-                tool_calls: r.tool_calls.and_then(|tc| serde_json::from_str(&tc).ok()),
-                tool_call_id: r.tool_call_id,
-                created_at: r.created_at,
-            }
-        }).collect())
+            FROM messages WHERE session_id = ? ORDER BY id ASC",
+        )
+        .bind(&session_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let content = if let Ok(blocks) =
+                    serde_json::from_str::<Vec<crate::types::ContentBlock>>(&r.content)
+                {
+                    blocks
+                } else {
+                    vec![crate::types::ContentBlock::Text { text: r.content }]
+                };
+                Message {
+                    role: parse_role(&r.role),
+                    content,
+                    tool_calls: r.tool_calls.and_then(|tc| serde_json::from_str(&tc).ok()),
+                    tool_call_id: r.tool_call_id,
+                    created_at: r.created_at,
+                }
+            })
+            .collect())
     }
 
-    async fn update_summary(
-        &self, session_id: &SessionId, summary: &str
-    ) -> Result<()> {
+    async fn update_summary(&self, session_id: &SessionId, summary: &str) -> Result<()> {
         sqlx::query("UPDATE sessions SET summary = ? WHERE id = ?")
-            .bind(summary).bind(&session_id.0).execute(&self.pool).await?;
+            .bind(summary)
+            .bind(&session_id.0)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn get_summary(
-        &self, session_id: &SessionId
-    ) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT summary FROM sessions WHERE id = ?"
-        ).bind(&session_id.0).fetch_optional(&self.pool).await?;
+    async fn get_summary(&self, session_id: &SessionId) -> Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT summary FROM sessions WHERE id = ?")
+            .bind(&session_id.0)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|r| r.0))
     }
 }

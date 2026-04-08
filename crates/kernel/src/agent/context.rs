@@ -29,10 +29,7 @@ impl AgentExecutionContext {
     pub fn transition_to(&self, new_state: AgentState) -> bool {
         let current = *self.inner.state_tx.borrow();
         if !current.can_transition_to(new_state) {
-            tracing::warn!(
-                "Invalid state transition: {:?} -> {:?}",
-                current, new_state
-            );
+            tracing::warn!("Invalid state transition: {:?} -> {:?}", current, new_state);
             return false;
         }
         self.inner.state_tx.send_replace(new_state);

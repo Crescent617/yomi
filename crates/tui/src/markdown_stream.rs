@@ -14,7 +14,7 @@ use crate::theme::{chars, colors, Styles};
 /// Tracks the state of markdown parsing for incremental rendering
 #[derive(Debug, Clone, Copy)]
 enum ListState {
-    /// (start_num, current_num) for ordered lists
+    /// (`start_num`, `current_num`) for ordered lists
     Ordered(u64, u64),
     Unordered,
 }
@@ -96,9 +96,8 @@ impl StreamingMarkdownRenderer {
     fn render(&mut self) -> &[Line<'static>] {
         self.lines.clear();
 
-        let options = Options::ENABLE_TABLES
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_STRIKETHROUGH;
+        let options =
+            Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
 
         let parser = Parser::new_ext(&self.content, options);
 
@@ -114,98 +113,95 @@ impl StreamingMarkdownRenderer {
 
         for event in parser {
             match event {
-                MdEvent::Start(tag) => {
-                    match tag {
-                        Tag::Strong => {
-                            current_style = current_style.add_modifier(Modifier::BOLD);
-                        }
-                        Tag::Strikethrough => {
-                            current_style = current_style.add_modifier(Modifier::CROSSED_OUT);
-                        }
-                        Tag::Emphasis => {
-                            current_style = current_style.add_modifier(Modifier::ITALIC);
-                        }
-                        Tag::CodeBlock(kind) => {
-                            in_code_block = true;
-                            if !current_line.is_empty() {
-                                self.lines.push(Line::from(current_line));
-                                current_line = Vec::new();
-                            }
-                            if let CodeBlockKind::Fenced(lang) = kind {
-                                code_language = Some(lang.to_string());
-                            }
-                        }
-                        Tag::List(start_num) => {
-                            let state = match start_num {
-                                Some(n) => ListState::Ordered(n, n),
-                                None => ListState::Unordered,
-                            };
-                            list_stack.push(state);
-                        }
-                        Tag::Item => {
-                            let indent = "  ".repeat(list_stack.len().saturating_sub(1));
-                            let prefix = match list_stack.last_mut() {
-                                Some(ListState::Ordered(start, current)) => {
-                                    let num = *current;
-                                    *current += 1;
-                                    format!("{indent}{num}. ")
-                                }
-                                Some(ListState::Unordered) => {
-                                    format!("{indent}{} ", chars::BULLET)
-                                }
-                                None => format!("{} ", chars::BULLET),
-                            };
-                            current_line.push(Span::styled(
-                                prefix,
-                                Style::default().fg(colors::accent_user()),
-                            ));
-                        }
-                        Tag::Heading { level, .. } => {
-                            if !current_line.is_empty() {
-                                self.lines.push(Line::from(current_line));
-                                current_line = Vec::new();
-                            }
-                            self.lines.push(Line::from(""));
-                            current_style = match level {
-                                pulldown_cmark::HeadingLevel::H1 => {
-                                    Style::default()
-                                        .fg(colors::accent_user())
-                                        .add_modifier(Modifier::BOLD)
-                                }
-                                pulldown_cmark::HeadingLevel::H2 => {
-                                    Style::default()
-                                        .fg(colors::text_primary())
-                                        .add_modifier(Modifier::BOLD)
-                                }
-                                _ => Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::BOLD),
-                            };
-                        }
-                        Tag::BlockQuote(_) => {
-                            current_line.push(Span::styled(
-                                format!("{} ", chars::USER_BAR),
-                                Style::default().fg(colors::border()),
-                            ));
-                        }
-                        Tag::Table(_) => {
-                            in_table = true;
-                        }
-                        Tag::TableHead => {
-                            in_table_head = true;
-                        }
-                        Tag::TableRow => {
-                            first_cell_in_row = true;
-                        }
-                        Tag::TableCell => {
-                            if first_cell_in_row {
-                                current_line.push(Span::styled("| ", Style::default().fg(colors::text_secondary())));
-                                first_cell_in_row = false;
-                            }
-                        }
-                        _ => {}
+                MdEvent::Start(tag) => match tag {
+                    Tag::Strong => {
+                        current_style = current_style.add_modifier(Modifier::BOLD);
                     }
-                }
+                    Tag::Strikethrough => {
+                        current_style = current_style.add_modifier(Modifier::CROSSED_OUT);
+                    }
+                    Tag::Emphasis => {
+                        current_style = current_style.add_modifier(Modifier::ITALIC);
+                    }
+                    Tag::CodeBlock(kind) => {
+                        in_code_block = true;
+                        if !current_line.is_empty() {
+                            self.lines.push(Line::from(current_line));
+                            current_line = Vec::new();
+                        }
+                        if let CodeBlockKind::Fenced(lang) = kind {
+                            code_language = Some(lang.to_string());
+                        }
+                    }
+                    Tag::List(start_num) => {
+                        let state = match start_num {
+                            Some(n) => ListState::Ordered(n, n),
+                            None => ListState::Unordered,
+                        };
+                        list_stack.push(state);
+                    }
+                    Tag::Item => {
+                        let indent = "  ".repeat(list_stack.len().saturating_sub(1));
+                        let prefix = match list_stack.last_mut() {
+                            Some(ListState::Ordered(start, current)) => {
+                                let num = *current;
+                                *current += 1;
+                                format!("{indent}{num}. ")
+                            }
+                            Some(ListState::Unordered) => {
+                                format!("{indent}{} ", chars::BULLET)
+                            }
+                            None => format!("{} ", chars::BULLET),
+                        };
+                        current_line.push(Span::styled(
+                            prefix,
+                            Style::default().fg(colors::accent_user()),
+                        ));
+                    }
+                    Tag::Heading { level, .. } => {
+                        if !current_line.is_empty() {
+                            self.lines.push(Line::from(current_line));
+                            current_line = Vec::new();
+                        }
+                        self.lines.push(Line::from(""));
+                        current_style = match level {
+                            pulldown_cmark::HeadingLevel::H1 => Style::default()
+                                .fg(colors::accent_user())
+                                .add_modifier(Modifier::BOLD),
+                            pulldown_cmark::HeadingLevel::H2 => Style::default()
+                                .fg(colors::text_primary())
+                                .add_modifier(Modifier::BOLD),
+                            _ => Style::default()
+                                .fg(colors::text_secondary())
+                                .add_modifier(Modifier::BOLD),
+                        };
+                    }
+                    Tag::BlockQuote(_) => {
+                        current_line.push(Span::styled(
+                            format!("{} ", chars::USER_BAR),
+                            Style::default().fg(colors::border()),
+                        ));
+                    }
+                    Tag::Table(_) => {
+                        in_table = true;
+                    }
+                    Tag::TableHead => {
+                        in_table_head = true;
+                    }
+                    Tag::TableRow => {
+                        first_cell_in_row = true;
+                    }
+                    Tag::TableCell => {
+                        if first_cell_in_row {
+                            current_line.push(Span::styled(
+                                "| ",
+                                Style::default().fg(colors::text_secondary()),
+                            ));
+                            first_cell_in_row = false;
+                        }
+                    }
+                    _ => {}
+                },
                 MdEvent::End(tag_end) => {
                     match tag_end {
                         TagEnd::Strong => {
@@ -223,13 +219,22 @@ impl StreamingMarkdownRenderer {
                                 self.lines.push(Line::from(
                                     current_line
                                         .into_iter()
-                                        .map(|s| Span::styled(s.content, Style::default().fg(colors::code_fg())))
+                                        .map(|s| {
+                                            Span::styled(
+                                                s.content,
+                                                Style::default().fg(colors::code_fg()),
+                                            )
+                                        })
                                         .collect::<Vec<_>>(),
                                 ));
                                 current_line = Vec::new();
                             }
                             self.lines.push(Line::from(Span::styled(
-                                format!("{}{}", chars::CODE_BOTTOM_LEFT, chars::CODE_HORIZONTAL.repeat(40)),
+                                format!(
+                                    "{}{}",
+                                    chars::CODE_BOTTOM_LEFT,
+                                    chars::CODE_HORIZONTAL.repeat(40)
+                                ),
                                 Style::default().fg(colors::code_border()),
                             )));
                             code_language = None;
@@ -272,27 +277,45 @@ impl StreamingMarkdownRenderer {
                             // Add separator line after header
                             if in_table {
                                 if !current_line.is_empty() {
-                                    current_line.push(Span::styled(" |", Style::default().fg(colors::text_secondary())));
+                                    current_line.push(Span::styled(
+                                        " |",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ));
                                     self.lines.push(Line::from(current_line));
                                     current_line = Vec::new();
                                 }
                                 self.lines.push(Line::from(vec![
-                                    Span::styled("| ", Style::default().fg(colors::text_secondary())),
-                                    Span::styled("---", Style::default().fg(colors::text_secondary())),
-                                    Span::styled(" |", Style::default().fg(colors::text_secondary())),
+                                    Span::styled(
+                                        "| ",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                    Span::styled(
+                                        "---",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                    Span::styled(
+                                        " |",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
                                 ]));
                             }
                         }
                         TagEnd::TableRow => {
                             if in_table {
-                                current_line.push(Span::styled(" |", Style::default().fg(colors::text_secondary())));
+                                current_line.push(Span::styled(
+                                    " |",
+                                    Style::default().fg(colors::text_secondary()),
+                                ));
                                 self.lines.push(Line::from(current_line));
                                 current_line = Vec::new();
                             }
                         }
                         TagEnd::TableCell => {
                             if in_table {
-                                current_line.push(Span::styled(" | ", Style::default().fg(colors::text_secondary())));
+                                current_line.push(Span::styled(
+                                    " | ",
+                                    Style::default().fg(colors::text_secondary()),
+                                ));
                             }
                         }
                         _ => {}
@@ -305,7 +328,11 @@ impl StreamingMarkdownRenderer {
                                 let lang = code_language.take().unwrap();
                                 self.lines.push(Line::from(vec![
                                     Span::styled(
-                                        format!("{}{} ", chars::CODE_TOP_LEFT, chars::CODE_HORIZONTAL.repeat(2)),
+                                        format!(
+                                            "{}{} ",
+                                            chars::CODE_TOP_LEFT,
+                                            chars::CODE_HORIZONTAL.repeat(2)
+                                        ),
                                         Style::default().fg(colors::code_border()),
                                     ),
                                     Span::styled(lang, Styles::code_lang()),
@@ -315,7 +342,12 @@ impl StreamingMarkdownRenderer {
                                 self.lines.push(Line::from(
                                     current_line
                                         .into_iter()
-                                        .map(|s| Span::styled(s.content, Style::default().fg(colors::code_fg())))
+                                        .map(|s| {
+                                            Span::styled(
+                                                s.content,
+                                                Style::default().fg(colors::code_fg()),
+                                            )
+                                        })
                                         .collect::<Vec<_>>(),
                                 ));
                                 current_line = Vec::new();
@@ -336,16 +368,17 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Code(code) => {
-                    current_line.push(Span::styled(
-                        format!(" `{code}` "),
-                        Styles::inline_code(),
-                    ));
+                    current_line.push(Span::styled(format!(" `{code}` "), Styles::inline_code()));
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
                     current_line.push(Span::styled(
                         format!("{checkbox} "),
-                        Style::default().fg(if checked { colors::accent_user() } else { colors::text_secondary() }),
+                        Style::default().fg(if checked {
+                            colors::accent_user()
+                        } else {
+                            colors::text_secondary()
+                        }),
                     ));
                 }
                 MdEvent::SoftBreak | MdEvent::HardBreak => {
@@ -354,7 +387,12 @@ impl StreamingMarkdownRenderer {
                             self.lines.push(Line::from(
                                 current_line
                                     .into_iter()
-                                    .map(|s| Span::styled(s.content, Style::default().fg(colors::code_fg())))
+                                    .map(|s| {
+                                        Span::styled(
+                                            s.content,
+                                            Style::default().fg(colors::code_fg()),
+                                        )
+                                    })
                                     .collect::<Vec<_>>(),
                             ));
                             current_line = Vec::new();
@@ -390,7 +428,11 @@ impl StreamingMarkdownRenderer {
         }
 
         // Remove trailing empty lines
-        while self.lines.last().is_some_and(|l| l.to_string().trim().is_empty()) {
+        while self
+            .lines
+            .last()
+            .is_some_and(|l| l.to_string().trim().is_empty())
+        {
             self.lines.pop();
         }
 
@@ -408,5 +450,4 @@ impl StreamingMarkdownRenderer {
 
         &self.lines
     }
-
 }

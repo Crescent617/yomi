@@ -28,19 +28,25 @@ impl AgentHandle {
 
     /// 发送用户消息给 Agent
     pub async fn send_message(&self, content: String) -> anyhow::Result<()> {
-        self.input_tx.send(AgentInput::User(content)).await
+        self.input_tx
+            .send(AgentInput::User(content))
+            .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
     }
 
     /// 发送工具结果给 Agent
     pub async fn send_tool_result(&self, tool_id: String, output: String) -> anyhow::Result<()> {
-        self.input_tx.send(AgentInput::ToolResult { tool_id, output }).await
+        self.input_tx
+            .send(AgentInput::ToolResult { tool_id, output })
+            .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
     }
 
     /// 发送取消信号给 Agent
     pub async fn send_cancel(&self) -> anyhow::Result<()> {
-        self.input_tx.send(AgentInput::Cancel).await
+        self.input_tx
+            .send(AgentInput::Cancel)
+            .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
     }
 

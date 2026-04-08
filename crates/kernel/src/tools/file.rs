@@ -1,7 +1,7 @@
-use anyhow::Result;
-use async_trait::async_trait;
 use crate::tool::Tool;
 use crate::types::ToolOutput;
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -11,7 +11,9 @@ pub struct FileTool {
 
 impl FileTool {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self { base_dir: base_dir.into() }
+        Self {
+            base_dir: base_dir.into(),
+        }
     }
 
     fn resolve_path(&self, relative: &str) -> Result<PathBuf> {
@@ -26,7 +28,9 @@ impl FileTool {
 
 #[async_trait]
 impl Tool for FileTool {
-    fn name(&self) -> &'static str { "file" }
+    fn name(&self) -> &'static str {
+        "file"
+    }
 
     fn description(&self) -> &'static str {
         "Read, write, or modify files in the working directory"
@@ -55,9 +59,11 @@ impl Tool for FileTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput> {
-        let action = args["action"].as_str()
+        let action = args["action"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'action' argument"))?;
-        let path_str = args["path"].as_str()
+        let path_str = args["path"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
         let path = self.resolve_path(path_str)?;
 
@@ -66,27 +72,44 @@ impl Tool for FileTool {
         match action {
             "read" => {
                 let content = tokio::fs::read_to_string(&path).await?;
-                tracing::debug!("File read successfully: {} ({} bytes)", path.display(), content.len());
+                tracing::debug!(
+                    "File read successfully: {} ({} bytes)",
+                    path.display(),
+                    content.len()
+                );
                 Ok(ToolOutput::new(content, ""))
             }
             "write" => {
-                let content = args["content"].as_str()
+                let content = args["content"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing 'content' for write"))?;
                 if let Some(parent) = path.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
                 tokio::fs::write(&path, content).await?;
-                tracing::debug!("File written successfully: {} ({} bytes)", path.display(), content.len());
+                tracing::debug!(
+                    "File written successfully: {} ({} bytes)",
+                    path.display(),
+                    content.len()
+                );
                 Ok(ToolOutput::new("File written successfully", ""))
             }
             "append" => {
-                let content = args["content"].as_str()
+                let content = args["content"]
+                    .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing 'content' for append"))?;
                 let mut file = tokio::fs::OpenOptions::new()
-                    .append(true).create(true).open(&path).await?;
+                    .append(true)
+                    .create(true)
+                    .open(&path)
+                    .await?;
                 use tokio::io::AsyncWriteExt;
                 file.write_all(content.as_bytes()).await?;
-                tracing::debug!("File appended successfully: {} ({} bytes)", path.display(), content.len());
+                tracing::debug!(
+                    "File appended successfully: {} ({} bytes)",
+                    path.display(),
+                    content.len()
+                );
                 Ok(ToolOutput::new("Content appended successfully", ""))
             }
             "delete" => {
@@ -102,7 +125,8 @@ impl Tool for FileTool {
                     let name = entry.file_name();
                     let meta = entry.metadata().await.ok();
                     let is_dir = meta.is_some_and(|m| m.is_dir());
-                    result.push_str(&format!("{}{}\n",
+                    result.push_str(&format!(
+                        "{}{}\n",
                         name.to_string_lossy(),
                         if is_dir { "/" } else { "" }
                     ));
@@ -115,7 +139,9 @@ impl Tool for FileTool {
         }
     }
 
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 
     async fn is_allowed(&self, args: &Value) -> Result<bool> {
         if let Some(path) = args["path"].as_str() {

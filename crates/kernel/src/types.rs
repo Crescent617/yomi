@@ -52,7 +52,10 @@ pub enum ContentBlock {
     /// Plain text content
     Text { text: String },
     /// Model's thinking/reasoning process (shown in UI but not sent back to model)
-    Thinking { thinking: String, signature: Option<String> },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
     /// Redacted thinking (for Claude 3.7 Sonnet)
     RedactedThinking { data: String },
     /// Image URL or base64 data
@@ -97,7 +100,9 @@ impl From<String> for ContentBlock {
 
 impl From<&str> for ContentBlock {
     fn from(text: &str) -> Self {
-        Self::Text { text: text.to_string() }
+        Self::Text {
+            text: text.to_string(),
+        }
     }
 }
 
@@ -112,7 +117,7 @@ pub struct ImageUrl {
 /// Audio data structure
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioData {
-    pub data: String, // base64 encoded
+    pub data: String,   // base64 encoded
     pub format: String, // mp3, wav, etc.
 }
 
@@ -136,7 +141,9 @@ impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: Role::System,
-            content: vec![ContentBlock::Text { text: content.into() }],
+            content: vec![ContentBlock::Text {
+                text: content.into(),
+            }],
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
@@ -147,7 +154,9 @@ impl Message {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: vec![ContentBlock::Text { text: content.into() }],
+            content: vec![ContentBlock::Text {
+                text: content.into(),
+            }],
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
@@ -164,7 +173,7 @@ impl Message {
                     image_url: ImageUrl {
                         url: image_url.into(),
                         detail: None,
-                    }
+                    },
                 },
             ],
             tool_calls: None,
@@ -177,7 +186,9 @@ impl Message {
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: vec![ContentBlock::Text { text: content.into() }],
+            content: vec![ContentBlock::Text {
+                text: content.into(),
+            }],
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
@@ -189,7 +200,10 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: vec![
-                ContentBlock::Thinking { thinking: thinking.into(), signature: None },
+                ContentBlock::Thinking {
+                    thinking: thinking.into(),
+                    signature: None,
+                },
                 ContentBlock::Text { text: text.into() },
             ],
             tool_calls: None,
@@ -220,7 +234,8 @@ impl Message {
 
     /// Get thinking content if any
     pub fn thinking_content(&self) -> Option<String> {
-        let thinking: Vec<_> = self.content
+        let thinking: Vec<_> = self
+            .content
             .iter()
             .filter_map(|block| block.as_thinking())
             .collect();
@@ -252,7 +267,9 @@ impl Message {
     pub fn tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
-            content: vec![ContentBlock::Text { text: output.into() }],
+            content: vec![ContentBlock::Text {
+                text: output.into(),
+            }],
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             created_at: Utc::now(),
@@ -287,7 +304,9 @@ mod content_serde {
 
         // Handle string format
         if let Some(s) = value.as_str() {
-            return Ok(vec![ContentBlock::Text { text: s.to_string() }]);
+            return Ok(vec![ContentBlock::Text {
+                text: s.to_string(),
+            }]);
         }
 
         // Handle array format

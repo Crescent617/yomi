@@ -1,8 +1,8 @@
 //! Theme and styling configuration for the TUI
 //! All colors are configurable at runtime through semantic color names
 
+use std::sync::{LazyLock, RwLock};
 use tuirealm::ratatui::style::{Color, Modifier, Style};
-use std::sync::RwLock;
 
 /// Semantic color configuration - modify these to customize the theme
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,164 +62,37 @@ impl Default for ThemeConfig {
             surface_hover: Color::Reset,
 
             // Text colors
-            text_primary: Color::Rgb(245, 245, 250),
-            text_secondary: Color::Rgb(160, 160, 175),
-            text_muted: Color::Rgb(100, 100, 115),
+            text_primary: hex("#F5F5FA"),
+            text_secondary: hex("#90909F"),
+            text_muted: hex("#808090"),
 
             // Accent colors - Purple theme
-            accent_user: Color::Rgb(196, 150, 255),  // Purple
-            accent_system: Color::Rgb(100, 200, 255), // Blue
-            accent_success: Color::Rgb(100, 220, 140), // Green
-            accent_warning: Color::Rgb(255, 200, 100), // Yellow
-            accent_error: Color::Rgb(255, 100, 100),   // Red
+            accent_user: hex("#C4C6CF"),
+            accent_system: hex("#64C8FF"),
+            accent_success: hex("#64DC8C"),
+            accent_warning: hex("#FFC864"),
+            accent_error: hex("#FF6464"),
 
             // Code colors
-            code_bg: Color::Rgb(35, 35, 45),
-            code_fg: Color::Rgb(140, 220, 240),
-            code_border: Color::Rgb(90, 90, 105),
+            code_bg: hex("#23232D"),
+            code_fg: hex("#8CDCF0"),
+            code_border: hex("#707080"),
 
             // UI elements
-            border: Color::Rgb(80, 80, 95),
-            border_active: Color::Rgb(80, 80, 100),
-            divider: Color::Rgb(40, 40, 52),
-        }
-    }
-}
-
-impl ThemeConfig {
-    /// Create a light theme
-    pub const fn light() -> Self {
-        Self {
-            background: Color::Rgb(250, 250, 252),
-            surface: Color::Rgb(255, 255, 255),
-            surface_hover: Color::Rgb(240, 240, 245),
-
-            text_primary: Color::Rgb(30, 30, 35),
-            text_secondary: Color::Rgb(100, 100, 115),
-            text_muted: Color::Rgb(150, 150, 165),
-
-            accent_user: Color::Rgb(120, 80, 200),    // Deep purple
-            accent_system: Color::Rgb(50, 120, 200),  // Blue
-            accent_success: Color::Rgb(40, 150, 90),  // Green
-            accent_warning: Color::Rgb(200, 150, 50), // Orange
-            accent_error: Color::Rgb(200, 60, 60),    // Red
-
-            code_bg: Color::Rgb(245, 245, 248),
-            code_fg: Color::Rgb(60, 120, 140),
-            code_border: Color::Rgb(220, 220, 228),
-
-            border: Color::Rgb(220, 220, 230),
-            border_active: Color::Rgb(180, 180, 200),
-            divider: Color::Rgb(230, 230, 238),
-        }
-    }
-
-    /// Create a high-contrast theme
-    pub const fn high_contrast() -> Self {
-        Self {
-            background: Color::Black,
-            surface: Color::Rgb(20, 20, 20),
-            surface_hover: Color::Rgb(40, 40, 40),
-
-            text_primary: Color::White,
-            text_secondary: Color::Rgb(200, 200, 200),
-            text_muted: Color::Rgb(150, 150, 150),
-
-            accent_user: Color::Cyan,
-            accent_system: Color::Yellow,
-            accent_success: Color::Green,
-            accent_warning: Color::Rgb(255, 165, 0),
-            accent_error: Color::Red,
-
-            code_bg: Color::Rgb(10, 10, 10),
-            code_fg: Color::Green,
-            code_border: Color::Rgb(80, 80, 80),
-
-            border: Color::Rgb(100, 100, 100),
-            border_active: Color::White,
-            divider: Color::Rgb(80, 80, 80),
-        }
-    }
-
-    /// Create a warm theme (amber/orange accents)
-    pub const fn warm() -> Self {
-        Self {
-            background: Color::Rgb(25, 20, 18),
-            surface: Color::Rgb(35, 28, 25),
-            surface_hover: Color::Rgb(45, 38, 35),
-
-            text_primary: Color::Rgb(255, 250, 245),
-            text_secondary: Color::Rgb(200, 190, 180),
-            text_muted: Color::Rgb(140, 130, 120),
-
-            accent_user: Color::Rgb(255, 170, 100),   // Amber
-            accent_system: Color::Rgb(100, 200, 220), // Cyan
-            accent_success: Color::Rgb(140, 220, 120), // Green
-            accent_warning: Color::Rgb(255, 200, 80),  // Yellow
-            accent_error: Color::Rgb(255, 100, 100),   // Red
-
-            code_bg: Color::Rgb(30, 25, 22),
-            code_fg: Color::Rgb(220, 180, 140),
-            code_border: Color::Rgb(60, 50, 45),
-
-            border: Color::Rgb(60, 50, 45),
-            border_active: Color::Rgb(100, 90, 80),
-            divider: Color::Rgb(50, 42, 38),
-        }
-    }
-
-    /// Create a forest/green theme
-    pub const fn forest() -> Self {
-        Self {
-            background: Color::Rgb(15, 25, 20),
-            surface: Color::Rgb(22, 35, 28),
-            surface_hover: Color::Rgb(32, 48, 38),
-
-            text_primary: Color::Rgb(245, 255, 250),
-            text_secondary: Color::Rgb(180, 200, 185),
-            text_muted: Color::Rgb(120, 140, 125),
-
-            accent_user: Color::Rgb(140, 220, 140),   // Green
-            accent_system: Color::Rgb(140, 200, 255), // Blue
-            accent_success: Color::Rgb(120, 255, 160), // Bright green
-            accent_warning: Color::Rgb(255, 220, 100), // Yellow
-            accent_error: Color::Rgb(255, 120, 120),   // Red
-
-            code_bg: Color::Rgb(20, 30, 25),
-            code_fg: Color::Rgb(160, 230, 170),
-            code_border: Color::Rgb(40, 60, 50),
-
-            border: Color::Rgb(40, 60, 50),
-            border_active: Color::Rgb(80, 120, 90),
-            divider: Color::Rgb(35, 52, 42),
+            border: hex("#707080"),
+            border_active: hex("#A0A0AF"),
+            divider: hex("#707080"),
         }
     }
 }
 
 // Global theme configuration - thread-safe
-static THEME_CONFIG: RwLock<ThemeConfig> = RwLock::new(ThemeConfig {
-    background: Color::Rgb(18, 18, 23),
-    surface: Color::Rgb(28, 28, 36),
-    surface_hover: Color::Rgb(38, 38, 48),
-    text_primary: Color::Rgb(245, 245, 250),
-    text_secondary: Color::Rgb(160, 160, 175),
-    text_muted: Color::Rgb(100, 100, 115),
-    accent_user: Color::Rgb(196, 150, 255),
-    accent_system: Color::Rgb(100, 200, 255),
-    accent_success: Color::Rgb(100, 220, 140),
-    accent_warning: Color::Rgb(255, 200, 100),
-    accent_error: Color::Rgb(255, 100, 100),
-    code_bg: Color::Rgb(35, 35, 45),
-    code_fg: Color::Rgb(140, 220, 240),
-    code_border: Color::Rgb(90, 90, 105),
-    border: Color::Rgb(80, 80, 95),
-    border_active: Color::Rgb(80, 80, 100),
-    divider: Color::Rgb(40, 40, 52),
-});
+static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> =
+    LazyLock::new(|| RwLock::new(ThemeConfig::default()));
 
 /// Get the current theme configuration
 pub fn current_theme() -> ThemeConfig {
-    THEME_CONFIG.read().map(|t| *t).unwrap_or_default()
+    THEME_CONFIG.read().map(|t| *t).unwrap()
 }
 
 /// Set the global theme configuration
@@ -241,22 +114,6 @@ pub mod presets {
     pub fn default() -> ThemeConfig {
         ThemeConfig::default()
     }
-
-    pub const fn light() -> ThemeConfig {
-        ThemeConfig::light()
-    }
-
-    pub const fn high_contrast() -> ThemeConfig {
-        ThemeConfig::high_contrast()
-    }
-
-    pub const fn warm() -> ThemeConfig {
-        ThemeConfig::warm()
-    }
-
-    pub const fn forest() -> ThemeConfig {
-        ThemeConfig::forest()
-    }
 }
 
 /// Color accessors - use these to get current theme colors
@@ -264,27 +121,61 @@ pub mod colors {
     use super::current_theme;
     use tuirealm::ratatui::style::Color;
 
-    pub fn background() -> Color { current_theme().background }
-    pub fn surface() -> Color { current_theme().surface }
-    pub fn surface_hover() -> Color { current_theme().surface_hover }
+    pub fn background() -> Color {
+        current_theme().background
+    }
+    pub fn surface() -> Color {
+        current_theme().surface
+    }
+    pub fn surface_hover() -> Color {
+        current_theme().surface_hover
+    }
 
-    pub fn text_primary() -> Color { current_theme().text_primary }
-    pub fn text_secondary() -> Color { current_theme().text_secondary }
-    pub fn text_muted() -> Color { current_theme().text_muted }
+    pub fn text_primary() -> Color {
+        current_theme().text_primary
+    }
+    pub fn text_secondary() -> Color {
+        current_theme().text_secondary
+    }
+    pub fn text_muted() -> Color {
+        current_theme().text_muted
+    }
 
-    pub fn accent_user() -> Color { current_theme().accent_user }
-    pub fn accent_system() -> Color { current_theme().accent_system }
-    pub fn accent_success() -> Color { current_theme().accent_success }
-    pub fn accent_warning() -> Color { current_theme().accent_warning }
-    pub fn accent_error() -> Color { current_theme().accent_error }
+    pub fn accent_user() -> Color {
+        current_theme().accent_user
+    }
+    pub fn accent_system() -> Color {
+        current_theme().accent_system
+    }
+    pub fn accent_success() -> Color {
+        current_theme().accent_success
+    }
+    pub fn accent_warning() -> Color {
+        current_theme().accent_warning
+    }
+    pub fn accent_error() -> Color {
+        current_theme().accent_error
+    }
 
-    pub fn code_bg() -> Color { current_theme().code_bg }
-    pub fn code_fg() -> Color { current_theme().code_fg }
-    pub fn code_border() -> Color { current_theme().code_border }
+    pub fn code_bg() -> Color {
+        current_theme().code_bg
+    }
+    pub fn code_fg() -> Color {
+        current_theme().code_fg
+    }
+    pub fn code_border() -> Color {
+        current_theme().code_border
+    }
 
-    pub fn border() -> Color { current_theme().border }
-    pub fn border_active() -> Color { current_theme().border_active }
-    pub fn divider() -> Color { current_theme().divider }
+    pub fn border() -> Color {
+        current_theme().border
+    }
+    pub fn border_active() -> Color {
+        current_theme().border_active
+    }
+    pub fn divider() -> Color {
+        current_theme().divider
+    }
 }
 
 /// Style presets - dynamically use current theme
@@ -396,14 +287,12 @@ impl Styles {
 
     /// Success style
     pub fn success() -> Style {
-        Style::default()
-            .fg(colors::accent_success())
+        Style::default().fg(colors::accent_success())
     }
 
     /// Warning style
     pub fn warning() -> Style {
-        Style::default()
-            .fg(colors::accent_warning())
+        Style::default().fg(colors::accent_warning())
     }
 }
 
@@ -463,24 +352,6 @@ pub fn hex(color_hex: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_theme_presets() {
-        let _default = ThemeConfig::default();
-        let _light = ThemeConfig::light();
-        let _high_contrast = ThemeConfig::high_contrast();
-        let _warm = ThemeConfig::warm();
-        let _forest = ThemeConfig::forest();
-    }
-
-    #[test]
-    fn test_theme_switching() {
-        set_theme(ThemeConfig::light());
-        assert_eq!(colors::background(), ThemeConfig::light().background);
-
-        set_theme(ThemeConfig::default());
-        assert_eq!(colors::background(), ThemeConfig::default().background);
-    }
 
     #[test]
     fn test_hex_color() {

@@ -20,23 +20,58 @@ pub enum UserEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
-    Started { agent_id: AgentId },
-    StateChanged { agent_id: AgentId, state: String },
-    Completed { agent_id: AgentId, result: AgentResult },
-    Failed { agent_id: AgentId, error: String },
-    Cancelled { agent_id: AgentId },
-    SubAgentSpawned { parent_id: AgentId, child_id: AgentId, mode: String },
-    Progress { agent_id: AgentId, update: ProgressUpdate },
+    Started {
+        agent_id: AgentId,
+    },
+    StateChanged {
+        agent_id: AgentId,
+        state: String,
+    },
+    Completed {
+        agent_id: AgentId,
+        result: AgentResult,
+    },
+    Failed {
+        agent_id: AgentId,
+        error: String,
+    },
+    Cancelled {
+        agent_id: AgentId,
+    },
+    SubAgentSpawned {
+        parent_id: AgentId,
+        child_id: AgentId,
+        mode: String,
+    },
+    Progress {
+        agent_id: AgentId,
+        update: ProgressUpdate,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelEvent {
-    Request { agent_id: AgentId, message_count: usize },
+    Request {
+        agent_id: AgentId,
+        message_count: usize,
+    },
     /// Content chunk (text or thinking)
-    Chunk { agent_id: AgentId, content: ContentChunk },
-    Complete { agent_id: AgentId },
-    Error { agent_id: AgentId, error: String },
-    Fallback { agent_id: AgentId, from: String, to: String },
+    Chunk {
+        agent_id: AgentId,
+        content: ContentChunk,
+    },
+    Complete {
+        agent_id: AgentId,
+    },
+    Error {
+        agent_id: AgentId,
+        error: String,
+    },
+    Fallback {
+        agent_id: AgentId,
+        from: String,
+        to: String,
+    },
     /// Token usage update from provider
     TokenUsage {
         agent_id: AgentId,
@@ -50,15 +85,30 @@ pub enum ModelEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContentChunk {
     Text(String),
-    Thinking { thinking: String, signature: Option<String> },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
     RedactedThinking,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEvent {
-    Started { agent_id: AgentId, tool_id: String, tool_name: String },
-    Output { agent_id: AgentId, tool_id: String, output: String },
-    Error { agent_id: AgentId, tool_id: String, error: String },
+    Started {
+        agent_id: AgentId,
+        tool_id: String,
+        tool_name: String,
+    },
+    Output {
+        agent_id: AgentId,
+        tool_id: String,
+        output: String,
+    },
+    Error {
+        agent_id: AgentId,
+        tool_id: String,
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

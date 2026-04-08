@@ -14,8 +14,7 @@ pub struct FsStorage {
 impl FsStorage {
     pub fn new(base_dir: impl Into<PathBuf>) -> Result<Self> {
         let base_dir = base_dir.into();
-        std::fs::create_dir_all(&base_dir)
-            .context("Failed to create storage directory")?;
+        std::fs::create_dir_all(&base_dir).context("Failed to create storage directory")?;
         Ok(Self { base_dir })
     }
 
@@ -76,8 +75,8 @@ impl FsStorage {
             if line.trim().is_empty() {
                 continue;
             }
-            let record: SessionEventRecord = serde_json::from_str(line)
-                .context("Failed to parse session event")?;
+            let record: SessionEventRecord =
+                serde_json::from_str(line).context("Failed to parse session event")?;
             events.push(record);
         }
 
@@ -91,7 +90,11 @@ impl FsStorage {
 
         for record in events {
             match &record.event {
-                SessionEvent::Created { session_id, project_path, created_at } => {
+                SessionEvent::Created {
+                    session_id,
+                    project_path,
+                    created_at,
+                } => {
                     session = Some(SessionRecord {
                         id: session_id.clone(),
                         project_path: project_path.clone(),
@@ -104,7 +107,11 @@ impl FsStorage {
                 SessionEvent::MessageAdded { .. } => {
                     message_count += 1;
                 }
-                SessionEvent::Forked { new_session_id, timestamp, .. } => {
+                SessionEvent::Forked {
+                    new_session_id,
+                    timestamp,
+                    ..
+                } => {
                     if let Some(ref mut s) = session {
                         s.parent_session_id = Some(new_session_id.clone());
                         s.updated_at = *timestamp;
@@ -201,11 +208,7 @@ impl Storage for FsStorage {
         Ok(())
     }
 
-    async fn append_messages(
-        &self,
-        session_id: &SessionId,
-        messages: &[Message],
-    ) -> Result<()> {
+    async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
         for message in messages {
             let event = SessionEvent::message_added(message.clone());
             self.append_event(session_id, event).await?;

@@ -1,7 +1,7 @@
-use anyhow::Result;
-use async_trait::async_trait;
 use crate::tool::Tool;
 use crate::types::ToolOutput;
+use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -13,13 +13,17 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new(working_dir: impl Into<std::path::PathBuf>) -> Self {
-        Self { working_dir: working_dir.into() }
+        Self {
+            working_dir: working_dir.into(),
+        }
     }
 }
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &'static str { "bash" }
+    fn name(&self) -> &'static str {
+        "bash"
+    }
 
     fn description(&self) -> &'static str {
         "Execute a bash command in the working directory"
@@ -44,14 +48,16 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolOutput> {
-        let command = args["command"].as_str()
+        let command = args["command"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
         let timeout_secs = args["timeout"].as_u64().unwrap_or(60);
 
         tracing::debug!("Executing bash command: {}", command);
 
         let child = Command::new("bash")
-            .arg("-c").arg(command)
+            .arg("-c")
+            .arg(command)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -61,7 +67,11 @@ impl Tool for BashTool {
         let output = match timeout(Duration::from_secs(timeout_secs), child).await {
             Ok(result) => result?,
             Err(_) => {
-                tracing::warn!("Bash command timed out after {}s: {}", timeout_secs, command);
+                tracing::warn!(
+                    "Bash command timed out after {}s: {}",
+                    timeout_secs,
+                    command
+                );
                 return Ok(ToolOutput {
                     stdout: String::new(),
                     stderr: "Command timed out".to_string(),
@@ -74,9 +84,16 @@ impl Tool for BashTool {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if exit_code == 0 {
-            tracing::debug!("Bash command completed successfully (exit code: {})", exit_code);
+            tracing::debug!(
+                "Bash command completed successfully (exit code: {})",
+                exit_code
+            );
         } else {
-            tracing::warn!("Bash command failed (exit code: {}): stderr={}", exit_code, stderr);
+            tracing::warn!(
+                "Bash command failed (exit code: {}): stderr={}",
+                exit_code,
+                stderr
+            );
         }
 
         Ok(ToolOutput {
@@ -86,5 +103,7 @@ impl Tool for BashTool {
         })
     }
 
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 }

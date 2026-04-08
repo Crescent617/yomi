@@ -83,17 +83,21 @@ impl SubAgentManager {
         // 发送子代理任务
         handle.send_message(task).await.ok();
 
-        self.sub_agents.write().await.insert(
-            id.clone(),
-            SubAgentHandle { handle, mode },
-        );
+        self.sub_agents
+            .write()
+            .await
+            .insert(id.clone(), SubAgentHandle { handle, mode });
 
         id
     }
 
     /// 获取子代理句柄
     pub async fn get(&self, id: &AgentId) -> Option<AgentHandle> {
-        self.sub_agents.read().await.get(id).map(|h| h.handle.clone())
+        self.sub_agents
+            .read()
+            .await
+            .get(id)
+            .map(|h| h.handle.clone())
     }
 
     /// 等待所有子代理完成
