@@ -138,7 +138,8 @@ impl MockComponent for InputMock {
 
         let paragraph = Paragraph::new(text).block(
             tuirealm::ratatui::widgets::Block::default()
-                .borders(tuirealm::ratatui::widgets::Borders::TOP),
+                .borders(tuirealm::ratatui::widgets::Borders::TOP)
+                .border_style(Style::default().fg(colors::border())),
         );
 
         frame.render_widget(paragraph, area);

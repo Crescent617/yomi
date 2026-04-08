@@ -18,6 +18,10 @@ struct ParseState {
     code_language: Option<String>,
     list_stack: Vec<Option<u64>>,
     current_style: Style,
+    // Table state - simple raw output
+    in_table: bool,
+    in_table_head: bool,
+    first_cell_in_row: bool,
 }
 
 impl Default for ParseState {
@@ -27,6 +31,9 @@ impl Default for ParseState {
             code_language: None,
             list_stack: Vec::new(),
             current_style: Style::default().fg(colors::text_primary()),
+            in_table: false,
+            in_table_head: false,
+            first_cell_in_row: true,
         }
     }
 }
@@ -93,6 +100,10 @@ impl StreamingMarkdownRenderer {
         let mut code_language = self.state.code_language.clone();
         let mut list_stack: Vec<Option<u64>> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
+        // Table state
+        let mut in_table = self.state.in_table;
+        let mut in_table_head = self.state.in_table_head;
+        let mut first_cell_in_row = self.state.first_cell_in_row;
 
         for event in parser {
             match event {
@@ -159,6 +170,21 @@ impl StreamingMarkdownRenderer {
                                 Style::default().fg(colors::border()),
                             ));
                         }
+                        Tag::Table(_) => {
+                            in_table = true;
+                        }
+                        Tag::TableHead => {
+                            in_table_head = true;
+                        }
+                        Tag::TableRow => {
+                            first_cell_in_row = true;
+                        }
+                        Tag::TableCell => {
+                            if first_cell_in_row {
+                                current_line.push(Span::styled("| ", Style::default().fg(colors::text_secondary())));
+                                first_cell_in_row = false;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -218,6 +244,38 @@ impl StreamingMarkdownRenderer {
                                 current_line = Vec::new();
                             }
                             self.lines.push(Line::from(""));
+                        }
+                        TagEnd::Table => {
+                            in_table = false;
+                            in_table_head = false;
+                        }
+                        TagEnd::TableHead => {
+                            in_table_head = false;
+                            // Add separator line after header
+                            if in_table {
+                                if !current_line.is_empty() {
+                                    current_line.push(Span::styled(" |", Style::default().fg(colors::text_secondary())));
+                                    self.lines.push(Line::from(current_line));
+                                    current_line = Vec::new();
+                                }
+                                self.lines.push(Line::from(vec![
+                                    Span::styled("| ", Style::default().fg(colors::text_secondary())),
+                                    Span::styled("---", Style::default().fg(colors::text_secondary())),
+                                    Span::styled(" |", Style::default().fg(colors::text_secondary())),
+                                ]));
+                            }
+                        }
+                        TagEnd::TableRow => {
+                            if in_table {
+                                current_line.push(Span::styled(" |", Style::default().fg(colors::text_secondary())));
+                                self.lines.push(Line::from(current_line));
+                                current_line = Vec::new();
+                            }
+                        }
+                        TagEnd::TableCell => {
+                            if in_table {
+                                current_line.push(Span::styled(" | ", Style::default().fg(colors::text_secondary())));
+                            }
                         }
                         _ => {}
                     }
@@ -323,9 +381,13 @@ impl StreamingMarkdownRenderer {
             code_language,
             list_stack,
             current_style,
+            in_table,
+            in_table_head,
+            first_cell_in_row,
         };
         self.dirty = false;
 
         &self.lines
     }
+
 }
