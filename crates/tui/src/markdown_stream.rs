@@ -28,7 +28,8 @@ struct ParseState {
     // Table state - simple raw output
     in_table: bool,
     in_table_head: bool,
-    first_cell_in_row: bool,
+    table_columns: usize,
+    current_row_cells: usize,
 }
 
 impl Default for ParseState {
@@ -40,7 +41,8 @@ impl Default for ParseState {
             current_style: Style::default().fg(colors::text_primary()),
             in_table: false,
             in_table_head: false,
-            first_cell_in_row: true,
+            table_columns: 0,
+            current_row_cells: 0,
         }
     }
 }
@@ -109,7 +111,8 @@ impl StreamingMarkdownRenderer {
         // Table state
         let mut in_table = self.state.in_table;
         let mut in_table_head = self.state.in_table_head;
-        let mut first_cell_in_row = self.state.first_cell_in_row;
+        let mut table_columns = self.state.table_columns;
+        let mut current_row_cells = self.state.current_row_cells;
 
         for event in parser {
             match event {
@@ -189,16 +192,15 @@ impl StreamingMarkdownRenderer {
                         in_table_head = true;
                     }
                     Tag::TableRow => {
-                        first_cell_in_row = true;
+                        current_row_cells = 0;
                     }
                     Tag::TableCell => {
-                        if first_cell_in_row {
-                            current_line.push(Span::styled(
-                                "| ",
-                                Style::default().fg(colors::text_secondary()),
-                            ));
-                            first_cell_in_row = false;
-                        }
+                        // Add | before each cell
+                        current_line.push(Span::styled(
+                            "| ",
+                            Style::default().fg(colors::text_secondary()),
+                        ));
+                        current_row_cells += 1;
                     }
                     _ => {}
                 },
@@ -271,37 +273,48 @@ impl StreamingMarkdownRenderer {
                         TagEnd::Table => {
                             in_table = false;
                             in_table_head = false;
+                            table_columns = 0;
+                            current_row_cells = 0;
                         }
                         TagEnd::TableHead => {
                             in_table_head = false;
-                            // Add separator line after header
-                            if in_table {
-                                if !current_line.is_empty() {
-                                    current_line.push(Span::styled(
-                                        " |",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ));
-                                    self.lines.push(Line::from(current_line));
-                                    current_line = Vec::new();
+                            // Save the column count from header row
+                            table_columns = current_row_cells;
+                            // End of header row - add closing | and push line
+                            if in_table && !current_line.is_empty() {
+                                current_line.push(Span::styled(
+                                    " |",
+                                    Style::default().fg(colors::text_secondary()),
+                                ));
+                                self.lines.push(Line::from(current_line));
+                                current_line = Vec::new();
+                            }
+                            // Add separator line with correct column count
+                            if table_columns > 0 {
+                                let mut sep_parts: Vec<Span> = Vec::new();
+                                for i in 0..table_columns {
+                                    if i == 0 {
+                                        sep_parts.push(Span::styled(
+                                            "|---",
+                                            Style::default().fg(colors::text_secondary()),
+                                        ));
+                                    } else {
+                                        sep_parts.push(Span::styled(
+                                            "|---",
+                                            Style::default().fg(colors::text_secondary()),
+                                        ));
+                                    }
                                 }
-                                self.lines.push(Line::from(vec![
-                                    Span::styled(
-                                        "| ",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(
-                                        "---",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(
-                                        " |",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                ]));
+                                sep_parts.push(Span::styled(
+                                    "|",
+                                    Style::default().fg(colors::text_secondary()),
+                                ));
+                                self.lines.push(Line::from(sep_parts));
                             }
                         }
                         TagEnd::TableRow => {
-                            if in_table {
+                            if in_table && !current_line.is_empty() {
+                                // End of row - add closing |
                                 current_line.push(Span::styled(
                                     " |",
                                     Style::default().fg(colors::text_secondary()),
@@ -311,12 +324,8 @@ impl StreamingMarkdownRenderer {
                             }
                         }
                         TagEnd::TableCell => {
-                            if in_table {
-                                current_line.push(Span::styled(
-                                    " | ",
-                                    Style::default().fg(colors::text_secondary()),
-                                ));
-                            }
+                            // Cell content is already added, just add separator after cell
+                            // (except we'll handle the final | at row end)
                         }
                         _ => {}
                     }
@@ -368,7 +377,7 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Code(code) => {
-                    current_line.push(Span::styled(format!(" {code} "), Styles::inline_code()));
+                    current_line.push(Span::styled(format!("{code}"), Styles::inline_code()));
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
@@ -444,7 +453,8 @@ impl StreamingMarkdownRenderer {
             current_style,
             in_table,
             in_table_head,
-            first_cell_in_row,
+            table_columns,
+            current_row_cells,
         };
         self.dirty = false;
 

@@ -14,8 +14,6 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use unicode_width::UnicodeWidthStr;
-
 use crate::{chars, markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
 
 /// Tool execution status
@@ -291,7 +289,10 @@ impl ChatView {
         for msg in &self.messages {
             count += self.count_message_lines(msg);
         }
-        if self.is_streaming || !self.streaming_content.is_empty() {
+        if self.is_streaming
+            || !self.streaming_content.is_empty()
+            || !self.streaming_thinking.is_empty()
+        {
             count += self.count_streaming_lines();
         }
         count
@@ -452,9 +453,9 @@ impl ChatView {
                 ..
             } => {
                 let (icon, color) = match status {
-                    ToolStatus::Running => ("●", colors::accent_warning()),
-                    ToolStatus::Completed => ("●", colors::accent_success()),
-                    ToolStatus::Failed => ("●", colors::accent_error()),
+                    ToolStatus::Running => ("", colors::accent_warning()),
+                    ToolStatus::Completed => ("", colors::accent_success()),
+                    ToolStatus::Failed => ("", colors::accent_error()),
                 };
 
                 // Build header with execution time if available
@@ -597,7 +598,11 @@ impl MockComponent for ChatView {
         }
 
         // Render streaming content (if any)
-        if self.is_streaming || !self.streaming_content.is_empty() {
+        // Note: also check streaming_thinking to ensure think block is visible during tool execution
+        if self.is_streaming
+            || !self.streaming_content.is_empty()
+            || !self.streaming_thinking.is_empty()
+        {
             all_lines.extend(self.render_streaming());
         }
 

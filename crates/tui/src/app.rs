@@ -188,7 +188,8 @@ impl Model {
                     )?;
 
                     // Add completed assistant message to history
-                    if !self.current_content.is_empty() {
+                    // Save if there's either content or thinking
+                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
                         // Calculate thinking elapsed time
                         let elapsed_ms = self
                             .thinking_start_time
@@ -214,11 +215,11 @@ impl Model {
                             Attribute::Custom("add_assistant_with_thinking"),
                             AttrValue::String(combined),
                         )?;
-                        // Clear tracking
-                        self.current_content.clear();
-                        self.current_thinking.clear();
-                        self.thinking_start_time = None;
                     }
+                    // Clear tracking
+                    self.current_content.clear();
+                    self.current_thinking.clear();
+                    self.thinking_start_time = None;
 
                     // Clear streaming message to avoid duplication with history
                     self.app.attr(

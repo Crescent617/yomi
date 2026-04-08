@@ -406,6 +406,14 @@ impl Component<Msg, crate::msg::UserEvent> for InputComponent {
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(c),
+                modifiers: KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_char(c);
+                self.component.show_exit_hint = false;
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
+            tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
