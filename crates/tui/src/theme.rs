@@ -304,8 +304,8 @@ pub mod chars {
     pub const USER_CORNER_BOTTOM: &str = "╰";
 
     // Section indicators
-    pub const FOLD_COLLAPSED: &str = "▶";
-    pub const FOLD_EXPANDED: &str = "▼";
+    pub const FOLD_COLLAPSED: &str = ""; // 先不用
+    pub const FOLD_EXPANDED: &str = ""; // 先不用
     pub const BULLET: &str = "•";
 
     // Input

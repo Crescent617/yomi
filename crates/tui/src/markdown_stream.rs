@@ -368,7 +368,7 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Code(code) => {
-                    current_line.push(Span::styled(format!(" `{code}` "), Styles::inline_code()));
+                    current_line.push(Span::styled(format!(" {code} "), Styles::inline_code()));
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };

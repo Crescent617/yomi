@@ -235,6 +235,12 @@ impl Agent {
 
     async fn handle_streaming(&mut self) -> Result<()> {
         let tools = self.tool_registry.definitions();
+        tracing::info!(
+            "Agent {} preparing to stream with {} tool(s): {:?}",
+            self.id.0,
+            tools.len(),
+            tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
         let _ = self
             .event_tx
             .send(Event::Model(ModelEvent::Request {
@@ -398,12 +404,14 @@ impl Agent {
             .unwrap_or_default();
 
         for call in &tool_calls {
+            let args_str = serde_json::to_string_pretty(&call.arguments).ok();
             let _ = self
                 .event_tx
                 .send(Event::Tool(ToolEvent::Started {
                     agent_id: self.id.clone(),
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
+                    arguments: args_str,
                 }))
                 .await;
         }

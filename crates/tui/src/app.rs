@@ -255,10 +255,11 @@ impl Model {
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
-                    tool_id, tool_name, ..
+                    tool_id, tool_name, arguments, ..
                 }) => {
                     // Show tool execution start in chat view
-                    let combined = format!("{tool_id}\x00{tool_name}");
+                    let args_str = arguments.unwrap_or_default();
+                    let combined = format!("{tool_id}\x00{tool_name}\x00{args_str}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("start_tool"),
@@ -267,10 +268,10 @@ impl Model {
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
-                    tool_id, output, ..
+                    tool_id, output, elapsed_ms, ..
                 }) => {
                     // Show tool output in chat view
-                    let combined = format!("{tool_id}\x00{output}");
+                    let combined = format!("{tool_id}\x00{output}\x00{elapsed_ms}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("complete_tool"),
@@ -278,9 +279,9 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Error { tool_id, error, .. }) => {
+                AppEvent::Tool(kernel::event::ToolEvent::Error { tool_id, error, elapsed_ms, .. }) => {
                     // Show tool error in chat view
-                    let combined = format!("{tool_id}\x00{error}");
+                    let combined = format!("{tool_id}\x00{error}\x00{elapsed_ms}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("fail_tool"),

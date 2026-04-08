@@ -43,14 +43,21 @@ impl ToolRegistry {
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools
+        let defs: Vec<ToolDefinition> = self
+            .tools
             .values()
             .map(|tool| ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
                 parameters: tool.parameters_schema(),
             })
-            .collect()
+            .collect();
+        tracing::debug!(
+            "ToolRegistry.definitions() returning {} tools: {:?}",
+            defs.len(),
+            defs.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        defs
     }
 
     pub fn list(&self) -> Vec<String> {

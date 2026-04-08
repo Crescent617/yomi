@@ -1,7 +1,9 @@
 pub mod bash;
-pub mod file;
+pub mod edit;
 pub mod parallel;
+pub mod read;
 
 pub use bash::BashTool;
-pub use file::FileTool;
+pub use edit::EditTool;
 pub use parallel::execute_tools_parallel;
+pub use read::ReadTool;

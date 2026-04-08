@@ -148,7 +148,6 @@ impl ModelProvider for AnthropicProvider {
 
         // Enable thinking if configured
         if config.thinking.enabled {
-            request_body.tools = None; // Thinking doesn't work with tools
             request_body.thinking = Some(AnthropicThinking {
                 type_: "enabled".to_string(),
                 budget_tokens: config.thinking.budget_tokens,
@@ -162,6 +161,9 @@ impl ModelProvider for AnthropicProvider {
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
             .json(&request_body);
+
+        tracing::debug!("Sending request to Anthropic API at {}", url);
+        tracing::debug!("Request body: {:?}", request_body);
 
         let response = request.send().await?;
 

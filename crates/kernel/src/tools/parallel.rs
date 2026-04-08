@@ -28,11 +28,19 @@ pub async fn execute_tools_parallel(
 
     let mut join_set = JoinSet::new();
 
+    for call in &tool_calls {
+        tracing::debug!("Looking up tool: '{}'", call.name);
+    }
+
     for call in tool_calls {
         let agent_id = agent_id.clone();
         let tool_opt = tool_registry.get(&call.name);
+        if tool_opt.is_none() {
+            tracing::error!("Tool '{}' not found in registry. Available tools: {:?}", call.name, tool_registry.list());
+        }
 
         join_set.spawn(async move {
+            let start = std::time::Instant::now();
             let result = match tool_opt {
                 Some(tool) => execute_single_tool(tool, call.clone(), timeout).await,
                 None => ToolOutput {
@@ -41,6 +49,7 @@ pub async fn execute_tools_parallel(
                     stderr: format!("Unknown tool: {}", call.name),
                 },
             };
+            let elapsed = start.elapsed().as_millis() as u64;
 
             let (event, message) = if result.success() {
                 let output = result.stdout;
@@ -49,6 +58,7 @@ pub async fn execute_tools_parallel(
                         agent_id: agent_id.clone(),
                         tool_id: call.id.clone(),
                         output: output.clone(),
+                        elapsed_ms: elapsed,
                     },
                     Message {
                         role: Role::Tool,
@@ -68,6 +78,7 @@ pub async fn execute_tools_parallel(
                         agent_id: agent_id.clone(),
                         tool_id: call.id.clone(),
                         error: error.clone(),
+                        elapsed_ms: elapsed,
                     },
                     Message {
                         role: Role::Tool,
@@ -89,10 +100,10 @@ pub async fn execute_tools_parallel(
 
     let mut results = Vec::new();
     while let Some(Ok(result)) = join_set.join_next().await {
-        if let ToolEvent::Output { .. } = &result.event {
-            tracing::debug!("Tool {} completed successfully", result.tool_call_id);
-        } else if let ToolEvent::Error { error, .. } = &result.event {
-            tracing::warn!("Tool {} failed: {}", result.tool_call_id, error);
+        if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
+            tracing::debug!("Tool {} completed successfully in {}ms", result.tool_call_id, elapsed_ms);
+        } else if let ToolEvent::Error { error, elapsed_ms, .. } = &result.event {
+            tracing::warn!("Tool {} failed in {}ms: {}", result.tool_call_id, elapsed_ms, error);
         }
         results.push(result);
     }

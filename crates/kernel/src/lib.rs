@@ -47,4 +47,4 @@ pub use providers::{AnthropicProvider, OpenAIProvider};
 #[cfg(feature = "storage")]
 pub use storage::sqlite::SqliteStorage;
 #[cfg(feature = "tools")]
-pub use tools::{execute_tools_parallel, BashTool, FileTool};
+pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool};

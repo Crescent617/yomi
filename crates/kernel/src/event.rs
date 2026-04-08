@@ -98,16 +98,19 @@ pub enum ToolEvent {
         agent_id: AgentId,
         tool_id: String,
         tool_name: String,
+        arguments: Option<String>,
     },
     Output {
         agent_id: AgentId,
         tool_id: String,
         output: String,
+        elapsed_ms: u64,
     },
     Error {
         agent_id: AgentId,
         tool_id: String,
         error: String,
+        elapsed_ms: u64,
     },
 }
 
