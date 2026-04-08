@@ -7,16 +7,15 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::{
     application::PollStrategy,
-    props::{Alignment, Borders, Color, Style as TuiStyle, TextModifiers},
     ratatui::layout::{Constraint, Direction, Layout},
-    terminal::{CrosstermTerminalAdapter, TerminalAdapter, TerminalBridge},
+    terminal::{CrosstermTerminalAdapter, TerminalBridge},
     Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, SubEventClause, Update,
 };
 
 use kernel::event::Event as AppEvent;
 
 use crate::{
-    components::{ChatHistoryComponent, InputComponent, StreamingMessageComponent},
+    components::{ChatViewComponent, InputComponent},
     id::Id,
     msg::{Msg, UserEvent},
 };
@@ -69,8 +68,6 @@ impl Model {
 
     pub fn view(&mut self) {
         let _ = self.terminal.draw(|f| {
-            let is_streaming = self.is_streaming;
-
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(1)
@@ -83,16 +80,9 @@ impl Model {
                 )
                 .split(f.area());
 
-            let main_area = chunks[0];
-
-            if is_streaming {
-                // When streaming, show streaming component in full area
-                self.app.view(&Id::StreamingMessage, f, main_area);
-            } else {
-                // When not streaming, show chat history
-                self.app.view(&Id::ChatHistory, f, main_area);
-            }
-
+            // Always show ChatView (unified history + streaming)
+            self.app.view(&Id::ChatView, f, chunks[0]);
+            // InputBox renders last and sets cursor position
             self.app.view(&Id::InputBox, f, chunks[1]);
         });
     }
@@ -105,17 +95,10 @@ impl Model {
                 .tick_interval(Duration::from_millis(100)),
         );
 
-        // Mount chat history component
+        // Mount unified chat view component
         app.mount(
-            Id::ChatHistory,
-            Box::new(ChatHistoryComponent::new()),
-            vec![],
-        )?;
-
-        // Mount streaming message component
-        app.mount(
-            Id::StreamingMessage,
-            Box::new(StreamingMessageComponent::new()),
+            Id::ChatView,
+            Box::new(ChatViewComponent::new()),
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
         )?;
 
@@ -142,7 +125,7 @@ impl Model {
                         kernel::event::ContentChunk::Text(text) => {
                             self.current_content.push_str(&text);
                             self.app.attr(
-                                &Id::StreamingMessage,
+                                &Id::ChatView,
                                 Attribute::Custom("append_content"),
                                 AttrValue::String(text),
                             )?;
@@ -155,7 +138,7 @@ impl Model {
                             self.current_thinking.push_str(&thinking);
                             // Show thinking in streaming view
                             self.app.attr(
-                                &Id::StreamingMessage,
+                                &Id::ChatView,
                                 Attribute::Custom("append_thinking"),
                                 AttrValue::String(thinking),
                             )?;
@@ -190,7 +173,7 @@ impl Model {
                             )
                         };
                         self.app.attr(
-                            &Id::ChatHistory,
+                            &Id::ChatView,
                             Attribute::Custom("add_assistant_with_thinking"),
                             AttrValue::String(combined),
                         )?;
@@ -202,18 +185,18 @@ impl Model {
 
                     // Clear streaming message to avoid duplication with history
                     self.app.attr(
-                        &Id::StreamingMessage,
-                        Attribute::Custom("clear"),
+                        &Id::ChatView,
+                        Attribute::Custom("clear_streaming"),
                         AttrValue::Flag(true),
                     )?;
 
                     self.app.attr(
-                        &Id::StreamingMessage,
+                        &Id::ChatView,
                         Attribute::Custom("stop_streaming"),
                         AttrValue::Flag(true),
                     )?;
                     self.app.attr(
-                        &Id::ChatHistory,
+                        &Id::ChatView,
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
@@ -226,7 +209,7 @@ impl Model {
                     self.current_thinking.clear();
                     self.thinking_start_time = None;
                     self.app.attr(
-                        &Id::StreamingMessage,
+                        &Id::ChatView,
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     )?;
@@ -247,6 +230,9 @@ impl Model {
         self.terminal.enter_alternate_screen()?;
         self.terminal.enable_raw_mode()?;
 
+        // Hide cursor by default (will be shown by InputComponent when needed)
+        crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide)?;
+
         let result = self.run_loop().await;
 
         // Cleanup
@@ -258,6 +244,9 @@ impl Model {
     }
 
     async fn run_loop(&mut self) -> Result<()> {
+        // Enable mouse capture
+        self.terminal.enable_mouse_capture()?;
+
         while !self.quit {
             // Process kernel events
             self.process_kernel_events()?;
@@ -286,6 +275,9 @@ impl Model {
             tokio::task::yield_now().await;
         }
 
+        // Disable mouse capture before exit
+        self.terminal.disable_mouse_capture()?;
+
         Ok(())
     }
 }
@@ -301,14 +293,38 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::InputSubmit(content) => {
-                    // Add user message to history
+                    // Add user message to chat view
                     let _ = self.app.attr(
-                        &Id::ChatHistory,
+                        &Id::ChatView,
                         Attribute::Custom("add_user_message"),
                         AttrValue::String(content.clone()),
                     );
                     // Send to kernel
                     let _ = self.input_tx.try_send(content);
+                    None
+                }
+                Msg::ScrollUp => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_up"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::ScrollDown => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_down"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::ToggleThinking => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("toggle_thinking"),
+                        AttrValue::Flag(true),
+                    );
                     None
                 }
                 Msg::Redraw => {

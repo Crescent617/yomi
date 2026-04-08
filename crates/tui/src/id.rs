@@ -2,8 +2,7 @@
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Id {
-    ChatHistory,
-    StreamingMessage,
+    ChatView,
     InputBox,
     StatusBar,
 }

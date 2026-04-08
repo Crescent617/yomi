@@ -29,6 +29,11 @@ pub enum Msg {
     InputSubmit(String),
     InputChanged(String),
 
+    // Scrolling
+    ScrollUp,
+    ScrollDown,
+    ToggleThinking,
+
     // UI
     Tick,
     Quit,

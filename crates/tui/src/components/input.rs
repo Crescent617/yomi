@@ -2,7 +2,7 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    event::{Key, KeyEvent, KeyModifiers},
+    event::{Key, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
@@ -13,10 +13,7 @@ use tuirealm::{
     Component, Frame, MockComponent, State, StateValue,
 };
 
-use crate::{
-    msg::Msg,
-    theme::colors,
-};
+use crate::{msg::Msg, theme::colors};
 
 #[derive(Debug, Default)]
 pub struct InputMock {
@@ -139,10 +136,10 @@ impl MockComponent for InputMock {
             tuirealm::ratatui::text::Text::from(lines)
         };
 
-        let paragraph = Paragraph::new(text)
-            .block(tuirealm::ratatui::widgets::Block::default().borders(
-                tuirealm::ratatui::widgets::Borders::TOP,
-            ));
+        let paragraph = Paragraph::new(text).block(
+            tuirealm::ratatui::widgets::Block::default()
+                .borders(tuirealm::ratatui::widgets::Borders::TOP),
+        );
 
         frame.render_widget(paragraph, area);
 
@@ -304,6 +301,35 @@ impl Component<Msg, crate::msg::UserEvent> for InputComponent {
                 code: Key::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::Quit),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollUp),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollDown),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::PageUp,
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollUp),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::PageDown,
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollDown),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ToggleThinking),
+            // Mouse scroll events
+            tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                ..
+            }) => Some(Msg::ScrollUp),
+            tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                ..
+            }) => Some(Msg::ScrollDown),
             _ => None,
         }
     }
