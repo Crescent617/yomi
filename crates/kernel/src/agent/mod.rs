@@ -6,7 +6,7 @@ mod message_buffer;
 mod state;
 mod subagent;
 
-pub use cancel::CancelToken;
+pub use cancel::CancellationToken;
 pub use config::{AgentConfig, SubAgentMode};
 pub use context::AgentExecutionContext;
 pub use handle::AgentHandle;
@@ -47,7 +47,7 @@ pub struct Agent {
     input_tx: mpsc::Sender<AgentInput>,
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
-    cancel_token: CancelToken,
+    cancel_token: CancellationToken,
     token_usage: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Storage for message persistence
     storage: Option<Arc<dyn crate::storage::Storage>>,
@@ -66,7 +66,7 @@ impl Agent {
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
         let (event_tx, event_rx) = mpsc::channel(1000);
-        let cancel_token = CancelToken::new();
+        let cancel_token = CancellationToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         let mut message_buffer = MessageBuffer::new(100);
@@ -260,78 +260,89 @@ impl Agent {
         let mut current_thinking = String::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
 
-        while let Some(item) = stream.try_next().await? {
-            match item {
-                ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
-                    current_text.push_str(&text);
-                    let _ = self
-                        .event_tx
-                        .send(Event::Model(ModelEvent::Chunk {
-                            agent_id: self.id.clone(),
-                            content: ContentChunk::Text(text),
-                        }))
-                        .await;
+        // Stream with hard cancellation support
+        loop {
+            tokio::select! {
+                biased;  // Check cancel first for lower latency
+                _ = self.cancel_token.cancelled() => {
+                    tracing::info!("Agent {} streaming cancelled (hard)", self.id.0);
+                    drop(stream);
+                    return Ok(());
                 }
-                ModelStreamItem::Chunk(ContentChunk::Thinking {
-                    thinking,
-                    signature,
-                }) => {
-                    current_thinking.push_str(&thinking);
-                    let _ = self
-                        .event_tx
-                        .send(Event::Model(ModelEvent::Chunk {
-                            agent_id: self.id.clone(),
-                            content: ContentChunk::Thinking {
+                item = stream.try_next() => {
+                    match item {
+                        Ok(Some(item)) => match item {
+                            ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
+                                current_text.push_str(&text);
+                                let _ = self
+                                    .event_tx
+                                    .send(Event::Model(ModelEvent::Chunk {
+                                        agent_id: self.id.clone(),
+                                        content: ContentChunk::Text(text),
+                                    }))
+                                    .await;
+                            }
+                            ModelStreamItem::Chunk(ContentChunk::Thinking {
                                 thinking,
                                 signature,
-                            },
-                        }))
-                        .await;
+                            }) => {
+                                current_thinking.push_str(&thinking);
+                                let _ = self
+                                    .event_tx
+                                    .send(Event::Model(ModelEvent::Chunk {
+                                        agent_id: self.id.clone(),
+                                        content: ContentChunk::Thinking {
+                                            thinking,
+                                            signature,
+                                        },
+                                    }))
+                                    .await;
+                            }
+                            ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
+                                content_blocks.push(ContentBlock::RedactedThinking {
+                                    data: String::new(),
+                                });
+                            }
+                            ModelStreamItem::ToolCall(request) => {
+                                pending_tool_calls.push(ToolCall {
+                                    id: request.id,
+                                    name: request.name,
+                                    arguments: request.arguments,
+                                });
+                            }
+                            ModelStreamItem::Complete => break,
+                            ModelStreamItem::Fallback { from, to } => {
+                                let _ = self
+                                    .event_tx
+                                    .send(Event::Model(ModelEvent::Fallback {
+                                        agent_id: self.id.clone(),
+                                        from,
+                                        to,
+                                    }))
+                                    .await;
+                            }
+                            ModelStreamItem::TokenUsage {
+                                prompt_tokens,
+                                completion_tokens,
+                            } => {
+                                let total_tokens = prompt_tokens + completion_tokens;
+                                self.token_usage
+                                    .fetch_add(u64::from(total_tokens), std::sync::atomic::Ordering::SeqCst);
+                                let _ = self
+                                    .event_tx
+                                    .send(Event::Model(ModelEvent::TokenUsage {
+                                        agent_id: self.id.clone(),
+                                        prompt_tokens,
+                                        completion_tokens,
+                                        total_tokens,
+                                    }))
+                                    .await;
+                            }
+                        },
+                        Ok(None) => break,
+                        Err(e) => return Err(e),
+                    }
                 }
-                ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
-                    content_blocks.push(ContentBlock::RedactedThinking {
-                        data: String::new(),
-                    });
-                }
-                ModelStreamItem::ToolCall(request) => {
-                    pending_tool_calls.push(ToolCall {
-                        id: request.id,
-                        name: request.name,
-                        arguments: request.arguments,
-                    });
-                }
-                ModelStreamItem::Complete => break,
-                ModelStreamItem::Fallback { from, to } => {
-                    let _ = self
-                        .event_tx
-                        .send(Event::Model(ModelEvent::Fallback {
-                            agent_id: self.id.clone(),
-                            from,
-                            to,
-                        }))
-                        .await;
-                }
-                ModelStreamItem::TokenUsage {
-                    prompt_tokens,
-                    completion_tokens,
-                } => {
-                    let total_tokens = prompt_tokens + completion_tokens;
-                    self.token_usage
-                        .fetch_add(u64::from(total_tokens), std::sync::atomic::Ordering::SeqCst);
-                    let _ = self
-                        .event_tx
-                        .send(Event::Model(ModelEvent::TokenUsage {
-                            agent_id: self.id.clone(),
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens,
-                        }))
-                        .await;
-                }
-            }
-            // Yield every 100 chars to keep UI responsive
-            if (current_text.len() + current_thinking.len()) % 100 == 0 {
-                tokio::task::yield_now().await;
             }
         }
 
@@ -426,6 +437,10 @@ impl Agent {
         .await;
 
         for result in results {
+            if self.cancel_token.is_cancelled() {
+                tracing::info!("Agent {} tool execution cancelled", self.id.0);
+                return Ok(());
+            }
             let _ = self.event_tx.send(Event::Tool(result.event)).await;
             self.message_buffer.push(result.message.clone());
             self.persist_message(&result.message).await;

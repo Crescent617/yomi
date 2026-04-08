@@ -115,8 +115,8 @@ async fn main() -> Result<()> {
     // Create tool registry
     let mut tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(BashTool::new(&working_dir)));
-    tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
+    // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
 
     // Create sandbox
     let sandbox = if config.sandbox {
