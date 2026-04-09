@@ -19,10 +19,11 @@ use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, Too
 use crate::provider::{ModelProvider, ModelStreamItem};
 use crate::tool::{ToolRegistry, ToolSandbox};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
@@ -243,15 +244,15 @@ impl Agent {
                     }))
                     .await;
                 let msg = Message::user(content);
-                self.message_buffer.push(msg.clone());
                 self.persist_message(&msg).await;
+                self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
             Some(AgentInput::ToolResult { tool_id, output }) => {
                 let msg = Message::tool_result(&tool_id, output);
-                self.message_buffer.push(msg.clone());
                 self.persist_message(&msg).await;
+                self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
@@ -283,35 +284,21 @@ impl Agent {
             }))
             .await;
 
-        let messages_vec: Vec<_> = self.message_buffer.messages().to_vec();
-
-        // Spawn stream creation in background so we can cancel immediately
-        // Clone data for 'static lifetime requirement
-        let provider = self.provider.clone();
-        let tools_vec = tools.to_vec();
-        let model_config = self.config.model.clone();
-        let mut stream_handle = Some(tokio::spawn(async move {
-            provider
-                .stream(&messages_vec, &tools_vec, &model_config)
-                .await
-        }));
-
+        let messages = self.message_buffer.messages();
+        let stream_future = timeout(
+            Duration::from_secs(5),
+            self.provider.stream(messages, &tools, &self.config.model),
+        );
         let mut stream = tokio::select! {
             biased;
             _ = self.cancel_token.cancelled() => {
-                // Cancel immediately - abort and forget the background task
-                if let Some(handle) = stream_handle.take() {
-                    handle.abort();
-                }
+                // Future is automatically dropped by select!
                 return self.handle_cancel("stream start").await;
             }
-            // This branch only runs if cancelled() didn't trigger first,
-            // so stream_handle is guaranteed to be Some
-            result = stream_handle.take().unwrap() => match result {
+            result = stream_future => match result {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => return Err(e),
-                Err(e) if e.is_cancelled() => return Err(anyhow!("Request cancelled")),
-                Err(e) => return Err(anyhow!("Stream task failed: {e}")),
+                Err(_) => return Err(anyhow::anyhow!("Stream creation timed out after 5s")),
             }
         };
 
@@ -403,10 +390,6 @@ impl Agent {
             }
         }
 
-        let estimated_tokens = current_text.len() / 4 + current_thinking.len() / 4;
-        self.token_usage
-            .fetch_add(estimated_tokens as u64, std::sync::atomic::Ordering::SeqCst);
-
         if !current_thinking.is_empty() {
             content_blocks.push(ContentBlock::Thinking {
                 thinking: current_thinking,
@@ -422,8 +405,8 @@ impl Agent {
             if !pending_tool_calls.is_empty() {
                 msg.tool_calls = Some(pending_tool_calls);
             }
-            self.message_buffer.push(msg.clone());
             self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
         }
 
         if self
@@ -468,10 +451,10 @@ impl Agent {
             .message_buffer
             .messages()
             .last()
-            .and_then(|m| m.tool_calls.clone())
-            .unwrap_or_default();
+            .and_then(|m| m.tool_calls.as_deref())
+            .unwrap_or(&[]);
 
-        for call in &tool_calls {
+        for call in tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
                 .event_tx
@@ -498,8 +481,8 @@ impl Agent {
                 return self.handle_cancel("tool execution").await;
             }
             let _ = self.event_tx.send(Event::Tool(result.event)).await;
-            self.message_buffer.push(result.message.clone());
             self.persist_message(&result.message).await;
+            self.message_buffer.push(result.message);
         }
 
         self.context.transition_to(AgentState::Streaming);

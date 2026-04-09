@@ -14,7 +14,7 @@ pub struct ToolExecutionResult {
 /// 并行执行多个工具调用
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
-    tool_calls: Vec<ToolCall>,
+    tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
     _sandbox: &ToolSandbox,
     timeout: std::time::Duration,
@@ -28,17 +28,21 @@ pub async fn execute_tools_parallel(
 
     let mut join_set = JoinSet::new();
 
-    for call in &tool_calls {
+    for call in tool_calls {
         tracing::debug!("Looking up tool: '{}'", call.name);
     }
 
     for call in tool_calls {
         let agent_id = agent_id.clone();
-        let tool_opt = tool_registry.get(&call.name);
+        // 克隆必要字段，避免持有整个引用
+        let call_id = call.id.clone();
+        let call_name = call.name.clone();
+        let arguments = call.arguments.clone();
+        let tool_opt = tool_registry.get(&call_name);
         if tool_opt.is_none() {
             tracing::error!(
                 "Tool '{}' not found in registry. Available tools: {:?}",
-                call.name,
+                call_name,
                 tool_registry.list()
             );
         }
@@ -46,11 +50,11 @@ pub async fn execute_tools_parallel(
         join_set.spawn(async move {
             let start = std::time::Instant::now();
             let result = match tool_opt {
-                Some(tool) => execute_single_tool(tool, call.clone(), timeout).await,
+                Some(tool) => execute_single_tool(tool, arguments, timeout).await,
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
-                    stderr: format!("Unknown tool: {}", call.name),
+                    stderr: format!("Unknown tool: {}", call_name),
                 },
             };
             let elapsed = start.elapsed().as_millis() as u64;
@@ -60,7 +64,7 @@ pub async fn execute_tools_parallel(
                 (
                     ToolEvent::Output {
                         agent_id: agent_id.clone(),
-                        tool_id: call.id.clone(),
+                        tool_id: call_id.clone(),
                         output: output.clone(),
                         elapsed_ms: elapsed,
                     },
@@ -68,7 +72,7 @@ pub async fn execute_tools_parallel(
                         role: Role::Tool,
                         content: vec![ContentBlock::Text { text: output }],
                         tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
+                        tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
                     },
                 )
@@ -80,7 +84,7 @@ pub async fn execute_tools_parallel(
                 (
                     ToolEvent::Error {
                         agent_id: agent_id.clone(),
-                        tool_id: call.id.clone(),
+                        tool_id: call_id.clone(),
                         error: error.clone(),
                         elapsed_ms: elapsed,
                     },
@@ -88,14 +92,14 @@ pub async fn execute_tools_parallel(
                         role: Role::Tool,
                         content: vec![ContentBlock::Text { text: error }],
                         tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
+                        tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
                     },
                 )
             };
 
             ToolExecutionResult {
-                tool_call_id: call.id,
+                tool_call_id: call_id,
                 message,
                 event,
             }
@@ -139,10 +143,10 @@ pub async fn execute_tools_parallel(
 
 async fn execute_single_tool(
     tool: Arc<dyn Tool>,
-    call: ToolCall,
+    arguments: serde_json::Value,
     timeout: std::time::Duration,
 ) -> ToolOutput {
-    match tokio::time::timeout(timeout, tool.execute(call.arguments)).await {
+    match tokio::time::timeout(timeout, tool.execute(arguments)).await {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => ToolOutput {
             exit_code: 1,
