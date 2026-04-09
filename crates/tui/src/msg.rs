@@ -43,8 +43,8 @@ pub enum Msg {
     // Request control
     CancelRequest,
 
-    // Status bar message
-    ShowStatusMessage(String),
+    // Status bar message with duration in milliseconds
+    ShowStatusMessage(String, u64),
 
     // Browse mode (readonly like less)
     ToggleBrowseMode,

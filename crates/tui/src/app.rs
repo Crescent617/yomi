@@ -608,10 +608,12 @@ impl Update<Msg> for Model {
                     self.redraw = true;
                     None
                 }
-                Msg::ShowStatusMessage(msg) => {
+                Msg::ShowStatusMessage(msg, duration_ms) => {
+                    // Format: "duration_ms|message"
+                    let value = format!("{}|{}", duration_ms, msg);
                     let _ = self
                         .app
-                        .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String(msg));
+                        .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String(value));
                     None
                 }
                 // Mode switching

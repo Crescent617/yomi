@@ -16,7 +16,7 @@ Yomi is a production-grade AI coding assistant CLI tool written in Rust. It feat
 - Testable: Write code that's easy to test; prefer pure functions and clear interfaces
 - Idiomatic: Follow Rust conventions and best practices for readability and maintainability
 - Clean Code: Prioritize readability and clarity; use meaningful and short names
-- AGENTS.md: follow the guidelines in AGENTS.md in each module
+- AGENTS.md: follow the guidelines in AGENTS.md in each module. like ./crates/tui/AGENTS.md
 
 ### Error Handling
 

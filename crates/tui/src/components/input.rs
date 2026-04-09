@@ -477,9 +477,10 @@ impl InputComponent {
                 if self.component.handle_ctrl_c() {
                     Some(Msg::Quit)
                 } else {
-                    // First Ctrl+C: clear input and show hint in status bar
+                    // First Ctrl+C: show hint in status bar for 1 second
                     Some(Msg::ShowStatusMessage(
                         "Press Ctrl+C again to exit".to_string(),
+                        1000, // 1000ms = 1 second, matches double-press detection
                     ))
                 }
             }

@@ -28,7 +28,7 @@ pub enum AppMode {
 impl AppMode {
     fn as_str(&self) -> &'static str {
         match self {
-            AppMode::Normal => " NORMAL ",
+            AppMode::Normal => "",
             AppMode::Browse => " BROWSE ",
         }
     }
@@ -164,8 +164,16 @@ impl MockComponent for StatusBar {
                 }
             }
             Attribute::Custom(s) if s == "show_message" => {
-                if let AttrValue::String(msg) = value {
-                    self.show_message(msg, 3); // 3 second timeout
+                // Parse duration (ms) and message from "duration_ms|message" format
+                if let AttrValue::String(value_str) = value {
+                    let parts: Vec<&str> = value_str.splitn(2, '|').collect();
+                    if parts.len() == 2 {
+                        // Use provided duration, default to 3s if parsing fails or is 0
+                        let duration_ms = parts[0].parse::<u64>().unwrap_or(0);
+                        let timeout = std::time::Duration::from_millis(if duration_ms == 0 { 3000 } else { duration_ms });
+                        self.center_message = Some(parts[1].to_string());
+                        self.message_timeout = Some(std::time::Instant::now() + timeout);
+                    }
                 }
             }
             Attribute::Custom(s) if s == "tick" => {
