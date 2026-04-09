@@ -86,6 +86,11 @@ impl Default for ChatView {
 }
 
 impl ChatView {
+    /// Render a pixel-art style cat banner for empty state
+    fn render_banner() -> Vec<Line<'static>> {
+        return vec![];
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -253,7 +258,12 @@ impl ChatView {
             if *status == ToolStatus::Running {
                 *status = ToolStatus::Cancelled;
                 for msg in &mut self.messages {
-                    if let HistoryMessage::Tool { tool_id: id, status: s, .. } = msg {
+                    if let HistoryMessage::Tool {
+                        tool_id: id,
+                        status: s,
+                        ..
+                    } = msg
+                    {
                         if id == tool_id {
                             *s = ToolStatus::Cancelled;
                         }
@@ -793,6 +803,11 @@ impl MockComponent for ChatView {
             all_lines.extend(self.render_streaming());
         }
 
+        // Show banner if no messages yet
+        if all_lines.is_empty() {
+            all_lines.extend(Self::render_banner());
+        }
+
         // Calculate scroll position with wrap support
         let visible_height = main_area.height as usize;
         let width = main_area.width as usize;
@@ -879,8 +894,11 @@ impl MockComponent for ChatView {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split(' ').collect();
                     let content = (*parts.first().unwrap_or(&"")).to_string();
-                    let thinking = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
-                    
+                    let thinking = parts
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+
                     // Add to history with cancelled flag
                     self.messages.push(HistoryMessage::Assistant {
                         content,
@@ -888,13 +906,18 @@ impl MockComponent for ChatView {
                         thinking_folded: !self.expand_all,
                         thinking_elapsed_ms: parts.get(2).and_then(|s| s.parse().ok()),
                     });
-                    
+
                     // Mark running tools as cancelled
                     for (tool_id, (_, status)) in self.active_tools.iter_mut() {
                         if *status == ToolStatus::Running {
                             *status = ToolStatus::Cancelled;
                             for msg in &mut self.messages {
-                                if let HistoryMessage::Tool { tool_id: id, status: s, .. } = msg {
+                                if let HistoryMessage::Tool {
+                                    tool_id: id,
+                                    status: s,
+                                    ..
+                                } = msg
+                                {
                                     if id == tool_id {
                                         *s = ToolStatus::Cancelled;
                                     }
@@ -902,7 +925,7 @@ impl MockComponent for ChatView {
                             }
                         }
                     }
-                    
+
                     // Clear streaming state
                     self.streaming_content.clear();
                     self.streaming_thinking.clear();

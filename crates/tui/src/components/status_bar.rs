@@ -168,16 +168,23 @@ impl MockComponent for StatusBar {
                 if let AttrValue::String(value_str) = value {
                     let parts: Vec<&str> = value_str.splitn(2, '|').collect();
                     if parts.len() == 2 {
-                        // Use provided duration, default to 3s if parsing fails or is 0
                         let duration_ms = parts[0].parse::<u64>().unwrap_or(0);
-                        let timeout = std::time::Duration::from_millis(if duration_ms == 0 { 3000 } else { duration_ms });
                         self.center_message = Some(parts[1].to_string());
-                        self.message_timeout = Some(std::time::Instant::now() + timeout);
+                        // If duration is 0, don't set timeout (message persists until cleared)
+                        self.message_timeout = if duration_ms == 0 {
+                            None
+                        } else {
+                            Some(std::time::Instant::now() + std::time::Duration::from_millis(duration_ms))
+                        };
                     }
                 }
             }
             Attribute::Custom(s) if s == "tick" => {
                 self.check_timeout();
+            }
+            Attribute::Custom(s) if s == "clear_message" => {
+                self.center_message = None;
+                self.message_timeout = None;
             }
             _ => {
                 self.props.set(attr, value);

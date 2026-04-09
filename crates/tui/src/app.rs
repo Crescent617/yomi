@@ -627,6 +627,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(1));
+                            // Show help message for browse mode shortcuts (0 = no auto-clear)
+                            let _ = self
+                                .app
+                                .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String("0|C-o toggle, j/k scroll, q exit browse".to_string()));
                         }
                         AppMode::Browse => {
                             // Exit browse mode
@@ -639,6 +643,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(0));
+                            // Clear any status message
+                            let _ = self
+                                .app
+                                .attr(&Id::StatusBar, Attribute::Custom("clear_message"), AttrValue::Flag(true));
                         }
                     }
                     None
