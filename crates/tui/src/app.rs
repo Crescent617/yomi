@@ -108,7 +108,6 @@ impl Model {
                 // Browse mode: full screen chat view with status bar
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .margin(1)
                     .constraints(
                         [
                             Constraint::Min(3),    // Main content area
@@ -125,7 +124,6 @@ impl Model {
                 // Normal mode: show all components
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .margin(1)
                     .constraints(
                         [
                             Constraint::Min(3),                // Main content area
@@ -168,7 +166,10 @@ impl Model {
         app.mount(
             Id::InfoBar,
             Box::new(InfoBarComponent::new()),
-            vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+            vec![
+                Sub::new(SubEventClause::Tick, SubClause::Always),
+                Sub::new(SubEventClause::Any, SubClause::Always),
+            ],
         )?;
 
         // Mount input component
@@ -201,13 +202,11 @@ impl Model {
                                 Attribute::Custom("append_content"),
                                 AttrValue::String(text.clone()),
                             )?;
-                            // Update status bar with token counts
-                            let content_tokens = self.current_content.len() / 4;
-                            let thinking_tokens = self.current_thinking.len() / 4;
+                            // Update InfoBar with content for token counting
                             self.app.attr(
                                 &Id::InfoBar,
-                                Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
+                                Attribute::Custom("append_content"),
+                                AttrValue::String(text),
                             )?;
                         }
                         kernel::event::ContentChunk::Thinking { thinking, .. } => {
@@ -222,13 +221,11 @@ impl Model {
                                 Attribute::Custom("append_thinking"),
                                 AttrValue::String(thinking.clone()),
                             )?;
-                            // Update status bar with token counts
-                            let content_tokens = self.current_content.len() / 4;
-                            let thinking_tokens = self.current_thinking.len() / 4;
+                            // Update InfoBar with thinking for token counting
                             self.app.attr(
                                 &Id::InfoBar,
-                                Attribute::Custom("set_tokens"),
-                                AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
+                                Attribute::Custom("append_thinking"),
+                                AttrValue::String(thinking),
                             )?;
                         }
                         _ => {}

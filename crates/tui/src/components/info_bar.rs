@@ -14,12 +14,22 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::msg::Msg;
-use crate::theme::colors;
+use crate::{msg::Msg, theme::colors};
+
+/// Check if a character is CJK (Chinese, Japanese, Korean)
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4e00}'..='\u{9fff}' |  // CJK Unified Ideographs
+        '\u{3400}'..='\u{4dbf}' |  // CJK Extension A
+        '\u{3040}'..='\u{309f}' |  // Hiragana
+        '\u{30a0}'..='\u{30ff}' |  // Katakana
+        '\u{ac00}'..='\u{d7af}'    // Hangul Syllables
+    )
+}
 
 /// Status state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StatusState {
+pub enum InfoBarState {
     #[default]
     Idle,
     Streaming,
@@ -31,10 +41,10 @@ pub enum StatusState {
 #[derive(Debug, Default)]
 pub struct InfoBar {
     props: Props,
-    state: StatusState,
+    state: InfoBarState,
     tick_frame: usize,
-    content_tokens: usize,
-    thinking_tokens: usize,
+    content: String,
+    thinking: String,
     start_time: Option<std::time::Instant>,
 }
 
@@ -43,38 +53,69 @@ impl InfoBar {
         Self::default()
     }
 
-    pub fn set_state(&mut self, state: StatusState) {
+    pub fn set_state(&mut self, state: InfoBarState) {
         self.state = state;
         match state {
-            StatusState::Streaming => {
+            InfoBarState::Streaming => {
                 self.tick_frame = 0;
-                self.content_tokens = 0;
-                self.thinking_tokens = 0;
+                self.content.clear();
+                self.thinking.clear();
                 self.start_time = Some(std::time::Instant::now());
             }
-            StatusState::Idle | StatusState::Completed | StatusState::Cancelled => {
+            InfoBarState::Idle | InfoBarState::Completed | InfoBarState::Cancelled => {
                 self.start_time = None;
             }
         }
     }
 
-    pub const fn set_tokens(&mut self, content_tokens: usize, thinking_tokens: usize) {
-        self.content_tokens = content_tokens;
-        self.thinking_tokens = thinking_tokens;
+    pub fn append_content(&mut self, text: &str) {
+        self.content.push_str(text);
+    }
+
+    pub fn append_thinking(&mut self, text: &str) {
+        self.thinking.push_str(text);
+    }
+
+    /// Count tokens using a better estimation
+    /// For English: 1 token ≈ 4 characters
+    /// For CJK: 1 token ≈ 1-1.5 characters
+    fn count_tokens(&self, text: &str) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+
+        // Count different character types
+        let mut ascii_count = 0;
+        let mut cjk_count = 0;
+        let mut other_count = 0;
+
+        for c in text.chars() {
+            if c.is_ascii() {
+                ascii_count += 1;
+            } else if is_cjk(c) {
+                cjk_count += 1;
+            } else {
+                other_count += 1;
+            }
+        }
+
+        // ASCII: ~4 chars per token, CJK: ~1.5 chars per token, Other: ~2 chars per token
+        let ascii_tokens = ascii_count / 4;
+        let cjk_tokens = (cjk_count * 2) / 3; // 1/1.5 ≈ 2/3
+        let other_tokens = other_count / 2;
+
+        (ascii_tokens + cjk_tokens + other_tokens).max(1)
     }
 
     pub fn tick(&mut self) {
-        if self.state == StatusState::Streaming {
+        if self.state == InfoBarState::Streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
     }
 
     fn render(&self) -> Line<'static> {
-        // Show when streaming or has tokens (keep showing after complete)
-        if self.state == StatusState::Idle
-            && self.content_tokens == 0
-            && self.thinking_tokens == 0
-        {
+        // Show when streaming or has content
+        if self.state == InfoBarState::Idle && self.content.is_empty() && self.thinking.is_empty() {
             return Line::from("");
         }
 
@@ -82,7 +123,7 @@ impl InfoBar {
 
         // Indicator based on state
         let (indicator, indicator_style) = match self.state {
-            StatusState::Streaming => {
+            InfoBarState::Streaming => {
                 const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
                 let frame_idx = (self.tick_frame / 3) % FRAMES.len();
                 (
@@ -92,13 +133,13 @@ impl InfoBar {
                         .add_modifier(Modifier::BOLD),
                 )
             }
-            StatusState::Cancelled => (
+            InfoBarState::Cancelled => (
                 "✕",
                 Style::default()
                     .fg(colors::accent_error())
                     .add_modifier(Modifier::BOLD),
             ),
-            StatusState::Completed | StatusState::Idle => (
+            InfoBarState::Completed | InfoBarState::Idle => (
                 "✓",
                 Style::default()
                     .fg(colors::accent_success())
@@ -108,21 +149,18 @@ impl InfoBar {
 
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
-        // Token count with separate thinking count
-        let token_style = Style::default().fg(colors::text_secondary());
-        let total_tokens = self.content_tokens + self.thinking_tokens;
+        // Token count using tiktoken
+        let content_tokens = self.count_tokens(&self.content);
+        let thinking_tokens = self.count_tokens(&self.thinking);
+        let total_tokens = content_tokens + thinking_tokens;
 
-        if self.thinking_tokens > 0 {
-            spans.push(Span::styled(
-                format!("{} tokens (+{} think)", total_tokens, self.thinking_tokens),
-                token_style,
-            ));
-        } else {
-            spans.push(Span::styled(format!("{total_tokens} tokens"), token_style));
-        }
+        let token_style = Style::default().fg(colors::text_secondary());
+        // Add ~ prefix to indicate these are estimated token counts
+        let token_text = format!("~{total_tokens} tokens");
+        spans.push(Span::styled(token_text, token_style));
 
         // Elapsed time (only when streaming)
-        if self.state == StatusState::Streaming {
+        if self.state == InfoBarState::Streaming {
             if let Some(start) = self.start_time {
                 let elapsed = start.elapsed().as_secs_f64();
                 let time_str = if elapsed < 60.0 {
@@ -154,20 +192,22 @@ impl MockComponent for InfoBar {
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
             Attribute::Custom(s) if s == "start_streaming" => {
-                self.set_state(StatusState::Streaming);
+                self.set_state(InfoBarState::Streaming);
             }
             Attribute::Custom(s) if s == "stop_streaming" => {
-                self.set_state(StatusState::Completed);
+                self.set_state(InfoBarState::Completed);
             }
             Attribute::Custom(s) if s == "cancel_streaming" => {
-                self.set_state(StatusState::Cancelled);
+                self.set_state(InfoBarState::Cancelled);
             }
-            Attribute::Custom(s) if s == "set_tokens" => {
+            Attribute::Custom(s) if s == "append_content" => {
                 if let AttrValue::String(text) = value {
-                    let parts: Vec<&str> = text.split(',').collect();
-                    let content = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-                    let thinking = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.set_tokens(content, thinking);
+                    self.append_content(&text);
+                }
+            }
+            Attribute::Custom(s) if s == "append_thinking" => {
+                if let AttrValue::String(text) = value {
+                    self.append_thinking(&text);
                 }
             }
             Attribute::Custom(s) if s == "tick" => {
@@ -236,11 +276,7 @@ impl Component<Msg, crate::msg::UserEvent> for InfoBarComponent {
                 self.component.tick();
                 Some(Msg::Redraw)
             }
-            tuirealm::Event::User(crate::msg::UserEvent::AppEvent(
-                kernel::event::Event::Model(kernel::event::ModelEvent::Chunk { .. }),
-            )) => {
-                Some(Msg::Redraw)
-            }
+            // Note: Content updates come through attr() from app.rs, not here
             _ => None,
         }
     }
