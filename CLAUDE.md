@@ -2,19 +2,7 @@
 
 ## Project Overview
 
-Nekoclaw is a production-grade AI coding assistant CLI tool written in Rust. It features an async agent loop with sub-agent support, a TUI with custom markdown rendering, and an event-driven architecture.
-
-## Workspace Structure
-
-```
-crates/
-├── core/       # Core business logic + async agent runtime + trait definitions
-├── app/        # Application orchestration (Coordinator, Session)
-├── cli/        # CLI entry point (binary: yomi)
-└── tui/        # Terminal UI (ratatui-based)
-```
-
-**Dependency Flow**: `cli/tui` → `app` → `core` (traits)
+Yomi is a production-grade AI coding assistant CLI tool written in Rust. It features an async agent loop with sub-agent support, a TUI with custom markdown rendering, and an event-driven architecture.
 
 ## Coding Guidelines
 
@@ -28,6 +16,7 @@ crates/
 - Testable: Write code that's easy to test; prefer pure functions and clear interfaces
 - Idiomatic: Follow Rust conventions and best practices for readability and maintainability
 - Clean Code: Prioritize readability and clarity; use meaningful and short names
+- AGENTS.md: follow the guidelines in AGENTS.md in each module
 
 ### Error Handling
 

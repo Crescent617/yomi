@@ -15,7 +15,7 @@ use tuirealm::{
 use kernel::event::Event as AppEvent;
 
 use crate::{
-    components::{ChatViewComponent, InputComponent, StatusBarComponent},
+    components::{ChatViewComponent, InfoBarComponent, InputComponent, StatusBarComponent},
     id::Id,
     msg::{Msg, UserEvent},
 };
@@ -81,12 +81,46 @@ impl Model {
         })
     }
 
+    /// Calculate input box height based on content (3-5 lines, including borders)
+    fn calculate_input_height(&self) -> u16 {
+        // Content lines (1-3), plus 2 for borders = total 3-5
+        let content_lines = if let Ok(state) = self.app.state(&Id::InputBox) {
+            if let tuirealm::State::One(tuirealm::StateValue::String(content)) = state {
+                // Count newlines + 1 to handle trailing newlines correctly
+                // "hello\nworld" -> 1 newline + 1 = 2 lines
+                // "hello\n" -> 1 newline + 1 = 2 lines (lines() would return 1)
+                let line_count = content.matches('\n').count() + 1;
+                (line_count.max(1) as u16).min(3)
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+        content_lines + 2 // Add 2 for top/bottom borders
+    }
+
     pub fn view(&mut self) {
+        let input_height = self.calculate_input_height();
+        
         let _ = self.terminal.draw(|f| {
             if self.mode == AppMode::Browse {
-                // Browse mode: full screen chat view
-                let area = f.area();
-                self.app.view(&Id::ChatView, f, area);
+                // Browse mode: full screen chat view with status bar
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(1)
+                    .constraints(
+                        [
+                            Constraint::Min(3),    // Main content area
+                            Constraint::Length(1), // Status bar (mode indicator)
+                        ]
+                        .as_ref(),
+                    )
+                    .split(f.area());
+
+                self.app.view(&Id::ChatView, f, chunks[0]);
+                // Status bar shows current mode (vim-style)
+                self.app.view(&Id::StatusBar, f, chunks[1]);
             } else {
                 // Normal mode: show all components
                 let chunks = Layout::default()
@@ -94,9 +128,10 @@ impl Model {
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Min(3),    // Main content area
-                            Constraint::Length(1), // Status bar
-                            Constraint::Length(3), // Input area
+                            Constraint::Min(3),                // Main content area
+                            Constraint::Length(1),             // Info bar (tokens/streaming)
+                            Constraint::Length(input_height),  // Input area (dynamic 1-3 lines)
+                            Constraint::Length(1),             // Status bar (mode indicator)
                         ]
                         .as_ref(),
                     )
@@ -104,10 +139,12 @@ impl Model {
 
                 // Always show ChatView (unified history + streaming)
                 self.app.view(&Id::ChatView, f, chunks[0]);
-                // Status bar shows streaming progress
-                self.app.view(&Id::StatusBar, f, chunks[1]);
+                // Info bar shows streaming progress
+                self.app.view(&Id::InfoBar, f, chunks[1]);
                 // InputBox renders last and sets cursor position
                 self.app.view(&Id::InputBox, f, chunks[2]);
+                // Status bar shows current mode (vim-style)
+                self.app.view(&Id::StatusBar, f, chunks[3]);
             }
         });
     }
@@ -127,15 +164,22 @@ impl Model {
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
         )?;
 
-        // Mount status bar component
+        // Mount info bar component (token/streaming status)
         app.mount(
-            Id::StatusBar,
-            Box::new(StatusBarComponent::new()),
+            Id::InfoBar,
+            Box::new(InfoBarComponent::new()),
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
         )?;
 
         // Mount input component
         app.mount(Id::InputBox, Box::new(InputComponent::new()), vec![])?;
+
+        // Mount status bar component (vim-style mode indicator at bottom)
+        app.mount(
+            Id::StatusBar,
+            Box::new(StatusBarComponent::new()),
+            vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+        )?;
 
         // Set focus to input box
         app.active(&Id::InputBox)?;
@@ -161,7 +205,7 @@ impl Model {
                             let content_tokens = self.current_content.len() / 4;
                             let thinking_tokens = self.current_thinking.len() / 4;
                             self.app.attr(
-                                &Id::StatusBar,
+                                &Id::InfoBar,
                                 Attribute::Custom("set_tokens"),
                                 AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
                             )?;
@@ -182,7 +226,7 @@ impl Model {
                             let content_tokens = self.current_content.len() / 4;
                             let thinking_tokens = self.current_thinking.len() / 4;
                             self.app.attr(
-                                &Id::StatusBar,
+                                &Id::InfoBar,
                                 Attribute::Custom("set_tokens"),
                                 AttrValue::String(format!("{content_tokens}, {thinking_tokens}")),
                             )?;
@@ -196,7 +240,7 @@ impl Model {
 
                     // Stop status bar
                     self.app.attr(
-                        &Id::StatusBar,
+                        &Id::InfoBar,
                         Attribute::Custom("stop_streaming"),
                         AttrValue::Flag(true),
                     )?;
@@ -359,7 +403,7 @@ impl Model {
                     )?;
 
                     self.app.attr(
-                        &Id::StatusBar,
+                        &Id::InfoBar,
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
@@ -406,7 +450,7 @@ impl Model {
                     )?;
 
                     self.app.attr(
-                        &Id::StatusBar,
+                        &Id::InfoBar,
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
@@ -504,7 +548,7 @@ impl Update<Msg> for Model {
                     );
                     // Start streaming status immediately when sending request
                     let _ = self.app.attr(
-                        &Id::StatusBar,
+                        &Id::InfoBar,
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     );
@@ -564,6 +608,12 @@ impl Update<Msg> for Model {
                     self.redraw = true;
                     None
                 }
+                Msg::ShowStatusMessage(msg) => {
+                    let _ = self
+                        .app
+                        .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String(msg));
+                    None
+                }
                 // Mode switching
                 Msg::ToggleBrowseMode => {
                     match self.mode {
@@ -574,6 +624,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::ChatView, Attribute::Custom("expand_all"), AttrValue::Flag(true));
+                            // Update status bar to show BROWSE mode
+                            let _ = self
+                                .app
+                                .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(1));
                         }
                         AppMode::Browse => {
                             // Exit browse mode
@@ -582,6 +636,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::ChatView, Attribute::Custom("collapse_all"), AttrValue::Flag(true));
+                            // Update status bar to show NORMAL mode
+                            let _ = self
+                                .app
+                                .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(0));
                         }
                     }
                     None

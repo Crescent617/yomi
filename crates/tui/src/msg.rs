@@ -43,6 +43,9 @@ pub enum Msg {
     // Request control
     CancelRequest,
 
+    // Status bar message
+    ShowStatusMessage(String),
+
     // Browse mode (readonly like less)
     ToggleBrowseMode,
     PageUp,

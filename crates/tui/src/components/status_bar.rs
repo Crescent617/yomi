@@ -1,12 +1,13 @@
-//! Status bar component for displaying streaming progress
+//! Status bar component for TUI
 //!
-//! Shows spinner, token count, and elapsed time above the input box.
+//! Shows current mode at the bottom (vim-style) with three sections:
+//! [LEFT: mode] [CENTER: temporary messages] [RIGHT: reserved]
 
 use tuirealm::{
     command::{Cmd, CmdResult},
     props::{AttrValue, Attribute, Props},
     ratatui::{
-        layout::Rect,
+        layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
@@ -14,28 +15,33 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::msg::Msg;
-use crate::theme::colors;
+use crate::{msg::Msg, theme::colors};
 
-/// Status state
+/// Application mode for status bar display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StatusState {
+pub enum AppMode {
     #[default]
-    Idle,
-    Streaming,
-    Completed,
-    Cancelled,
+    Normal,
+    Browse,
 }
 
-/// Status bar component showing streaming progress
+impl AppMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            AppMode::Normal => " NORMAL ",
+            AppMode::Browse => " BROWSE ",
+        }
+    }
+}
+
+/// Status bar showing current mode (vim-style at bottom)
+/// Layout: [mode] [center message] [right reserved]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
-    state: StatusState,
-    tick_frame: usize,
-    content_tokens: usize,
-    thinking_tokens: usize,
-    start_time: Option<std::time::Instant>,
+    mode: AppMode,
+    center_message: Option<String>,
+    message_timeout: Option<std::time::Instant>,
 }
 
 impl StatusBar {
@@ -43,108 +49,103 @@ impl StatusBar {
         Self::default()
     }
 
-    pub fn set_state(&mut self, state: StatusState) {
-        self.state = state;
-        match state {
-            StatusState::Streaming => {
-                self.tick_frame = 0;
-                self.content_tokens = 0;
-                self.thinking_tokens = 0;
-                self.start_time = Some(std::time::Instant::now());
-            }
-            StatusState::Idle | StatusState::Completed | StatusState::Cancelled => {
-                self.start_time = None;
+    pub const fn set_mode(&mut self, mode: AppMode) {
+        self.mode = mode;
+    }
+
+    /// Show a temporary message in the center section
+    pub fn show_message(&mut self, message: String, timeout_secs: u64) {
+        self.center_message = Some(message);
+        self.message_timeout = Some(
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs),
+        );
+    }
+
+    /// Clear message if timeout expired
+    pub fn check_timeout(&mut self) {
+        if let Some(timeout) = self.message_timeout {
+            if std::time::Instant::now() > timeout {
+                self.center_message = None;
+                self.message_timeout = None;
             }
         }
     }
 
-    pub const fn set_tokens(&mut self, content_tokens: usize, thinking_tokens: usize) {
-        self.content_tokens = content_tokens;
-        self.thinking_tokens = thinking_tokens;
-    }
-
+    /// Tick handler for timeout checking
     pub fn tick(&mut self) {
-        if self.state == StatusState::Streaming {
-            self.tick_frame = self.tick_frame.wrapping_add(1);
-        }
+        self.check_timeout();
     }
 
-    fn render(&self) -> Line<'static> {
-        // Show when streaming or has tokens (keep showing after complete)
-        if self.state == StatusState::Idle
-            && self.content_tokens == 0
-            && self.thinking_tokens == 0
-        {
-            return Line::from("");
-        }
+    fn render_mode_section(&self) -> Span<'static> {
+        let bg = match self.mode {
+            AppMode::Normal => colors::accent_success(),
+            AppMode::Browse => colors::accent_system(),
+        };
+        let fg = colors::code_bg();
 
-        let mut spans = Vec::new();
+        Span::styled(
+            self.mode.as_str(),
+            Style::default()
+                .fg(fg)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    }
 
-        // Indicator based on state
-        let (indicator, indicator_style) = match self.state {
-            StatusState::Streaming => {
-                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
-                let frame_idx = (self.tick_frame / 3) % FRAMES.len();
-                (
-                    FRAMES[frame_idx],
-                    Style::default()
-                        .fg(colors::accent_system())
-                        .add_modifier(Modifier::BOLD),
-                )
-            }
-            StatusState::Cancelled => (
-                "✕",
-                Style::default()
-                    .fg(colors::accent_error())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            StatusState::Completed | StatusState::Idle => (
-                "✓",
-                Style::default()
-                    .fg(colors::accent_success())
-                    .add_modifier(Modifier::BOLD),
-            ),
+    fn render_center_section(&self, width: usize) -> Span<'static> {
+        let message = self.center_message.as_deref().unwrap_or("");
+        // Center the message, truncate if too long
+        let display = if message.len() > width {
+            format!("{}...", &message[..width.saturating_sub(3)])
+        } else {
+            let padding = (width.saturating_sub(message.len())) / 2;
+            format!("{:>padding$}{}", "", message, padding = padding)
         };
 
-        spans.push(Span::styled(format!("{indicator} "), indicator_style));
+        Span::styled(
+            display,
+            Style::default()
+                .fg(colors::text_secondary())
+                .add_modifier(Modifier::ITALIC),
+        )
+    }
 
-        // Token count with separate thinking count
-        let token_style = Style::default().fg(colors::text_secondary());
-        let total_tokens = self.content_tokens + self.thinking_tokens;
-
-        if self.thinking_tokens > 0 {
-            spans.push(Span::styled(
-                format!("{} tokens (+{} think)", total_tokens, self.thinking_tokens),
-                token_style,
-            ));
-        } else {
-            spans.push(Span::styled(format!("{total_tokens} tokens"), token_style));
-        }
-
-        // Elapsed time (only when streaming)
-        if self.state == StatusState::Streaming {
-            if let Some(start) = self.start_time {
-                let elapsed = start.elapsed().as_secs_f64();
-                let time_str = if elapsed < 60.0 {
-                    format!(" · {elapsed:.1}s")
-                } else {
-                    let mins = (elapsed / 60.0) as u64;
-                    let secs = (elapsed % 60.0) as u64;
-                    format!(" · {mins}m{secs:02}s")
-                };
-                spans.push(Span::styled(time_str, token_style));
-            }
-        }
-
-        Line::from(spans)
+    fn render_right_section(&self) -> Span<'static> {
+        // Reserved for future use (e.g., file info, cursor position)
+        Span::styled("", Style::default())
     }
 }
 
 impl MockComponent for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let line = self.render();
-        let paragraph = Paragraph::new(line);
-        frame.render_widget(paragraph, area);
+        // Check for message timeout
+        self.check_timeout();
+
+        // Split area into three sections: [mode] [center] [right]
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(10),     // Mode section (" NORMAL ")
+                Constraint::Min(10),        // Center message section
+                Constraint::Length(10),     // Right reserved section
+            ])
+            .split(area);
+
+        // Render mode section
+        let mode_span = self.render_mode_section();
+        let mode_line = Line::from(vec![mode_span]);
+        frame.render_widget(Paragraph::new(mode_line), chunks[0]);
+
+        // Render center message section
+        let center_width = chunks[1].width as usize;
+        let center_span = self.render_center_section(center_width);
+        let center_line = Line::from(vec![center_span]);
+        frame.render_widget(Paragraph::new(center_line), chunks[1]);
+
+        // Render right section
+        let right_span = self.render_right_section();
+        let right_line = Line::from(vec![right_span]);
+        frame.render_widget(Paragraph::new(right_line), chunks[2]);
     }
 
     fn query(&self, attr: Attribute) -> Option<AttrValue> {
@@ -153,25 +154,22 @@ impl MockComponent for StatusBar {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "start_streaming" => {
-                self.set_state(StatusState::Streaming);
+            Attribute::Custom(s) if s == "set_mode" => {
+                if let AttrValue::Number(mode_val) = value {
+                    self.mode = match mode_val {
+                        0 => AppMode::Normal,
+                        1 => AppMode::Browse,
+                        _ => AppMode::Normal,
+                    };
+                }
             }
-            Attribute::Custom(s) if s == "stop_streaming" => {
-                self.set_state(StatusState::Completed);
-            }
-            Attribute::Custom(s) if s == "cancel_streaming" => {
-                self.set_state(StatusState::Cancelled);
-            }
-            Attribute::Custom(s) if s == "set_tokens" => {
-                if let AttrValue::String(text) = value {
-                    let parts: Vec<&str> = text.split(',').collect();
-                    let content = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-                    let thinking = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.set_tokens(content, thinking);
+            Attribute::Custom(s) if s == "show_message" => {
+                if let AttrValue::String(msg) = value {
+                    self.show_message(msg, 3); // 3 second timeout
                 }
             }
             Attribute::Custom(s) if s == "tick" => {
-                self.tick();
+                self.check_timeout();
             }
             _ => {
                 self.props.set(attr, value);
@@ -234,11 +232,6 @@ impl Component<Msg, crate::msg::UserEvent> for StatusBarComponent {
         match ev {
             tuirealm::Event::Tick => {
                 self.component.tick();
-                Some(Msg::Redraw)
-            }
-            tuirealm::Event::User(crate::msg::UserEvent::AppEvent(
-                kernel::event::Event::Model(kernel::event::ModelEvent::Chunk { .. }),
-            )) => {
                 Some(Msg::Redraw)
             }
             _ => None,

@@ -219,21 +219,23 @@ impl MockComponent for InputMock {
             .count();
 
         // Calculate scroll offset to keep cursor visible
-        let visible_height = input_area.height.saturating_sub(1) as usize; // -1 for border
-        let total_lines = self.content.lines().count().max(1);
+        let visible_height = input_area.height.saturating_sub(2).max(1) as usize; // -2 for top/bottom borders, min 1
+        // Use matches('\n') to correctly count lines including trailing newlines
+        let total_lines = self.content.matches('\n').count() + 1;
         let scroll_offset = if total_lines > visible_height {
             // Scroll so cursor is visible (prefer showing cursor near bottom)
             cursor_line
-                .saturating_sub(visible_height - 1)
-                .min(total_lines - visible_height)
+                .saturating_sub(visible_height.saturating_sub(1))
+                .min(total_lines.saturating_sub(visible_height))
         } else {
             0
         };
 
         // Render only visible lines
+        // Use split('\n') instead of lines() to handle trailing newlines correctly
         let all_lines: Vec<Line> = self
             .content
-            .lines()
+            .split('\n')
             .enumerate()
             .map(|(i, line)| {
                 let prefix = if i == 0 { "❯ " } else { "│ " };
@@ -253,15 +255,12 @@ impl MockComponent for InputMock {
             .collect();
 
         // Slice visible lines based on scroll offset
-        let visible_lines: Vec<Line> = if all_lines.is_empty() {
-            vec![]
-        } else {
-            let start = scroll_offset.min(all_lines.len());
-            let end = (scroll_offset + visible_height).min(all_lines.len());
-            all_lines[start..end].to_vec()
-        };
+        let start = scroll_offset.min(all_lines.len());
+        let end = (scroll_offset + visible_height).min(all_lines.len());
+        let visible_lines: Vec<Line> = all_lines[start..end].to_vec();
 
-        let text = if visible_lines.is_empty() {
+        // Show placeholder only when content is truly empty
+        let text = if self.content.is_empty() {
             tuirealm::ratatui::text::Text::from(vec![Line::from(vec![
                 Span::styled(
                     "❯ ",
@@ -280,7 +279,7 @@ impl MockComponent for InputMock {
 
         let paragraph = Paragraph::new(text).block(
             tuirealm::ratatui::widgets::Block::default()
-                .borders(tuirealm::ratatui::widgets::Borders::TOP)
+                .borders(tuirealm::ratatui::widgets::Borders::TOP | tuirealm::ratatui::widgets::Borders::BOTTOM)
                 .border_style(Style::default().fg(colors::border())),
         );
 
@@ -315,7 +314,7 @@ impl MockComponent for InputMock {
         let col = line_content.width();
 
         let cursor_x = area.x + 2 + col as u16; // 2 for "❯ " prefix
-        let cursor_y = input_area.y + 1 + (cursor_line - scroll_offset) as u16; // +1 for border, adjusted for scroll
+        let cursor_y = input_area.y + 1 + (cursor_line - scroll_offset) as u16; // +1 for top border, adjusted for scroll
 
         if cursor_y < area.y + area.height {
             frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
@@ -533,7 +532,10 @@ impl InputComponent {
                 if self.component.handle_ctrl_c() {
                     Some(Msg::Quit)
                 } else {
-                    Some(Msg::InputChanged(self.component.content().to_string()))
+                    // First Ctrl+C: clear input and show hint in status bar
+                    Some(Msg::ShowStatusMessage(
+                        "Press Ctrl+C again to exit".to_string(),
+                    ))
                 }
             }
             tuirealm::Event::Keyboard(KeyEvent {
