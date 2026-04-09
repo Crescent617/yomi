@@ -19,7 +19,7 @@ use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, Too
 use crate::provider::{ModelProvider, ModelStreamItem};
 use crate::tool::{ToolRegistry, ToolSandbox};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -285,14 +285,33 @@ impl Agent {
 
         let messages_vec: Vec<_> = self.message_buffer.messages().to_vec();
 
-        // Start the provider stream with cancellation support
+        // Spawn stream creation in background so we can cancel immediately
+        // Clone data for 'static lifetime requirement
+        let provider = self.provider.clone();
+        let tools_vec = tools.to_vec();
+        let model_config = self.config.model.clone();
+        let mut stream_handle = Some(tokio::spawn(async move {
+            provider
+                .stream(&messages_vec, &tools_vec, &model_config)
+                .await
+        }));
+
         let mut stream = tokio::select! {
             biased;
             _ = self.cancel_token.cancelled() => {
+                // Cancel immediately - abort and forget the background task
+                if let Some(handle) = stream_handle.take() {
+                    handle.abort();
+                }
                 return self.handle_cancel("stream start").await;
             }
-            result = self.provider.stream(&messages_vec, &tools, &self.config.model) => {
-                result?
+            // This branch only runs if cancelled() didn't trigger first,
+            // so stream_handle is guaranteed to be Some
+            result = stream_handle.take().unwrap() => match result {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => return Err(e),
+                Err(e) if e.is_cancelled() => return Err(anyhow!("Request cancelled")),
+                Err(e) => return Err(anyhow!("Stream task failed: {e}")),
             }
         };
 
