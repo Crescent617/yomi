@@ -42,6 +42,11 @@ pub enum Msg {
 
     // Request control
     CancelRequest,
+
+    // Browse mode (readonly like less)
+    ToggleBrowseMode,
+    PageUp,
+    PageDown,
 }
 
 impl From<AppEvent> for Msg {

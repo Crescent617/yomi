@@ -354,6 +354,7 @@ impl MockComponent for InputMock {
 }
 
 /// Input component that handles keyboard events
+/// Note: Mode is managed by Model, not by this component
 pub struct InputComponent {
     component: InputMock,
 }
@@ -396,7 +397,36 @@ impl MockComponent for InputComponent {
 
 impl Component<Msg, crate::msg::UserEvent> for InputComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        self.handle_input(ev)
+    }
+}
+
+impl InputComponent {
+    /// Handle all input events - mode-aware handling is done by Model
+    fn handle_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         match ev {
+            // Browse mode navigation keys - sent to Model (Model decides based on mode)
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollDown),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('k'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ScrollUp),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('q'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::ToggleBrowseMode),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::PageDown),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::PageUp),
+            // Normal mode: character input
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE,
@@ -526,10 +556,11 @@ impl Component<Msg, crate::msg::UserEvent> for InputComponent {
                 code: Key::Tab,
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ToggleThinking),
+            // Toggle browse mode with Ctrl+O
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
-            }) => Some(Msg::ToggleExpandAll),
+            }) => Some(Msg::ToggleBrowseMode),
             // Mouse scroll events
             tuirealm::Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,

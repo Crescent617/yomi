@@ -20,6 +20,14 @@ use crate::{
     msg::{Msg, UserEvent},
 };
 
+/// Application mode - single source of truth for UI mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppMode {
+    #[default]
+    Normal,
+    Browse,
+}
+
 /// TUI Model holding application state
 pub struct Model {
     /// Application
@@ -44,6 +52,8 @@ pub struct Model {
     thinking_start_time: Option<Instant>,
     /// Whether we're currently streaming (showing streaming component)
     is_streaming: bool,
+    /// Application mode - single source of truth
+    mode: AppMode,
 }
 
 impl Model {
@@ -67,30 +77,38 @@ impl Model {
             current_thinking: String::new(),
             thinking_start_time: None,
             is_streaming: false,
+            mode: AppMode::Normal,
         })
     }
 
     pub fn view(&mut self) {
         let _ = self.terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Min(3),    // Main content area
-                        Constraint::Length(1), // Status bar
-                        Constraint::Length(3), // Input area
-                    ]
-                    .as_ref(),
-                )
-                .split(f.area());
+            if self.mode == AppMode::Browse {
+                // Browse mode: full screen chat view
+                let area = f.area();
+                self.app.view(&Id::ChatView, f, area);
+            } else {
+                // Normal mode: show all components
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(1)
+                    .constraints(
+                        [
+                            Constraint::Min(3),    // Main content area
+                            Constraint::Length(1), // Status bar
+                            Constraint::Length(3), // Input area
+                        ]
+                        .as_ref(),
+                    )
+                    .split(f.area());
 
-            // Always show ChatView (unified history + streaming)
-            self.app.view(&Id::ChatView, f, chunks[0]);
-            // Status bar shows streaming progress
-            self.app.view(&Id::StatusBar, f, chunks[1]);
-            // InputBox renders last and sets cursor position
-            self.app.view(&Id::InputBox, f, chunks[2]);
+                // Always show ChatView (unified history + streaming)
+                self.app.view(&Id::ChatView, f, chunks[0]);
+                // Status bar shows streaming progress
+                self.app.view(&Id::StatusBar, f, chunks[1]);
+                // InputBox renders last and sets cursor position
+                self.app.view(&Id::InputBox, f, chunks[2]);
+            }
         });
     }
 
@@ -179,7 +197,7 @@ impl Model {
                     // Stop status bar
                     self.app.attr(
                         &Id::StatusBar,
-                        Attribute::Custom("cancel_streaming"),
+                        Attribute::Custom("stop_streaming"),
                         AttrValue::Flag(true),
                     )?;
 
@@ -467,7 +485,11 @@ impl Update<Msg> for Model {
                     self.quit = true;
                     None
                 }
+                // Ignore input-related messages in Browse mode
                 Msg::InputSubmit(content) => {
+                    if self.mode == AppMode::Browse {
+                        return None;
+                    }
                     // Add user message to chat view
                     let _ = self.app.attr(
                         &Id::ChatView,
@@ -490,19 +512,22 @@ impl Update<Msg> for Model {
                     let _ = self.input_tx.try_send(content);
                     None
                 }
+                // Scrolling - works in both modes
                 Msg::ScrollUp => {
+                    let amount = if self.mode == AppMode::Browse { 1 } else { 3 };
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("scroll_up"),
-                        AttrValue::Flag(true),
+                        AttrValue::Number(amount as isize),
                     );
                     None
                 }
                 Msg::ScrollDown => {
+                    let amount = if self.mode == AppMode::Browse { 1 } else { 3 };
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("scroll_down"),
-                        AttrValue::Flag(true),
+                        AttrValue::Number(amount as isize),
                     );
                     None
                 }
@@ -522,12 +547,61 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::InputChanged(_) => {
+                    // Ignore input changes in Browse mode
+                    if self.mode == AppMode::Browse {
+                        return None;
+                    }
+                    // Note: InputChanged is sent by InputComponent but doesn't need special handling here
+                    // It's mainly used for tracking input state if needed
+                    None
+                }
                 Msg::CancelRequest => {
                     let _ = self.cancel_tx.try_send(());
                     None
                 }
                 Msg::Redraw => {
                     self.redraw = true;
+                    None
+                }
+                // Mode switching
+                Msg::ToggleBrowseMode => {
+                    match self.mode {
+                        AppMode::Normal => {
+                            // Enter browse mode
+                            self.mode = AppMode::Browse;
+                            // Expand all blocks in browse mode
+                            let _ = self
+                                .app
+                                .attr(&Id::ChatView, Attribute::Custom("expand_all"), AttrValue::Flag(true));
+                        }
+                        AppMode::Browse => {
+                            // Exit browse mode
+                            self.mode = AppMode::Normal;
+                            // Collapse all blocks
+                            let _ = self
+                                .app
+                                .attr(&Id::ChatView, Attribute::Custom("collapse_all"), AttrValue::Flag(true));
+                        }
+                    }
+                    None
+                }
+                Msg::PageUp => {
+                    let height = self.terminal.raw().size().map_or(20, |s| s.height as usize);
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("page_up"),
+                        AttrValue::Number(height as isize),
+                    );
+                    None
+                }
+                Msg::PageDown => {
+                    let height = self.terminal.raw().size().map_or(20, |s| s.height as usize);
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("page_down"),
+                        AttrValue::Number(height as isize),
+                    );
                     None
                 }
                 _ => None,

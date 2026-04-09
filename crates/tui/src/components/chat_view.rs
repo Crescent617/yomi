@@ -14,7 +14,7 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{chars, markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
+use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,6 +336,54 @@ impl ChatView {
                 _ => {}
             }
         }
+    }
+
+    pub fn expand_all(&mut self) {
+        if !self.expand_all {
+            self.expand_all = true;
+            for msg in &mut self.messages {
+                match msg {
+                    HistoryMessage::Assistant {
+                        thinking_folded, ..
+                    } => {
+                        *thinking_folded = false;
+                    }
+                    HistoryMessage::Tool { folded, .. } => {
+                        *folded = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub fn collapse_all(&mut self) {
+        if self.expand_all {
+            self.expand_all = false;
+            for msg in &mut self.messages {
+                match msg {
+                    HistoryMessage::Assistant {
+                        thinking_folded, ..
+                    } => {
+                        *thinking_folded = true;
+                    }
+                    HistoryMessage::Tool { folded, .. } => {
+                        *folded = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pub fn page_up(&mut self, page_height: usize) {
+        let amount = page_height.saturating_sub(2); // Leave some context
+        self.scroll_up(amount);
+    }
+
+    pub fn page_down(&mut self, page_height: usize) {
+        let amount = page_height.saturating_sub(2); // Leave some context
+        self.scroll_down(amount);
     }
 
     fn calculate_total_lines(&mut self) -> usize {
@@ -716,6 +764,8 @@ impl ChatView {
 
 impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        let main_area = area;
+
         let mut all_lines: Vec<Line> = Vec::new();
 
         // Render history with unified spacing
@@ -744,8 +794,8 @@ impl MockComponent for ChatView {
         }
 
         // Calculate scroll position with wrap support
-        let visible_height = area.height as usize;
-        let width = area.width as usize;
+        let visible_height = main_area.height as usize;
+        let width = main_area.width as usize;
 
         // Calculate wrapped line counts and find start line
         let start_line = if self.scroll_offset == 0 {
@@ -787,7 +837,7 @@ impl MockComponent for ChatView {
         let paragraph = Paragraph::new(Text::from(visible_lines))
             .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, main_area);
     }
 
     fn query(&self, attr: Attribute) -> Option<AttrValue> {
@@ -885,6 +935,12 @@ impl MockComponent for ChatView {
             Attribute::Custom(s) if s == "toggle_expand_all" => {
                 self.toggle_expand_all();
             }
+            Attribute::Custom(s) if s == "expand_all" => {
+                self.expand_all();
+            }
+            Attribute::Custom(s) if s == "collapse_all" => {
+                self.collapse_all();
+            }
             Attribute::Custom(s) if s == "start_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
@@ -910,6 +966,17 @@ impl MockComponent for ChatView {
                     let error = (*parts.get(1).unwrap_or(&"")).to_string();
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
                     self.fail_tool(tool_id, error, elapsed_ms);
+                }
+            }
+            // Page navigation
+            Attribute::Custom(s) if s == "page_up" => {
+                if let AttrValue::Number(height) = value {
+                    self.page_up(height as usize);
+                }
+            }
+            Attribute::Custom(s) if s == "page_down" => {
+                if let AttrValue::Number(height) = value {
+                    self.page_down(height as usize);
                 }
             }
             _ => {
