@@ -64,9 +64,10 @@ pub struct Agent {
 }
 
 impl Agent {
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         id: AgentId,
-        shared: Arc<AgentShared>,
+        shared: &Arc<AgentShared>,
         system_prompt: &str,
         storage: Option<Arc<dyn crate::storage::Storage>>,
         session_id: Option<String>,

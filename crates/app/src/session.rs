@@ -48,7 +48,7 @@ impl Session {
     async fn spawn_main_agent(&mut self) -> Result<()> {
         let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
-            Arc::clone(&self.agent_shared),
+            &self.agent_shared,
             &self.config.agent.system_prompt,
             Some(self.storage.clone()),
             Some(self.id.0.clone()),

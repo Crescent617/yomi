@@ -7,7 +7,7 @@ use std::path::Path;
 
 pub struct SqliteStorage {
     pool: Pool<Sqlite>,
-    config: StorageConfig,
+    _config: StorageConfig,
 }
 
 impl SqliteStorage {
@@ -22,7 +22,7 @@ impl SqliteStorage {
             .await?;
         let storage = Self {
             pool,
-            config: config.clone(),
+            _config: config.clone(),
         };
         storage.migrate().await?;
         Ok(storage)

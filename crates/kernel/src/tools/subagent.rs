@@ -81,7 +81,7 @@ impl Tool for SubAgentTool {
         // Spawn the sub-agent
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
-            Arc::clone(&self.shared),
+            &self.shared,
             &format!(
                 "You are a sub-agent. Parent: {}. Task: {}",
                 self.parent_id, task

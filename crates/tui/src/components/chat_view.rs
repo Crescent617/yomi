@@ -406,7 +406,7 @@ impl ChatView {
     fn calculate_total_lines(&mut self) -> usize {
         let mut count = 0;
         for msg in &self.messages {
-            count += self.count_message_lines(msg);
+            count += Self::count_message_lines(msg);
         }
         if self.is_streaming
             || !self.streaming_content.is_empty()
@@ -417,7 +417,7 @@ impl ChatView {
         count
     }
 
-    fn count_message_lines(&self, msg: &HistoryMessage) -> usize {
+    fn count_message_lines(msg: &HistoryMessage) -> usize {
         let mut count = 0;
         match msg {
             HistoryMessage::User(content) => {
@@ -484,7 +484,8 @@ impl ChatView {
         count
     }
 
-    fn render_message(&self, msg: &HistoryMessage) -> Vec<Line<'static>> {
+    #[allow(clippy::cast_precision_loss)]
+    fn render_message(msg: &HistoryMessage) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         match msg {
@@ -519,20 +520,13 @@ impl ChatView {
                             .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
                             .unwrap_or_default();
 
-                        if *thinking_folded {
-                            lines.push(Line::from(vec![Span::styled(
-                                format!("Thinking ({tokens} tokens){elapsed_str}"),
-                                Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::ITALIC),
-                            )]));
-                        } else {
-                            lines.push(Line::from(vec![Span::styled(
-                                format!("Thinking ({tokens} tokens){elapsed_str}"),
-                                Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::ITALIC),
-                            )]));
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("Thinking ({tokens} tokens){elapsed_str}"),
+                            Style::default()
+                                .fg(colors::text_secondary())
+                                .add_modifier(Modifier::ITALIC),
+                        )]));
+                        if !thinking_folded {
                             for line in thinking.lines() {
                                 lines.push(Line::from(vec![
                                     Span::styled(
@@ -808,7 +802,7 @@ impl MockComponent for ChatView {
 
         // Render history with unified spacing
         for (i, msg) in self.messages.iter().enumerate() {
-            all_lines.extend(self.render_message(msg));
+            all_lines.extend(Self::render_message(msg));
             // Add spacing between messages (but not after the last one)
             if i < self.messages.len() - 1 {
                 all_lines.push(Line::from(""));

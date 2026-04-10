@@ -342,7 +342,7 @@ impl MockComponent for InputComponent {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "mode" => {
+            Attribute::Custom("mode") => {
                 if let AttrValue::Number(mode_val) = value {
                     self.mode = match mode_val {
                         1 => crate::app::AppMode::Browse,
@@ -365,13 +365,13 @@ impl MockComponent for InputComponent {
 
 impl Component<Msg, crate::msg::UserEvent> for InputComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        self.handle_input(ev)
+        self.handle_input(&ev)
     }
 }
 
 impl InputComponent {
     /// Handle all input events - mode-aware handling
-    fn handle_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+    fn handle_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Browse mode: navigation shortcuts take priority
         if self.mode == crate::app::AppMode::Browse {
             return self.handle_browse_input(ev);
@@ -382,8 +382,8 @@ impl InputComponent {
     }
 
     /// Handle input in browse mode - navigation keys
-    fn handle_browse_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        match ev {
+    fn handle_browse_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match *ev {
             // Browse mode navigation
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('j'),
@@ -411,18 +411,11 @@ impl InputComponent {
     }
 
     /// Handle input in normal mode - text editing
-    fn handle_normal_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        match ev {
+    fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match *ev {
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                self.component.insert_char(c);
-                Some(Msg::InputChanged(self.component.content().to_string()))
-            }
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char(c),
-                modifiers: KeyModifiers::SHIFT,
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
                 self.component.insert_char(c);
                 Some(Msg::InputChanged(self.component.content().to_string()))
@@ -520,20 +513,20 @@ impl InputComponent {
                 }
             }
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Up,
+                code: Key::Up | Key::PageUp,
                 modifiers: KeyModifiers::NONE,
+            })
+            | tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                ..
             }) => Some(Msg::ScrollUp),
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Down,
+                code: Key::Down | Key::PageDown,
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::ScrollDown),
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::PageUp,
-                modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::ScrollUp),
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::PageDown,
-                modifiers: KeyModifiers::NONE,
+            })
+            | tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                ..
             }) => Some(Msg::ScrollDown),
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Tab,
@@ -544,15 +537,6 @@ impl InputComponent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
-            // Mouse scroll events
-            tuirealm::Event::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                ..
-            }) => Some(Msg::ScrollUp),
-            tuirealm::Event::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                ..
-            }) => Some(Msg::ScrollDown),
             _ => None,
         }
     }

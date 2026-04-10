@@ -263,7 +263,7 @@ impl Model {
                                 AttrValue::String(thinking),
                             )?;
                         }
-                        _ => {}
+                        kernel::event::ContentChunk::RedactedThinking => {}
                     }
                     self.redraw = true;
                 }

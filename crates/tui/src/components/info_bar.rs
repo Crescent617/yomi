@@ -79,7 +79,7 @@ impl InfoBar {
     /// Count tokens using a better estimation
     /// For English: 1 token ≈ 4 characters
     /// For CJK: 1 token ≈ 1-1.5 characters
-    fn count_tokens(&self, text: &str) -> usize {
+    fn count_tokens(text: &str) -> usize {
         if text.is_empty() {
             return 0;
         }
@@ -150,8 +150,8 @@ impl InfoBar {
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
         // Token count using tiktoken
-        let content_tokens = self.count_tokens(&self.content);
-        let thinking_tokens = self.count_tokens(&self.thinking);
+        let content_tokens = Self::count_tokens(&self.content);
+        let thinking_tokens = Self::count_tokens(&self.thinking);
         let total_tokens = content_tokens + thinking_tokens;
 
         let token_style = Style::default().fg(colors::text_secondary());

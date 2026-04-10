@@ -26,7 +26,7 @@ pub enum AppMode {
 }
 
 impl AppMode {
-    const fn as_str(&self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Normal => "",
             Self::Browse => " BROWSE ",
@@ -106,7 +106,7 @@ impl StatusBar {
         )
     }
 
-    fn render_right_section(&self) -> Span<'static> {
+    fn render_right_section() -> Span<'static> {
         // Reserved for future use (e.g., file info, cursor position)
         Span::styled("", Style::default())
     }
@@ -139,7 +139,7 @@ impl MockComponent for StatusBar {
         frame.render_widget(Paragraph::new(center_line), chunks[1]);
 
         // Render right section
-        let right_span = self.render_right_section();
+        let right_span = Self::render_right_section();
         let right_line = Line::from(vec![right_span]);
         frame.render_widget(Paragraph::new(right_line), chunks[2]);
     }

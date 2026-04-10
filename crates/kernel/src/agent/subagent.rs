@@ -45,7 +45,7 @@ impl SubAgentManager {
 
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
-            Arc::clone(&self.agent_shared),
+            &self.agent_shared,
             &system_prompt,
             None, // Sub-agents don't persist to storage
             None,

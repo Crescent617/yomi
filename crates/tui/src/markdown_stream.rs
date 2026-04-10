@@ -142,7 +142,7 @@ impl StreamingMarkdownRenderer {
                     Tag::Item => {
                         let indent = "  ".repeat(list_stack.len().saturating_sub(1));
                         let prefix = match list_stack.last_mut() {
-                            Some(ListState::Ordered(start, current)) => {
+                            Some(ListState::Ordered(_start, current)) => {
                                 let num = *current;
                                 *current += 1;
                                 format!("{indent}{num}. ")

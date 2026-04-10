@@ -1,5 +1,5 @@
-///! Implementation of the ModelProvider trait for Anthropic's API
-///! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
+//! Implementation of the `ModelProvider` trait for Anthropic's API
+//! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
 use crate::event::ContentChunk;
 use crate::provider::{
     HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest,
@@ -444,21 +444,26 @@ struct AnthropicTool {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicStreamEvent {
     MessageStart {
-        message: AnthropicMessageStart,
+        #[serde(rename = "message")]
+        _message: AnthropicMessageStart,
     },
     ContentBlockStart {
-        index: usize,
+        #[serde(rename = "index")]
+        _index: usize,
         content_block: AnthropicContent,
     },
     ContentBlockDelta {
-        index: usize,
+        #[serde(rename = "index")]
+        _index: usize,
         delta: AnthropicDelta,
     },
     ContentBlockStop {
-        index: usize,
+        #[serde(rename = "index")]
+        _index: usize,
     },
     MessageDelta {
-        delta: AnthropicMessageDelta,
+        #[serde(rename = "delta")]
+        _delta: AnthropicMessageDelta,
         usage: Option<AnthropicUsage>,
     },
     MessageStop,
@@ -470,15 +475,22 @@ enum AnthropicStreamEvent {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageStart {
-    id: String,
+    #[serde(rename = "id")]
+    _id: String,
     #[serde(rename = "type")]
-    type_: String,
-    role: String,
-    content: Vec<AnthropicContent>,
-    model: String,
-    stop_reason: Option<String>,
-    stop_sequence: Option<String>,
-    usage: AnthropicUsage,
+    _type_: String,
+    #[serde(rename = "role")]
+    _role: String,
+    #[serde(rename = "content")]
+    _content: Vec<AnthropicContent>,
+    #[serde(rename = "model")]
+    _model: String,
+    #[serde(rename = "stop_reason")]
+    _stop_reason: Option<String>,
+    #[serde(rename = "stop_sequence")]
+    _stop_sequence: Option<String>,
+    #[serde(rename = "usage")]
+    _usage: AnthropicUsage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -487,14 +499,19 @@ struct AnthropicMessageStart {
 enum AnthropicDelta {
     TextDelta { text: String },
     ThinkingDelta { thinking: String },
-    SignatureDelta { signature: String },
+    SignatureDelta {
+        #[serde(rename = "signature")]
+        _signature: String,
+    },
     InputJsonDelta { partial_json: String },
 }
 
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageDelta {
-    stop_reason: Option<String>,
-    stop_sequence: Option<String>,
+    #[serde(rename = "stop_reason")]
+    _stop_reason: Option<String>,
+    #[serde(rename = "stop_sequence")]
+    _stop_sequence: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,7 +523,8 @@ struct AnthropicUsage {
 #[derive(Debug, Deserialize)]
 struct AnthropicError {
     #[serde(rename = "type")]
-    type_: String,
+    _type_: String,
+    #[serde(rename = "message")]
     message: String,
 }
 
