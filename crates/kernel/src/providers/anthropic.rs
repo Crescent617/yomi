@@ -497,13 +497,19 @@ struct AnthropicMessageStart {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
 enum AnthropicDelta {
-    TextDelta { text: String },
-    ThinkingDelta { thinking: String },
+    TextDelta {
+        text: String,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
     SignatureDelta {
         #[serde(rename = "signature")]
         _signature: String,
     },
-    InputJsonDelta { partial_json: String },
+    InputJsonDelta {
+        partial_json: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]

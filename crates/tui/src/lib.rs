@@ -8,6 +8,7 @@ pub mod id;
 pub mod markdown_stream;
 pub mod msg;
 pub mod theme;
+pub mod utils;
 
 // Re-export main entry point
 pub use app::run_tui;

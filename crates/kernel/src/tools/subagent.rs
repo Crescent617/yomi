@@ -141,13 +141,9 @@ impl Tool for SubAgentTool {
 
                     // Forward result to parent agent
                     let result_text = if completed {
-                        format!(
-                            "\n\n[Async Sub-agent {sub_id} completed]\nResult:\n{output}"
-                        )
+                        format!("\n\n[Async Sub-agent {sub_id} completed]\nResult:\n{output}")
                     } else {
-                        format!(
-                            "\n\n[Async Sub-agent {sub_id} ended]\nPartial result:\n{output}"
-                        )
+                        format!("\n\n[Async Sub-agent {sub_id} ended]\nPartial result:\n{output}")
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)

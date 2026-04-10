@@ -14,18 +14,7 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{msg::Msg, theme::colors};
-
-/// Check if a character is CJK (Chinese, Japanese, Korean)
-const fn is_cjk(c: char) -> bool {
-    matches!(c,
-        '\u{4e00}'..='\u{9fff}' |  // CJK Unified Ideographs
-        '\u{3400}'..='\u{4dbf}' |  // CJK Extension A
-        '\u{3040}'..='\u{309f}' |  // Hiragana
-        '\u{30a0}'..='\u{30ff}' |  // Katakana
-        '\u{ac00}'..='\u{d7af}'    // Hangul Syllables
-    )
-}
+use crate::{msg::Msg, theme::colors, utils::token_utils};
 
 /// Status state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,37 +65,6 @@ impl InfoBar {
         self.thinking.push_str(text);
     }
 
-    /// Count tokens using a better estimation
-    /// For English: 1 token ≈ 4 characters
-    /// For CJK: 1 token ≈ 1-1.5 characters
-    fn count_tokens(text: &str) -> usize {
-        if text.is_empty() {
-            return 0;
-        }
-
-        // Count different character types
-        let mut ascii_count = 0;
-        let mut cjk_count = 0;
-        let mut other_count = 0;
-
-        for c in text.chars() {
-            if c.is_ascii() {
-                ascii_count += 1;
-            } else if is_cjk(c) {
-                cjk_count += 1;
-            } else {
-                other_count += 1;
-            }
-        }
-
-        // ASCII: ~4 chars per token, CJK: ~1.5 chars per token, Other: ~2 chars per token
-        let ascii_tokens = ascii_count / 4;
-        let cjk_tokens = (cjk_count * 2) / 3; // 1/1.5 ≈ 2/3
-        let other_tokens = other_count / 2;
-
-        (ascii_tokens + cjk_tokens + other_tokens).max(1)
-    }
-
     pub fn tick(&mut self) {
         if self.state == InfoBarState::Streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
@@ -150,8 +108,8 @@ impl InfoBar {
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
         // Token count using tiktoken
-        let content_tokens = Self::count_tokens(&self.content);
-        let thinking_tokens = Self::count_tokens(&self.thinking);
+        let content_tokens = token_utils::count_tokens(&self.content);
+        let thinking_tokens = token_utils::count_tokens(&self.thinking);
         let total_tokens = content_tokens + thinking_tokens;
 
         let token_style = Style::default().fg(colors::text_secondary());

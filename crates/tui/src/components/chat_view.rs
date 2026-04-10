@@ -14,7 +14,9 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors};
+use crate::{
+    markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::token_utils,
+};
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -513,38 +515,17 @@ impl ChatView {
                 thinking_elapsed_ms,
             } => {
                 // Render thinking summary (folded) or detail (expanded)
-                if let Some(thinking) = thinking {
-                    if !thinking.is_empty() {
-                        let tokens = thinking.len() / 4;
-                        let elapsed_str = thinking_elapsed_ms
-                            .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
-                            .unwrap_or_default();
-
-                        lines.push(Line::from(vec![Span::styled(
-                            format!("Thinking ({tokens} tokens){elapsed_str}"),
-                            Style::default()
-                                .fg(colors::text_secondary())
-                                .add_modifier(Modifier::ITALIC),
-                        )]));
-                        if !thinking_folded {
-                            for line in thinking.lines() {
-                                lines.push(Line::from(vec![
-                                    Span::styled(
-                                        "│ ",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(
-                                        line.to_string(),
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                ]));
-                            }
-                        }
-                    }
-                }
+                let thinking_rendered = thinking.as_ref().is_some_and(|t| {
+                    Self::render_thinking_lines(
+                        &mut lines,
+                        t,
+                        *thinking_folded,
+                        *thinking_elapsed_ms,
+                    )
+                });
 
                 // Add separator between thinking and content if both exist
-                if thinking.as_ref().is_some_and(|t| !t.is_empty()) && !content.is_empty() {
+                if thinking_rendered && !content.is_empty() {
                     lines.push(Line::from(""));
                 }
 
@@ -752,27 +733,7 @@ impl ChatView {
         let mut lines = Vec::new();
 
         // Render thinking if present (collapsed by default, expanded in expand_all mode)
-        if !self.streaming_thinking.is_empty() {
-            let tokens = self.streaming_thinking.len() / 4;
-            lines.push(Line::from(vec![Span::styled(
-                format!("Thinking ({tokens} tokens)"),
-                Style::default()
-                    .fg(colors::text_secondary())
-                    .add_modifier(Modifier::ITALIC),
-            )]));
-            // Show thinking content only in expand_all mode
-            if self.expand_all {
-                for line in self.streaming_thinking.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(colors::text_secondary())),
-                        Span::styled(
-                            line.to_string(),
-                            Style::default().fg(colors::text_secondary()),
-                        ),
-                    ]));
-                }
-            }
-        }
+        Self::render_thinking_lines(&mut lines, &self.streaming_thinking, !self.expand_all, None);
 
         // Render content (no indicator, status shown in status bar)
         // Add separator between thinking and content
@@ -791,6 +752,47 @@ impl ChatView {
         }
 
         lines
+    }
+
+    /// Render thinking content with optional elapsed time
+    ///
+    /// Returns true if thinking was rendered (i.e., thinking was non-empty)
+    #[allow(clippy::cast_precision_loss)]
+    fn render_thinking_lines(
+        lines: &mut Vec<Line<'static>>,
+        thinking: &str,
+        is_folded: bool,
+        elapsed_ms: Option<u64>,
+    ) -> bool {
+        if thinking.is_empty() {
+            return false;
+        }
+
+        let tokens = token_utils::count_tokens(thinking);
+        let elapsed_str = elapsed_ms
+            .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
+            .unwrap_or_default();
+
+        lines.push(Line::from(vec![Span::styled(
+            format!(" Thinking ({tokens} tokens){elapsed_str}"),
+            Style::default()
+                .fg(colors::text_secondary())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+
+        if !is_folded {
+            for line in thinking.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                    Span::styled(
+                        line.to_string(),
+                        Style::default().fg(colors::text_secondary()),
+                    ),
+                ]));
+            }
+        }
+
+        true
     }
 }
 

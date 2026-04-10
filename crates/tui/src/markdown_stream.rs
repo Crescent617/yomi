@@ -137,7 +137,9 @@ impl StreamingMarkdownRenderer {
                         }
                     }
                     Tag::List(start_num) => {
-                        list_stack.push(start_num.map_or(ListState::Unordered, |n| ListState::Ordered(n, n)));
+                        list_stack.push(
+                            start_num.map_or(ListState::Unordered, |n| ListState::Ordered(n, n)),
+                        );
                     }
                     Tag::Item => {
                         let indent = "  ".repeat(list_stack.len().saturating_sub(1));
