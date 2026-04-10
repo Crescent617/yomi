@@ -76,7 +76,7 @@ impl Tool for BashTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Execute a bash command in the working directory. Use 'background: true' to run long commands asynchronously."
+        "Execute a bash command in the working directory. Use 'background: true' to run long commands asynchronously. DO NOT use `git push` or other dangerous commands unless user explicitly asks for it. Always consider the security implications of the command being executed."
     }
 
     fn params(&self) -> Value {
