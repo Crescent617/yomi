@@ -26,10 +26,10 @@ pub enum AppMode {
 }
 
 impl AppMode {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
-            AppMode::Normal => "",
-            AppMode::Browse => " BROWSE ",
+            Self::Normal => "",
+            Self::Browse => " BROWSE ",
         }
     }
 }
@@ -56,9 +56,8 @@ impl StatusBar {
     /// Show a temporary message in the center section
     pub fn show_message(&mut self, message: String, timeout_secs: u64) {
         self.center_message = Some(message);
-        self.message_timeout = Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs),
-        );
+        self.message_timeout =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs));
     }
 
     /// Clear message if timeout expired
@@ -85,10 +84,7 @@ impl StatusBar {
 
         Span::styled(
             self.mode.as_str(),
-            Style::default()
-                .fg(fg)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
         )
     }
 
@@ -125,9 +121,9 @@ impl MockComponent for StatusBar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(10),     // Mode section (" NORMAL ")
-                Constraint::Min(10),        // Center message section
-                Constraint::Length(10),     // Right reserved section
+                Constraint::Length(10), // Mode section (" NORMAL ")
+                Constraint::Min(10),    // Center message section
+                Constraint::Length(10), // Right reserved section
             ])
             .split(area);
 
@@ -174,7 +170,10 @@ impl MockComponent for StatusBar {
                         self.message_timeout = if duration_ms == 0 {
                             None
                         } else {
-                            Some(std::time::Instant::now() + std::time::Duration::from_millis(duration_ms))
+                            Some(
+                                std::time::Instant::now()
+                                    + std::time::Duration::from_millis(duration_ms),
+                            )
                         };
                     }
                 }

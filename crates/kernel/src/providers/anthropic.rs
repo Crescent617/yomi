@@ -1,5 +1,7 @@
 use crate::event::ContentChunk;
-use crate::provider::{HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest};
+use crate::provider::{
+    HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest,
+};
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

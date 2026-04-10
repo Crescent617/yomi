@@ -17,7 +17,7 @@ use tuirealm::{
 use crate::{msg::Msg, theme::colors};
 
 /// Check if a character is CJK (Chinese, Japanese, Korean)
-fn is_cjk(c: char) -> bool {
+const fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4e00}'..='\u{9fff}' |  // CJK Unified Ideographs
         '\u{3400}'..='\u{4dbf}' |  // CJK Extension A

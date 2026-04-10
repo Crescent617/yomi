@@ -139,7 +139,7 @@ impl Model {
 
     pub fn view(&mut self) {
         let input_height = self.calculate_input_height();
-        
+
         let _ = self.terminal.draw(|f| {
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
@@ -163,10 +163,10 @@ impl Model {
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),                // Main content area
-                            Constraint::Length(1),             // Info bar (tokens/streaming)
-                            Constraint::Length(input_height),  // Input area (dynamic 1-3 lines)
-                            Constraint::Length(1),             // Status bar (mode indicator)
+                            Constraint::Min(3),               // Main content area
+                            Constraint::Length(1),            // Info bar (tokens/streaming)
+                            Constraint::Length(input_height), // Input area (dynamic 1-3 lines)
+                            Constraint::Length(1),            // Status bar (mode indicator)
                         ]
                         .as_ref(),
                     )
@@ -443,7 +443,7 @@ impl Model {
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_error_message"),
-                        AttrValue::String(format!("Agent error: {}", error)),
+                        AttrValue::String(format!("Agent error: {error}")),
                     )?;
 
                     self.app.attr(
@@ -607,10 +607,12 @@ impl Update<Msg> for Model {
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {
                     // Format: "duration_ms|message"
-                    let value = format!("{}|{}", duration_ms, msg);
-                    let _ = self
-                        .app
-                        .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String(value));
+                    let value = format!("{duration_ms}|{msg}");
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String(value),
+                    );
                     None
                 }
                 // Mode switching
@@ -620,41 +622,59 @@ impl Update<Msg> for Model {
                             // Enter browse mode
                             self.mode = AppMode::Browse;
                             // Expand all blocks in browse mode
-                            let _ = self
-                                .app
-                                .attr(&Id::ChatView, Attribute::Custom("expand_all"), AttrValue::Flag(true));
+                            let _ = self.app.attr(
+                                &Id::ChatView,
+                                Attribute::Custom("expand_all"),
+                                AttrValue::Flag(true),
+                            );
                             // Update status bar to show BROWSE mode
-                            let _ = self
-                                .app
-                                .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(1));
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("set_mode"),
+                                AttrValue::Number(1),
+                            );
                             // Update input box mode so it knows to use browse shortcuts
-                            let _ = self
-                                .app
-                                .attr(&Id::InputBox, Attribute::Custom("mode"), AttrValue::Number(1));
+                            let _ = self.app.attr(
+                                &Id::InputBox,
+                                Attribute::Custom("mode"),
+                                AttrValue::Number(1),
+                            );
                             // Show help message for browse mode shortcuts (0 = no auto-clear)
-                            let _ = self
-                                .app
-                                .attr(&Id::StatusBar, Attribute::Custom("show_message"), AttrValue::String("0|C-o toggle, j/k scroll, q exit browse".to_string()));
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("show_message"),
+                                AttrValue::String(
+                                    "0|C-o toggle, j/k scroll, q exit browse".to_string(),
+                                ),
+                            );
                         }
                         AppMode::Browse => {
                             // Exit browse mode
                             self.mode = AppMode::Normal;
                             // Collapse all blocks
-                            let _ = self
-                                .app
-                                .attr(&Id::ChatView, Attribute::Custom("collapse_all"), AttrValue::Flag(true));
+                            let _ = self.app.attr(
+                                &Id::ChatView,
+                                Attribute::Custom("collapse_all"),
+                                AttrValue::Flag(true),
+                            );
                             // Update status bar to show NORMAL mode
-                            let _ = self
-                                .app
-                                .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(0));
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("set_mode"),
+                                AttrValue::Number(0),
+                            );
                             // Update input box mode so it uses normal text input
-                            let _ = self
-                                .app
-                                .attr(&Id::InputBox, Attribute::Custom("mode"), AttrValue::Number(0));
+                            let _ = self.app.attr(
+                                &Id::InputBox,
+                                Attribute::Custom("mode"),
+                                AttrValue::Number(0),
+                            );
                             // Clear any status message
-                            let _ = self
-                                .app
-                                .attr(&Id::StatusBar, Attribute::Custom("clear_message"), AttrValue::Flag(true));
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("clear_message"),
+                                AttrValue::Flag(true),
+                            );
                         }
                     }
                     None

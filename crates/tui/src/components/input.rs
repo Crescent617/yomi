@@ -326,7 +326,7 @@ impl InputComponent {
     }
 
     /// Set the current mode
-    pub fn set_mode(&mut self, mode: crate::app::AppMode) {
+    pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
     }
 }

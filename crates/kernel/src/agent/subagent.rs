@@ -27,10 +27,7 @@ struct SubAgentHandle {
 }
 
 impl SubAgentManager {
-    pub fn new(
-        parent_id: AgentId,
-        agent_shared: Arc<AgentShared>,
-    ) -> Self {
+    pub fn new(parent_id: AgentId, agent_shared: Arc<AgentShared>) -> Self {
         Self {
             sub_agents: Arc::new(RwLock::new(HashMap::new())),
             parent_id,
@@ -49,10 +46,10 @@ impl SubAgentManager {
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
             Arc::clone(&self.agent_shared),
-            system_prompt,
+            &system_prompt,
             None, // Sub-agents don't persist to storage
             None,
-            10,   // Sub-agents get fewer iterations
+            10,    // Sub-agents get fewer iterations
             false, // Sub-agents don't spawn more sub-agents
             SubAgentMode::Async,
         );
@@ -68,7 +65,7 @@ impl SubAgentManager {
         });
 
         // 发送子代理任务
-        handle.send_message(task).await.ok();
+        handle.send_text(task).await.ok();
 
         self.sub_agents
             .write()

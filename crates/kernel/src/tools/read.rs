@@ -62,7 +62,7 @@ impl Tool for ReadTool {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
-        let offset = args["offset"].as_u64().map(|n| n as usize).unwrap_or(1);
+        let offset = args["offset"].as_u64().map_or(1, |n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n as usize);
 
         let path = self.resolve_path(path_str)?;
@@ -75,8 +75,7 @@ impl Tool for ReadTool {
 
         let start = offset.saturating_sub(1); // Convert to 0-based
         let end = limit
-            .map(|l| start + l)
-            .unwrap_or(total_lines)
+            .map_or(total_lines, |l| start + l)
             .min(total_lines);
 
         if start >= total_lines {

@@ -85,7 +85,7 @@ impl Future for CancelledFuture {
         tokio::pin!(notified);
 
         match notified.poll(cx) {
-            Poll::Ready(_) => Poll::Ready(()),
+            Poll::Ready(()) => Poll::Ready(()),
             Poll::Pending => {
                 // Double-check after registering
                 if self.inner.cancelled.load(Ordering::SeqCst) {

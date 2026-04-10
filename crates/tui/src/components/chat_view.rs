@@ -88,8 +88,8 @@ impl Default for ChatView {
 
 impl ChatView {
     /// Render a pixel-art style cat banner for empty state
-    fn render_banner() -> Vec<Line<'static>> {
-        return vec![];
+    const fn render_banner() -> Vec<Line<'static>> {
+        vec![]
     }
 
     pub fn new() -> Self {
@@ -398,7 +398,7 @@ impl ChatView {
         self.scroll_up(amount);
     }
 
-    pub fn page_down(&mut self, page_height: usize) {
+    pub const fn page_down(&mut self, page_height: usize) {
         let amount = page_height.saturating_sub(2); // Leave some context
         self.scroll_down(amount);
     }
@@ -550,7 +550,7 @@ impl ChatView {
                 }
 
                 // Add separator between thinking and content if both exist
-                if thinking.as_ref().map_or(false, |t| !t.is_empty()) && !content.is_empty() {
+                if thinking.as_ref().is_some_and(|t| !t.is_empty()) && !content.is_empty() {
                     lines.push(Line::from(""));
                 }
 
@@ -600,7 +600,7 @@ impl ChatView {
                             let peek = if compact.len() > 80 {
                                 format!("{}...", &compact[..77])
                             } else {
-                                compact.to_string()
+                                compact.clone()
                             };
                             Some(peek)
                         }
@@ -930,7 +930,7 @@ impl MockComponent for ChatView {
                     let thinking = parts
                         .get(1)
                         .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string());
+                        .map(|s| (*s).to_string());
 
                     // Add to history with cancelled flag
                     self.messages.push(HistoryMessage::Assistant {
@@ -941,7 +941,7 @@ impl MockComponent for ChatView {
                     });
 
                     // Mark running tools as cancelled
-                    for (tool_id, (_, status)) in self.active_tools.iter_mut() {
+                    for (tool_id, (_, status)) in &mut self.active_tools {
                         if *status == ToolStatus::Running {
                             *status = ToolStatus::Cancelled;
                             for msg in &mut self.messages {
@@ -1002,7 +1002,7 @@ impl MockComponent for ChatView {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = (*parts.first().unwrap_or(&"")).to_string();
                     let tool_name = (*parts.get(1).unwrap_or(&"tool")).to_string();
-                    let arguments = parts.get(2).map(|s| s.to_string());
+                    let arguments = parts.get(2).map(|s| (*s).to_string());
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }

@@ -30,10 +30,13 @@ use tokio::time::Duration;
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
 pub enum AgentInput {
-    /// User message
-    User(String),
-    /// Tool execution result
-    ToolResult { tool_id: String, output: String },
+    /// User message with multi-modal content blocks
+    User(Vec<ContentBlock>),
+    /// Tool execution result with multi-modal content blocks
+    ToolResult {
+        tool_id: String,
+        content: Vec<ContentBlock>,
+    },
     /// Cancel current operation
     Cancel,
 }
@@ -41,22 +44,16 @@ pub enum AgentInput {
 pub struct Agent {
     id: AgentId,
     shared: Arc<AgentShared>,
-    system_prompt: String,
     message_buffer: MessageBuffer,
     event_tx: mpsc::Sender<Event>,
-    #[allow(dead_code)]
-    input_tx: mpsc::Sender<AgentInput>,
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
     cancel_token: CancelToken,
-    token_usage: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Storage for message persistence
     storage: Option<Arc<dyn crate::storage::Storage>>,
     session_id: Option<String>,
     // Agent-specific configuration (not shared)
     max_iterations: usize,
-    enable_sub_agents: bool,
-    sub_agent_mode: SubAgentMode,
     // Store the last error message for display
     last_error: Option<String>,
 }
@@ -65,12 +62,12 @@ impl Agent {
     pub fn spawn(
         id: AgentId,
         shared: Arc<AgentShared>,
-        system_prompt: String,
+        system_prompt: &str,
         storage: Option<Arc<dyn crate::storage::Storage>>,
         session_id: Option<String>,
         max_iterations: usize,
         enable_sub_agents: bool,
-        sub_agent_mode: SubAgentMode,
+        _sub_agent_mode: SubAgentMode,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
         let (event_tx, event_rx) = mpsc::channel(1000);
@@ -78,7 +75,7 @@ impl Agent {
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         let mut message_buffer = MessageBuffer::new(100);
-        message_buffer.push(Message::system(&system_prompt));
+        message_buffer.push(Message::system(system_prompt));
 
         // Clone the shared resources with a new ToolRegistry if sub-agents are enabled
         let shared = if enable_sub_agents {
@@ -101,19 +98,14 @@ impl Agent {
         let agent = Self {
             id: id.clone(),
             shared,
-            system_prompt,
             message_buffer,
             event_tx,
-            input_tx: input_tx.clone(),
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
-            token_usage: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             storage,
             session_id,
             max_iterations,
-            enable_sub_agents,
-            sub_agent_mode,
             last_error: None,
         };
 
@@ -265,7 +257,7 @@ impl Agent {
 
     /// Record an error and store it for later display
     fn record_error(&mut self, context: &str, error: &anyhow::Error) {
-        let msg = format!("{}: {}", context, error);
+        let msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id.0, msg);
         self.last_error = Some(msg);
     }
@@ -289,20 +281,29 @@ impl Agent {
             Some(AgentInput::User(content)) => {
                 // Reset cancel token for new request
                 self.cancel_token.reset();
+                // Extract text content for event
+                let text_content = content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
                 let _ = self
                     .event_tx
                     .send(Event::User(crate::event::UserEvent::Message {
-                        content: content.clone(),
+                        content: text_content,
                     }))
                     .await;
-                let msg = Message::user(content);
+                let msg = Message::with_blocks(Role::User, content);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
-            Some(AgentInput::ToolResult { tool_id, output }) => {
-                let msg = Message::tool_result(&tool_id, output);
+            Some(AgentInput::ToolResult { tool_id, content }) => {
+                let msg = Message::with_blocks(Role::Tool, content).with_tool_call_id(tool_id);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
@@ -431,8 +432,6 @@ impl Agent {
                                 completion_tokens,
                             } => {
                                 let total_tokens = prompt_tokens + completion_tokens;
-                                self.token_usage
-                                    .fetch_add(u64::from(total_tokens), std::sync::atomic::Ordering::SeqCst);
                                 let _ = self
                                     .event_tx
                                     .send(Event::Model(ModelEvent::TokenUsage {
@@ -532,7 +531,6 @@ impl Agent {
             tool_calls,
             &self.shared.tool_registry,
             &self.shared.sandbox,
-            self.shared.sandbox.default_timeout(),
         )
         .await;
 

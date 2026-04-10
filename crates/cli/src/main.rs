@@ -7,7 +7,7 @@ use kernel::{
     storage::FsStorage,
     tool::{enable_yolo_mode, ToolRegistry, ToolSandbox},
 };
-use kernel::{AnthropicProvider, BashTool, EditTool, OpenAIProvider, ReadTool};
+use kernel::{AnthropicProvider, BashTool, EditTool, OpenAIProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
     };
 
     // Create tool registry
-    let mut tool_registry = ToolRegistry::new();
+    let tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(BashTool::new(&working_dir)));
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
     // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
@@ -125,7 +125,13 @@ async fn main() -> Result<()> {
         ToolSandbox::default()
     };
 
-    let coordinator = Arc::new(Coordinator::new(storage, provider, tool_registry, sandbox, config.model.clone()));
+    let coordinator = Arc::new(Coordinator::new(
+        storage,
+        provider,
+        tool_registry,
+        sandbox,
+        config.model.clone(),
+    ));
 
     // Build agent config
     let agent_config = AgentConfig {
@@ -234,9 +240,7 @@ fn reload_for_provider(mut config: Config) -> Config {
 /// - `YOMI_LOG_DIR`: Log directory (default: "~/.yomi/logs")
 fn init_logging(config: &Config) -> Result<()> {
     // Get log directory from env or default to ~/.yomi/logs
-    let log_dir = std::env::var(env_names::LOG_DIR)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| config.data_dir.join("logs"));
+    let log_dir = std::env::var(env_names::LOG_DIR).map_or_else(|_| config.data_dir.join("logs"), PathBuf::from);
 
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir)

@@ -276,6 +276,12 @@ impl Message {
             created_at: Utc::now(),
         }
     }
+
+    /// Set the `tool_call_id` for this message (builder pattern)
+    pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
+        self.tool_call_id = Some(tool_call_id.into());
+        self
+    }
 }
 
 /// Custom serialization for content to support both string and array formats

@@ -83,7 +83,7 @@ impl Tool for EditTool {
         if !content.contains(old_str) {
             return Ok(ToolOutput::new(
                 "",
-                &format!("Could not find 'old_str' in {}", path.display()),
+                format!("Could not find 'old_str' in {}", path.display()),
             ));
         }
 

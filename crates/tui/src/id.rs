@@ -3,7 +3,7 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Id {
     ChatView,
-    InfoBar,      // Token/stream info above input
+    InfoBar, // Token/stream info above input
     InputBox,
-    StatusBar,    // Mode indicator at bottom (vim-style)
+    StatusBar, // Mode indicator at bottom (vim-style)
 }

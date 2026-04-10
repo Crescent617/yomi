@@ -17,7 +17,6 @@ pub async fn execute_tools_parallel(
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
     _sandbox: &ToolSandbox,
-    timeout: std::time::Duration,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -50,11 +49,11 @@ pub async fn execute_tools_parallel(
         join_set.spawn(async move {
             let start = std::time::Instant::now();
             let result = match tool_opt {
-                Some(tool) => execute_single_tool(tool, arguments, timeout).await,
+                Some(tool) => execute_single_tool(tool, arguments).await,
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
-                    stderr: format!("Unknown tool: {}", call_name),
+                    stderr: format!("Unknown tool: {call_name}"),
                 },
             };
             let elapsed = start.elapsed().as_millis() as u64;
@@ -141,22 +140,13 @@ pub async fn execute_tools_parallel(
     results
 }
 
-async fn execute_single_tool(
-    tool: Arc<dyn Tool>,
-    arguments: serde_json::Value,
-    timeout: std::time::Duration,
-) -> ToolOutput {
-    match tokio::time::timeout(timeout, tool.execute(arguments)).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => ToolOutput {
+async fn execute_single_tool(tool: Arc<dyn Tool>, arguments: serde_json::Value) -> ToolOutput {
+    match tool.execute(arguments).await {
+        Ok(output) => output,
+        Err(e) => ToolOutput {
             exit_code: 1,
             stdout: String::new(),
             stderr: format!("Tool execution error: {e}"),
-        },
-        Err(_) => ToolOutput {
-            exit_code: 124,
-            stdout: String::new(),
-            stderr: format!("Tool execution timed out after {timeout:?}"),
         },
     }
 }

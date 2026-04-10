@@ -1,5 +1,5 @@
 use crate::agent::{AgentInput, AgentState, CancelToken};
-use crate::types::AgentId;
+use crate::types::{AgentId, ContentBlock};
 use tokio::sync::mpsc;
 
 /// 外部控制运行中 Agent 的句柄
@@ -26,18 +26,27 @@ impl AgentHandle {
         }
     }
 
-    /// 发送用户消息给 Agent
-    pub async fn send_message(&self, content: String) -> anyhow::Result<()> {
+    /// 发送用户消息给 Agent（支持多模态内容）
+    pub async fn send_message(&self, content: Vec<ContentBlock>) -> anyhow::Result<()> {
         self.input_tx
             .send(AgentInput::User(content))
             .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
     }
 
-    /// 发送工具结果给 Agent
-    pub async fn send_tool_result(&self, tool_id: String, output: String) -> anyhow::Result<()> {
+    /// 发送用户文本消息给 Agent（便捷方法）
+    pub async fn send_text(&self, text: String) -> anyhow::Result<()> {
+        self.send_message(vec![ContentBlock::Text { text }]).await
+    }
+
+    /// 发送工具结果给 Agent（支持多模态内容）
+    pub async fn send_tool_result(
+        &self,
+        tool_id: String,
+        content: Vec<ContentBlock>,
+    ) -> anyhow::Result<()> {
         self.input_tx
-            .send(AgentInput::ToolResult { tool_id, output })
+            .send(AgentInput::ToolResult { tool_id, content })
             .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
     }

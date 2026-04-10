@@ -3,9 +3,7 @@ use kernel::types::{AgentId, SessionId};
 use kernel::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentState},
     event::Event,
-    provider::ModelProvider,
     storage::Storage,
-    tool::{ToolRegistry, ToolSandbox},
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -54,7 +52,7 @@ impl Session {
         let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
             Arc::clone(&self.agent_shared),
-            self.config.agent.system_prompt.clone(),
+            &self.config.agent.system_prompt,
             Some(self.storage.clone()),
             Some(self.id.0.clone()),
             self.config.agent.max_iterations,
@@ -80,7 +78,7 @@ impl Session {
         );
         match &self.main_agent {
             Some(handle) => {
-                let result = handle.send_message(content).await;
+                let result = handle.send_text(content).await;
                 if let Err(ref e) = result {
                     tracing::error!("Session {} failed to send message: {}", self.id.0, e);
                 }

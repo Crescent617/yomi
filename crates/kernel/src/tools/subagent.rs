@@ -1,7 +1,7 @@
-use crate::agent::{Agent, AgentHandle, AgentInput, AgentShared, SubAgentMode};
+use crate::agent::{Agent, AgentInput, AgentShared, SubAgentMode};
 use crate::event::Event;
 use crate::tool::Tool;
-use crate::types::{AgentId, ToolOutput};
+use crate::types::{AgentId, ContentBlock, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -12,12 +12,12 @@ use tokio::sync::mpsc;
 pub struct SubAgentTool {
     parent_id: AgentId,
     shared: Arc<AgentShared>,
-    /// Parent's input_tx for forwarding async sub-agent results
+    /// Parent's `input_tx` for forwarding async sub-agent results
     parent_input_tx: mpsc::Sender<AgentInput>,
 }
 
 impl SubAgentTool {
-    pub fn new(
+    pub const fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
         parent_input_tx: mpsc::Sender<AgentInput>,
@@ -82,7 +82,7 @@ impl Tool for SubAgentTool {
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
             Arc::clone(&self.shared),
-            format!(
+            &format!(
                 "You are a sub-agent. Parent: {}. Task: {}",
                 self.parent_id.0, task
             ),
@@ -95,8 +95,8 @@ impl Tool for SubAgentTool {
 
         let sub_agent_id = handle.id.clone();
 
-        // Send the task
-        handle.send_message(task.to_string()).await.ok();
+        // Send the task (as text content block)
+        handle.send_text(task.to_string()).await.ok();
 
         match mode {
             SubAgentMode::Async => {
@@ -127,7 +127,7 @@ impl Tool for SubAgentTool {
                                 break;
                             }
                             Event::Agent(crate::event::AgentEvent::Failed { error, .. }) => {
-                                output.push_str(&format!("\n[Sub-agent failed: {}]", error));
+                                output.push_str(&format!("\n[Sub-agent failed: {error}]"));
                                 break;
                             }
                             Event::Agent(crate::event::AgentEvent::Cancelled { .. }) => {
@@ -139,7 +139,7 @@ impl Tool for SubAgentTool {
                     }
 
                     // Forward result to parent agent
-                    let result_msg = if completed {
+                    let result_text = if completed {
                         format!(
                             "\n\n[Async Sub-agent {} completed]\nResult:\n{}",
                             sub_id.0, output
@@ -151,11 +151,13 @@ impl Tool for SubAgentTool {
                         )
                     };
 
-                    // Send result back to parent via input_tx
-                    let _ = parent_tx.send(AgentInput::ToolResult {
-                        tool_id: format!("subagent_{}", sub_id.0),
-                        output: result_msg,
-                    }).await;
+                    // Send result back to parent via input_tx (as ContentBlock array)
+                    let _ = parent_tx
+                        .send(AgentInput::ToolResult {
+                            tool_id: format!("subagent_{}", sub_id.0),
+                            content: vec![ContentBlock::Text { text: result_text }],
+                        })
+                        .await;
                 });
 
                 let result = format!(
@@ -195,7 +197,7 @@ impl Tool for SubAgentTool {
                         Event::Agent(crate::event::AgentEvent::Failed { error, .. }) => {
                             return Ok(ToolOutput {
                                 stdout: output,
-                                stderr: format!("Sub-agent failed: {}", error),
+                                stderr: format!("Sub-agent failed: {error}"),
                                 exit_code: 1,
                             });
                         }
@@ -211,10 +213,7 @@ impl Tool for SubAgentTool {
                 }
 
                 if completed {
-                    output.push_str(&format!(
-                        "\n\n[Sub-agent {} completed]",
-                        sub_agent_id.0
-                    ));
+                    output.push_str(&format!("\n\n[Sub-agent {} completed]", sub_agent_id.0));
                     Ok(ToolOutput {
                         stdout: output,
                         stderr: String::new(),

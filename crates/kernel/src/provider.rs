@@ -86,11 +86,11 @@ impl HttpError {
     /// Returns true if this error is retryable
     /// Retryable: 5xx, 429 rate limit
     /// Not retryable: other 4xx
-    pub fn is_retryable(&self) -> bool {
+    pub const fn is_retryable(&self) -> bool {
         match self.0 {
-            429 => true,                    // Rate limit - retry
-            500..=599 => true,              // Server errors - retry
-            _ => false,                     // Client errors - don't retry
+            429 => true,       // Rate limit - retry
+            500..=599 => true, // Server errors - retry
+            _ => false,        // Client errors - don't retry
         }
     }
 }

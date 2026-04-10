@@ -16,7 +16,7 @@ pub struct AgentShared {
 }
 
 impl AgentShared {
-    /// Create a new AgentShared with the required components
+    /// Create a new `AgentShared` with the required components
     pub fn new(
         provider: Arc<dyn crate::provider::ModelProvider>,
         tool_registry: Arc<ToolRegistry>,
@@ -31,7 +31,7 @@ impl AgentShared {
         }
     }
 
-    /// Clone this AgentShared with a new ToolRegistry (for adding agent-specific tools)
+    /// Clone this `AgentShared` with a new `ToolRegistry` (for adding agent-specific tools)
     pub fn with_cloned_registry(&self) -> Self {
         Self {
             provider: Arc::clone(&self.provider),
