@@ -150,16 +150,15 @@ impl MockComponent for StatusBar {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "set_mode" => {
+            Attribute::Custom("set_mode") => {
                 if let AttrValue::Number(mode_val) = value {
                     self.mode = match mode_val {
-                        0 => AppMode::Normal,
                         1 => AppMode::Browse,
                         _ => AppMode::Normal,
                     };
                 }
             }
-            Attribute::Custom(s) if s == "show_message" => {
+            Attribute::Custom("show_message") => {
                 // Parse duration (ms) and message from "duration_ms|message" format
                 if let AttrValue::String(value_str) = value {
                     let parts: Vec<&str> = value_str.splitn(2, '|').collect();
@@ -178,10 +177,10 @@ impl MockComponent for StatusBar {
                     }
                 }
             }
-            Attribute::Custom(s) if s == "tick" => {
+            Attribute::Custom("tick") => {
                 self.check_timeout();
             }
-            Attribute::Custom(s) if s == "clear_message" => {
+            Attribute::Custom("clear_message") => {
                 self.center_message = None;
                 self.message_timeout = None;
             }

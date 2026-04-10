@@ -153,28 +153,28 @@ impl MockComponent for StreamingMessageMock {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "start_streaming" => {
+            Attribute::Custom("start_streaming") => {
                 self.start_streaming();
             }
-            Attribute::Custom(s) if s == "stop_streaming" => {
+            Attribute::Custom("stop_streaming") => {
                 self.stop_streaming();
             }
-            Attribute::Custom(s) if s == "clear" => {
+            Attribute::Custom("clear") => {
                 self.content.clear();
                 self.thinking.clear();
                 self.md_renderer = StreamingMarkdownRenderer::new();
             }
-            Attribute::Custom(s) if s == "append_thinking" => {
+            Attribute::Custom("append_thinking") => {
                 if let AttrValue::String(text) = value {
                     self.append_thinking(&text);
                 }
             }
-            Attribute::Custom(s) if s == "append_content" => {
+            Attribute::Custom("append_content") => {
                 if let AttrValue::String(text) = value {
                     self.append_content(&text);
                 }
             }
-            Attribute::Custom(s) if s == "tick" => {
+            Attribute::Custom("tick") => {
                 self.tick();
             }
             _ => {

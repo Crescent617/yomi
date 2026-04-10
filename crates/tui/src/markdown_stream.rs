@@ -137,11 +137,7 @@ impl StreamingMarkdownRenderer {
                         }
                     }
                     Tag::List(start_num) => {
-                        let state = match start_num {
-                            Some(n) => ListState::Ordered(n, n),
-                            None => ListState::Unordered,
-                        };
-                        list_stack.push(state);
+                        list_stack.push(start_num.map_or(ListState::Unordered, |n| ListState::Ordered(n, n)));
                     }
                     Tag::Item => {
                         let indent = "  ".repeat(list_stack.len().saturating_sub(1));
@@ -292,18 +288,11 @@ impl StreamingMarkdownRenderer {
                             // Add separator line with correct column count
                             if table_columns > 0 {
                                 let mut sep_parts: Vec<Span> = Vec::new();
-                                for i in 0..table_columns {
-                                    if i == 0 {
-                                        sep_parts.push(Span::styled(
-                                            "|---",
-                                            Style::default().fg(colors::text_secondary()),
-                                        ));
-                                    } else {
-                                        sep_parts.push(Span::styled(
-                                            "|---",
-                                            Style::default().fg(colors::text_secondary()),
-                                        ));
-                                    }
+                                for _ in 0..table_columns {
+                                    sep_parts.push(Span::styled(
+                                        "|---",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ));
                                 }
                                 sep_parts.push(Span::styled(
                                     "|",
@@ -322,10 +311,6 @@ impl StreamingMarkdownRenderer {
                                 self.lines.push(Line::from(current_line));
                                 current_line = Vec::new();
                             }
-                        }
-                        TagEnd::TableCell => {
-                            // Cell content is already added, just add separator after cell
-                            // (except we'll handle the final | at row end)
                         }
                         _ => {}
                     }

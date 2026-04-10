@@ -242,6 +242,7 @@ impl Config {
     }
 
     /// Set the data directory
+    #[must_use]
     pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
         self.storage.url = data_dir.to_string_lossy().to_string();
         self.data_dir = data_dir;

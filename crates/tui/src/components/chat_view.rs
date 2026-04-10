@@ -889,17 +889,17 @@ impl MockComponent for ChatView {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "add_user_message" => {
+            Attribute::Custom("add_user_message") => {
                 if let AttrValue::String(content) = value {
                     self.add_user_message(content);
                 }
             }
-            Attribute::Custom(s) if s == "add_error_message" => {
+            Attribute::Custom("add_error_message") => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
                 }
             }
-            Attribute::Custom(s) if s == "add_assistant_with_thinking" => {
+            Attribute::Custom("add_assistant_with_thinking") => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
                     let content = (*parts.first().unwrap_or(&"")).to_string();
@@ -911,19 +911,19 @@ impl MockComponent for ChatView {
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
             }
-            Attribute::Custom(s) if s == "start_streaming" => {
+            Attribute::Custom("start_streaming") => {
                 self.start_streaming();
             }
-            Attribute::Custom(s) if s == "stop_streaming" => {
+            Attribute::Custom("stop_streaming") => {
                 self.stop_streaming();
             }
-            Attribute::Custom(s) if s == "clear_streaming" => {
+            Attribute::Custom("clear_streaming") => {
                 self.clear_streaming();
             }
-            Attribute::Custom(s) if s == "cancel_streaming" => {
+            Attribute::Custom("cancel_streaming") => {
                 self.cancel_streaming();
             }
-            Attribute::Custom(s) if s == "cancel_streaming_with_content" => {
+            Attribute::Custom("cancel_streaming_with_content") => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split(' ').collect();
                     let content = (*parts.first().unwrap_or(&"")).to_string();
@@ -966,38 +966,38 @@ impl MockComponent for ChatView {
                     self.is_streaming = false;
                 }
             }
-            Attribute::Custom(s) if s == "append_content" => {
+            Attribute::Custom("append_content") => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_content(&text);
                 }
             }
-            Attribute::Custom(s) if s == "append_thinking" => {
+            Attribute::Custom("append_thinking") => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_thinking(&text);
                 }
             }
-            Attribute::Custom(s) if s == "scroll_up" => {
+            Attribute::Custom("scroll_up") => {
                 self.scroll_up(3);
             }
-            Attribute::Custom(s) if s == "scroll_down" => {
+            Attribute::Custom("scroll_down") => {
                 self.scroll_down(3);
             }
-            Attribute::Custom(s) if s == "scroll_to_bottom" => {
+            Attribute::Custom("scroll_to_bottom") => {
                 self.scroll_to_bottom();
             }
-            Attribute::Custom(s) if s == "toggle_thinking" => {
+            Attribute::Custom("toggle_thinking") => {
                 self.toggle_last_thinking();
             }
-            Attribute::Custom(s) if s == "toggle_expand_all" => {
+            Attribute::Custom("toggle_expand_all") => {
                 self.toggle_expand_all();
             }
-            Attribute::Custom(s) if s == "expand_all" => {
+            Attribute::Custom("expand_all") => {
                 self.expand_all();
             }
-            Attribute::Custom(s) if s == "collapse_all" => {
+            Attribute::Custom("collapse_all") => {
                 self.collapse_all();
             }
-            Attribute::Custom(s) if s == "start_tool" => {
+            Attribute::Custom("start_tool") => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = (*parts.first().unwrap_or(&"")).to_string();
@@ -1006,7 +1006,7 @@ impl MockComponent for ChatView {
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }
-            Attribute::Custom(s) if s == "complete_tool" => {
+            Attribute::Custom("complete_tool") => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = (*parts.first().unwrap_or(&"")).to_string();
@@ -1015,7 +1015,7 @@ impl MockComponent for ChatView {
                     self.complete_tool(tool_id, output, elapsed_ms);
                 }
             }
-            Attribute::Custom(s) if s == "fail_tool" => {
+            Attribute::Custom("fail_tool") => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = (*parts.first().unwrap_or(&"")).to_string();
@@ -1025,12 +1025,12 @@ impl MockComponent for ChatView {
                 }
             }
             // Page navigation
-            Attribute::Custom(s) if s == "page_up" => {
+            Attribute::Custom("page_up") => {
                 if let AttrValue::Number(height) = value {
                     self.page_up(height as usize);
                 }
             }
-            Attribute::Custom(s) if s == "page_down" => {
+            Attribute::Custom("page_down") => {
                 if let AttrValue::Number(height) = value {
                     self.page_down(height as usize);
                 }

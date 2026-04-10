@@ -87,11 +87,7 @@ impl HttpError {
     /// Retryable: 5xx, 429 rate limit
     /// Not retryable: other 4xx
     pub const fn is_retryable(&self) -> bool {
-        match self.0 {
-            429 => true,       // Rate limit - retry
-            500..=599 => true, // Server errors - retry
-            _ => false,        // Client errors - don't retry
-        }
+        matches!(self.0, 429 | 500..=599)
     }
 }
 
@@ -128,6 +124,7 @@ impl<P: ModelProvider> RetryingProvider<P> {
         }
     }
 
+    #[must_use]
     pub const fn with_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
         self

@@ -84,7 +84,7 @@ impl FsStorage {
     }
 
     /// Rebuild session record from events
-    fn rebuild_session(&self, events: &[SessionEventRecord]) -> Option<SessionRecord> {
+    fn rebuild_session(events: &[SessionEventRecord]) -> Option<SessionRecord> {
         let mut session: Option<SessionRecord> = None;
         let mut message_count = 0;
 
@@ -146,6 +146,7 @@ impl Storage for FsStorage {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .write(true)
+            .truncate(false)
             .open(&path)
             .await?;
 
@@ -168,7 +169,7 @@ impl Storage for FsStorage {
 
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>> {
         let events = self.read_events(id).await?;
-        Ok(self.rebuild_session(&events))
+        Ok(Self::rebuild_session(&events))
     }
 
     async fn list_sessions(&self, project_path: &Path) -> Result<Vec<SessionRecord>> {
@@ -186,7 +187,7 @@ impl Storage for FsStorage {
                 let session_id = SessionId(stem.to_string());
                 let events = self.read_events(&session_id).await?;
 
-                if let Some(session) = self.rebuild_session(&events) {
+                if let Some(session) = Self::rebuild_session(&events) {
                     // Only return sessions matching project path
                     if session.project_path == project_path {
                         sessions.push(session);

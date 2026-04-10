@@ -266,13 +266,11 @@ impl Message {
     /// Append text to the last text block, or create new one
     pub fn append_text(&mut self, text: impl Into<String>) {
         let text = text.into();
-        if let Some(last) = self.content.last_mut() {
-            if let ContentBlock::Text { text: existing } = last {
-                existing.push_str(&text);
-                return;
-            }
+        if let Some(ContentBlock::Text { text: existing }) = self.content.last_mut() {
+            existing.push_str(&text);
+        } else {
+            self.content.push(ContentBlock::Text { text });
         }
-        self.content.push(ContentBlock::Text { text });
     }
 
     /// Create a tool result message
@@ -289,6 +287,7 @@ impl Message {
     }
 
     /// Set the `tool_call_id` for this message (builder pattern)
+    #[must_use]
     pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
         self.tool_call_id = Some(tool_call_id.into());
         self

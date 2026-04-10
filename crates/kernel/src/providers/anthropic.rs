@@ -267,7 +267,7 @@ impl AnthropicStreamState {
         let mut items = Vec::new();
 
         match event {
-            AnthropicStreamEvent::MessageStart { .. } => {}
+            AnthropicStreamEvent::MessageStart { .. } | AnthropicStreamEvent::Ping => {}
             AnthropicStreamEvent::ContentBlockStart { content_block, .. } => match content_block {
                 AnthropicContent::Text { text } => {
                     self.accumulated_text = text;
@@ -334,7 +334,6 @@ impl AnthropicStreamState {
             AnthropicStreamEvent::MessageStop => {
                 items.push(ModelStreamItem::Complete);
             }
-            AnthropicStreamEvent::Ping => {}
             AnthropicStreamEvent::Error { error } => {
                 return Err(anyhow!("Anthropic API error: {}", error.message));
             }
@@ -484,6 +483,7 @@ struct AnthropicMessageStart {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
 enum AnthropicDelta {
     TextDelta { text: String },
     ThinkingDelta { thinking: String },

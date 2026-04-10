@@ -84,16 +84,14 @@ impl Model {
     /// Calculate input box height based on content (3-5 lines, including borders)
     fn calculate_input_height(&self) -> u16 {
         // Content lines (1-3), plus 2 for borders = total 3-5
-        let content_lines = if let Ok(state) = self.app.state(&Id::InputBox) {
-            if let tuirealm::State::One(tuirealm::StateValue::String(content)) = state {
-                // Count newlines + 1 to handle trailing newlines correctly
-                // "hello\nworld" -> 1 newline + 1 = 2 lines
-                // "hello\n" -> 1 newline + 1 = 2 lines (lines() would return 1)
-                let line_count = content.matches('\n').count() + 1;
-                (line_count.max(1) as u16).min(3)
-            } else {
-                1
-            }
+        let content_lines = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
+            self.app.state(&Id::InputBox)
+        {
+            // Count newlines + 1 to handle trailing newlines correctly
+            // "hello\nworld" -> 1 newline + 1 = 2 lines
+            // "hello\n" -> 1 newline + 1 = 2 lines (lines() would return 1)
+            let line_count = content.matches('\n').count() + 1;
+            (line_count.max(1) as u16).min(3)
         } else {
             1
         };
@@ -460,6 +458,7 @@ impl Model {
     }
 
     /// Run the main loop
+    #[allow(clippy::future_not_send)]
     pub async fn run(mut self) -> Result<()> {
         // Enter alternate screen
         self.terminal.enter_alternate_screen()?;
@@ -477,6 +476,7 @@ impl Model {
         result
     }
 
+    #[allow(clippy::future_not_send)]
     async fn run_loop(&mut self) -> Result<()> {
         // Enable mouse capture
         self.terminal.enable_mouse_capture()?;
@@ -706,6 +706,7 @@ impl Update<Msg> for Model {
 }
 
 /// Run the TUI application
+#[allow(clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,

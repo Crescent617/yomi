@@ -191,26 +191,26 @@ impl MockComponent for InfoBar {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(s) if s == "start_streaming" => {
+            Attribute::Custom("start_streaming") => {
                 self.set_state(InfoBarState::Streaming);
             }
-            Attribute::Custom(s) if s == "stop_streaming" => {
+            Attribute::Custom("stop_streaming") => {
                 self.set_state(InfoBarState::Completed);
             }
-            Attribute::Custom(s) if s == "cancel_streaming" => {
+            Attribute::Custom("cancel_streaming") => {
                 self.set_state(InfoBarState::Cancelled);
             }
-            Attribute::Custom(s) if s == "append_content" => {
+            Attribute::Custom("append_content") => {
                 if let AttrValue::String(text) = value {
                     self.append_content(&text);
                 }
             }
-            Attribute::Custom(s) if s == "append_thinking" => {
+            Attribute::Custom("append_thinking") => {
                 if let AttrValue::String(text) = value {
                     self.append_thinking(&text);
                 }
             }
-            Attribute::Custom(s) if s == "tick" => {
+            Attribute::Custom("tick") => {
                 self.tick();
             }
             _ => {

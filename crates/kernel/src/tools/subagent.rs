@@ -127,7 +127,8 @@ impl Tool for SubAgentTool {
                                 break;
                             }
                             Event::Agent(crate::event::AgentEvent::Failed { error, .. }) => {
-                                output.push_str(&format!("\n[Sub-agent failed: {error}]"));
+                                use std::fmt::Write;
+                                let _ = write!(output, "\n[Sub-agent failed: {error}]");
                                 break;
                             }
                             Event::Agent(crate::event::AgentEvent::Cancelled { .. }) => {
@@ -210,7 +211,8 @@ impl Tool for SubAgentTool {
                 }
 
                 if completed {
-                    output.push_str(&format!("\n\n[Sub-agent {sub_agent_id} completed]"));
+                    use std::fmt::Write;
+                    let _ = write!(output, "\n\n[Sub-agent {sub_agent_id} completed]");
                     Ok(ToolOutput {
                         stdout: output,
                         stderr: String::new(),

@@ -54,6 +54,7 @@ impl BashTool {
         }
     }
 
+    #[must_use]
     pub fn with_ctx(mut self, ctx: BashToolCtx) -> Self {
         self.ctx = Some(ctx);
         self

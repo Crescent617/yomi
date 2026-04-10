@@ -254,7 +254,6 @@ fn expand_path(path: &str) -> String {
 fn parse_role(role: &str) -> crate::types::Role {
     match role {
         "system" => crate::types::Role::System,
-        "user" => crate::types::Role::User,
         "assistant" => crate::types::Role::Assistant,
         "tool" => crate::types::Role::Tool,
         _ => crate::types::Role::User,

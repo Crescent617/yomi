@@ -29,6 +29,7 @@ impl AgentShared {
     }
 
     /// Clone this `AgentShared` with a new `ToolRegistry` (for adding agent-specific tools)
+    #[must_use]
     pub fn with_cloned_registry(&self) -> Self {
         Self {
             provider: Arc::clone(&self.provider),
