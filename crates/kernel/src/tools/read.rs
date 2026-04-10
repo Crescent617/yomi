@@ -32,11 +32,11 @@ impl Tool for ReadTool {
         "read"
     }
 
-    fn description(&self) -> &'static str {
+    fn desc(&self) -> &'static str {
         "Read the contents of a file. Use offset and limit to read specific sections."
     }
 
-    fn parameters_schema(&self) -> Value {
+    fn params(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -58,7 +58,7 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;

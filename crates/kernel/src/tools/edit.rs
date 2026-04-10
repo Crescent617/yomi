@@ -32,11 +32,11 @@ impl Tool for EditTool {
         "edit"
     }
 
-    fn description(&self) -> &'static str {
+    fn desc(&self) -> &'static str {
         "Replace text in a file. Use old_str to locate the text and new_str to replace it."
     }
 
-    fn parameters_schema(&self) -> Value {
+    fn params(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -62,7 +62,7 @@ impl Tool for EditTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;

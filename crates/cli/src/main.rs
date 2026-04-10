@@ -7,7 +7,7 @@ use kernel::{
     storage::FsStorage,
     tool::{enable_yolo_mode, ToolRegistry},
 };
-use kernel::{AnthropicProvider, BashTool, EditTool, OpenAIProvider};
+use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -106,7 +106,6 @@ async fn main() -> Result<()> {
 
     // Create tool registry
     let tool_registry = ToolRegistry::new();
-    tool_registry.register(Arc::new(BashTool::new(&working_dir)));
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
     // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
 

@@ -36,13 +36,13 @@ impl Tool for SubAgentTool {
         "spawn_subagent"
     }
 
-    fn description(&self) -> &'static str {
+    fn desc(&self) -> &'static str {
         "Spawn a sub-agent to handle a specific task. \
          Use 'sync' mode to wait for completion and get results, \
          or 'async' mode to spawn and continue immediately."
     }
 
-    fn parameters_schema(&self) -> Value {
+    fn params(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -61,7 +61,7 @@ impl Tool for SubAgentTool {
         })
     }
 
-    async fn execute(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value) -> Result<ToolOutput> {
         let task = args["task"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'task' argument"))?;

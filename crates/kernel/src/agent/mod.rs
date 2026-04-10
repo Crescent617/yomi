@@ -88,14 +88,13 @@ impl Agent {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-            // Register task tools
-            let task_ctx = crate::tools::TaskCtx::new(id.clone(), input_tx.clone(), working_dir);
+            // Register bash tool with background execution support
+            let bash_ctx = crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
+            let bash_tool = crate::tools::BashTool::new(&working_dir).with_ctx(bash_ctx);
             new_shared
                 .tool_registry
-                .register(Arc::new(crate::tools::RunTask::new(task_ctx.clone())));
-            new_shared
-                .tool_registry
-                .register(Arc::new(crate::tools::CancelTask::new(task_ctx)));
+                .register(Arc::new(bash_tool));
+
 
             // Register subagent tool if enabled
             if enable_sub_agents {

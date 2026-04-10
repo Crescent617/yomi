@@ -157,7 +157,7 @@ pub async fn execute_tools_parallel(
 }
 
 async fn execute_single_tool(tool: Arc<dyn Tool>, arguments: serde_json::Value) -> ToolOutput {
-    match tool.execute(arguments).await {
+    match tool.exec(arguments).await {
         Ok(output) => output,
         Err(e) => ToolOutput {
             exit_code: 1,

@@ -9,9 +9,9 @@ use std::sync::{Arc, RwLock};
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters_schema(&self) -> Value;
-    async fn execute(&self, args: Value) -> Result<ToolOutput>;
+    fn desc(&self) -> &str;
+    fn params(&self) -> Value;
+    async fn exec(&self, args: Value) -> Result<ToolOutput>;
 }
 
 /// Tool registry - manages available tools
@@ -56,8 +56,8 @@ impl ToolRegistry {
             .values()
             .map(|tool| ToolDefinition {
                 name: tool.name().to_string(),
-                description: tool.description().to_string(),
-                parameters: tool.parameters_schema(),
+                description: tool.desc().to_string(),
+                parameters: tool.params(),
             })
             .collect();
         tracing::debug!(

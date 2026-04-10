@@ -1,3 +1,5 @@
+///! Implementation of the ModelProvider trait for Anthropic's API
+///! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
 use crate::event::ContentChunk;
 use crate::provider::{
     HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest,
