@@ -1,7 +1,7 @@
 use anyhow::Result;
 use kernel::types::{AgentId, SessionId};
 use kernel::{
-    agent::{Agent, AgentConfig, AgentHandle, AgentState},
+    agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentState},
     event::Event,
     provider::ModelProvider,
     storage::Storage,
@@ -14,9 +14,7 @@ pub struct Session {
     id: SessionId,
     config: SessionConfig,
     storage: Arc<dyn Storage>,
-    provider: Arc<dyn ModelProvider>,
-    tool_registry: ToolRegistry,
-    sandbox: ToolSandbox,
+    agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     event_rx: Option<mpsc::Receiver<Event>>,
 }
@@ -32,17 +30,13 @@ impl Session {
         id: SessionId,
         config: SessionConfig,
         storage: Arc<dyn Storage>,
-        provider: Arc<dyn ModelProvider>,
-        tool_registry: ToolRegistry,
-        sandbox: ToolSandbox,
+        agent_shared: Arc<AgentShared>,
     ) -> Self {
         Self {
             id,
             config,
             storage,
-            provider,
-            tool_registry,
-            sandbox,
+            agent_shared,
             main_agent: None,
             event_rx: None,
         }
@@ -59,12 +53,13 @@ impl Session {
     async fn spawn_main_agent(&mut self) -> Result<()> {
         let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
-            self.config.agent.clone(),
-            self.provider.clone(),
-            self.tool_registry.clone(),
-            self.sandbox.clone(),
+            Arc::clone(&self.agent_shared),
+            self.config.agent.system_prompt.clone(),
             Some(self.storage.clone()),
             Some(self.id.0.clone()),
+            self.config.agent.max_iterations,
+            self.config.agent.enable_sub_agents,
+            self.config.agent.sub_agent_mode,
         );
         let agent_id = handle.id.clone();
         tracing::info!(

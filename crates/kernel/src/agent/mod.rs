@@ -3,6 +3,7 @@ mod config;
 mod context;
 mod handle;
 mod message_buffer;
+mod shared;
 mod state;
 mod subagent;
 
@@ -10,20 +11,21 @@ pub use cancel::CancelToken;
 pub use config::{AgentConfig, SubAgentMode};
 pub use context::AgentExecutionContext;
 pub use handle::AgentHandle;
+pub use shared::AgentShared;
 pub use state::AgentState;
 pub use subagent::SubAgentManager;
 
 use message_buffer::MessageBuffer;
 
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
-use crate::provider::{ModelProvider, ModelStreamItem};
-use crate::tool::{ToolRegistry, ToolSandbox};
+use crate::provider::ModelStreamItem;
+use crate::tools::SubAgentTool;
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall};
 use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
@@ -38,12 +40,10 @@ pub enum AgentInput {
 
 pub struct Agent {
     id: AgentId,
-    config: AgentConfig,
+    shared: Arc<AgentShared>,
+    system_prompt: String,
     message_buffer: MessageBuffer,
     event_tx: mpsc::Sender<Event>,
-    provider: Arc<dyn ModelProvider>,
-    tool_registry: ToolRegistry,
-    sandbox: ToolSandbox,
     #[allow(dead_code)]
     input_tx: mpsc::Sender<AgentInput>,
     input_rx: mpsc::Receiver<AgentInput>,
@@ -53,17 +53,24 @@ pub struct Agent {
     // Storage for message persistence
     storage: Option<Arc<dyn crate::storage::Storage>>,
     session_id: Option<String>,
+    // Agent-specific configuration (not shared)
+    max_iterations: usize,
+    enable_sub_agents: bool,
+    sub_agent_mode: SubAgentMode,
+    // Store the last error message for display
+    last_error: Option<String>,
 }
 
 impl Agent {
     pub fn spawn(
         id: AgentId,
-        config: AgentConfig,
-        provider: Arc<dyn ModelProvider>,
-        tool_registry: ToolRegistry,
-        sandbox: ToolSandbox,
+        shared: Arc<AgentShared>,
+        system_prompt: String,
         storage: Option<Arc<dyn crate::storage::Storage>>,
         session_id: Option<String>,
+        max_iterations: usize,
+        enable_sub_agents: bool,
+        sub_agent_mode: SubAgentMode,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
         let (event_tx, event_rx) = mpsc::channel(1000);
@@ -71,16 +78,32 @@ impl Agent {
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         let mut message_buffer = MessageBuffer::new(100);
-        message_buffer.push(Message::system(&config.system_prompt));
+        message_buffer.push(Message::system(&system_prompt));
+
+        // Clone the shared resources with a new ToolRegistry if sub-agents are enabled
+        let shared = if enable_sub_agents {
+            // Clone input_tx for SubAgentTool (only needed when sub-agents enabled)
+            let input_tx_for_subagent = input_tx.clone();
+            let new_shared = shared.with_cloned_registry();
+            // Register the subagent tool with parent's input_tx for async result forwarding
+            new_shared
+                .tool_registry
+                .register(Arc::new(SubAgentTool::new(
+                    id.clone(),
+                    Arc::new(new_shared.clone()),
+                    input_tx_for_subagent,
+                )));
+            Arc::new(new_shared)
+        } else {
+            shared
+        };
 
         let agent = Self {
             id: id.clone(),
-            config,
+            shared,
+            system_prompt,
             message_buffer,
             event_tx,
-            provider,
-            tool_registry,
-            sandbox,
             input_tx: input_tx.clone(),
             input_rx,
             context,
@@ -88,6 +111,10 @@ impl Agent {
             token_usage: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             storage,
             session_id,
+            max_iterations,
+            enable_sub_agents,
+            sub_agent_mode,
+            last_error: None,
         };
 
         let handle_id = id.clone();
@@ -106,7 +133,7 @@ impl Agent {
         if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
             let session_id = crate::types::SessionId(session_id.clone());
             let _ = storage
-                .append_messages(&session_id, &[message.clone()])
+                .append_messages(&session_id, std::slice::from_ref(message))
                 .await;
         }
     }
@@ -136,7 +163,7 @@ impl Agent {
                 break;
             }
 
-            if self.context.iteration_count() >= self.config.max_iterations {
+            if self.context.iteration_count() >= self.max_iterations {
                 tracing::warn!("Max iterations reached, forcing completion");
                 self.context.transition_to(AgentState::Completed);
                 break;
@@ -149,21 +176,21 @@ impl Agent {
                 AgentState::WaitingForInput => {
                     tracing::debug!("Agent {} waiting for input", self.id.0);
                     if let Err(e) = self.handle_wait_for_input().await {
-                        tracing::error!("Wait for input failed: {}", e);
+                        self.record_error("Wait for input failed", &e);
                         self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id.0);
                     if let Err(e) = self.handle_streaming_with_retry().await {
-                        tracing::error!("Streaming failed after retries: {}", e);
+                        self.record_error("Streaming failed", &e);
                         self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::ExecutingTool => {
                     tracing::info!("Agent {} executing tools", self.id.0);
                     if let Err(e) = self.handle_execute_tool().await {
-                        tracing::error!("Tool execution failed: {}", e);
+                        self.record_error("Tool execution failed", &e);
                         self.context.transition_to(AgentState::Failed);
                     }
                 }
@@ -194,11 +221,15 @@ impl Agent {
                     .await;
             }
             AgentState::Failed => {
+                let error_msg = self
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "Agent failed".to_string());
                 let _ = self
                     .event_tx
                     .send(Event::Agent(AgentEvent::Failed {
                         agent_id: self.id.clone(),
-                        error: "Agent failed".to_string(),
+                        error: error_msg,
                     }))
                     .await;
             }
@@ -220,7 +251,7 @@ impl Agent {
     }
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
-    async fn handle_cancel(&mut self, context: &str) -> Result<()> {
+    async fn handle_cancel(&self, context: &str) -> Result<()> {
         tracing::info!("Agent {} {} cancelled", self.id.0, context);
         let _ = self
             .event_tx
@@ -230,6 +261,27 @@ impl Agent {
             .await;
         self.context.transition_to(AgentState::WaitingForInput);
         Ok(())
+    }
+
+    /// Record an error and store it for later display
+    fn record_error(&mut self, context: &str, error: &anyhow::Error) {
+        let msg = format!("{}: {}", context, error);
+        tracing::error!("Agent {} failed: {}", self.id.0, msg);
+        self.last_error = Some(msg);
+    }
+
+    /// Helper to emit `AgentEvent::Failed` and return error
+    async fn fail_agent(&self, context: &str, error: anyhow::Error) -> Result<()> {
+        let error_msg = format!("{context}: {error}");
+        tracing::error!("Agent {} failed: {}", self.id.0, error_msg);
+        let _ = self
+            .event_tx
+            .send(Event::Agent(AgentEvent::Failed {
+                agent_id: self.id.clone(),
+                error: error_msg,
+            }))
+            .await;
+        Err(error)
     }
 
     async fn handle_wait_for_input(&mut self) -> Result<()> {
@@ -269,7 +321,7 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<()> {
-        let tools = self.tool_registry.definitions();
+        let tools = self.shared.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
             self.id.0,
@@ -285,20 +337,28 @@ impl Agent {
             .await;
 
         let messages = self.message_buffer.messages();
-        let stream_future = timeout(
-            Duration::from_secs(5),
-            self.provider.stream(messages, &tools, &self.config.model),
+        let stream_future = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.shared
+                .provider
+                .stream(messages, &tools, &self.shared.model_config),
         );
         let mut stream = tokio::select! {
             biased;
-            _ = self.cancel_token.cancelled() => {
-                // Future is automatically dropped by select!
-                return self.handle_cancel("stream start").await;
+            () = self.cancel_token.cancelled() => {
+                return self.handle_cancel("stream creation").await;
             }
             result = stream_future => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(e),
-                Err(_) => return Err(anyhow::anyhow!("Stream creation timed out after 5s")),
+                Ok(Err(e)) => {
+                    return self.fail_agent("Stream creation failed", e).await;
+                }
+                Err(_) => {
+                    return self.fail_agent(
+                        "Stream creation timed out",
+                        anyhow::anyhow!("timeout after 10s"),
+                    ).await;
+                }
             }
         };
 
@@ -311,7 +371,7 @@ impl Agent {
         loop {
             tokio::select! {
                 biased;
-                _ = self.cancel_token.cancelled() => {
+                () = self.cancel_token.cancelled() => {
                     drop(stream);
                     return self.handle_cancel("streaming").await;
                 }
@@ -470,9 +530,9 @@ impl Agent {
         let results = crate::tools::execute_tools_parallel(
             &self.id,
             tool_calls,
-            &self.tool_registry,
-            &self.sandbox,
-            self.sandbox.default_timeout(),
+            &self.shared.tool_registry,
+            &self.shared.sandbox,
+            self.shared.sandbox.default_timeout(),
         )
         .await;
 
@@ -503,7 +563,7 @@ impl Agent {
     }
 
     async fn handle_streaming_with_retry(&mut self) -> Result<()> {
-        let max_retries = 3;
+        let max_retries = 10;
         let mut attempt = 0;
 
         loop {
@@ -511,6 +571,11 @@ impl Agent {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt >= max_retries => {
                     tracing::error!("Streaming failed after {} attempts: {}", attempt, e);
+                    return Err(e);
+                }
+                Err(e) if !Self::is_retryable_error(&e) => {
+                    // Client errors (4xx) should not be retried
+                    tracing::error!("Streaming failed with non-retryable error: {}", e);
                     return Err(e);
                 }
                 Err(e) => {
@@ -521,5 +586,13 @@ impl Agent {
                 }
             }
         }
+    }
+
+    /// Check if an error is retryable.
+    fn is_retryable_error(error: &anyhow::Error) -> bool {
+        if let Some(http_err) = error.downcast_ref::<crate::provider::HttpError>() {
+            return http_err.is_retryable();
+        }
+        true // Unknown errors default to retryable
     }
 }

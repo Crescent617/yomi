@@ -305,9 +305,10 @@ impl MockComponent for InputMock {
 }
 
 /// Input component that handles keyboard events
-/// Note: Mode is managed by Model, not by this component
+/// Mode is passed from Model via attr
 pub struct InputComponent {
     component: InputMock,
+    mode: crate::app::AppMode,
 }
 
 impl Default for InputComponent {
@@ -320,7 +321,13 @@ impl InputComponent {
     pub fn new() -> Self {
         Self {
             component: InputMock::new(),
+            mode: crate::app::AppMode::Normal,
         }
+    }
+
+    /// Set the current mode
+    pub fn set_mode(&mut self, mode: crate::app::AppMode) {
+        self.mode = mode;
     }
 }
 
@@ -334,7 +341,17 @@ impl MockComponent for InputComponent {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        self.component.attr(attr, value);
+        match attr {
+            Attribute::Custom(s) if s == "mode" => {
+                if let AttrValue::Number(mode_val) = value {
+                    self.mode = match mode_val {
+                        1 => crate::app::AppMode::Browse,
+                        _ => crate::app::AppMode::Normal,
+                    };
+                }
+            }
+            _ => self.component.attr(attr, value),
+        }
     }
 
     fn state(&self) -> State {
@@ -353,10 +370,21 @@ impl Component<Msg, crate::msg::UserEvent> for InputComponent {
 }
 
 impl InputComponent {
-    /// Handle all input events - mode-aware handling is done by Model
+    /// Handle all input events - mode-aware handling
     fn handle_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        // Browse mode: navigation shortcuts take priority
+        if self.mode == crate::app::AppMode::Browse {
+            return self.handle_browse_input(ev);
+        }
+
+        // Normal mode: text input with some shortcuts
+        self.handle_normal_input(ev)
+    }
+
+    /// Handle input in browse mode - navigation keys
+    fn handle_browse_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         match ev {
-            // Browse mode navigation keys - sent to Model (Model decides based on mode)
+            // Browse mode navigation
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('j'),
                 modifiers: KeyModifiers::NONE,
@@ -366,18 +394,25 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ScrollUp),
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('q'),
+                code: Key::Char('u'),
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::ToggleBrowseMode),
+            }) => Some(Msg::PageUp),
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('d'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::PageDown),
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('u'),
+                code: Key::Char('q'),
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::PageUp),
-            // Normal mode: character input
+            }) => Some(Msg::ToggleBrowseMode),
+            // Pass through to normal input handler for other keys
+            _ => self.handle_normal_input(ev),
+        }
+    }
+
+    /// Handle input in normal mode - text editing
+    fn handle_normal_input(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match ev {
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE,

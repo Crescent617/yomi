@@ -35,7 +35,8 @@ pub use event::{
 };
 pub use prompt::PromptBuilder;
 pub use provider::{
-    ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig,
+    ToolCallRequest,
 };
 pub use storage::{Storage, StorageConfig};
 pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry, ToolSandbox};
@@ -47,4 +48,4 @@ pub use providers::{AnthropicProvider, OpenAIProvider};
 #[cfg(feature = "storage")]
 pub use storage::sqlite::SqliteStorage;
 #[cfg(feature = "tools")]
-pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool};
+pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool, SubAgentTool};

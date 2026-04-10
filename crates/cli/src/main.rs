@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
         ToolSandbox::default()
     };
 
-    let coordinator = Arc::new(Coordinator::new(storage, provider, tool_registry, sandbox));
+    let coordinator = Arc::new(Coordinator::new(storage, provider, tool_registry, sandbox, config.model.clone()));
 
     // Build agent config
     let agent_config = AgentConfig {

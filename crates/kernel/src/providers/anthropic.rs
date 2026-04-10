@@ -1,5 +1,5 @@
 use crate::event::ContentChunk;
-use crate::provider::{ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest};
+use crate::provider::{HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest};
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -171,7 +171,7 @@ impl ModelProvider for AnthropicProvider {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("Anthropic API error: {} - {}", status, text);
-            return Err(anyhow!("Anthropic API error: {status} - {text}"));
+            return Err(anyhow!(HttpError(status.as_u16())));
         }
 
         tracing::debug!("Anthropic API response received, starting stream processing");

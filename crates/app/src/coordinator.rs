@@ -1,5 +1,7 @@
 use crate::session::{Session, SessionConfig};
 use anyhow::Result;
+use kernel::agent::AgentShared;
+use kernel::provider::ModelConfig;
 use kernel::types::SessionId;
 use kernel::{
     event::Event,
@@ -13,9 +15,7 @@ use tokio::sync::RwLock;
 
 pub struct Coordinator {
     storage: Arc<dyn Storage>,
-    provider: Arc<dyn ModelProvider>,
-    tool_registry: ToolRegistry,
-    sandbox: ToolSandbox,
+    agent_shared: Arc<AgentShared>,
     sessions: RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>,
 }
 
@@ -25,12 +25,17 @@ impl Coordinator {
         provider: Arc<dyn ModelProvider>,
         tool_registry: ToolRegistry,
         sandbox: ToolSandbox,
+        model_config: ModelConfig,
     ) -> Self {
+        let agent_shared = Arc::new(AgentShared::new(
+            provider,
+            Arc::new(tool_registry),
+            Arc::new(sandbox),
+            model_config,
+        ));
         Self {
             storage,
-            provider,
-            tool_registry,
-            sandbox,
+            agent_shared,
             sessions: RwLock::new(HashMap::new()),
         }
     }
@@ -41,9 +46,7 @@ impl Coordinator {
             id.clone(),
             config,
             self.storage.clone(),
-            self.provider.clone(),
-            self.tool_registry.clone(),
-            self.sandbox.clone(),
+            Arc::clone(&self.agent_shared),
         );
         session.init().await?;
         let session_id = session.id().clone();

@@ -45,6 +45,7 @@ pub enum HistoryMessage {
         arguments: Option<String>,
         elapsed_ms: Option<u64>,
     },
+    Error(String),
 }
 
 /// Unified chat view component
@@ -97,6 +98,12 @@ impl ChatView {
 
     pub fn add_user_message(&mut self, content: String) {
         self.messages.push(HistoryMessage::User(content));
+        // Auto scroll to bottom on new message
+        self.scroll_to_bottom();
+    }
+
+    pub fn add_error_message(&mut self, error: String) {
+        self.messages.push(HistoryMessage::Error(error));
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
@@ -458,6 +465,9 @@ impl ChatView {
                     count += 1; // Extra line after content
                 }
             }
+            HistoryMessage::Error(error) => {
+                count += error.lines().count();
+            }
         }
         count += 1; // spacing
         count
@@ -721,6 +731,24 @@ impl ChatView {
                     }
                 }
             }
+            HistoryMessage::Error(error) => {
+                // Render error message with red color and error icon
+                for (i, line) in error.lines().enumerate() {
+                    let prefix = if i == 0 { "⚠ " } else { "  " };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            prefix,
+                            Style::default()
+                                .fg(colors::accent_error())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(colors::accent_error()),
+                        ),
+                    ]));
+                }
+            }
         }
 
         lines
@@ -864,6 +892,11 @@ impl MockComponent for ChatView {
             Attribute::Custom(s) if s == "add_user_message" => {
                 if let AttrValue::String(content) = value {
                     self.add_user_message(content);
+                }
+            }
+            Attribute::Custom(s) if s == "add_error_message" => {
+                if let AttrValue::String(error) = value {
+                    self.add_error_message(error);
                 }
             }
             Attribute::Custom(s) if s == "add_assistant_with_thinking" => {

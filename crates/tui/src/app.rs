@@ -100,6 +100,43 @@ impl Model {
         content_lines + 2 // Add 2 for top/bottom borders
     }
 
+    /// Save partial content (content and thinking) to chat history
+    fn save_partial_content(&mut self) -> anyhow::Result<()> {
+        if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
+            let elapsed_ms = self
+                .thinking_start_time
+                .map(|start| start.elapsed().as_millis() as u64);
+
+            let combined = if self.current_thinking.is_empty() {
+                if let Some(ms) = elapsed_ms {
+                    format!("{}\x00\x00{}", self.current_content, ms)
+                } else {
+                    self.current_content.clone()
+                }
+            } else {
+                format!(
+                    "{}\x00{}\x00{}",
+                    self.current_content,
+                    self.current_thinking,
+                    elapsed_ms.unwrap_or(0)
+                )
+            };
+            self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom("add_assistant_with_thinking"),
+                AttrValue::String(combined),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Clear streaming state (content, thinking, start time)
+    fn clear_streaming_state(&mut self) {
+        self.current_content.clear();
+        self.current_thinking.clear();
+        self.thinking_start_time = None;
+    }
+
     pub fn view(&mut self) {
         let input_height = self.calculate_input_height();
         
@@ -359,46 +396,16 @@ impl Model {
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
                     self.is_streaming = false;
 
-                    // Flush any partial content to history
-                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
-                        let elapsed_ms = self
-                            .thinking_start_time
-                            .map(|start| start.elapsed().as_millis() as u64);
+                    // Save partial content and clear state
+                    let _ = self.save_partial_content();
+                    self.clear_streaming_state();
 
-                        let combined = if self.current_thinking.is_empty() {
-                            if let Some(ms) = elapsed_ms {
-                                format!("{}\x00\x00{}", self.current_content, ms)
-                            } else {
-                                self.current_content.clone()
-                            }
-                        } else {
-                            format!(
-                                "{}\x00{}\x00{}",
-                                self.current_content,
-                                self.current_thinking,
-                                elapsed_ms.unwrap_or(0)
-                            )
-                        };
-                        // Save partial content
-                        self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom("add_assistant_with_thinking"),
-                            AttrValue::String(combined),
-                        )?;
-                    }
-
-                    // Clear tracking
-                    self.current_content.clear();
-                    self.current_thinking.clear();
-                    self.thinking_start_time = None;
-
-                    // Cancel streaming in ChatView
+                    // Cancel streaming in ChatView and InfoBar
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
-
                     self.app.attr(
                         &Id::InfoBar,
                         Attribute::Custom("cancel_streaming"),
@@ -406,49 +413,42 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
-                AppEvent::Agent(kernel::event::AgentEvent::Failed { .. }) => {
+                AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
                     self.is_streaming = false;
 
-                    // Similar to Cancelled - save partial content
-                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
-                        let elapsed_ms = self
-                            .thinking_start_time
-                            .map(|start| start.elapsed().as_millis() as u64);
+                    // Stop status bar
+                    self.app.attr(
+                        &Id::InfoBar,
+                        Attribute::Custom("stop_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
 
-                        let combined = if self.current_thinking.is_empty() {
-                            if let Some(ms) = elapsed_ms {
-                                format!("{}\x00\x00{}", self.current_content, ms)
-                            } else {
-                                self.current_content.clone()
-                            }
-                        } else {
-                            format!(
-                                "{}\x00{}\x00{}",
-                                self.current_content,
-                                self.current_thinking,
-                                elapsed_ms.unwrap_or(0)
-                            )
-                        };
-                        self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom("add_assistant_with_thinking"),
-                            AttrValue::String(combined),
-                        )?;
-                    }
+                    // Save partial content and clear state
+                    let _ = self.save_partial_content();
+                    self.clear_streaming_state();
 
-                    self.current_content.clear();
-                    self.current_thinking.clear();
-                    self.thinking_start_time = None;
-
+                    // Clear streaming (both clear_streaming and cancel_streaming are needed for proper cleanup)
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("clear_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
 
+                    // Display error message to user
                     self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom("cancel_streaming"),
+                        &Id::ChatView,
+                        Attribute::Custom("add_error_message"),
+                        AttrValue::String(format!("Agent error: {}", error)),
+                    )?;
+
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
                     self.redraw = true;
@@ -627,6 +627,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(1));
+                            // Update input box mode so it knows to use browse shortcuts
+                            let _ = self
+                                .app
+                                .attr(&Id::InputBox, Attribute::Custom("mode"), AttrValue::Number(1));
                             // Show help message for browse mode shortcuts (0 = no auto-clear)
                             let _ = self
                                 .app
@@ -643,6 +647,10 @@ impl Update<Msg> for Model {
                             let _ = self
                                 .app
                                 .attr(&Id::StatusBar, Attribute::Custom("set_mode"), AttrValue::Number(0));
+                            // Update input box mode so it uses normal text input
+                            let _ = self
+                                .app
+                                .attr(&Id::InputBox, Attribute::Custom("mode"), AttrValue::Number(0));
                             // Clear any status message
                             let _ = self
                                 .app

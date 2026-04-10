@@ -1,6 +1,4 @@
-use crate::agent::{Agent, AgentConfig, AgentHandle, SubAgentMode};
-use crate::provider::ModelProvider;
-use crate::tool::{ToolRegistry, ToolSandbox};
+use crate::agent::{Agent, AgentHandle, AgentShared, SubAgentMode};
 use crate::types::AgentId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,10 +9,7 @@ use tokio::sync::RwLock;
 pub struct SubAgentManager {
     sub_agents: Arc<RwLock<HashMap<AgentId, SubAgentHandle>>>,
     parent_id: AgentId,
-    provider: Arc<dyn ModelProvider>,
-    tool_registry: ToolRegistry,
-    sandbox: ToolSandbox,
-    config: AgentConfig,
+    agent_shared: Arc<AgentShared>,
 }
 
 impl std::fmt::Debug for SubAgentManager {
@@ -34,40 +29,32 @@ struct SubAgentHandle {
 impl SubAgentManager {
     pub fn new(
         parent_id: AgentId,
-        provider: Arc<dyn ModelProvider>,
-        tool_registry: ToolRegistry,
-        sandbox: ToolSandbox,
-        config: AgentConfig,
+        agent_shared: Arc<AgentShared>,
     ) -> Self {
         Self {
             sub_agents: Arc::new(RwLock::new(HashMap::new())),
             parent_id,
-            provider,
-            tool_registry,
-            sandbox,
-            config,
+            agent_shared,
         }
     }
 
     /// 启动子代理
     pub async fn spawn(&self, mode: SubAgentMode, task: String) -> AgentId {
-        let sub_config = AgentConfig {
-            system_prompt: format!(
-                "You are a sub-agent working on a specific task. \
-                 Parent agent: {}. Task: {}",
-                self.parent_id.0, task
-            ),
-            ..self.config.clone()
-        };
+        let system_prompt = format!(
+            "You are a sub-agent working on a specific task. \
+             Parent agent: {}. Task: {}",
+            self.parent_id.0, task
+        );
 
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
-            sub_config,
-            self.provider.clone(),
-            self.tool_registry.clone(),
-            self.sandbox.clone(),
+            Arc::clone(&self.agent_shared),
+            system_prompt,
             None, // Sub-agents don't persist to storage
             None,
+            10,   // Sub-agents get fewer iterations
+            false, // Sub-agents don't spawn more sub-agents
+            SubAgentMode::Async,
         );
 
         let id = handle.id.clone();

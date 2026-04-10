@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use thiserror::Error;
 
 /// Stream of model events
 pub type ModelStream = Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem>> + Send>>;
@@ -72,6 +73,24 @@ impl Default for ModelConfig {
             fallback_model_id: None,
             sse_timeout_secs: 30,
             thinking: ThinkingConfig::default(),
+        }
+    }
+}
+
+/// HTTP error with status code for retry decisions
+#[derive(Error, Debug, Clone)]
+#[error("HTTP error {0}")]
+pub struct HttpError(pub u16);
+
+impl HttpError {
+    /// Returns true if this error is retryable
+    /// Retryable: 5xx, 429 rate limit
+    /// Not retryable: other 4xx
+    pub fn is_retryable(&self) -> bool {
+        match self.0 {
+            429 => true,                    // Rate limit - retry
+            500..=599 => true,              // Server errors - retry
+            _ => false,                     // Client errors - don't retry
         }
     }
 }
