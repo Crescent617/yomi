@@ -169,7 +169,7 @@ impl BashTool {
         })
     }
 
-    /// Execute command in background and notify via TaskResult when complete
+    /// Execute command in background and notify via `TaskResult` when complete
     async fn exec_async(&self, command: &str, timeout_secs: Option<u64>) -> Result<ToolOutput> {
         let ctx = self
             .ctx
@@ -193,7 +193,7 @@ impl BashTool {
 
         let ctx_clone = ctx.clone();
         let task_id_clone = task_id.clone();
-        let output_path_clone = output_path.clone();
+        let output_path_clone = output_path;
         let command_clone = command.to_string();
 
         tokio::spawn(async move {

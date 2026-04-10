@@ -41,9 +41,6 @@ impl Session {
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        self.storage
-            .create_session(&self.config.project_path)
-            .await?;
         self.spawn_main_agent().await?;
         Ok(())
     }
@@ -60,11 +57,7 @@ impl Session {
             self.config.agent.sub_agent_mode,
         );
         let agent_id = handle.id.clone();
-        tracing::info!(
-            "Main agent {} spawned for session {}",
-            agent_id.0,
-            self.id.0
-        );
+        tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
         self.main_agent = Some(handle);
         self.event_rx = Some(event_rx);
         Ok(())

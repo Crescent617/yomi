@@ -36,7 +36,7 @@ pub async fn execute_tools_parallel(
     tracing::info!(
         "Executing {} tool(s) in parallel for agent {}",
         tool_count,
-        agent_id.0
+        agent_id
     );
 
     let mut join_set = JoinSet::new();

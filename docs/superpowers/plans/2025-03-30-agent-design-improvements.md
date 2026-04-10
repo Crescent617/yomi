@@ -1221,7 +1221,7 @@ impl Session {
         );
 
         let agent_id = handle.id.clone();
-        tracing::info!("Main agent {} spawned for session {}", agent_id.0, self.id.0);
+        tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
         self.main_agent = Some(handle);
         Ok(())
     }

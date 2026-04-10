@@ -89,12 +89,10 @@ impl Agent {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
             // Register bash tool with background execution support
-            let bash_ctx = crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
+            let bash_ctx =
+                crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
             let bash_tool = crate::tools::BashTool::new(&working_dir).with_ctx(bash_ctx);
-            new_shared
-                .tool_registry
-                .register(Arc::new(bash_tool));
-
+            new_shared.tool_registry.register(Arc::new(bash_tool));
 
             // Register subagent tool if enabled
             if enable_sub_agents {
@@ -128,7 +126,7 @@ impl Agent {
         let handle_id = id.clone();
         tokio::spawn(async move {
             if let Err(e) = agent.run().await {
-                tracing::error!("Agent {} failed: {}", handle_id.0, e);
+                tracing::error!("Agent {} failed: {}", handle_id, e);
             }
         });
 
@@ -147,7 +145,7 @@ impl Agent {
     }
 
     async fn run(mut self) -> Result<()> {
-        tracing::info!("Agent {} started", self.id.0);
+        tracing::info!("Agent {} started", self.id);
 
         // Load historical messages if storage and session_id are provided
         if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
@@ -182,21 +180,21 @@ impl Agent {
 
             match state {
                 AgentState::WaitingForInput => {
-                    tracing::debug!("Agent {} waiting for input", self.id.0);
+                    tracing::debug!("Agent {} waiting for input", self.id);
                     if let Err(e) = self.handle_wait_for_input().await {
                         self.record_error("Wait for input failed", &e);
                         self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::Streaming => {
-                    tracing::debug!("Agent {} starting streaming", self.id.0);
+                    tracing::debug!("Agent {} starting streaming", self.id);
                     if let Err(e) = self.handle_streaming_with_retry().await {
                         self.record_error("Streaming failed", &e);
                         self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::ExecutingTool => {
-                    tracing::info!("Agent {} executing tools", self.id.0);
+                    tracing::info!("Agent {} executing tools", self.id);
                     if let Err(e) = self.handle_execute_tool().await {
                         self.record_error("Tool execution failed", &e);
                         self.context.transition_to(AgentState::Failed);
@@ -212,7 +210,7 @@ impl Agent {
         let final_state = self.context.current_state();
         tracing::info!(
             "Agent {} finished: state={:?}, messages={}, tool_calls={}",
-            self.id.0,
+            self.id,
             final_state,
             self.message_buffer.len(),
             tool_calls
@@ -260,7 +258,7 @@ impl Agent {
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<()> {
-        tracing::info!("Agent {} {} cancelled", self.id.0, context);
+        tracing::info!("Agent {} {} cancelled", self.id, context);
         let _ = self
             .event_tx
             .send(Event::Agent(AgentEvent::Cancelled {
@@ -274,14 +272,14 @@ impl Agent {
     /// Record an error and store it for later display
     fn record_error(&mut self, context: &str, error: &anyhow::Error) {
         let msg = format!("{context}: {error}");
-        tracing::error!("Agent {} failed: {}", self.id.0, msg);
+        tracing::error!("Agent {} failed: {}", self.id, msg);
         self.last_error = Some(msg);
     }
 
     /// Helper to emit `AgentEvent::Failed` and return error
     async fn fail_agent(&self, context: &str, error: anyhow::Error) -> Result<()> {
         let error_msg = format!("{context}: {error}");
-        tracing::error!("Agent {} failed: {}", self.id.0, error_msg);
+        tracing::error!("Agent {} failed: {}", self.id, error_msg);
         let _ = self
             .event_tx
             .send(Event::Agent(AgentEvent::Failed {
@@ -349,7 +347,7 @@ impl Agent {
         let tools = self.shared.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
-            self.id.0,
+            self.id,
             tools.len(),
             tools.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
@@ -509,14 +507,14 @@ impl Agent {
                 .map_or(0, |c| c.len());
             tracing::info!(
                 "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
-                self.id.0,
+                self.id,
                 tool_count
             );
             self.context.transition_to(AgentState::ExecutingTool);
         } else {
             tracing::debug!(
                 "Agent {} streaming complete, waiting for next input",
-                self.id.0
+                self.id
             );
             let _ = self
                 .event_tx

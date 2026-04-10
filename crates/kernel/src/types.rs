@@ -5,17 +5,28 @@ use uuid::Uuid;
 
 /// Unique identifier for agents
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AgentId(pub SmolStr);
+pub struct AgentId(SmolStr);
+
+impl Default for AgentId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AgentId {
     pub fn new() -> Self {
         Self(SmolStr::new(Uuid::now_v7().to_string()))
     }
+
+    /// Get the string representation
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl Default for AgentId {
-    fn default() -> Self {
-        Self::new()
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

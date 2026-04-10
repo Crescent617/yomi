@@ -74,7 +74,7 @@ impl Tool for SubAgentTool {
 
         tracing::info!(
             "Spawning sub-agent for parent {} with task: {}",
-            self.parent_id.0,
+            self.parent_id,
             task
         );
 
@@ -84,7 +84,7 @@ impl Tool for SubAgentTool {
             Arc::clone(&self.shared),
             &format!(
                 "You are a sub-agent. Parent: {}. Task: {}",
-                self.parent_id.0, task
+                self.parent_id, task
             ),
             None,
             None,
@@ -141,28 +141,25 @@ impl Tool for SubAgentTool {
                     // Forward result to parent agent
                     let result_text = if completed {
                         format!(
-                            "\n\n[Async Sub-agent {} completed]\nResult:\n{}",
-                            sub_id.0, output
+                            "\n\n[Async Sub-agent {sub_id} completed]\nResult:\n{output}"
                         )
                     } else {
                         format!(
-                            "\n\n[Async Sub-agent {} ended]\nPartial result:\n{}",
-                            sub_id.0, output
+                            "\n\n[Async Sub-agent {sub_id} ended]\nPartial result:\n{output}"
                         )
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)
                     let _ = parent_tx
                         .send(AgentInput::ToolResult {
-                            tool_id: format!("subagent_{}", sub_id.0),
+                            tool_id: format!("subagent_{sub_id}"),
                             content: vec![ContentBlock::Text { text: result_text }],
                         })
                         .await;
                 });
 
                 let result = format!(
-                    "Sub-agent {} spawned in async mode. Results will be sent when complete. Task: {}",
-                    sub_agent_id.0, task
+                    "Sub-agent {sub_agent_id} spawned in async mode. Results will be sent when complete. Task: {task}"
                 );
                 Ok(ToolOutput {
                     stdout: result,
@@ -213,7 +210,7 @@ impl Tool for SubAgentTool {
                 }
 
                 if completed {
-                    output.push_str(&format!("\n\n[Sub-agent {} completed]", sub_agent_id.0));
+                    output.push_str(&format!("\n\n[Sub-agent {sub_agent_id} completed]"));
                     Ok(ToolOutput {
                         stdout: output,
                         stderr: String::new(),

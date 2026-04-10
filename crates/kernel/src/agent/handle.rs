@@ -31,7 +31,7 @@ impl AgentHandle {
         self.input_tx
             .send(AgentInput::User(content))
             .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
+            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
     }
 
     /// 发送用户文本消息给 Agent（便捷方法）
@@ -48,7 +48,7 @@ impl AgentHandle {
         self.input_tx
             .send(AgentInput::ToolResult { tool_id, content })
             .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
+            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
     }
 
     /// 发送取消信号给 Agent
@@ -56,7 +56,7 @@ impl AgentHandle {
         self.input_tx
             .send(AgentInput::Cancel)
             .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id.0))
+            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
     }
 
     /// 获取当前状态

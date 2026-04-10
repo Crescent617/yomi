@@ -40,7 +40,7 @@ impl SubAgentManager {
         let system_prompt = format!(
             "You are a sub-agent working on a specific task. \
              Parent agent: {}. Task: {}",
-            self.parent_id.0, task
+            self.parent_id, task
         );
 
         let (handle, mut event_rx) = Agent::spawn(

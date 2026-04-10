@@ -34,7 +34,7 @@ impl Coordinator {
     }
 
     pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
-        let id = SessionId::new();
+        let id = self.storage.create_session(&config.project_path).await?;
         let mut session = Session::new(
             id.clone(),
             config,
@@ -49,6 +49,37 @@ impl Coordinator {
             .insert(session_id.clone(), Arc::new(RwLock::new(session)));
         tracing::info!("Session {} created", session_id.0);
         Ok(session_id)
+    }
+
+    /// Restore a session from storage by its ID
+    pub async fn restore_session(
+        &self,
+        session_id: &SessionId,
+        config: SessionConfig,
+    ) -> Result<SessionId> {
+        // Verify session exists in storage
+        let session_record = self
+            .storage
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session not found in storage: {}", session_id.0))?;
+
+        tracing::info!("Restoring session {} from storage", session_id.0);
+
+        let mut session = Session::new(
+            session_record.id.clone(),
+            config,
+            self.storage.clone(),
+            Arc::clone(&self.agent_shared),
+        );
+        session.init().await?;
+
+        self.sessions
+            .write()
+            .await
+            .insert(session_record.id.clone(), Arc::new(RwLock::new(session)));
+        tracing::info!("Session {} restored", session_record.id.0);
+        Ok(session_record.id)
     }
 
     pub async fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
