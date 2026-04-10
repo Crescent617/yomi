@@ -1,5 +1,5 @@
 use crate::provider::ModelConfig;
-use crate::tool::{ToolRegistry, ToolSandbox};
+use crate::tool::ToolRegistry;
 use std::sync::Arc;
 
 /// Shared resources across agents in the same session/context.
@@ -11,7 +11,6 @@ use std::sync::Arc;
 pub struct AgentShared {
     pub provider: Arc<dyn crate::provider::ModelProvider>,
     pub tool_registry: Arc<ToolRegistry>,
-    pub sandbox: Arc<ToolSandbox>,
     pub model_config: ModelConfig,
 }
 
@@ -20,13 +19,11 @@ impl AgentShared {
     pub fn new(
         provider: Arc<dyn crate::provider::ModelProvider>,
         tool_registry: Arc<ToolRegistry>,
-        sandbox: Arc<ToolSandbox>,
         model_config: ModelConfig,
     ) -> Self {
         Self {
             provider,
             tool_registry,
-            sandbox,
             model_config,
         }
     }
@@ -36,7 +33,6 @@ impl AgentShared {
         Self {
             provider: Arc::clone(&self.provider),
             tool_registry: Arc::new(self.tool_registry.as_ref().clone()),
-            sandbox: Arc::clone(&self.sandbox),
             model_config: self.model_config.clone(),
         }
     }

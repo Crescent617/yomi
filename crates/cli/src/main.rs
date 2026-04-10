@@ -5,7 +5,7 @@ use kernel::{
     agent::AgentConfig,
     config::{env_names, Config, ModelProvider},
     storage::FsStorage,
-    tool::{enable_yolo_mode, ToolRegistry, ToolSandbox},
+    tool::{enable_yolo_mode, ToolRegistry},
 };
 use kernel::{AnthropicProvider, BashTool, EditTool, OpenAIProvider};
 use std::path::PathBuf;
@@ -35,10 +35,6 @@ struct Args {
     /// API key (or set env var)
     #[arg(long)]
     api_key: Option<String>,
-
-    /// Enable sandbox mode for tools
-    #[arg(long)]
-    sandbox: bool,
 
     /// Skip all confirmations (YOLO mode)
     #[arg(long)]
@@ -87,10 +83,6 @@ async fn main() -> Result<()> {
         config.model.api_key = api_key;
     }
 
-    if args.sandbox {
-        config.sandbox = true;
-    }
-
     // Create data directory
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
@@ -118,18 +110,10 @@ async fn main() -> Result<()> {
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
     // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
 
-    // Create sandbox
-    let sandbox = if config.sandbox {
-        ToolSandbox::new().enable()
-    } else {
-        ToolSandbox::default()
-    };
-
     let coordinator = Arc::new(Coordinator::new(
         storage,
         provider,
         tool_registry,
-        sandbox,
         config.model.clone(),
     ));
 
@@ -240,7 +224,9 @@ fn reload_for_provider(mut config: Config) -> Config {
 /// - `YOMI_LOG_DIR`: Log directory (default: "~/.yomi/logs")
 fn init_logging(config: &Config) -> Result<()> {
     // Get log directory from env or default to ~/.yomi/logs
-    let log_dir = std::env::var(env_names::LOG_DIR).map_or_else(|_| config.data_dir.join("logs"), PathBuf::from);
+    let log_dir = std::env::var(env_names::LOG_DIR)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| config.data_dir.join("logs"));
 
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir)

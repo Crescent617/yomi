@@ -1,22 +1,35 @@
 use crate::event::ToolEvent;
-use crate::tool::{Tool, ToolRegistry, ToolSandbox};
+use crate::tool::{Tool, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-/// 工具执行结果
+/// Max output length before truncation (10KB)
+const MAX_OUTPUT_LENGTH: usize = 10_000;
+const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length. Use file tools or pagination to view full output.]";
+
+/// Tool execution result
 pub struct ToolExecutionResult {
     pub tool_call_id: String,
     pub message: Message,
     pub event: ToolEvent,
 }
 
-/// 并行执行多个工具调用
+/// Truncate output if it exceeds max length
+fn truncate_output(output: String) -> String {
+    if output.len() > MAX_OUTPUT_LENGTH {
+        let truncate_at = MAX_OUTPUT_LENGTH - TRUNCATION_MESSAGE.len();
+        format!("{}{}", &output[..truncate_at], TRUNCATION_MESSAGE)
+    } else {
+        output
+    }
+}
+
+/// Execute multiple tool calls in parallel
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
-    _sandbox: &ToolSandbox,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -33,7 +46,7 @@ pub async fn execute_tools_parallel(
 
     for call in tool_calls {
         let agent_id = agent_id.clone();
-        // 克隆必要字段，避免持有整个引用
+        // Clone necessary fields to avoid holding references
         let call_id = call.id.clone();
         let call_name = call.name.clone();
         let arguments = call.arguments.clone();
@@ -57,9 +70,14 @@ pub async fn execute_tools_parallel(
                 },
             };
             let elapsed = start.elapsed().as_millis() as u64;
+            let success = result.success();
 
-            let (event, message) = if result.success() {
-                let output = result.stdout;
+            // Truncate output if too long
+            let stdout = truncate_output(result.stdout);
+            let stderr = truncate_output(result.stderr);
+
+            let (event, message) = if success {
+                let output = stdout;
                 (
                     ToolEvent::Output {
                         agent_id: agent_id.clone(),
@@ -76,10 +94,7 @@ pub async fn execute_tools_parallel(
                     },
                 )
             } else {
-                let error = format!(
-                    "Exit code: {}\n{}\n{}",
-                    result.exit_code, result.stdout, result.stderr
-                );
+                let error = format!("Exit code: {}\n{}\n{}", result.exit_code, stdout, stderr);
                 (
                     ToolEvent::Error {
                         agent_id: agent_id.clone(),

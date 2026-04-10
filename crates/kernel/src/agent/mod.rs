@@ -37,6 +37,11 @@ pub enum AgentInput {
         tool_id: String,
         content: Vec<ContentBlock>,
     },
+    /// Background task completion
+    TaskResult {
+        task_id: String,
+        content: Vec<ContentBlock>,
+    },
     /// Cancel current operation
     Cancel,
 }
@@ -77,22 +82,34 @@ impl Agent {
         let mut message_buffer = MessageBuffer::new(100);
         message_buffer.push(Message::system(system_prompt));
 
-        // Clone the shared resources with a new ToolRegistry if sub-agents are enabled
-        let shared = if enable_sub_agents {
-            // Clone input_tx for SubAgentTool (only needed when sub-agents enabled)
-            let input_tx_for_subagent = input_tx.clone();
+        // Clone the shared resources with a new ToolRegistry for agent-specific tools
+        let shared = {
             let new_shared = shared.with_cloned_registry();
-            // Register the subagent tool with parent's input_tx for async result forwarding
+            let working_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+            // Register task tools
+            let task_ctx = crate::tools::TaskCtx::new(id.clone(), input_tx.clone(), working_dir);
             new_shared
                 .tool_registry
-                .register(Arc::new(SubAgentTool::new(
-                    id.clone(),
-                    Arc::new(new_shared.clone()),
-                    input_tx_for_subagent,
-                )));
+                .register(Arc::new(crate::tools::RunTask::new(task_ctx.clone())));
+            new_shared
+                .tool_registry
+                .register(Arc::new(crate::tools::CancelTask::new(task_ctx)));
+
+            // Register subagent tool if enabled
+            if enable_sub_agents {
+                let input_tx_for_subagent = input_tx.clone();
+                new_shared
+                    .tool_registry
+                    .register(Arc::new(SubAgentTool::new(
+                        id.clone(),
+                        Arc::new(new_shared.clone()),
+                        input_tx_for_subagent,
+                    )));
+            }
+
             Arc::new(new_shared)
-        } else {
-            shared
         };
 
         let agent = Self {
@@ -304,6 +321,14 @@ impl Agent {
             }
             Some(AgentInput::ToolResult { tool_id, content }) => {
                 let msg = Message::with_blocks(Role::Tool, content).with_tool_call_id(tool_id);
+                self.persist_message(&msg).await;
+                self.message_buffer.push(msg);
+                self.context.transition_to(AgentState::Streaming);
+                Ok(())
+            }
+            Some(AgentInput::TaskResult { task_id, content }) => {
+                tracing::debug!("Task result received: {}", task_id);
+                let msg = Message::with_blocks(Role::User, content);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
@@ -530,7 +555,6 @@ impl Agent {
             &self.id,
             tool_calls,
             &self.shared.tool_registry,
-            &self.shared.sandbox,
         )
         .await;
 

@@ -230,7 +230,4 @@ impl Tool for SubAgentTool {
         }
     }
 
-    fn requires_confirmation(&self) -> bool {
-        false
-    }
 }

@@ -103,7 +103,4 @@ impl Tool for BashTool {
         })
     }
 
-    fn requires_confirmation(&self) -> bool {
-        true
-    }
 }

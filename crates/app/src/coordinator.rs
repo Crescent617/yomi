@@ -7,7 +7,7 @@ use kernel::{
     event::Event,
     provider::ModelProvider,
     storage::Storage,
-    tool::{ToolRegistry, ToolSandbox},
+    tool::ToolRegistry,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,13 +24,11 @@ impl Coordinator {
         storage: Arc<dyn Storage>,
         provider: Arc<dyn ModelProvider>,
         tool_registry: ToolRegistry,
-        sandbox: ToolSandbox,
         model_config: ModelConfig,
     ) -> Self {
         let agent_shared = Arc::new(AgentShared::new(
             provider,
             Arc::new(tool_registry),
-            Arc::new(sandbox),
             model_config,
         ));
         Self {

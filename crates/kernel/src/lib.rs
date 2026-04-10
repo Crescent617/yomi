@@ -39,7 +39,7 @@ pub use provider::{
     ToolCallRequest,
 };
 pub use storage::{Storage, StorageConfig};
-pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry, ToolSandbox};
+pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry};
 pub use types::*;
 
 // Conditional re-exports for convenience

@@ -107,14 +107,4 @@ impl Tool for EditTool {
         ))
     }
 
-    fn requires_confirmation(&self) -> bool {
-        true
-    }
-
-    async fn is_allowed(&self, args: &Value) -> Result<bool> {
-        if let Some(path) = args["path"].as_str() {
-            return self.resolve_path(path).map(|_| true);
-        }
-        Ok(false)
-    }
 }
