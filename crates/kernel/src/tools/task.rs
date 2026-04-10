@@ -3,6 +3,7 @@ use crate::tool::Tool;
 use crate::types::{AgentId, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
+use rand::Rng;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,6 +13,19 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, RwLock};
+
+const BASE56_CHARS: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+
+/// Generate a random base56 ID of specified length
+fn generate_base56_id(len: usize) -> String {
+    let mut rng = rand::thread_rng();
+    (0..len)
+        .map(|_| {
+            let idx = rng.gen_range(0..BASE56_CHARS.len());
+            BASE56_CHARS[idx] as char
+        })
+        .collect()
+}
 
 #[derive(Clone)]
 pub struct TaskCtx {
@@ -75,7 +89,7 @@ impl RunTask {
     }
 
     fn generate_id() -> String {
-        format!("task_{}", uuid::Uuid::now_v7())
+        format!("task_{}", generate_base56_id(10))
     }
 
     fn output_path(task_id: &str) -> PathBuf {
@@ -124,35 +138,42 @@ impl Tool for RunTask {
         let output_path = Self::output_path(&task_id);
         let output_path_str = output_path.to_string_lossy().to_string();
 
+        // Start the process and get PID immediately
+        let child = Command::new("bash")
+            .arg("-c")
+            .arg(&command)
+            .current_dir(&self.ctx.working_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let pid = child.id().unwrap_or(0);
+
         let ctx = self.ctx.clone();
         let task_id_clone = task_id.clone();
+        let output_path_clone = output_path.clone();
 
         let spawn_handle = tokio::spawn(async move {
-            let result = run_shell(
-                command,
-                output_path.clone(),
-                ctx.working_dir.clone(),
-                timeout_secs,
-            )
-            .await;
+            let result =
+                wait_for_child(child, command, output_path_clone.clone(), timeout_secs).await;
 
             let text = match result {
                 Ok((code, timed_out)) => {
                     if timed_out {
                         format!(
-                            "[Task {task_id_clone} timed out]\nPartial output: {}",
-                            output_path.display()
+                            "[Task {task_id_clone} (PID: {pid}) timed out]\nPartial output: {}",
+                            output_path_clone.display()
                         )
                     } else {
                         format!(
-                            "[Task {task_id_clone} completed]\nExit code: {code}\nOutput: {}",
-                            output_path.display()
+                            "[Task {task_id_clone} (PID: {pid}) completed]\nExit code: {code}\nOutput: {}",
+                            output_path_clone.display()
                         )
                     }
                 }
                 Err(e) => format!(
-                    "[Task {task_id_clone} failed]\nError: {e}\nOutput: {}",
-                    output_path.display()
+                    "[Task {task_id_clone} (PID: {pid}) failed]\nError: {e}\nOutput: {}",
+                    output_path_clone.display()
                 ),
             };
 
@@ -174,13 +195,12 @@ impl Tool for RunTask {
 
         Ok(ToolOutput {
             stdout: format!(
-                "Task {task_id} started.\nOutput file: {output_path_str}\nYou will be notified when it completes."
+                "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\nYou will be notified when it completes."
             ),
             stderr: String::new(),
             exit_code: 0,
         })
     }
-
 }
 
 /// Cancel a running background task
@@ -238,22 +258,13 @@ impl Tool for CancelTask {
     }
 }
 
-async fn run_shell(
+async fn wait_for_child(
+    mut child: tokio::process::Child,
     command: String,
     output_path: PathBuf,
-    working_dir: PathBuf,
     timeout_secs: Option<u64>,
 ) -> Result<(i32, bool)> {
-    use std::process::Stdio;
     use tokio::time::timeout;
-
-    let mut child = Command::new("bash")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(&working_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
 
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
@@ -333,7 +344,9 @@ async fn run_shell(
                     .write_all(format!("\n# Task timed out after {timeout_secs:?}s\n").as_bytes())
                     .await;
             }
-            let _ = file.write_all(format!("\n# Exit: {code}\n").as_bytes()).await;
+            let _ = file
+                .write_all(format!("\n# Exit: {code}\n").as_bytes())
+                .await;
         }
         Err(e) => {
             tracing::error!("Failed to append exit code: {e}");

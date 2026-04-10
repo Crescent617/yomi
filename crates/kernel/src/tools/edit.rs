@@ -106,5 +106,4 @@ impl Tool for EditTool {
             "",
         ))
     }
-
 }

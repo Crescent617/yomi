@@ -551,12 +551,9 @@ impl Agent {
                 .await;
         }
 
-        let results = crate::tools::execute_tools_parallel(
-            &self.id,
-            tool_calls,
-            &self.shared.tool_registry,
-        )
-        .await;
+        let results =
+            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.shared.tool_registry)
+                .await;
 
         for result in results {
             if self.cancel_token.is_cancelled() {

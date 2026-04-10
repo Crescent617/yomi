@@ -225,8 +225,7 @@ fn reload_for_provider(mut config: Config) -> Config {
 fn init_logging(config: &Config) -> Result<()> {
     // Get log directory from env or default to ~/.yomi/logs
     let log_dir = std::env::var(env_names::LOG_DIR)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| config.data_dir.join("logs"));
+        .map_or_else(|_| config.data_dir.join("logs"), PathBuf::from);
 
     // Ensure log directory exists
     std::fs::create_dir_all(&log_dir)

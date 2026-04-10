@@ -6,7 +6,8 @@ use tokio::task::JoinSet;
 
 /// Max output length before truncation (10KB)
 const MAX_OUTPUT_LENGTH: usize = 10_000;
-const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length. Use file tools or pagination to view full output.]";
+const TRUNCATION_MESSAGE: &str =
+    "\n\n[Output truncated due to length. Use file tools or pagination to view full output.]";
 
 /// Tool execution result
 pub struct ToolExecutionResult {
@@ -18,7 +19,7 @@ pub struct ToolExecutionResult {
 /// Truncate output if it exceeds max length
 fn truncate_output(output: String) -> String {
     if output.len() > MAX_OUTPUT_LENGTH {
-        let truncate_at = MAX_OUTPUT_LENGTH - TRUNCATION_MESSAGE.len();
+        let truncate_at = MAX_OUTPUT_LENGTH.saturating_sub(TRUNCATION_MESSAGE.len());
         format!("{}{}", &output[..truncate_at], TRUNCATION_MESSAGE)
     } else {
         output

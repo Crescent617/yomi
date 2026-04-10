@@ -102,5 +102,4 @@ impl Tool for BashTool {
             exit_code: output.status.code().unwrap_or(-1),
         })
     }
-
 }

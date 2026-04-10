@@ -3,12 +3,7 @@ use anyhow::Result;
 use kernel::agent::AgentShared;
 use kernel::provider::ModelConfig;
 use kernel::types::SessionId;
-use kernel::{
-    event::Event,
-    provider::ModelProvider,
-    storage::Storage,
-    tool::ToolRegistry,
-};
+use kernel::{event::Event, provider::ModelProvider, storage::Storage, tool::ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
