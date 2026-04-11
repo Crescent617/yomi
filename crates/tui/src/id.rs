@@ -6,4 +6,6 @@ pub enum Id {
     InfoBar, // Token/stream info above input
     InputBox,
     StatusBar, // Mode indicator at bottom (vim-style)
+    Mascot,    // Cat mascot
+    Banner,    // Banner with mascot and system info (empty state)
 }

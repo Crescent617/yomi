@@ -144,6 +144,10 @@ async fn main() -> Result<()> {
         config.model.clone(),
     ));
 
+    // Prepare banner data (before skills is moved)
+    let working_dir_str = working_dir.to_string_lossy().to_string();
+    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+
     // Build agent config
     let agent_config = AgentConfig {
         model: config.model.clone(),
@@ -206,8 +210,8 @@ async fn main() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
-    // Run TUI
-    run_tui(event_rx, input_tx, cancel_tx).await?;
+    // Run TUI with banner data
+    run_tui(event_rx, input_tx, cancel_tx, working_dir_str, skill_names).await?;
 
     println!("Goodbye!");
     Ok(())

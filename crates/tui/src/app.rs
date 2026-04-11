@@ -5,11 +5,12 @@
 use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tuirealm::SubEventClause;
 use tuirealm::{
     application::PollStrategy,
     ratatui::layout::{Constraint, Direction, Layout},
     terminal::{CrosstermTerminalAdapter, TerminalBridge},
-    Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, SubEventClause, Update,
+    Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, Update,
 };
 
 use kernel::event::Event as AppEvent;
@@ -81,6 +82,25 @@ impl Model {
         })
     }
 
+    /// Initialize banner with real data (called once at startup)
+    pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
+        self.update_banner(working_dir, skills)
+    }
+
+    /// Update banner data in ChatView
+    pub fn update_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
+        use crate::components::BannerData;
+        let banner = BannerData::new(working_dir, skills);
+        // Serialize banner data: working_dir|skill1,skill2,...
+        let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
+        self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("set_banner"),
+            AttrValue::String(banner_str),
+        )?;
+        Ok(())
+    }
+
     /// Calculate input box height based on content (3-5 lines, including borders)
     fn calculate_input_height(&self) -> u16 {
         // Content lines (1-3), plus 2 for borders = total 3-5
@@ -145,8 +165,8 @@ impl Model {
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),    // Main content area
-                            Constraint::Length(1), // Status bar (mode indicator)
+                            Constraint::Min(3),    // Main content area (includes banner)
+                            Constraint::Length(1), // Status bar
                         ]
                         .as_ref(),
                     )
@@ -161,16 +181,16 @@ impl Model {
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),               // Main content area
+                            Constraint::Min(3),               // Main content area (chat with banner)
                             Constraint::Length(1),            // Info bar (tokens/streaming)
-                            Constraint::Length(input_height), // Input area (dynamic 1-3 lines)
-                            Constraint::Length(1),            // Status bar (mode indicator)
+                            Constraint::Length(input_height), // Input area
+                            Constraint::Length(1),            // Status bar
                         ]
                         .as_ref(),
                     )
                     .split(f.area());
 
-                // Always show ChatView (unified history + streaming)
+                // ChatView includes banner at top (scrolls with content)
                 self.app.view(&Id::ChatView, f, chunks[0]);
                 // Info bar shows streaming progress
                 self.app.view(&Id::InfoBar, f, chunks[1]);
@@ -190,7 +210,7 @@ impl Model {
                 .tick_interval(Duration::from_millis(100)),
         );
 
-        // Mount unified chat view component
+        // Mount unified chat view component (includes scrollable banner)
         app.mount(
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
@@ -711,7 +731,10 @@ pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,
     cancel_tx: mpsc::Sender<()>,
+    working_dir: String,
+    skills: Vec<String>,
 ) -> Result<()> {
-    let model = Model::new(event_rx, input_tx, cancel_tx)?;
+    let mut model = Model::new(event_rx, input_tx, cancel_tx)?;
+    model.init_banner(working_dir, skills)?;
     model.run().await
 }

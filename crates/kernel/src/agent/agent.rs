@@ -72,7 +72,7 @@ impl Agent {
             .with_skills(&skills)
             .build();
 
-        tracing::info!(
+        tracing::debug!(
             "Agent {} spawning with system prompt: {}",
             id,
             system_prompt

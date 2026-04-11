@@ -18,6 +18,8 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::token_utils,
 };
 
+use super::banner::MascotAnimator;
+
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -68,6 +70,10 @@ pub struct ChatView {
     active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
     // Expand all mode (ctrl-o): show all thinking and tool details
     expand_all: bool,
+    // Banner data (rendered as first content, scrolls with messages)
+    banner: Option<crate::components::BannerData>,
+    // Mascot animator for blinking animation
+    mascot_animator: MascotAnimator,
 }
 
 impl Default for ChatView {
@@ -84,18 +90,20 @@ impl Default for ChatView {
             user_scrolled: false,
             active_tools: std::collections::HashMap::new(),
             expand_all: false,
+            banner: Some(crate::components::BannerData::default()),
+            mascot_animator: MascotAnimator::default(),
         }
     }
 }
 
 impl ChatView {
-    /// Render a pixel-art style cat banner for empty state
-    const fn render_banner() -> Vec<Line<'static>> {
-        vec![]
-    }
-
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set banner data to display at the top
+    pub fn set_banner(&mut self, banner: crate::components::BannerData) {
+        self.banner = Some(banner);
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -299,10 +307,12 @@ impl ChatView {
         }
     }
 
-    pub const fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if self.is_streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
+        // Update mascot blink animation
+        self.mascot_animator.tick();
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -802,6 +812,31 @@ impl MockComponent for ChatView {
 
         let mut all_lines: Vec<Line> = Vec::new();
 
+        // Render banner first (if set), it will scroll with content
+        if let Some(ref banner) = self.banner {
+            // Build banner lines with two-column layout (mascot left, info right)
+            let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
+            let info_lines = banner.info_lines();
+
+            // Column widths for alignment
+            const MASCOT_COL_WIDTH: usize = 8;
+
+            let max_rows = mascot_lines.len().max(info_lines.len());
+            for i in 0..max_rows {
+                let mascot_part = mascot_lines.get(i).unwrap_or(&"");
+                let info_part = info_lines.get(i).map(|s| s.as_str()).unwrap_or("");
+
+                // Pad mascot to fixed width for alignment
+                let mascot_padded = format!("{:width$}", mascot_part, width = MASCOT_COL_WIDTH);
+
+                all_lines.push(Line::from(vec![
+                    Span::styled(mascot_padded, colors::accent_system()),
+                    Span::styled(info_part.to_string(), colors::text_secondary()),
+                ]));
+            }
+            all_lines.push(Line::from(""));
+        }
+
         // Render history with unified spacing
         for (i, msg) in self.messages.iter().enumerate() {
             all_lines.extend(Self::render_message(msg));
@@ -825,11 +860,6 @@ impl MockComponent for ChatView {
             || !self.streaming_thinking.is_empty()
         {
             all_lines.extend(self.render_streaming());
-        }
-
-        // Show banner if no messages yet
-        if all_lines.is_empty() {
-            all_lines.extend(Self::render_banner());
         }
 
         // Calculate scroll position with wrap support
@@ -905,6 +935,17 @@ impl MockComponent for ChatView {
                         .map(|s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok());
                     self.add_assistant_message(content, thinking, elapsed_ms);
+                }
+            }
+            Attribute::Custom("set_banner") => {
+                if let AttrValue::String(banner_str) = value {
+                    let parts: Vec<&str> = banner_str.split('|').collect();
+                    let working_dir = parts.first().unwrap_or(&"").to_string();
+                    let skills = parts
+                        .get(1)
+                        .map(|s| s.split(',').map(|skill| skill.trim().to_string()).collect())
+                        .unwrap_or_default();
+                    self.set_banner(crate::components::BannerData::new(working_dir, skills));
                 }
             }
             Attribute::Custom("start_streaming") => {
@@ -1038,7 +1079,13 @@ impl MockComponent for ChatView {
     }
 
     fn state(&self) -> State {
-        State::None
+        // Return banner data if present: "working_dir|skill1,skill2,..."
+        if let Some(ref banner) = self.banner {
+            let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
+            State::One(tuirealm::StateValue::String(banner_str))
+        } else {
+            State::None
+        }
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
