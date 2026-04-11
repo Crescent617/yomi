@@ -33,7 +33,7 @@ impl Tool for EditTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Replace text in a file. Use old_str to locate the text and new_str to replace it."
+        "Replace text in a file. Use this instead of sed. Provide old_str to locate the text (should be unique enough) and new_str to replace it. Supports multi=true to replace all occurrences."
     }
 
     fn params(&self) -> Value {

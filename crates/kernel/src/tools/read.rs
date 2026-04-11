@@ -33,7 +33,7 @@ impl Tool for ReadTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Read the contents of a file. Use offset and limit to read specific sections."
+        "Read a file from the local filesystem. Use this instead of cat/head/tail. Supports reading specific line ranges with offset and limit."
     }
 
     fn params(&self) -> Value {

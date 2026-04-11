@@ -42,9 +42,7 @@ impl Tool for SubAgentTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Spawn a sub-agent to handle a specific task. \
-         Use 'sync' mode to wait for completion and get results, \
-         or 'async' mode to spawn and continue immediately."
+        "Spawn a sub-agent to handle a specific task. Useful for parallelizing independent work or protecting the main context from excessive results. Use 'sync' mode to wait for results, or 'async' mode to continue immediately. Avoid duplicating work - if you delegate research to a sub-agent, don't also do the same search yourself."
     }
 
     fn params(&self) -> Value {
