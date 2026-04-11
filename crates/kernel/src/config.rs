@@ -58,6 +58,9 @@ pub mod env_names {
     /// Logging configuration
     pub const LOG_DIR: &str = env_name!("LOG_DIR");
     pub const LOG_LEVEL: &str = "RUST_LOG"; // Standard env var, no prefix
+
+    /// Skill folders (comma-separated paths)
+    pub const SKILL_FOLDERS: &str = env_name!("SKILL_FOLDERS");
 }
 
 /// Provider type
@@ -138,6 +141,7 @@ pub struct Config {
     pub sandbox: bool,
     pub yolo: bool,
     pub data_dir: PathBuf,
+    pub skill_folders: Vec<String>,
 }
 
 impl Default for Config {
@@ -151,6 +155,7 @@ impl Default for Config {
             sandbox: false,
             yolo: false,
             data_dir,
+            skill_folders: Vec::new(),
         }
     }
 }
@@ -221,6 +226,11 @@ impl Config {
         config.model.thinking.enabled = env_bool_opt(env_names::THINKING).unwrap_or(true);
         if let Some(budget) = env_var(env_names::THINKING_BUDGET).and_then(|s| s.parse().ok()) {
             config.model.thinking.budget_tokens = budget;
+        }
+
+        // Skill folders from env (comma-separated)
+        if let Some(folders) = env_var(env_names::SKILL_FOLDERS) {
+            config.skill_folders = folders.split(',').map(String::from).collect();
         }
 
         // Update agent config model (must be after all model config)

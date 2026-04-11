@@ -1,6 +1,8 @@
 use crate::provider::ModelConfig;
+use crate::skill::Skill;
 use crate::storage::StorageConfig;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -8,8 +10,9 @@ pub struct AgentConfig {
     pub storage: StorageConfig,
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
-    pub sub_agent_mode: SubAgentMode,
     pub system_prompt: String,
+    #[serde(skip)]
+    pub skills: Vec<Arc<Skill>>,
 }
 
 impl Default for AgentConfig {
@@ -19,8 +22,8 @@ impl Default for AgentConfig {
             storage: StorageConfig::default(),
             max_iterations: 50,
             enable_sub_agents: true,
-            sub_agent_mode: SubAgentMode::Async,
             system_prompt: "You are a helpful AI coding assistant.".to_string(),
+            skills: Vec::new(),
         }
     }
 }

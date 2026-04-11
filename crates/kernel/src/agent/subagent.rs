@@ -1,4 +1,5 @@
 use crate::agent::{Agent, AgentHandle, AgentShared, SubAgentMode};
+use crate::skill::Skill;
 use crate::types::AgentId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ pub struct SubAgentManager {
     sub_agents: Arc<RwLock<HashMap<AgentId, SubAgentHandle>>>,
     parent_id: AgentId,
     agent_shared: Arc<AgentShared>,
+    skills: Vec<Arc<Skill>>,
 }
 
 impl std::fmt::Debug for SubAgentManager {
@@ -27,17 +29,22 @@ struct SubAgentHandle {
 }
 
 impl SubAgentManager {
-    pub fn new(parent_id: AgentId, agent_shared: Arc<AgentShared>) -> Self {
+    pub fn new(
+        parent_id: AgentId,
+        agent_shared: Arc<AgentShared>,
+        skills: Vec<Arc<Skill>>,
+    ) -> Self {
         Self {
             sub_agents: Arc::new(RwLock::new(HashMap::new())),
             parent_id,
             agent_shared,
+            skills,
         }
     }
 
     /// 启动子代理
     pub async fn spawn(&self, mode: SubAgentMode, task: String) -> AgentId {
-        let system_prompt = format!(
+        let base_prompt = format!(
             "You are a sub-agent working on a specific task. \
              Parent agent: {}. Task: {}",
             self.parent_id, task
@@ -46,12 +53,13 @@ impl SubAgentManager {
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
             &self.agent_shared,
-            &system_prompt,
-            None, // Sub-agents don't persist to storage
+            base_prompt,
+            self.skills.clone(), // Inherit skills from parent
+            Vec::new(),          // No history for sub-agents
+            None,                // Sub-agents don't persist to storage
             None,
             10,    // Sub-agents get fewer iterations
             false, // Sub-agents don't spawn more sub-agents
-            SubAgentMode::Async,
         );
 
         let id = handle.id.clone();

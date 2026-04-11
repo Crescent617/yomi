@@ -18,7 +18,9 @@ pub use subagent::SubAgentManager;
 use message_buffer::MessageBuffer;
 
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
+use crate::prompt::SystemPromptBuilder;
 use crate::provider::ModelStreamItem;
+use crate::skill::Skill;
 use crate::tools::SubAgentTool;
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall};
 use anyhow::Result;
@@ -68,20 +70,34 @@ impl Agent {
     pub fn spawn(
         id: AgentId,
         shared: &Arc<AgentShared>,
-        system_prompt: &str,
+        base_prompt: impl AsRef<str>, // Base system prompt
+        skills: Vec<Arc<Skill>>,      // Skills to include in system prompt
+        history: Vec<Message>,        // Historical messages (may include old system message)
         storage: Option<Arc<dyn crate::storage::Storage>>,
         session_id: Option<String>,
         max_iterations: usize,
         enable_sub_agents: bool,
-        _sub_agent_mode: SubAgentMode,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
-        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(100);
-        let (event_tx, event_rx) = mpsc::channel(1000);
+        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
+        let (event_tx, event_rx) = mpsc::channel(100);
         let cancel_token = CancelToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        let mut message_buffer = MessageBuffer::new(100);
-        message_buffer.push(Message::system(system_prompt));
+        // Build system prompt with skills inside Agent
+        let system_prompt = SystemPromptBuilder::new()
+            .base_prompt(base_prompt.as_ref())
+            .with_skills(&skills)
+            .build();
+
+        tracing::info!(
+            "Agent {} spawning with system prompt: {}",
+            id,
+            system_prompt
+        );
+        // Build MessageBuffer: system message + history (excluding old system messages)
+        let mut messages = vec![Message::system(system_prompt)];
+        messages.extend(history.into_iter().filter(|m| m.role != Role::System));
+        let message_buffer = MessageBuffer::from_messages(messages);
 
         // Clone the shared resources with a new ToolRegistry for agent-specific tools
         let shared = {
@@ -104,6 +120,7 @@ impl Agent {
                         id.clone(),
                         Arc::new(new_shared.clone()),
                         input_tx_for_subagent,
+                        skills,
                     )));
             }
 
@@ -146,21 +163,11 @@ impl Agent {
     }
 
     async fn run(mut self) -> Result<()> {
-        tracing::info!("Agent {} started", self.id);
-
-        // Load historical messages if storage and session_id are provided
-        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
-            let session_id_wrapped = crate::types::SessionId(session_id.clone());
-            if let Ok(messages) = storage.get_messages(&session_id_wrapped).await {
-                for msg in messages {
-                    // Skip system message as it's already in the buffer
-                    if msg.role != Role::System {
-                        self.message_buffer.push(msg);
-                    }
-                }
-                tracing::info!("Loaded {} messages from storage", self.message_buffer.len());
-            }
-        }
+        tracing::info!(
+            "Agent {} started with {} messages",
+            self.id,
+            self.message_buffer.len()
+        );
 
         self.context.transition_to(AgentState::WaitingForInput);
         loop {

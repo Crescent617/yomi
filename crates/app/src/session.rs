@@ -46,15 +46,23 @@ impl Session {
     }
 
     async fn spawn_main_agent(&mut self) -> Result<()> {
+        // Load history from storage
+        let history = self
+            .storage
+            .get_messages(&self.id)
+            .await
+            .unwrap_or_default();
+
         let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
             &self.agent_shared,
-            &self.config.agent.system_prompt,
+            &self.config.agent.system_prompt, // Base prompt
+            self.config.agent.skills.clone(), // Skills (Agent will build system prompt)
+            history,
             Some(self.storage.clone()),
             Some(self.id.0.clone()),
             self.config.agent.max_iterations,
             self.config.agent.enable_sub_agents,
-            self.config.agent.sub_agent_mode,
         );
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);

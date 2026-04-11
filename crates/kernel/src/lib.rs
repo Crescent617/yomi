@@ -18,6 +18,7 @@ pub mod config;
 pub mod event;
 pub mod prompt;
 pub mod provider;
+pub mod skill;
 pub mod storage;
 pub mod tool;
 pub mod types;
@@ -33,11 +34,12 @@ pub use event::{
     AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
     ToolEvent, UserEvent,
 };
-pub use prompt::PromptBuilder;
+pub use prompt::{PromptBuilder, SystemPromptBuilder};
 pub use provider::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig,
     ToolCallRequest,
 };
+pub use skill::{Skill, SkillLoader};
 pub use storage::{Storage, StorageConfig};
 pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry};
 pub use types::*;

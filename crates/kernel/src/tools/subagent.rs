@@ -1,5 +1,6 @@
 use crate::agent::{Agent, AgentInput, AgentShared, SubAgentMode};
 use crate::event::Event;
+use crate::skill::Skill;
 use crate::tool::Tool;
 use crate::types::{AgentId, ContentBlock, ToolOutput};
 use anyhow::Result;
@@ -14,6 +15,8 @@ pub struct SubAgentTool {
     shared: Arc<AgentShared>,
     /// Parent's `input_tx` for forwarding async sub-agent results
     parent_input_tx: mpsc::Sender<AgentInput>,
+    /// Skills inherited from parent agent
+    skills: Vec<Arc<Skill>>,
 }
 
 impl SubAgentTool {
@@ -21,11 +24,13 @@ impl SubAgentTool {
         parent_id: AgentId,
         shared: Arc<AgentShared>,
         parent_input_tx: mpsc::Sender<AgentInput>,
+        skills: Vec<Arc<Skill>>,
     ) -> Self {
         Self {
             parent_id,
             shared,
             parent_input_tx,
+            skills,
         }
     }
 }
@@ -79,18 +84,20 @@ impl Tool for SubAgentTool {
         );
 
         // Spawn the sub-agent
+        let base_prompt = format!(
+            "You are a sub-agent. Parent: {}. Task: {}",
+            self.parent_id, task
+        );
         let (handle, mut event_rx) = Agent::spawn(
             AgentId::new(),
             &self.shared,
-            &format!(
-                "You are a sub-agent. Parent: {}. Task: {}",
-                self.parent_id, task
-            ),
+            base_prompt,
+            self.skills.clone(), // Inherit skills from parent
+            Vec::new(),          // No history for sub-agents
             None,
             None,
             10,
             false,
-            SubAgentMode::Async,
         );
 
         let sub_agent_id = handle.id.clone();

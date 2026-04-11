@@ -4,10 +4,8 @@ use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-/// Max output length before truncation (10KB)
-const MAX_OUTPUT_LENGTH: usize = 10_000;
-const TRUNCATION_MESSAGE: &str =
-    "\n\n[Output truncated due to length. Use file tools or pagination to view full output.]";
+const MAX_OUTPUT_LENGTH: usize = 40_000;
+const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length.]";
 
 /// Tool execution result
 pub struct ToolExecutionResult {

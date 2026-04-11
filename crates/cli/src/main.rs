@@ -4,6 +4,8 @@ use clap::Parser;
 use kernel::{
     agent::AgentConfig,
     config::{env_names, Config, ModelProvider},
+    expand_tilde,
+    skill::SkillLoader,
     storage::FsStorage,
     tool::{enable_yolo_mode, ToolRegistry},
 };
@@ -89,6 +91,32 @@ async fn main() -> Result<()> {
     // Initialize logging with file output and env filter
     init_logging(&config)?;
 
+    // Load skills from configured folders
+    // Default to ./.claude/skills if no folders configured via env
+    let skill_folders = if config.skill_folders.is_empty() {
+        &vec!["~/.yomi/skills".into(), "~/.claude/skills".into()]
+    } else {
+        &config.skill_folders
+    };
+
+    tracing::debug!("Loading skills from folders: {:?}", skill_folders);
+
+    let skills: Vec<Arc<kernel::skill::Skill>> = {
+        let loader = SkillLoader::new(skill_folders.iter().map(expand_tilde).collect());
+        loader.load_all().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load skills: {e}");
+            Vec::new()
+        })
+    };
+
+    // Log loaded skills
+    if !skills.is_empty() {
+        tracing::info!("Loaded {} skill(s)", skills.len());
+        for skill in &skills {
+            tracing::info!("  - {} (from {})", skill.name, skill.source_path.display());
+        }
+    }
+
     // Validate API key
     if !config.has_api_key() {
         eprintln!("Error: API key not configured.");
@@ -119,6 +147,7 @@ async fn main() -> Result<()> {
     // Build agent config
     let agent_config = AgentConfig {
         model: config.model.clone(),
+        skills,
         ..Default::default()
     };
 
