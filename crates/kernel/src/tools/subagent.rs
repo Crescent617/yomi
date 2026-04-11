@@ -1,7 +1,7 @@
 use crate::agent::{Agent, AgentInput, AgentShared, SubAgentMode};
 use crate::event::Event;
 use crate::skill::Skill;
-use crate::tool::Tool;
+use crate::tools::Tool;
 use crate::types::{AgentId, ContentBlock, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;

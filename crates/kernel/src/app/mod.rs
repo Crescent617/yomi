@@ -1,3 +1,5 @@
+//! Application layer - session and coordinator management
+
 pub mod coordinator;
 pub mod session;
 

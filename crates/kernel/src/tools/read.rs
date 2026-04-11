@@ -1,4 +1,4 @@
-use crate::tool::Tool;
+use crate::tools::Tool;
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;

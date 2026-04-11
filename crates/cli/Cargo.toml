@@ -11,7 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 kernel = { workspace = true }
-app = { workspace = true }
 tui = { workspace = true }
 
 clap = { workspace = true }

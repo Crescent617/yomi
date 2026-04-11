@@ -1,9 +1,11 @@
-use crate::session::{Session, SessionConfig};
+use crate::agent::AgentShared;
+use crate::app::session::{Session, SessionConfig};
+use crate::event::Event;
+use crate::providers::{ModelConfig, Provider};
+use crate::storage::Storage;
+use crate::tools::ToolRegistry;
+use crate::types::SessionId;
 use anyhow::Result;
-use kernel::agent::AgentShared;
-use kernel::provider::ModelConfig;
-use kernel::types::SessionId;
-use kernel::{event::Event, provider::ModelProvider, storage::Storage, tool::ToolRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,7 +19,7 @@ pub struct Coordinator {
 impl Coordinator {
     pub fn new(
         storage: Arc<dyn Storage>,
-        provider: Arc<dyn ModelProvider>,
+        provider: Arc<dyn Provider>,
         tool_registry: ToolRegistry,
         model_config: ModelConfig,
     ) -> Self {

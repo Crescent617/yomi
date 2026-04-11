@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use app::{Coordinator, SessionConfig};
 use clap::Parser;
 use kernel::{
     agent::AgentConfig,
@@ -7,9 +6,10 @@ use kernel::{
     expand_tilde,
     skill::SkillLoader,
     storage::FsStorage,
-    tool::{enable_yolo_mode, ToolRegistry},
+    tools::{enable_yolo_mode, ToolRegistry},
 };
 use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
+use kernel::{Coordinator, SessionConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
     let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
 
     // Create provider based on configuration
-    let provider: Arc<dyn kernel::provider::ModelProvider> = match config.provider {
+    let provider: Arc<dyn kernel::Provider> = match config.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };

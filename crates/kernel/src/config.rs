@@ -1,6 +1,6 @@
 use crate::agent::AgentConfig;
 use crate::env_name;
-use crate::provider::ModelConfig;
+use crate::providers::ModelConfig;
 use crate::storage::StorageConfig;
 use std::path::PathBuf;
 

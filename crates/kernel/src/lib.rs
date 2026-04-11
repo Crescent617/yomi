@@ -14,40 +14,35 @@ macro_rules! env_name {
 }
 
 pub mod agent;
+pub mod app;
 pub mod config;
 pub mod event;
 pub mod prompt;
-pub mod provider;
+pub mod providers;
 pub mod skill;
 pub mod storage;
-pub mod tool;
+pub mod tools;
 pub mod types;
 
-#[cfg(feature = "providers")]
-pub mod providers;
-#[cfg(feature = "tools")]
-pub mod tools;
-
 // Re-export commonly used types
+pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, expand_tilde, Config, ModelProvider, DEFAULT_DATA_DIR};
 pub use event::{
     AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
     ToolEvent, UserEvent,
 };
 pub use prompt::{PromptBuilder, SystemPromptBuilder};
-pub use provider::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, RetryingProvider, ThinkingConfig,
-    ToolCallRequest,
+pub use providers::{
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
+    ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{Skill, SkillLoader};
 pub use storage::{Storage, StorageConfig};
-pub use tool::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry};
+pub use tools::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry};
 pub use types::*;
 
 // Conditional re-exports for convenience
 #[cfg(feature = "providers")]
 pub use providers::{AnthropicProvider, OpenAIProvider};
-#[cfg(feature = "storage")]
-pub use storage::sqlite::SqliteStorage;
-#[cfg(feature = "tools")]
+pub use storage::SqliteStorage;
 pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool, SubAgentTool};

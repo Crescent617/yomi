@@ -1,6 +1,6 @@
 use crate::event::ContentChunk;
-use crate::provider::{
-    HttpError, ModelConfig, ModelProvider, ModelStream, ModelStreamItem, ToolCallRequest,
+use crate::providers::{
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ToolCallRequest,
 };
 use crate::types::{Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
@@ -104,7 +104,7 @@ impl OpenAIProvider {
 }
 
 #[async_trait]
-impl ModelProvider for OpenAIProvider {
+impl Provider for OpenAIProvider {
     async fn stream(
         &self,
         messages: &[Message],

@@ -1,5 +1,178 @@
+use crate::event::ContentChunk;
+use crate::types::{Message, ToolDefinition};
+use anyhow::Result;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use thiserror::Error;
+
 pub mod anthropic;
 pub mod openai;
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
+
+/// Stream of model events
+pub type ModelStream = Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem>> + Send>>;
+
+/// Items emitted by model stream
+#[derive(Debug, Clone)]
+pub enum ModelStreamItem {
+    Chunk(ContentChunk),
+    ToolCall(ToolCallRequest),
+    Complete,
+    Fallback {
+        from: String,
+        to: String,
+    },
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    },
+}
+
+/// Tool call request from model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallRequest {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// Thinking configuration for supported models
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    pub enabled: bool,
+    pub budget_tokens: u32,
+}
+
+impl Default for ThinkingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            budget_tokens: 1024,
+        }
+    }
+}
+
+/// Model configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub model_id: String,
+    pub endpoint: String,
+    pub api_key: String,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub fallback_model_id: Option<String>,
+    pub sse_timeout_secs: u64,
+    pub thinking: ThinkingConfig,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            model_id: String::new(),
+            endpoint: String::new(),
+            api_key: String::new(),
+            max_tokens: None,
+            temperature: None,
+            fallback_model_id: None,
+            sse_timeout_secs: 30,
+            thinking: ThinkingConfig::default(),
+        }
+    }
+}
+
+/// HTTP error with status code for retry decisions
+#[derive(Error, Debug, Clone)]
+#[error("HTTP error {0}")]
+pub struct HttpError(pub u16);
+
+impl HttpError {
+    /// Returns true if this error is retryable
+    /// Retryable: 5xx, 429 rate limit
+    /// Not retryable: other 4xx
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self.0, 429 | 500..=599)
+    }
+}
+
+/// Core trait for model providers
+#[async_trait]
+pub trait Provider: Send + Sync {
+    async fn stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        config: &ModelConfig,
+    ) -> Result<ModelStream>;
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str;
+}
+
+/// Wrapper that adds rate limit retry with exponential backoff
+pub struct RetryingProvider<P: Provider> {
+    inner: P,
+    max_retries: u32,
+    base_delay_ms: u64,
+}
+
+impl<P: Provider> RetryingProvider<P> {
+    pub const fn new(inner: P) -> Self {
+        Self {
+            inner,
+            max_retries: 3,
+            base_delay_ms: 1000,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+}
+
+#[async_trait]
+impl<P: Provider> Provider for RetryingProvider<P> {
+    async fn stream(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        config: &ModelConfig,
+    ) -> Result<ModelStream> {
+        let mut attempt = 0;
+        loop {
+            match self.inner.stream(messages, tools, config).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt > self.max_retries {
+                        return Err(e);
+                    }
+                    let err_str = e.to_string();
+                    if err_str.contains("429") || err_str.contains("rate limit") {
+                        let delay = self.base_delay_ms * 2_u64.pow(attempt - 1);
+                        tracing::warn!(
+                            "Rate limited, retrying in {}ms (attempt {}/{})",
+                            delay,
+                            attempt,
+                            self.max_retries
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+}

@@ -1,5 +1,5 @@
 use crate::event::ToolEvent;
-use crate::tool::{Tool, ToolRegistry};
+use crate::tools::{Tool, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use std::sync::Arc;
 use tokio::task::JoinSet;

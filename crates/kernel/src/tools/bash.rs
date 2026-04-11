@@ -1,5 +1,5 @@
 use crate::agent::AgentInput;
-use crate::tool::Tool;
+use crate::tools::Tool;
 use crate::types::{AgentId, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;

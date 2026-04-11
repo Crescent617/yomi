@@ -44,5 +44,4 @@ futures = "0.3"
 
 # Internal - renamed for generic use in code
 kernel = { path = "crates/kernel", package = "kernel" }
-app = { path = "crates/app", package = "app" }
 tui = { path = "crates/tui", package = "tui" }
