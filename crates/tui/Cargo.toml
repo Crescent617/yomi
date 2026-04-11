@@ -1,23 +1,21 @@
 [package]
-name = "nekoclaw-tui"
+name = "tui"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
-nekoclaw-core = { workspace = true }
+kernel = { workspace = true }
 
-ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = "0.2"
 pulldown-cmark = { workspace = true }
+# tiktoken-rust = "0.2"  # Requires OpenSSL, disabled for now
 
 # TUI Realm - declarative component framework
-tuirealm = "2.0"
-tui-realm-stdlib = "2.0"
-
-
+tuirealm = "3.3"
+tui-realm-stdlib = "3.1"
 
 tokio = { workspace = true }
 anyhow = { workspace = true }

@@ -1,17 +1,19 @@
-//! Nekoclaw TUI - Terminal UI (stdout style, no alt screen)
+//! Yomi TUI - Terminal UI using tuirealm
+//!
+//! Component-based TUI framework with delta rendering and streaming markdown support.
 
 pub mod app;
-pub mod model;
+pub mod components;
+pub mod id;
+pub mod markdown_stream;
+pub mod msg;
 pub mod theme;
+pub mod utils;
 
-// Keep old modules for compatibility
-pub mod fold;
-pub mod input;
-pub mod markdown;
-pub mod render;
+// Re-export main entry point
+pub use app::run_tui;
 
-pub use app::App;
-pub use model::{ChatMessage, InputState, MessageId, Role, StreamingState, ToolCall};
+// Re-export theme utilities
 pub use theme::{
     chars, colors, current_theme, hex, presets, reset_theme, rgb, set_theme, spinner_char, Styles,
     ThemeConfig,

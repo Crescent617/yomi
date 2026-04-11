@@ -1,0 +1,9 @@
+//! Component IDs for tuirealm
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Id {
+    ChatView,
+    InfoBar, // Token/stream info above input
+    InputBox,
+    StatusBar, // Mode indicator at bottom (vim-style)
+}

@@ -1,18 +1,17 @@
 [package]
-name = "nekoclaw-cli"
+name = "cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "nekoclaw"
+name = "yomi"
 path = "src/main.rs"
 
 [dependencies]
-nekoclaw-core = { workspace = true }
-nekoclaw-app = { workspace = true }
-nekoclaw-tui = { workspace = true }
+kernel = { workspace = true }
+tui = { workspace = true }
 
 clap = { workspace = true }
 config = { workspace = true }

@@ -2870,7 +2870,7 @@ impl Session {
         agent.spawn();
         self.main_agent = Some(agent_id);
 
-        tracing::info!("Main agent {} spawned for session {}", agent_id.0, self.id.0);
+        tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
         Ok(())
     }
 
