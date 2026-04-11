@@ -7,6 +7,8 @@ use kernel::{
     skill::SkillLoader,
     storage::FsStorage,
     tools::{enable_yolo_mode, ToolRegistry},
+    utils::strs,
+    ReadTool,
 };
 use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
 use kernel::{Coordinator, SessionConfig};
@@ -135,7 +137,7 @@ async fn main() -> Result<()> {
     // Create tool registry
     let tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
-    // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
+    tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
 
     let coordinator = Arc::new(Coordinator::new(
         storage,
@@ -166,8 +168,9 @@ async fn main() -> Result<()> {
     println!("Provider: {}", config.provider);
     println!("Model: {}", config.model.model_id);
     println!("Endpoint: {}", config.model.endpoint);
-    let key_preview = if config.api_key().len() > 8 {
-        format!("{}...", &config.api_key()[..8])
+    let api_key = config.api_key();
+    let key_preview = if api_key.len() > 8 {
+        strs::truncate_with_suffix(api_key, 11, "...")
     } else {
         "not set".to_string()
     };

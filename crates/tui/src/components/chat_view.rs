@@ -15,7 +15,7 @@ use tuirealm::{
 };
 
 use crate::{
-    markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::token_utils,
+    markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::{strs, token_utils},
 };
 
 use super::banner::MascotAnimator;
@@ -582,11 +582,7 @@ impl ChatView {
                         if compact.is_empty() {
                             None
                         } else {
-                            let peek = if compact.len() > 80 {
-                                format!("{}...", &compact[..77])
-                            } else {
-                                compact.clone()
-                            };
+                            let peek = strs::truncate_with_suffix(compact, 80, "...");
                             Some(peek)
                         }
                     })
@@ -620,11 +616,7 @@ impl ChatView {
                         if trimmed.is_empty() {
                             None
                         } else {
-                            let peek = if trimmed.len() > 200 {
-                                format!("{}...", &trimmed[..197])
-                            } else {
-                                trimmed.to_string()
-                            };
+                            let peek = strs::truncate_with_suffix(trimmed, 200, "...");
                             Some(peek.split_whitespace().collect::<Vec<_>>().join(" "))
                         }
                     });

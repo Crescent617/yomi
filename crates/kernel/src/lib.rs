@@ -23,6 +23,7 @@ pub mod skill;
 pub mod storage;
 pub mod tools;
 pub mod types;
+pub mod utils;
 
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};

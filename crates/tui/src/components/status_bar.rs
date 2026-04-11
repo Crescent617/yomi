@@ -15,7 +15,7 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{msg::Msg, theme::colors};
+use crate::{msg::Msg, theme::colors, utils::strs};
 
 /// Application mode for status bar display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,10 +91,11 @@ impl StatusBar {
     fn render_center_section(&self, width: usize) -> Span<'static> {
         let message = self.center_message.as_deref().unwrap_or("");
         // Center the message, truncate if too long
-        let display = if message.len() > width {
-            format!("{}...", &message[..width.saturating_sub(3)])
+        let display = if message.chars().count() > width {
+            strs::truncate_with_suffix(message, width, "...")
         } else {
-            let padding = (width.saturating_sub(message.len())) / 2;
+            let msg_width = message.chars().count();
+            let padding = (width.saturating_sub(msg_width)) / 2;
             format!("{:>padding$}{}", "", message, padding = padding)
         };
 

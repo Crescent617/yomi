@@ -84,7 +84,14 @@ impl BannerData {
         let skills_str = if self.skills.is_empty() {
             "None".to_string()
         } else {
-            self.skills.join(", ")
+            // Limit to max 20 skills
+            const MAX_SKILLS: usize = 20;
+            let display_count = self.skills.len().min(MAX_SKILLS);
+            let mut result = self.skills[..display_count].join(", ");
+            if self.skills.len() > MAX_SKILLS {
+                result.push_str(&format!(", +{} more", self.skills.len() - MAX_SKILLS));
+            }
+            result
         };
 
         vec![

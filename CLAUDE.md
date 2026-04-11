@@ -18,6 +18,10 @@ Yomi is a production-grade AI coding assistant CLI tool written in Rust. It feat
 - Clean Code: Prioritize readability and clarity; use meaningful and short names
 - AGENTS.md: follow the guidelines in AGENTS.md in each module. like ./crates/tui/AGENTS.md
 
+### Naming Conventions
+
+- Use concise and descriptive names for variables, functions, and types.
+     
 ### Error Handling
 
 - Use `anyhow::Result` for application code, `thiserror` for library errors

@@ -1,6 +1,7 @@
 use crate::event::ToolEvent;
 use crate::tools::{Tool, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
+use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -14,14 +15,9 @@ pub struct ToolExecutionResult {
     pub event: ToolEvent,
 }
 
-/// Truncate output if it exceeds max length
+/// Truncate output if it exceeds max length (UTF-8 safe)
 fn truncate_output(output: String) -> String {
-    if output.len() > MAX_OUTPUT_LENGTH {
-        let truncate_at = MAX_OUTPUT_LENGTH.saturating_sub(TRUNCATION_MESSAGE.len());
-        format!("{}{}", &output[..truncate_at], TRUNCATION_MESSAGE)
-    } else {
-        output
-    }
+    strs::truncate_with_suffix(&output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
 /// Execute multiple tool calls in parallel
