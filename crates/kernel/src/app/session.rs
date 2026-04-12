@@ -53,6 +53,9 @@ impl Session {
             .await
             .unwrap_or_default();
 
+        // Load project memory (CLAUDE.md/AGENTS.md)
+        let project_memory = crate::project_memory::load(&self.config.project_path).await?;
+
         let (handle, event_rx) = Agent::spawn(
             AgentId::new(),
             &self.agent_shared,
@@ -63,6 +66,7 @@ impl Session {
             Some(self.id.0.clone()),
             self.config.agent.max_iterations,
             self.config.agent.enable_sub_agents,
+            project_memory,
         );
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);

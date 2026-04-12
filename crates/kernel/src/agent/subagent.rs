@@ -60,6 +60,7 @@ impl SubAgentManager {
             None,
             10,    // Sub-agents get fewer iterations
             false, // Sub-agents don't spawn more sub-agents
+            crate::project_memory::MemoryFiles::default(), // Sub-agents don't load project memory
         );
 
         let id = handle.id.clone();

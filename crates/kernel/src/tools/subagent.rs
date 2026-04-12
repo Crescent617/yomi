@@ -96,6 +96,7 @@ impl Tool for SubAgentTool {
             None,
             10,
             false,
+            crate::project_memory::MemoryFiles::default(),
         );
 
         let sub_agent_id = handle.id.clone();

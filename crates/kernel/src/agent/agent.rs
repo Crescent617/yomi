@@ -60,16 +60,30 @@ impl Agent {
         session_id: Option<String>,
         max_iterations: usize,
         enable_sub_agents: bool,
+        project_memory: crate::project_memory::MemoryFiles,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
         let (event_tx, event_rx) = mpsc::channel(100);
         let cancel_token = CancelToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        let system_prompt = SystemPromptBuilder::new()
-            .base_prompt(base_prompt.as_ref())
-            .with_skills(&skills)
-            .build();
+        // Build system prompt with project memory and skills
+        let base_prompt = base_prompt.as_ref();
+        let system_prompt = if project_memory.is_empty() {
+            // No project memory, use original builder
+            SystemPromptBuilder::new()
+                .base_prompt(base_prompt)
+                .with_skills(&skills)
+                .build()
+        } else {
+            // Merge project memory with base prompt
+            let memory_prompt = project_memory.build_system_prompt(base_prompt);
+            // Add skills after project memory
+            SystemPromptBuilder::new()
+                .base_prompt(&memory_prompt)
+                .with_skills(&skills)
+                .build()
+        };
 
         tracing::debug!(
             "Agent {} spawning with system prompt: {}",
