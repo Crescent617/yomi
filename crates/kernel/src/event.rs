@@ -79,6 +79,11 @@ pub enum ModelEvent {
         completion_tokens: u32,
         total_tokens: u32,
     },
+    /// Context compaction in progress
+    Compacting {
+        agent_id: AgentId,
+        active: bool,
+    },
 }
 
 /// Content chunk for streaming
