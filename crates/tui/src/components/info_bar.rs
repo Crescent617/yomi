@@ -14,7 +14,8 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{msg::Msg, theme::colors, utils::token_utils};
+use crate::{msg::Msg, theme::colors};
+use kernel::utils::tokens;
 
 /// Status state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,14 +108,13 @@ impl InfoBar {
 
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
-        // Token count using tiktoken
-        let content_tokens = token_utils::count_tokens(&self.content);
-        let thinking_tokens = token_utils::count_tokens(&self.thinking);
+        // Token count estimation (same as Claude Code: ~4 chars per token)
+        let content_tokens = tokens::estimate_tokens(&self.content);
+        let thinking_tokens = tokens::estimate_tokens(&self.thinking);
         let total_tokens = content_tokens + thinking_tokens;
 
         let token_style = Style::default().fg(colors::text_secondary());
-        // Add ~ prefix to indicate these are estimated token counts
-        let token_text = format!("~{total_tokens} tokens");
+        let token_text = format!("{} tokens", tokens::format_token_count(total_tokens));
         spans.push(Span::styled(token_text, token_style));
 
         // Elapsed time (only when streaming)

@@ -14,9 +14,8 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{
-    markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::{strs, token_utils},
-};
+use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::strs};
+use kernel::utils::tokens;
 
 use super::banner::MascotAnimator;
 
@@ -770,7 +769,7 @@ impl ChatView {
             return false;
         }
 
-        let tokens = token_utils::count_tokens(thinking);
+        let tokens = tokens::estimate_tokens(thinking);
         let elapsed_str = elapsed_ms
             .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
             .unwrap_or_default();
@@ -800,6 +799,7 @@ impl ChatView {
 
 impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        const MASCOT_COL_WIDTH: usize = 8;
         let main_area = area;
 
         let mut all_lines: Vec<Line> = Vec::new();
@@ -811,15 +811,14 @@ impl MockComponent for ChatView {
             let info_lines = banner.info_lines();
 
             // Column widths for alignment
-            const MASCOT_COL_WIDTH: usize = 8;
 
             let max_rows = mascot_lines.len().max(info_lines.len());
             for i in 0..max_rows {
                 let mascot_part = mascot_lines.get(i).unwrap_or(&"");
-                let info_part = info_lines.get(i).map(|s| s.as_str()).unwrap_or("");
+                let info_part = info_lines.get(i).map_or("", |s| s.as_str());
 
                 // Pad mascot to fixed width for alignment
-                let mascot_padded = format!("{:width$}", mascot_part, width = MASCOT_COL_WIDTH);
+                let mascot_padded = format!("{mascot_part:MASCOT_COL_WIDTH$}");
 
                 all_lines.push(Line::from(vec![
                     Span::styled(mascot_padded, colors::accent_system()),
@@ -932,7 +931,7 @@ impl MockComponent for ChatView {
             Attribute::Custom("set_banner") => {
                 if let AttrValue::String(banner_str) = value {
                     let parts: Vec<&str> = banner_str.split('|').collect();
-                    let working_dir = parts.first().unwrap_or(&"").to_string();
+                    let working_dir = (*parts.first().unwrap_or(&"")).to_string();
                     let skills = parts
                         .get(1)
                         .map(|s| s.split(',').map(|skill| skill.trim().to_string()).collect())
@@ -1072,12 +1071,13 @@ impl MockComponent for ChatView {
 
     fn state(&self) -> State {
         // Return banner data if present: "working_dir|skill1,skill2,..."
-        if let Some(ref banner) = self.banner {
-            let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
-            State::One(tuirealm::StateValue::String(banner_str))
-        } else {
-            State::None
-        }
+        self.banner.as_ref().map_or_else(
+            || State::None,
+            |banner| {
+                let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
+                State::One(tuirealm::StateValue::String(banner_str))
+            },
+        )
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {

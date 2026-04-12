@@ -14,8 +14,8 @@ pub trait Storage: Send + Sync {
     async fn delete_session(&self, id: &SessionId) -> Result<()>;
     async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
     async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
-    async fn update_summary(&self, session_id: &SessionId, summary: &str) -> Result<()>;
-    async fn get_summary(&self, session_id: &SessionId) -> Result<Option<String>>;
+    /// Replace all messages for a session (used after compaction)
+    async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
 }
 
 pub mod fs;
@@ -27,7 +27,6 @@ pub use sqlite::SqliteStorage;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub url: String,
-    pub compaction_threshold: usize,
 }
 
 impl StorageConfig {
@@ -35,7 +34,6 @@ impl StorageConfig {
     pub fn with_data_dir(data_dir: &std::path::Path) -> Self {
         Self {
             url: data_dir.join("sessions.db").to_string_lossy().to_string(),
-            compaction_threshold: 100,
         }
     }
 }

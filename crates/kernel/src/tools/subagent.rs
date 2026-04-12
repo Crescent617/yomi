@@ -103,6 +103,7 @@ impl Tool for SubAgentTool {
         // Send the task (as text content block)
         handle.send_text(task.to_string()).await.ok();
 
+        // TODO: output using last message
         match mode {
             SubAgentMode::Async => {
                 // Spawn background task to collect results and forward to parent
@@ -146,22 +147,22 @@ impl Tool for SubAgentTool {
 
                     // Forward result to parent agent
                     let result_text = if completed {
-                        format!("\n\n[Async Sub-agent {sub_id} completed]\nResult:\n{output}")
+                        format!("\n\n[Async Sub-agent task {sub_id} completed]\nResult:\n{output}")
                     } else {
-                        format!("\n\n[Async Sub-agent {sub_id} ended]\nPartial result:\n{output}")
+                        format!("\n\n[Async Sub-agent task {sub_id} ended]\nPartial result:\n{output}")
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)
                     let _ = parent_tx
-                        .send(AgentInput::ToolResult {
-                            tool_id: format!("subagent_{sub_id}"),
+                        .send(AgentInput::TaskResult {
+                            task_id: sub_id.to_string(),
                             content: vec![ContentBlock::Text { text: result_text }],
                         })
                         .await;
                 });
 
                 let result = format!(
-                    "Sub-agent {sub_agent_id} spawned in async mode. Results will be sent when complete. Task: {task}"
+                    "Sub-agent task {sub_agent_id} spawned in async mode. Results will be sent when complete. Task: {task}"
                 );
                 Ok(ToolOutput {
                     stdout: result,

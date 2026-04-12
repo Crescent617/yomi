@@ -87,7 +87,7 @@ impl Model {
         self.update_banner(working_dir, skills)
     }
 
-    /// Update banner data in ChatView
+    /// Update banner data in `ChatView`
     pub fn update_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
         use crate::components::BannerData;
         let banner = BannerData::new(working_dir, skills);

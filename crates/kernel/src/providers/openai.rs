@@ -133,6 +133,9 @@ impl Provider for OpenAIProvider {
                 Some(Self::convert_tools(tools))
             },
             stream: true,
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
         };
@@ -250,6 +253,14 @@ impl ToolCallAssembler {
         let response: OpenAIStreamResponse = serde_json::from_str(data)
             .map_err(|e| anyhow!("Failed to parse SSE chunk: {e} - data: {data}"))?;
 
+        // Handle usage information (sent in final chunk when stream_options.include_usage=true)
+        if let Some(usage) = response.usage {
+            return Ok(vec![ModelStreamItem::TokenUsage {
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+            }]);
+        }
+
         let Some(choice) = response.choices.into_iter().next() else {
             return Ok(vec![]);
         };
@@ -358,9 +369,16 @@ struct OpenAIRequest {
     tools: Option<Vec<OpenAITool>>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -408,6 +426,14 @@ struct OpenAIFunction {
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIStreamResponse {
     choices: Vec<OpenAIChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<OpenAIUsage>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -435,6 +461,7 @@ mod tests {
     fn create_test_response(delta: OpenAIDelta) -> OpenAIStreamResponse {
         OpenAIStreamResponse {
             choices: vec![OpenAIChoice { delta: Some(delta) }],
+            usage: None,
         }
     }
 
@@ -678,7 +705,7 @@ mod tests {
     fn test_assembler_no_choices() {
         let mut assembler = ToolCallAssembler::new();
 
-        let response = OpenAIStreamResponse { choices: vec![] };
+        let response = OpenAIStreamResponse { choices: vec![], usage: None };
         let json = serde_json::to_string(&response).unwrap();
         let items = assembler.process(&json).unwrap();
 
@@ -691,6 +718,7 @@ mod tests {
 
         let response = OpenAIStreamResponse {
             choices: vec![OpenAIChoice { delta: None }],
+            usage: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         let items = assembler.process(&json).unwrap();

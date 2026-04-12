@@ -47,6 +47,7 @@ impl SqliteStorage {
                 content TEXT NOT NULL,
                 tool_calls TEXT,
                 tool_call_id TEXT,
+                token_usage TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
@@ -55,6 +56,12 @@ impl SqliteStorage {
         )
         .execute(&self.pool)
         .await?;
+
+        // Migration: add token_usage column if not exists (for existing databases)
+        let _ = sqlx::query("ALTER TABLE messages ADD COLUMN token_usage TEXT")
+            .execute(&self.pool)
+            .await;
+
         Ok(())
     }
 }
@@ -144,30 +151,7 @@ impl Storage for SqliteStorage {
 
     async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
         for msg in messages {
-            let content = if msg.content.len() == 1 {
-                msg.content
-                    .first()
-                    .and_then(|c| c.as_text())
-                    .map(|t| t.to_string())
-                    .unwrap_or_default()
-            } else {
-                serde_json::to_string(&msg.content).unwrap_or_default()
-            };
-            let tool_calls_json = msg
-                .tool_calls
-                .as_ref()
-                .map(|tc| serde_json::to_string(tc).unwrap_or_default());
-            sqlx::query(
-                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-                VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(&session_id.0)
-            .bind(format!("{:?}", msg.role).to_lowercase())
-            .bind(content)
-            .bind(tool_calls_json)
-            .bind(&msg.tool_call_id)
-            .execute(&self.pool)
-            .await?;
+            self.insert_message(&self.pool, session_id, msg).await?;
         }
         sqlx::query(
             "UPDATE sessions SET message_count = (SELECT COUNT(*) FROM messages WHERE session_id = ?),
@@ -178,7 +162,7 @@ impl Storage for SqliteStorage {
 
     async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
         let rows = sqlx::query_as::<_, MessageRow>(
-            "SELECT role, content, tool_calls, tool_call_id, created_at
+            "SELECT role, content, tool_calls, tool_call_id, token_usage, created_at
             FROM messages WHERE session_id = ? ORDER BY id ASC",
         )
         .bind(&session_id.0)
@@ -200,26 +184,74 @@ impl Storage for SqliteStorage {
                     tool_calls: r.tool_calls.and_then(|tc| serde_json::from_str(&tc).ok()),
                     tool_call_id: r.tool_call_id,
                     created_at: r.created_at,
+                    token_usage: r.token_usage.and_then(|tu| serde_json::from_str(&tu).ok()),
                 }
             })
             .collect())
     }
 
-    async fn update_summary(&self, session_id: &SessionId, summary: &str) -> Result<()> {
-        sqlx::query("UPDATE sessions SET summary = ? WHERE id = ?")
-            .bind(summary)
+    async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Delete existing messages
+        sqlx::query("DELETE FROM messages WHERE session_id = ?")
             .bind(&session_id.0)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        // Insert new messages
+        for msg in messages {
+            self.insert_message(&mut *tx, session_id, msg).await?;
+        }
+        // Update session statistics
+        sqlx::query(
+            "UPDATE sessions SET message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+        )
+        .bind(messages.len() as i32)
+        .bind(&session_id.0)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
+}
 
-    async fn get_summary(&self, session_id: &SessionId) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT summary FROM sessions WHERE id = ?")
-            .bind(&session_id.0)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|r| r.0))
+impl SqliteStorage {
+    /// Helper to insert a single message into the database
+    async fn insert_message(
+        &self,
+        executor: impl sqlx::Executor<'_, Database = Sqlite>,
+        session_id: &SessionId,
+        msg: &Message,
+    ) -> Result<()> {
+        let content = if msg.content.len() == 1 {
+            msg.content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| t.to_string())
+                .unwrap_or_default()
+        } else {
+            serde_json::to_string(&msg.content).unwrap_or_default()
+        };
+        let tool_calls_json = msg
+            .tool_calls
+            .as_ref()
+            .map(|tc| serde_json::to_string(tc).unwrap_or_default());
+        let token_usage_json = msg
+            .token_usage
+            .as_ref()
+            .map(|tu| serde_json::to_string(tu).unwrap_or_default());
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, token_usage)
+            VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&session_id.0)
+        .bind(format!("{:?}", msg.role).to_lowercase())
+        .bind(content)
+        .bind(tool_calls_json)
+        .bind(&msg.tool_call_id)
+        .bind(token_usage_json)
+        .execute(executor)
+        .await?;
+        Ok(())
     }
 }
 
@@ -239,6 +271,7 @@ struct MessageRow {
     content: String,
     tool_calls: Option<String>,
     tool_call_id: Option<String>,
+    token_usage: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
 }
 

@@ -16,8 +16,8 @@ pub struct ToolExecutionResult {
 }
 
 /// Truncate output if it exceeds max length (UTF-8 safe)
-fn truncate_output(output: String) -> String {
-    strs::truncate_with_suffix(&output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
+fn truncate_output(output: &str) -> String {
+    strs::truncate_with_suffix(output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
 /// Execute multiple tool calls in parallel
@@ -68,8 +68,8 @@ pub async fn execute_tools_parallel(
             let success = result.success();
 
             // Truncate output if too long
-            let stdout = truncate_output(result.stdout);
-            let stderr = truncate_output(result.stderr);
+            let stdout = truncate_output(&result.stdout);
+            let stderr = truncate_output(&result.stderr);
 
             let (event, message) = if success {
                 let output = stdout;
@@ -86,6 +86,7 @@ pub async fn execute_tools_parallel(
                         tool_calls: None,
                         tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
+                        token_usage: None,
                     },
                 )
             } else {
@@ -103,6 +104,7 @@ pub async fn execute_tools_parallel(
                         tool_calls: None,
                         tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
+                        token_usage: None,
                     },
                 )
             };

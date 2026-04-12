@@ -59,7 +59,7 @@ impl MascotAnimator {
     }
 }
 
-/// Banner data for rendering (used by ChatView)
+/// Banner data for rendering (used by `ChatView`)
 #[derive(Debug, Clone, Default)]
 pub struct BannerData {
     pub working_dir: String,
@@ -67,7 +67,7 @@ pub struct BannerData {
 }
 
 impl BannerData {
-    pub fn new(working_dir: String, skills: Vec<String>) -> Self {
+    pub const fn new(working_dir: String, skills: Vec<String>) -> Self {
         Self {
             working_dir,
             skills,
@@ -87,15 +87,16 @@ impl BannerData {
             // Limit to max 20 skills
             const MAX_SKILLS: usize = 20;
             let display_count = self.skills.len().min(MAX_SKILLS);
-            let mut result = self.skills[..display_count].join(", ");
+            let result = self.skills[..display_count].join(", ");
             if self.skills.len() > MAX_SKILLS {
-                result.push_str(&format!(", +{} more", self.skills.len() - MAX_SKILLS));
+                format!("{result}, +{} more", self.skills.len() - MAX_SKILLS)
+            } else {
+                result
             }
-            result
         };
 
         vec![
-            "Welcome!".to_string(),
+            "Hello!".to_string(),
             format!("CWD: {working_dir}"),
             format!("Skills: {skills_str}"),
         ]
@@ -201,12 +202,11 @@ impl MockComponent for BannerComponent {
 impl Component<Msg, crate::msg::UserEvent> for BannerComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Handle tick events for blinking animation
-        if ev == tuirealm::Event::Tick {
-            if self.tick() {
+        if ev == tuirealm::Event::Tick
+            && self.tick() {
                 // Animation state changed, trigger redraw
                 return Some(Msg::Redraw);
             }
-        }
         None
     }
 }

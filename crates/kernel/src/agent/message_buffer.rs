@@ -20,6 +20,10 @@ impl MessageBuffer {
         &self.messages
     }
 
+    pub const fn messages_mut(&mut self) -> &mut Vec<Message> {
+        &mut self.messages
+    }
+
     pub const fn len(&self) -> usize {
         self.messages.len()
     }
@@ -39,6 +43,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             created_at: chrono::Utc::now(),
+            token_usage: None,
         }
     }
 

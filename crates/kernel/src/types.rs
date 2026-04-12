@@ -133,6 +133,14 @@ pub struct AudioData {
     pub format: String, // mp3, wav, etc.
 }
 
+/// Token usage for a message (from API response)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
 /// Chat message with content blocks (OpenAI-style)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
@@ -146,6 +154,9 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Token usage for this message (from API response, only set for assistant messages)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<MessageTokenUsage>,
 }
 
 impl Message {
@@ -159,6 +170,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -172,6 +184,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -191,6 +204,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -204,6 +218,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -221,6 +236,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -232,6 +248,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -283,6 +300,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -421,10 +439,6 @@ pub enum SessionEvent {
         parent_id: SessionId,
         new_session_id: SessionId,
         timestamp: DateTime<Utc>,
-    },
-    SummaryUpdated {
-        summary: String,
-        updated_at: DateTime<Utc>,
     },
     Completed {
         completed_at: DateTime<Utc>,

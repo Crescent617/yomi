@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_parse_frontmatter_with_all_fields() {
-        let content = r#"---
+        let content = r"---
 name: test-skill
 description: A test skill
 triggers:
@@ -199,7 +199,7 @@ triggers:
 
 # Skill Content
 
-This is the skill content."#;
+This is the skill content.";
 
         let (frontmatter, body) = parse_frontmatter(content).unwrap();
 
@@ -211,11 +211,11 @@ This is the skill content."#;
 
     #[test]
     fn test_parse_frontmatter_minimal() {
-        let content = r#"---
+        let content = r"---
 name: minimal-skill
 ---
 
-Just content."#;
+Just content.";
 
         let (frontmatter, body) = parse_frontmatter(content).unwrap();
 

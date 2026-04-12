@@ -39,18 +39,6 @@ impl AgentHandle {
         self.send_message(vec![ContentBlock::Text { text }]).await
     }
 
-    /// 发送工具结果给 Agent（支持多模态内容）
-    pub async fn send_tool_result(
-        &self,
-        tool_id: String,
-        content: Vec<ContentBlock>,
-    ) -> anyhow::Result<()> {
-        self.input_tx
-            .send(AgentInput::ToolResult { tool_id, content })
-            .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
-    }
-
     /// 发送取消信号给 Agent
     pub async fn send_cancel(&self) -> anyhow::Result<()> {
         self.input_tx

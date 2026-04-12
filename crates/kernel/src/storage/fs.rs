@@ -117,7 +117,7 @@ impl FsStorage {
                         s.updated_at = *timestamp;
                     }
                 }
-                _ => {}
+                SessionEvent::Completed { .. } => {}
             }
         }
 
@@ -229,23 +229,45 @@ impl Storage for FsStorage {
         Ok(messages)
     }
 
-    async fn update_summary(&self, session_id: &SessionId, summary: &str) -> Result<()> {
-        let event = SessionEvent::SummaryUpdated {
-            summary: summary.to_string(),
-            updated_at: chrono::Utc::now(),
-        };
-        self.append_event(session_id, event).await
-    }
+    async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
+        // Full compaction: replace all messages atomically
+        let path = self.session_file_path(session_id);
+        let temp_path = path.with_extension("tmp");
 
-    async fn get_summary(&self, session_id: &SessionId) -> Result<Option<String>> {
-        let events = self.read_events(session_id).await?;
-        let summary = events
+        // Get existing events (keep non-message events like Created, Forked, etc.)
+        let existing_events = self.read_events(session_id).await?;
+        let mut new_events: Vec<SessionEventRecord> = existing_events
             .into_iter()
-            .filter_map(|record| match record.event {
-                SessionEvent::SummaryUpdated { summary, .. } => Some(summary),
-                _ => None,
-            })
-            .next_back();
-        Ok(summary)
+            .filter(|r| !matches!(r.event, SessionEvent::MessageAdded { .. }))
+            .collect();
+
+        // Add new messages
+        for message in messages {
+            new_events.push(SessionEventRecord {
+                timestamp: chrono::Utc::now(),
+                event: SessionEvent::message_added(message.clone()),
+            });
+        }
+
+        // Write to temp file then rename (atomic)
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)
+            .await?;
+
+        for record in &new_events {
+            let line = serde_json::to_string(record)?;
+            file.write_all(line.as_bytes()).await?;
+            file.write_all(b"\n").await?;
+        }
+        file.flush().await?;
+        drop(file);
+
+        // Atomic rename
+        fs::rename(&temp_path, &path).await?;
+
+        Ok(())
     }
 }
