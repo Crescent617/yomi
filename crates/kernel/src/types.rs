@@ -133,6 +133,14 @@ pub struct AudioData {
     pub format: String, // mp3, wav, etc.
 }
 
+/// Token usage for a message (from API response)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
 /// Chat message with content blocks (OpenAI-style)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
@@ -146,6 +154,9 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Token usage for this message (from API response, only set for assistant messages)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<MessageTokenUsage>,
 }
 
 impl Message {
@@ -159,6 +170,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -172,6 +184,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -191,6 +204,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -204,6 +218,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -221,6 +236,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -232,6 +248,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -283,6 +300,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             created_at: Utc::now(),
+            token_usage: None,
         }
     }
 
@@ -364,6 +382,20 @@ impl ToolOutput {
         }
     }
 
+    #[must_use]
+    pub const fn with_exit_code(mut self, exit_code: i32) -> Self {
+        self.exit_code = exit_code;
+        self
+    }
+
+    pub fn new_err(stderr: impl Into<String>) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: stderr.into(),
+            exit_code: 1,
+        }
+    }
+
     pub const fn success(&self) -> bool {
         self.exit_code == 0
     }
@@ -383,9 +415,6 @@ pub struct SessionRecord {
     pub id: SessionId,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub project_path: std::path::PathBuf,
-    pub message_count: usize,
-    pub parent_session_id: Option<SessionId>,
 }
 
 /// Token usage tracking
@@ -410,7 +439,6 @@ impl TokenUsage {
 pub enum SessionEvent {
     Created {
         session_id: SessionId,
-        project_path: std::path::PathBuf,
         created_at: DateTime<Utc>,
     },
     MessageAdded {
@@ -422,20 +450,15 @@ pub enum SessionEvent {
         new_session_id: SessionId,
         timestamp: DateTime<Utc>,
     },
-    SummaryUpdated {
-        summary: String,
-        updated_at: DateTime<Utc>,
-    },
     Completed {
         completed_at: DateTime<Utc>,
     },
 }
 
 impl SessionEvent {
-    pub fn created(session_id: SessionId, project_path: std::path::PathBuf) -> Self {
+    pub fn created(session_id: SessionId) -> Self {
         Self::Created {
             session_id,
-            project_path,
             created_at: Utc::now(),
         }
     }

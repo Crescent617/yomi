@@ -5,9 +5,12 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <you@example.com>"]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/yomi"
+authors = ["Huaru Li <crescent617@outlook.com>"]
+license = "MIT"
+repository = "https://github.com/Crescent617/yomi"
+
+[workspace.lints.clippy]
+needless_raw_string_hashes = "allow"
 
 [workspace.dependencies]
 # Core deps
@@ -23,7 +26,6 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.23", features = ["v4", "serde", "v7"] }
 
 # TUI deps
-ratatui = "0.29"
 crossterm = "0.29"
 pulldown-cmark = "0.13"
 

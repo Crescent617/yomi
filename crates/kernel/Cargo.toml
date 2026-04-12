@@ -27,11 +27,19 @@ futures = { workspace = true, features = ["std"] }
 tokio-util = { workspace = true }
 smol_str = { version = "0.3", features = ["serde"] }
 serde_yaml = "0.9"
+toml = "0.8"
 
 # Optional dependencies for features
 reqwest = { workspace = true, optional = true }
 eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
+# Task system dependencies
+# Note: fs4 removed - using SQLite instead of file-based storage
+
+[lints]
+workspace = true
+
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3.0"

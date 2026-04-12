@@ -1,6 +1,8 @@
+use crate::compactor::Compactor;
 use crate::providers::ModelConfig;
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
+use crate::types::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -15,6 +17,79 @@ pub struct AgentConfig {
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
+    /// Compactor configuration for context management
+    pub compactor: Compactor,
+}
+
+/// Configuration for spawning a new agent
+#[derive(Debug, Clone)]
+pub struct AgentSpawnArgs {
+    pub base_prompt: String,
+    pub skills: Vec<Arc<Skill>>,
+    pub history: Vec<Message>,
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub max_iterations: usize,
+    pub enable_sub_agents: bool,
+    pub working_dir: std::path::PathBuf,
+}
+
+impl AgentSpawnArgs {
+    /// Create a new config with the given base prompt and session
+    pub fn new(base_prompt: impl Into<String>, session_id: impl Into<String>) -> Self {
+        Self {
+            base_prompt: base_prompt.into(),
+            skills: Vec::new(),
+            history: Vec::new(),
+            session_id: session_id.into(),
+            parent_session_id: None,
+            max_iterations: 50,
+            enable_sub_agents: true,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        }
+    }
+
+    /// Set skills to include
+    #[must_use]
+    pub fn with_skills(mut self, skills: Vec<Arc<Skill>>) -> Self {
+        self.skills = skills;
+        self
+    }
+
+    /// Set history messages
+    #[must_use]
+    pub fn with_history(mut self, history: Vec<Message>) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// Set parent session ID for task sharing
+    #[must_use]
+    pub fn with_parent_session(mut self, parent_session_id: impl Into<String>) -> Self {
+        self.parent_session_id = Some(parent_session_id.into());
+        self
+    }
+
+    /// Set max iterations
+    #[must_use]
+    pub const fn with_max_iterations(mut self, max: usize) -> Self {
+        self.max_iterations = max;
+        self
+    }
+
+    /// Disable sub-agents
+    #[must_use]
+    pub const fn without_sub_agents(mut self) -> Self {
+        self.enable_sub_agents = false;
+        self
+    }
+
+    /// Set working directory
+    #[must_use]
+    pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.working_dir = dir.into();
+        self
+    }
 }
 
 impl Default for AgentConfig {
@@ -24,11 +99,36 @@ impl Default for AgentConfig {
             storage: StorageConfig::default(),
             max_iterations: 50,
             enable_sub_agents: true,
-            system_prompt: "You are a helpful AI coding assistant.".to_string(),
+            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
+            compactor: Compactor::default(),
         }
     }
 }
+
+/// Default system prompt for the agent
+const DEFAULT_SYSTEM_PROMPT: &str = r"You are Yomi, a helpful assistant.
+
+# System
+- All text you output outside of tool use is displayed to the user. Output text to communicate with the user.
+
+# Doing Tasks
+- The user will primarily request software engineering tasks: solving bugs, adding functionality, refactoring, explaining code, etc. When given an unclear instruction, consider it in this context.
+- In general, do not propose changes to code you haven't read. If a user asks about or wants to modify a file, read it first. Understand existing code before suggesting modifications.
+- Do not create files unless absolutely necessary. Prefer editing existing files to creating new ones.
+- If an approach fails, diagnose why before switching tactics—read the error, check your assumptions, try a focused fix. Escalate to the user only when genuinely stuck after investigation.
+- Be careful not to introduce security vulnerabilities (command injection, XSS, SQL injection, etc.). Prioritize writing safe, secure, and correct code.
+
+# Executing Actions
+Carefully consider reversibility and blast radius:
+- Local, reversible actions (editing files, running tests): proceed freely
+- Destructive operations (deleting files/branches, rm -rf, overwriting uncommitted changes): confirm first
+- Actions visible to others (pushing code, creating PRs/issues): confirm first
+- Measure twice, cut once. Only take risky actions carefully, and when in doubt, ask before acting.
+
+# Tone and Style
+- Your responses should be short and concise.
+";
 
 /// Sub-agent execution mode
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -152,29 +252,33 @@ impl AgentExecutionContext {
 #[derive(Clone)]
 pub struct AgentShared {
     pub provider: Arc<dyn crate::providers::Provider>,
-    pub tool_registry: Arc<crate::tools::ToolRegistry>,
-    pub model_config: ModelConfig,
+    pub model_config: Arc<ModelConfig>,
+    /// Task store for task tools
+    pub task_store: Option<Arc<crate::task::TaskStore>>,
+    /// Project memory (CLAUDE.md/AGENTS.md)
+    pub project_memory: Arc<crate::project_memory::MemoryFiles>,
+    /// Context compactor for managing long conversations
+    pub compactor: Option<crate::compactor::Compactor>,
+    /// Storage for message persistence
+    pub storage: Option<Arc<dyn crate::storage::Storage>>,
 }
 
 impl AgentShared {
     pub fn new(
         provider: Arc<dyn crate::providers::Provider>,
-        tool_registry: Arc<crate::tools::ToolRegistry>,
-        model_config: ModelConfig,
+        model_config: Arc<ModelConfig>,
+        task_store: Option<Arc<crate::task::TaskStore>>,
+        project_memory: Arc<crate::project_memory::MemoryFiles>,
+        compactor: Option<crate::compactor::Compactor>,
+        storage: Option<Arc<dyn crate::storage::Storage>>,
     ) -> Self {
         Self {
             provider,
-            tool_registry,
             model_config,
-        }
-    }
-
-    #[must_use]
-    pub fn with_cloned_registry(&self) -> Self {
-        Self {
-            provider: Arc::clone(&self.provider),
-            tool_registry: Arc::new(self.tool_registry.as_ref().clone()),
-            model_config: self.model_config.clone(),
+            task_store,
+            project_memory,
+            compactor,
+            storage,
         }
     }
 }

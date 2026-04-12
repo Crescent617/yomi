@@ -5,14 +5,17 @@
 use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tuirealm::SubEventClause;
+use unicode_width::UnicodeWidthStr;
 use tuirealm::{
     application::PollStrategy,
     ratatui::layout::{Constraint, Direction, Layout},
     terminal::{CrosstermTerminalAdapter, TerminalBridge},
-    Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, SubEventClause, Update,
+    Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, Update,
 };
 
 use kernel::event::Event as AppEvent;
+use kernel::types::Message;
 
 use crate::{
     components::{ChatViewComponent, InfoBarComponent, InputComponent, StatusBarComponent},
@@ -54,6 +57,15 @@ pub struct Model {
     is_streaming: bool,
     /// Application mode - single source of truth
     mode: AppMode,
+    /// Input history for the current working directory (loaded + new)
+    input_history: Vec<String>,
+    /// Initial history length (to identify new entries on exit)
+    initial_history_len: usize,
+    /// Working directory (kept for future use)
+    #[allow(dead_code)]
+    working_dir: std::path::PathBuf,
+    /// Session messages to display on startup (for resumed sessions)
+    session_messages: Vec<Message>,
 }
 
 impl Model {
@@ -61,6 +73,9 @@ impl Model {
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<String>,
         cancel_tx: mpsc::Sender<()>,
+        input_history: Vec<String>,
+        working_dir: std::path::PathBuf,
+        session_messages: Vec<Message>,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
@@ -78,24 +93,124 @@ impl Model {
             thinking_start_time: None,
             is_streaming: false,
             mode: AppMode::Normal,
+            initial_history_len: input_history.len(),
+            input_history,
+            working_dir,
+            session_messages,
         })
     }
 
-    /// Calculate input box height based on content (3-5 lines, including borders)
-    fn calculate_input_height(&self) -> u16 {
-        // Content lines (1-3), plus 2 for borders = total 3-5
-        let content_lines = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
-            self.app.state(&Id::InputBox)
-        {
-            // Count newlines + 1 to handle trailing newlines correctly
-            // "hello\nworld" -> 1 newline + 1 = 2 lines
-            // "hello\n" -> 1 newline + 1 = 2 lines (lines() would return 1)
-            let line_count = content.matches('\n').count() + 1;
-            (line_count.max(1) as u16).min(3)
-        } else {
+    /// Get new history entries collected during this session
+    pub fn get_new_history_entries(&self) -> Vec<String> {
+        self.input_history[self.initial_history_len..].to_vec()
+    }
+
+    /// Initialize input history in the `InputBox` component
+    pub fn init_input_history(&mut self) -> Result<()> {
+        // Serialize history to JSON string
+        let history_json = serde_json::to_string(&self.input_history)?;
+        self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("history"),
+            AttrValue::String(history_json),
+        )?;
+        Ok(())
+    }
+
+    /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
+    fn init_session_messages(&mut self, context_window: u32) -> Result<()> {
+        if self.session_messages.is_empty() {
+            // Still initialize StatusBar with 0 tokens
+            self.init_ctx_usage(0, context_window)?;
+            return Ok(());
+        }
+
+        // Calculate initial token usage from messages
+        let initial_tokens: u32 = self
+            .session_messages
+            .iter()
+            .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
+            .next_back()
+            .unwrap_or_else(|| {
+                // Estimate tokens from all messages if no usage data
+                use kernel::utils::tokens;
+                self.session_messages
+                    .iter()
+                    .map(|m| tokens::estimate_tokens(&m.text_content()))
+                    .sum::<usize>() as u32
+            });
+
+        // Initialize StatusBar with calculated tokens
+        self.init_ctx_usage(initial_tokens, context_window)?;
+
+        // Pass messages via Payload to avoid serialization
+        let messages: Vec<kernel::types::Message> = std::mem::take(&mut self.session_messages);
+        self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("init_history"),
+            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(messages))),
+        )?;
+        Ok(())
+    }
+
+    /// Initialize banner with real data (called once at startup)
+    pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
+        self.update_banner(working_dir, skills)
+    }
+
+    /// Initialize context window display in status bar
+    pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
+        let usage_str = format!("{tokens}\x00{context_window}");
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_ctx_usage"),
+            AttrValue::String(usage_str),
+        )?;
+        Ok(())
+    }
+
+    /// Update banner data in `ChatView`
+    pub fn update_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
+        use crate::components::BannerData;
+        let banner = BannerData::new(working_dir, skills);
+        // Serialize banner data: working_dir\x00skill1,skill2,...
+        let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
+        self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("set_banner"),
+            AttrValue::String(banner_str),
+        )?;
+        Ok(())
+    }
+
+    /// Calculate input box height based on content (3-10 lines, including borders)
+    /// Accounts for text wrapping based on available terminal width
+    fn calculate_input_height_for_content(content: &str, terminal_width: u16) -> u16 {
+        // Account for borders and padding in the layout
+        // Input area has left/right borders (2 chars)
+        let content_width = (terminal_width.saturating_sub(2) as usize).max(1);
+
+        // Get content and calculate visual lines
+        let visual_lines = if content.is_empty() {
             1
+        } else {
+            // Calculate how many visual lines are needed considering wrap
+            let lines: Vec<&str> = content.split('\n').collect();
+            let mut total_visual_lines = 0;
+
+            for line in lines {
+                // Each line needs at least 1 visual line
+                // Calculate how many lines it wraps to based on content width
+                let line_width = line.width();
+                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1) / content_width.max(1);
+                total_visual_lines += wrapped_lines.max(1);
+            }
+
+            // Clamp between 1 and 8 content lines (to prevent excessive growth)
+            total_visual_lines.clamp(1, 8)
         };
-        content_lines + 2 // Add 2 for top/bottom borders
+
+        visual_lines as u16 + 2 // Add 2 for top/bottom borders
     }
 
     /// Save partial content (content and thinking) to chat history
@@ -136,17 +251,27 @@ impl Model {
     }
 
     pub fn view(&mut self) {
-        let input_height = self.calculate_input_height();
+        // Pre-fetch content to calculate height without borrowing self in closure
+        let input_content = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
+            self.app.state(&Id::InputBox)
+        {
+            content
+        } else {
+            String::new()
+        };
 
         let _ = self.terminal.draw(|f| {
+            // Calculate input height inside draw closure to access terminal area
+            let input_height = Self::calculate_input_height_for_content(&input_content, f.area().width);
+
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),    // Main content area
-                            Constraint::Length(1), // Status bar (mode indicator)
+                            Constraint::Min(3),    // Main content area (includes banner)
+                            Constraint::Length(1), // Status bar
                         ]
                         .as_ref(),
                     )
@@ -161,16 +286,16 @@ impl Model {
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),               // Main content area
+                            Constraint::Min(3),               // Main content area (chat with banner)
                             Constraint::Length(1),            // Info bar (tokens/streaming)
-                            Constraint::Length(input_height), // Input area (dynamic 1-3 lines)
-                            Constraint::Length(1),            // Status bar (mode indicator)
+                            Constraint::Length(input_height), // Input area
+                            Constraint::Length(1),            // Status bar
                         ]
                         .as_ref(),
                     )
                     .split(f.area());
 
-                // Always show ChatView (unified history + streaming)
+                // ChatView includes banner at top (scrolls with content)
                 self.app.view(&Id::ChatView, f, chunks[0]);
                 // Info bar shows streaming progress
                 self.app.view(&Id::InfoBar, f, chunks[1]);
@@ -190,7 +315,7 @@ impl Model {
                 .tick_interval(Duration::from_millis(100)),
         );
 
-        // Mount unified chat view component
+        // Mount unified chat view component (includes scrollable banner)
         app.mount(
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
@@ -345,6 +470,30 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
+                AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
+                    // Show/hide compacting status in InfoBar
+                    let attr = if active {
+                        Attribute::Custom("start_compacting")
+                    } else {
+                        Attribute::Custom("stop_compacting")
+                    };
+                    self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
+                    self.redraw = true;
+                }
+                AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
+                    total_tokens,
+                    context_window,
+                    ..
+                }) => {
+                    // Update context window usage in status bar
+                    let usage_str = format!("{total_tokens}\x00{context_window}");
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("set_ctx_usage"),
+                        AttrValue::String(usage_str),
+                    )?;
+                    self.redraw = true;
+                }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
                     tool_name,
@@ -459,7 +608,7 @@ impl Model {
 
     /// Run the main loop
     #[allow(clippy::future_not_send)]
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(mut self) -> Result<Vec<String>> {
         // Enter alternate screen
         self.terminal.enter_alternate_screen()?;
         self.terminal.enable_raw_mode()?;
@@ -467,13 +616,14 @@ impl Model {
         // Hide cursor by default (will be shown by InputComponent when needed)
         crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide)?;
 
-        let result = self.run_loop().await;
+        let _result = self.run_loop().await;
 
         // Cleanup
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
 
-        result
+        // Return new history entries
+        Ok(self.get_new_history_entries())
     }
 
     #[allow(clippy::future_not_send)]
@@ -531,6 +681,11 @@ impl Update<Msg> for Model {
                     if self.mode == AppMode::Browse {
                         return None;
                     }
+                    // Save to history for C-n/C-p navigation
+                    if !content.trim().is_empty() {
+                        self.input_history.push(content.clone());
+                        let _ = self.init_input_history();
+                    }
                     // Add user message to chat view
                     let _ = self.app.attr(
                         &Id::ChatView,
@@ -572,22 +727,6 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
-                Msg::ToggleThinking => {
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("toggle_thinking"),
-                        AttrValue::Flag(true),
-                    );
-                    None
-                }
-                Msg::ToggleExpandAll => {
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("toggle_expand_all"),
-                        AttrValue::Flag(true),
-                    );
-                    None
-                }
                 Msg::InputChanged(_) => {
                     // Ignore input changes in Browse mode
                     if self.mode == AppMode::Browse {
@@ -606,8 +745,8 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {
-                    // Format: "duration_ms|message"
-                    let value = format!("{duration_ms}|{msg}");
+                    // Format: "duration_ms\x00message"
+                    let value = format!("{duration_ms}\x00{msg}");
                     let _ = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
@@ -644,7 +783,7 @@ impl Update<Msg> for Model {
                                 &Id::StatusBar,
                                 Attribute::Custom("show_message"),
                                 AttrValue::String(
-                                    "0|C-o toggle, j/k scroll, q exit browse".to_string(),
+                                    "0\x00C-o toggle, j/k/g/G scroll, q exit".to_string(),
                                 ),
                             );
                         }
@@ -697,6 +836,22 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::GoToTop => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_top"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::GoToBottom => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
                 _ => None,
             }
         } else {
@@ -706,12 +861,32 @@ impl Update<Msg> for Model {
 }
 
 /// Run the TUI application
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,
     cancel_tx: mpsc::Sender<()>,
-) -> Result<()> {
-    let model = Model::new(event_rx, input_tx, cancel_tx)?;
+    working_dir: String,
+    skills: Vec<String>,
+    input_history: Vec<String>,
+    session_messages: Vec<Message>,
+    context_window: u32,
+) -> Result<Vec<String>> {
+    let working_dir_path = std::path::PathBuf::from(&working_dir);
+    let mut model = Model::new(
+        event_rx,
+        input_tx,
+        cancel_tx,
+        input_history,
+        working_dir_path,
+        session_messages,
+    )?;
+    model.init_banner(working_dir, skills)?;
+    // Set input history after banner init
+    model.init_input_history()?;
+    // Display session messages and init ctx usage (for resumed sessions)
+    model.init_session_messages(context_window)?;
+    // run() consumes model and returns the new history entries
     model.run().await
 }

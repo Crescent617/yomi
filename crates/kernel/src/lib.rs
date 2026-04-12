@@ -15,14 +15,18 @@ macro_rules! env_name {
 
 pub mod agent;
 pub mod app;
+pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod project_memory;
 pub mod prompt;
 pub mod providers;
 pub mod skill;
 pub mod storage;
+pub mod task;
 pub mod tools;
 pub mod types;
+pub mod utils;
 
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};
@@ -44,5 +48,13 @@ pub use types::*;
 // Conditional re-exports for convenience
 #[cfg(feature = "providers")]
 pub use providers::{AnthropicProvider, OpenAIProvider};
-pub use storage::SqliteStorage;
 pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool, SubAgentTool};
+
+// Task system re-exports
+pub use task::{
+    CreateTaskInput, CreateTaskOutput, GetTaskOutput, ListTasksOutput, SharedTaskStore,
+    SqliteTaskStorage, StatusChange, Task, TaskCreateTool, TaskEvent, TaskGetTool, TaskListItem,
+    TaskListTool, TaskStatus, TaskStore, TaskSummary, TaskUpdateTool, TaskUpdates,
+    UpdateTaskOutput, TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME,
+    TASK_UPDATE_TOOL_NAME,
+};

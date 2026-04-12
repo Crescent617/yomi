@@ -5,46 +5,40 @@ use kernel::{
     config::{env_names, Config, ModelProvider},
     expand_tilde,
     skill::SkillLoader,
-    storage::FsStorage,
-    tools::{enable_yolo_mode, ToolRegistry},
+    storage::{FsStorage, Storage},
+    tools::enable_yolo_mode,
+    types::SessionId,
+    utils::strs,
 };
-use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
+use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
 use kernel::{Coordinator, SessionConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tui::run_tui;
 
+mod storage;
+use storage::AppStorage;
+
 #[derive(Parser)]
 #[command(name = "yomi")]
 #[command(about = "AI coding assistant CLI")]
 struct Args {
+    /// Working directory
     #[arg(short, long)]
     directory: Option<PathBuf>,
 
-    /// Provider to use (openai, anthropic)
+    /// Config file path
     #[arg(short, long)]
-    provider: Option<String>,
-
-    /// Model ID (e.g., gpt-4, claude-3-5-sonnet-20241022)
-    #[arg(short, long)]
-    model: Option<String>,
-
-    /// API endpoint URL
-    #[arg(long)]
-    endpoint: Option<String>,
-
-    /// API key (or set env var)
-    #[arg(long)]
-    api_key: Option<String>,
+    config: Option<PathBuf>,
 
     /// Skip all confirmations (YOLO mode)
     #[arg(long)]
     yolo: bool,
 
-    /// Config file path (not yet implemented)
+    /// Resume the last session for this working directory
     #[arg(short, long)]
-    config: Option<PathBuf>,
+    resume: bool,
 }
 
 #[tokio::main]
@@ -61,32 +55,32 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let working_dir = working_dir.canonicalize()?;
 
-    // Load configuration from environment variables
-    let mut config = Config::from_env();
-
-    // CLI arguments override environment variables
-    if let Some(provider_str) = args.provider {
-        if let Ok(provider) = provider_str.parse::<ModelProvider>() {
-            config.provider = provider;
-            // Reload provider-specific settings after changing provider
-            config = reload_for_provider(config);
+    // Load configuration with priority: env vars > config file > defaults
+    let config = if let Some(config_path) = args.config {
+        Config::from_file(&config_path)?
+    } else {
+        // Try default config locations, fallback to env-only config
+        let default_paths = [
+            expand_tilde("~/.yomi/config.toml"),
+            expand_tilde("~/.config/yomi/config.toml"),
+            working_dir.join("yomi.toml"),
+        ];
+        let mut loaded = None;
+        for path in &default_paths {
+            if path.exists() {
+                tracing::info!("Loading config from: {}", path.display());
+                loaded = Some(Config::from_file(path)?);
+                break;
+            }
         }
-    }
-
-    if let Some(model) = args.model {
-        config.model.model_id = model;
-    }
-
-    if let Some(endpoint) = args.endpoint {
-        config.model.endpoint = endpoint;
-    }
-
-    if let Some(api_key) = args.api_key {
-        config.model.api_key = api_key;
-    }
+        loaded.unwrap_or_else(Config::from_env)
+    };
 
     // Create data directory
     tokio::fs::create_dir_all(&config.data_dir).await?;
+
+    // Initialize AppStorage for session index and input history
+    let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
 
     // Initialize logging with file output and env filter
     init_logging(&config)?;
@@ -132,17 +126,24 @@ async fn main() -> Result<()> {
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
 
-    // Create tool registry
-    let tool_registry = ToolRegistry::new();
-    tool_registry.register(Arc::new(EditTool::new(&working_dir)));
-    // tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
+    // Create task store for all agents
+    let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
+
+    // Load project memory (CLAUDE.md/AGENTS.md)
+    let project_memory = kernel::project_memory::load(&working_dir).await?;
 
     let coordinator = Arc::new(Coordinator::new(
-        storage,
+        storage.clone(),
         provider,
-        tool_registry,
         config.model.clone(),
+        Some(task_store),
+        project_memory,
+        None, // Compactor is per-agent via agent_config
     ));
+
+    // Prepare banner data (before skills is moved)
+    let working_dir_str = working_dir.to_string_lossy().to_string();
+    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
 
     // Build agent config
     let agent_config = AgentConfig {
@@ -151,24 +152,64 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let session_config = SessionConfig {
-        agent: agent_config,
+    // Extract context_window before agent_config is moved
+    let context_window = agent_config.compactor.context_window;
+
+    // Helper to create session config
+    let mk_config = |agent: AgentConfig| SessionConfig {
+        agent,
         project_path: working_dir.clone(),
     };
-    let session_id = coordinator.create_session(session_config).await?;
+
+    // Create or restore session
+    let session_id = if args.resume {
+        match app_storage.get_last_session(&working_dir).await? {
+            Some(id) => {
+                let session_id = SessionId(id);
+                println!("Restoring previous session: {}", session_id.0);
+
+                match coordinator
+                    .restore_session(&session_id, mk_config(agent_config.clone()))
+                    .await
+                {
+                    Ok(_) => session_id,
+                    Err(e) => {
+                        println!("Failed to restore session: {e}");
+                        println!("Starting new session instead");
+                        coordinator.create_session(mk_config(agent_config)).await?
+                    }
+                }
+            }
+            None => {
+                println!("No previous session found, starting new session");
+                coordinator.create_session(mk_config(agent_config)).await?
+            }
+        }
+    } else {
+        coordinator.create_session(mk_config(agent_config)).await?
+    };
+
+    // Record this session for future --continue
+    app_storage
+        .record_session(&working_dir, &session_id.0)
+        .await?;
 
     println!("yomi session started: {}", session_id.0);
     println!("Working directory: {}", working_dir.display());
     println!("Provider: {}", config.provider);
     println!("Model: {}", config.model.model_id);
     println!("Endpoint: {}", config.model.endpoint);
-    let key_preview = if config.api_key().len() > 8 {
-        format!("{}...", &config.api_key()[..8])
+    let api_key = config.api_key();
+    let key_preview = if api_key.len() > 8 {
+        strs::truncate_with_suffix(api_key, 11, "...")
     } else {
         "not set".to_string()
     };
     println!("API Key: {key_preview}");
     println!("Starting TUI...\n");
+
+    // Load session messages for displaying in chat view
+    let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
 
     // Create channel for input forwarding
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
@@ -206,43 +247,32 @@ async fn main() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
-    // Run TUI
-    run_tui(event_rx, input_tx, cancel_tx).await?;
+    // Load input history for this working directory
+    let input_history = app_storage
+        .load_input_history(&working_dir)
+        .await
+        .unwrap_or_default();
+
+    // Run TUI with banner data, input history and session messages
+    let new_history_entries = run_tui(
+        event_rx,
+        input_tx,
+        cancel_tx,
+        working_dir_str,
+        skill_names,
+        input_history,
+        session_messages,
+        context_window,
+    )
+    .await?;
+
+    // Save new history entries
+    for entry in &new_history_entries {
+        app_storage.add_input_entry(&working_dir, entry).await?;
+    }
 
     println!("Goodbye!");
     Ok(())
-}
-
-/// Reload provider-specific settings after provider change
-fn reload_for_provider(mut config: Config) -> Config {
-    let provider = config.provider;
-
-    // Re-check provider-specific API key: YOMI_{PROVIDER}_API_KEY > {PROVIDER}_API_KEY
-    config.model.api_key = std::env::var(provider.standard_api_key_env())
-        .ok()
-        .unwrap_or_else(|| config.model.api_key.clone());
-
-    // Re-check provider-specific model: YOMI_{PROVIDER}_MODEL > {PROVIDER}_MODEL
-    config.model.model_id = std::env::var(provider.standard_model_env())
-        .ok()
-        .unwrap_or_else(|| {
-            if config.model.model_id.is_empty() {
-                // Set default model for new provider
-                match provider {
-                    ModelProvider::OpenAI => "gpt-4".to_string(),
-                    ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
-                }
-            } else {
-                config.model.model_id.clone()
-            }
-        });
-
-    // Re-check provider-specific endpoint: YOMI_{PROVIDER}_ENDPOINT > {PROVIDER}_ENDPOINT
-    config.model.endpoint = std::env::var(provider.standard_api_base_env())
-        .ok()
-        .unwrap_or_else(|| config.model.endpoint.clone());
-
-    config
 }
 
 /// Initialize logging with console and file output

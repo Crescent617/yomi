@@ -15,8 +15,14 @@ use tuirealm::{
 };
 
 use crate::{
-    markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::token_utils,
+    markdown_stream::StreamingMarkdownRenderer,
+    msg::Msg,
+    theme::colors,
+    utils::{strs, text::preprocess},
 };
+use kernel::utils::tokens;
+
+use super::banner::MascotAnimator;
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +74,10 @@ pub struct ChatView {
     active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
     // Expand all mode (ctrl-o): show all thinking and tool details
     expand_all: bool,
+    // Banner data (rendered as first content, scrolls with messages)
+    banner: Option<crate::components::BannerData>,
+    // Mascot animator for blinking animation
+    mascot_animator: MascotAnimator,
 }
 
 impl Default for ChatView {
@@ -84,18 +94,20 @@ impl Default for ChatView {
             user_scrolled: false,
             active_tools: std::collections::HashMap::new(),
             expand_all: false,
+            banner: Some(crate::components::BannerData::default()),
+            mascot_animator: MascotAnimator::default(),
         }
     }
 }
 
 impl ChatView {
-    /// Render a pixel-art style cat banner for empty state
-    const fn render_banner() -> Vec<Line<'static>> {
-        vec![]
-    }
-
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set banner data to display at the top
+    pub fn set_banner(&mut self, banner: crate::components::BannerData) {
+        self.banner = Some(banner);
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -299,10 +311,12 @@ impl ChatView {
         }
     }
 
-    pub const fn tick(&mut self) {
+    pub fn tick(&mut self) {
         if self.is_streaming {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
+        // Update mascot blink animation
+        self.mascot_animator.tick();
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -325,6 +339,15 @@ impl ChatView {
         self.scroll_offset = 0;
         // User scrolled to bottom, resume auto-scroll
         self.user_scrolled = false;
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        // Go to the very top by setting scroll_offset to max
+        // This is a simplified approach - we'll calculate based on total lines
+        let total_lines = self.calculate_total_lines();
+        self.scroll_offset = total_lines;
+        // User manually scrolled, pause auto-scroll
+        self.user_scrolled = true;
     }
 
     pub fn toggle_last_thinking(&mut self) {
@@ -502,7 +525,7 @@ impl ChatView {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            line.to_string(),
+                            preprocess(line),
                             Style::default().fg(colors::text_primary()),
                         ),
                     ]));
@@ -572,11 +595,7 @@ impl ChatView {
                         if compact.is_empty() {
                             None
                         } else {
-                            let peek = if compact.len() > 80 {
-                                format!("{}...", &compact[..77])
-                            } else {
-                                compact.clone()
-                            };
+                            let peek = strs::truncate_with_suffix(compact, 80, "...");
                             Some(peek)
                         }
                     })
@@ -610,11 +629,7 @@ impl ChatView {
                         if trimmed.is_empty() {
                             None
                         } else {
-                            let peek = if trimmed.len() > 200 {
-                                format!("{}...", &trimmed[..197])
-                            } else {
-                                trimmed.to_string()
-                            };
+                            let peek = strs::truncate_with_suffix(trimmed, 200, "...");
                             Some(peek.split_whitespace().collect::<Vec<_>>().join(" "))
                         }
                     });
@@ -646,7 +661,7 @@ impl ChatView {
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
-                                        line.to_string(),
+                                        preprocess(line),
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                 ]));
@@ -659,7 +674,7 @@ impl ChatView {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_error())),
                                 Span::styled(
-                                    line.to_string(),
+                                    preprocess(line),
                                     Style::default().fg(colors::accent_error()),
                                 ),
                             ]));
@@ -678,7 +693,7 @@ impl ChatView {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_system())),
                                 Span::styled(
-                                    line.to_string(),
+                                    preprocess(line),
                                     Style::default().fg(colors::text_primary()),
                                 ),
                             ]));
@@ -718,7 +733,7 @@ impl ChatView {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            line.to_string(),
+                            preprocess(line),
                             Style::default().fg(colors::accent_error()),
                         ),
                     ]));
@@ -768,7 +783,7 @@ impl ChatView {
             return false;
         }
 
-        let tokens = token_utils::count_tokens(thinking);
+        let tokens = tokens::estimate_tokens(thinking);
         let elapsed_str = elapsed_ms
             .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
             .unwrap_or_default();
@@ -785,7 +800,7 @@ impl ChatView {
                 lines.push(Line::from(vec![
                     Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                     Span::styled(
-                        line.to_string(),
+                        preprocess(line),
                         Style::default().fg(colors::text_secondary()),
                     ),
                 ]));
@@ -798,9 +813,34 @@ impl ChatView {
 
 impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        const MASCOT_COL_WIDTH: usize = 8;
         let main_area = area;
 
         let mut all_lines: Vec<Line> = Vec::new();
+
+        // Render banner first (if set), it will scroll with content
+        if let Some(ref banner) = self.banner {
+            // Build banner lines with two-column layout (mascot left, info right)
+            let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
+            let info_lines = banner.info_lines();
+
+            // Column widths for alignment
+
+            let max_rows = mascot_lines.len().max(info_lines.len());
+            for i in 0..max_rows {
+                let mascot_part = mascot_lines.get(i).unwrap_or(&"");
+                let info_part = info_lines.get(i).map_or("", |s| s.as_str());
+
+                // Pad mascot to fixed width for alignment
+                let mascot_padded = format!("{mascot_part:MASCOT_COL_WIDTH$}");
+
+                all_lines.push(Line::from(vec![
+                    Span::styled(mascot_padded, colors::accent_system()),
+                    Span::styled(info_part.to_string(), colors::text_secondary()),
+                ]));
+            }
+            all_lines.push(Line::from(""));
+        }
 
         // Render history with unified spacing
         for (i, msg) in self.messages.iter().enumerate() {
@@ -825,11 +865,6 @@ impl MockComponent for ChatView {
             || !self.streaming_thinking.is_empty()
         {
             all_lines.extend(self.render_streaming());
-        }
-
-        // Show banner if no messages yet
-        if all_lines.is_empty() {
-            all_lines.extend(Self::render_banner());
         }
 
         // Calculate scroll position with wrap support
@@ -871,7 +906,12 @@ impl MockComponent for ChatView {
         };
 
         let end_line = (start_line + visible_height).min(all_lines.len());
-        let visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
+        let mut visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
+
+        // Pad with empty lines to fill the entire area and prevent residue
+        while visible_lines.len() < visible_height {
+            visible_lines.push(Line::from(""));
+        }
 
         let paragraph = Paragraph::new(Text::from(visible_lines))
             .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
@@ -884,21 +924,27 @@ impl MockComponent for ChatView {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        match attr {
-            Attribute::Custom("add_user_message") => {
+        // Extract the custom string first, then match on it
+        let Attribute::Custom(cmd) = attr else {
+            self.props.set(attr, value);
+            return;
+        };
+
+        match cmd {
+            "add_user_message" => {
                 if let AttrValue::String(content) = value {
                     self.add_user_message(content);
                 }
             }
-            Attribute::Custom("add_error_message") => {
+            "add_error_message" => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
                 }
             }
-            Attribute::Custom("add_assistant_with_thinking") => {
+            "add_assistant_with_thinking" => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
-                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let content = parts.first().map_or(String::new(), |s| (*s).to_string());
                     let thinking = parts
                         .get(1)
                         .filter(|s| !s.is_empty())
@@ -907,22 +953,24 @@ impl MockComponent for ChatView {
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
             }
-            Attribute::Custom("start_streaming") => {
-                self.start_streaming();
+            "set_banner" => {
+                if let AttrValue::String(banner_str) = value {
+                    let parts: Vec<&str> = banner_str.split('\x00').collect();
+                    let working_dir = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let skills = parts.get(1).map_or(Vec::new(), |s| {
+                        s.split(',').map(|skill| skill.trim().to_string()).collect()
+                    });
+                    self.set_banner(crate::components::BannerData::new(working_dir, skills));
+                }
             }
-            Attribute::Custom("stop_streaming") => {
-                self.stop_streaming();
-            }
-            Attribute::Custom("clear_streaming") => {
-                self.clear_streaming();
-            }
-            Attribute::Custom("cancel_streaming") => {
-                self.cancel_streaming();
-            }
-            Attribute::Custom("cancel_streaming_with_content") => {
+            "start_streaming" => self.start_streaming(),
+            "stop_streaming" => self.stop_streaming(),
+            "clear_streaming" => self.clear_streaming(),
+            "cancel_streaming" => self.cancel_streaming(),
+            "cancel_streaming_with_content" => {
                 if let AttrValue::String(combined) = value {
-                    let parts: Vec<&str> = combined.split(' ').collect();
-                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let parts: Vec<&str> = combined.split('\x00').collect();
+                    let content = parts.first().map_or(String::new(), |s| (*s).to_string());
                     let thinking = parts
                         .get(1)
                         .filter(|s| !s.is_empty())
@@ -962,83 +1010,70 @@ impl MockComponent for ChatView {
                     self.is_streaming = false;
                 }
             }
-            Attribute::Custom("append_content") => {
+            "append_content" => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_content(&text);
                 }
             }
-            Attribute::Custom("append_thinking") => {
+            "append_thinking" => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_thinking(&text);
                 }
             }
-            Attribute::Custom("scroll_up") => {
-                self.scroll_up(3);
-            }
-            Attribute::Custom("scroll_down") => {
-                self.scroll_down(3);
-            }
-            Attribute::Custom("scroll_to_bottom") => {
-                self.scroll_to_bottom();
-            }
-            Attribute::Custom("toggle_thinking") => {
-                self.toggle_last_thinking();
-            }
-            Attribute::Custom("toggle_expand_all") => {
-                self.toggle_expand_all();
-            }
-            Attribute::Custom("expand_all") => {
-                self.expand_all();
-            }
-            Attribute::Custom("collapse_all") => {
-                self.collapse_all();
-            }
-            Attribute::Custom("start_tool") => {
+            "scroll_up" => self.scroll_up(3),
+            "scroll_down" => self.scroll_down(3),
+            "scroll_to_bottom" => self.scroll_to_bottom(),
+            "scroll_to_top" => self.scroll_to_top(),
+            "toggle_thinking" => self.toggle_last_thinking(),
+            "toggle_expand_all" => self.toggle_expand_all(),
+            "expand_all" => self.expand_all(),
+            "collapse_all" => self.collapse_all(),
+            "start_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let tool_name = (*parts.get(1).unwrap_or(&"tool")).to_string();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let tool_name = parts
+                        .get(1)
+                        .map_or_else(|| "tool".to_string(), |s| (*s).to_string());
                     let arguments = parts.get(2).map(|s| (*s).to_string());
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }
-            Attribute::Custom("complete_tool") => {
+            "complete_tool" | "fail_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let output = (*parts.get(1).unwrap_or(&"")).to_string();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let second = parts.get(1).map_or(String::new(), |s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.complete_tool(tool_id, output, elapsed_ms);
+                    match cmd {
+                        "complete_tool" => self.complete_tool(tool_id, second, elapsed_ms),
+                        "fail_tool" => self.fail_tool(tool_id, second, elapsed_ms),
+                        _ => {}
+                    }
                 }
             }
-            Attribute::Custom("fail_tool") => {
-                if let AttrValue::String(text) = value {
-                    let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let error = (*parts.get(1).unwrap_or(&"")).to_string();
-                    let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.fail_tool(tool_id, error, elapsed_ms);
-                }
-            }
-            // Page navigation
-            Attribute::Custom("page_up") => {
+            "page_up" | "page_down" => {
                 if let AttrValue::Number(height) = value {
-                    self.page_up(height as usize);
+                    match cmd {
+                        "page_up" => self.page_up(height as usize),
+                        "page_down" => self.page_down(height as usize),
+                        _ => {}
+                    }
                 }
             }
-            Attribute::Custom("page_down") => {
-                if let AttrValue::Number(height) = value {
-                    self.page_down(height as usize);
-                }
-            }
-            _ => {
-                self.props.set(attr, value);
-            }
+            _ => {}
         }
     }
 
     fn state(&self) -> State {
-        State::None
+        // Return banner data if present: "working_dir|skill1,skill2,..."
+        self.banner.as_ref().map_or_else(
+            || State::None,
+            |banner| {
+                let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
+                State::One(tuirealm::StateValue::String(banner_str))
+            },
+        )
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
@@ -1073,6 +1108,45 @@ impl ChatViewComponent {
             component: ChatView::new(),
         }
     }
+
+    /// Initialize history from kernel messages (for session resume)
+    pub fn init_history(&mut self, messages: &[kernel::types::Message]) {
+        for msg in messages {
+            match msg.role {
+                kernel::types::Role::User => {
+                    let text = msg.text_content();
+                    if !text.is_empty() {
+                        self.component.add_user_message(text);
+                    }
+                }
+                kernel::types::Role::Assistant => {
+                    let content = msg.text_content();
+                    let thinking = msg.thinking_content();
+                    self.component
+                        .add_assistant_message(content, thinking, None);
+
+                    // Handle tool calls
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        for call in tool_calls {
+                            let args = serde_json::to_string(&call.arguments).ok();
+                            self.component
+                                .start_tool(call.id.clone(), call.name.clone(), args);
+                        }
+                    }
+                }
+                kernel::types::Role::Tool => {
+                    if let Some(ref tool_call_id) = msg.tool_call_id {
+                        let output = msg.text_content();
+                        // For tool messages, we need to find the corresponding tool in history
+                        // and mark it as completed. Since we don't have elapsed_ms, use 0.
+                        self.component
+                            .complete_tool(tool_call_id.clone(), output, 0);
+                    }
+                }
+                kernel::types::Role::System => {}
+            }
+        }
+    }
 }
 
 impl MockComponent for ChatViewComponent {
@@ -1085,7 +1159,19 @@ impl MockComponent for ChatViewComponent {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        self.component.attr(attr, value);
+        use tuirealm::props::PropPayload;
+        match attr {
+            Attribute::Custom("init_history") => {
+                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
+                    use tuirealm::props::PropBoundExt;
+                    let any = payload.as_any();
+                    if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {
+                        self.init_history(messages);
+                    }
+                }
+            }
+            _ => self.component.attr(attr, value),
+        }
     }
 
     fn state(&self) -> State {

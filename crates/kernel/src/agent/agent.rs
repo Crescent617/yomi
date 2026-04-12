@@ -1,27 +1,25 @@
 use super::message_buffer::MessageBuffer;
-use super::{AgentExecutionContext, AgentHandle, AgentShared, AgentState, CancelToken};
+use super::{
+    AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
+};
+use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
 use crate::prompt::SystemPromptBuilder;
 use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
-use crate::tools::SubAgentTool;
-use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall};
+use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
 use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use tracing::warn;
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
 pub enum AgentInput {
     /// User message with multi-modal content blocks
     User(Vec<ContentBlock>),
-    /// Tool execution result with multi-modal content blocks
-    ToolResult {
-        tool_id: String,
-        content: Vec<ContentBlock>,
-    },
     /// Background task completion
     TaskResult {
         task_id: String,
@@ -39,76 +37,66 @@ pub struct Agent {
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
     cancel_token: CancelToken,
-    // Storage for message persistence
-    storage: Option<Arc<dyn crate::storage::Storage>>,
-    session_id: Option<String>,
-    // Agent-specific configuration (not shared)
+    session_id: String,
     max_iterations: usize,
+    // Tool registry - each agent has its own set of tools
+    tool_registry: crate::tools::ToolRegistry,
     // Store the last error message for display
     last_error: Option<String>,
+    // Pending token usage for the current message
+    pending_token_usage: Option<MessageTokenUsage>,
 }
 
 impl Agent {
-    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         id: AgentId,
         shared: &Arc<AgentShared>,
-        base_prompt: impl AsRef<str>, // Base system prompt
-        skills: Vec<Arc<Skill>>,      // Skills to include in system prompt
-        history: Vec<Message>,        // Historical messages (may include old system message)
-        storage: Option<Arc<dyn crate::storage::Storage>>,
-        session_id: Option<String>,
-        max_iterations: usize,
-        enable_sub_agents: bool,
+        args: AgentSpawnArgs,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
         let (event_tx, event_rx) = mpsc::channel(100);
         let cancel_token = CancelToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        // Build system prompt with skills inside Agent
-        let system_prompt = SystemPromptBuilder::new()
-            .base_prompt(base_prompt.as_ref())
-            .with_skills(&skills)
-            .build();
+        // Build system prompt with project memory and skills
+        let system_prompt = if shared.project_memory.is_empty() {
+            // No project memory, use original builder
+            SystemPromptBuilder::new()
+                .base_prompt(&args.base_prompt)
+                .with_skills(&args.skills)
+                .build()
+        } else {
+            // Merge project memory with base prompt
+            let memory_prompt = shared.project_memory.build_system_prompt(&args.base_prompt);
+            // Add skills after project memory
+            SystemPromptBuilder::new()
+                .base_prompt(&memory_prompt)
+                .with_skills(&args.skills)
+                .build()
+        };
 
-        tracing::info!(
+        tracing::debug!(
             "Agent {} spawning with system prompt: {}",
             id,
             system_prompt
         );
-        // Build MessageBuffer: system message + history (excluding old system messages)
         let mut messages = vec![Message::system(system_prompt)];
-        messages.extend(history.into_iter().filter(|m| m.role != Role::System));
+        messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
         let message_buffer = MessageBuffer::from_messages(messages);
 
-        // Clone the shared resources with a new ToolRegistry for agent-specific tools
-        let shared = {
-            let new_shared = shared.with_cloned_registry();
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let shared = shared.clone();
 
-            // Register bash tool with background execution support
-            let bash_ctx =
-                crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
-            let bash_tool = crate::tools::BashTool::new(&working_dir).with_ctx(bash_ctx);
-            new_shared.tool_registry.register(Arc::new(bash_tool));
-
-            // Register subagent tool if enabled
-            if enable_sub_agents {
-                let input_tx_for_subagent = input_tx.clone();
-                new_shared
-                    .tool_registry
-                    .register(Arc::new(SubAgentTool::new(
-                        id.clone(),
-                        Arc::new(new_shared.clone()),
-                        input_tx_for_subagent,
-                        skills,
-                    )));
-            }
-
-            Arc::new(new_shared)
-        };
+        // Create agent-specific tool registry with standard tools
+        let tool_registry = Self::create_tool_registry(
+            &id,
+            &shared,
+            &args.working_dir,
+            &input_tx,
+            args.skills,
+            &args.session_id,
+            args.parent_session_id.as_deref(),
+            args.enable_sub_agents,
+        );
 
         let agent = Self {
             id: id.clone(),
@@ -118,10 +106,11 @@ impl Agent {
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
-            storage,
-            session_id,
-            max_iterations,
+            session_id: args.session_id,
+            max_iterations: args.max_iterations,
+            tool_registry,
             last_error: None,
+            pending_token_usage: None,
         };
 
         let handle_id = id.clone();
@@ -135,10 +124,65 @@ impl Agent {
         (handle, event_rx)
     }
 
+    /// Create tool registry for an agent with standard tools
+    #[allow(clippy::too_many_arguments)]
+    fn create_tool_registry(
+        agent_id: &AgentId,
+        shared: &Arc<AgentShared>,
+        working_dir: &std::path::PathBuf,
+        input_tx: &mpsc::Sender<AgentInput>,
+        skills: Vec<Arc<Skill>>,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        enable_sub_agents: bool,
+    ) -> crate::tools::ToolRegistry {
+        use crate::tools::{BashTool, BashToolCtx, EditTool, ReadTool, SubAgentTool};
+
+        let mut registry = crate::tools::ToolRegistry::new();
+        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+
+        // Register Bash tool
+        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.clone(), working_dir.clone());
+        let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
+        registry.register(bash_tool);
+
+        // Register Read tool with file state store
+        let read_tool =
+            ReadTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        registry.register(read_tool);
+
+        // Register Edit tool with file state store
+        let edit_tool = EditTool::new(working_dir).with_file_state_store(file_state_store);
+        registry.register(edit_tool);
+
+        // Register SubAgent tool if enabled
+        if enable_sub_agents {
+            let subagent_tool = SubAgentTool::new(
+                agent_id.clone(),
+                Arc::clone(shared),
+                input_tx.clone(),
+                skills,
+                shared.storage.clone(),
+                working_dir.clone(),
+                session_id.to_owned(),
+            );
+            registry.register(subagent_tool);
+        }
+
+        // Register task tools if task_store is provided
+        if let Some(task_store) = &shared.task_store {
+            // Use parent_session_id for task store if available (subagents share parent's task list)
+            let task_list_id = parent_session_id.unwrap_or(session_id).to_owned();
+            registry.register_task_tools(task_store.clone(), task_list_id);
+        }
+
+        registry
+    }
+
     /// Persist a single message to storage
     async fn persist_message(&self, message: &Message) {
-        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
-            let session_id = crate::types::SessionId(session_id.clone());
+        if let Some(storage) = &self.shared.storage {
+            let session_id = crate::types::SessionId(self.session_id.clone());
             let _ = storage
                 .append_messages(&session_id, std::slice::from_ref(message))
                 .await;
@@ -284,9 +328,7 @@ impl Agent {
     async fn handle_wait_for_input(&mut self) -> Result<()> {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
-                // Reset cancel token for new request
                 self.cancel_token.reset();
-                // Extract text content for event
                 let text_content = content
                     .iter()
                     .filter_map(|block| match block {
@@ -302,13 +344,6 @@ impl Agent {
                     }))
                     .await;
                 let msg = Message::with_blocks(Role::User, content);
-                self.persist_message(&msg).await;
-                self.message_buffer.push(msg);
-                self.context.transition_to(AgentState::Streaming);
-                Ok(())
-            }
-            Some(AgentInput::ToolResult { tool_id, content }) => {
-                let msg = Message::with_blocks(Role::Tool, content).with_tool_call_id(tool_id);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
@@ -335,13 +370,14 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<()> {
-        let tools = self.shared.tool_registry.definitions();
+        let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
             self.id,
             tools.len(),
             tools.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
+
         let _ = self
             .event_tx
             .send(Event::Model(ModelEvent::Request {
@@ -357,6 +393,7 @@ impl Agent {
                 .provider
                 .stream(messages, &tools, &self.shared.model_config),
         );
+
         let mut stream = tokio::select! {
             biased;
             () = self.cancel_token.cancelled() => {
@@ -364,97 +401,104 @@ impl Agent {
             }
             result = stream_future => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => {
-                    return self.fail_agent("Stream creation failed", e).await;
-                }
-                Err(_) => {
-                    return self.fail_agent(
-                        "Stream creation timed out",
-                        anyhow::anyhow!("timeout after 10s"),
-                    ).await;
-                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
         };
 
-        let mut content_blocks: Vec<ContentBlock> = Vec::new();
+        let (content_blocks, pending_tool_calls) = self.collect_stream_output(&mut stream).await?;
+
+        if !content_blocks.is_empty() || !pending_tool_calls.is_empty() {
+            let mut msg = Message::with_blocks(Role::Assistant, content_blocks);
+            if !pending_tool_calls.is_empty() {
+                msg.tool_calls = Some(pending_tool_calls);
+            }
+            if let Some(usage) = self.pending_token_usage.take() {
+                msg.token_usage = Some(usage);
+            }
+
+            self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
+
+            // Handle compaction if needed
+            self.maybe_compact_messages().await;
+        }
+
+        self.transition_after_streaming().await
+    }
+
+    /// Collect all output from the stream until completion
+    async fn collect_stream_output(
+        &mut self,
+        stream: &mut crate::providers::ModelStream,
+    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>)> {
         let mut current_text = String::new();
         let mut current_thinking = String::new();
+        let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
 
-        // Stream with hard cancellation support using select!
         loop {
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
-                    drop(stream);
-                    return self.handle_cancel("streaming").await;
+                    let _ = stream;
+                    return self.handle_cancel("streaming").await.map(|()| (vec![], vec![]));
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => match item {
-                            ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
-                                current_text.push_str(&text);
-                                let _ = self
-                                    .event_tx
-                                    .send(Event::Model(ModelEvent::Chunk {
-                                        agent_id: self.id.clone(),
-                                        content: ContentChunk::Text(text),
-                                    }))
-                                    .await;
-                            }
-                            ModelStreamItem::Chunk(ContentChunk::Thinking {
-                                thinking,
-                                signature,
-                            }) => {
-                                current_thinking.push_str(&thinking);
-                                let _ = self
-                                    .event_tx
-                                    .send(Event::Model(ModelEvent::Chunk {
-                                        agent_id: self.id.clone(),
-                                        content: ContentChunk::Thinking {
-                                            thinking,
-                                            signature,
-                                        },
-                                    }))
-                                    .await;
-                            }
-                            ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
-                                content_blocks.push(ContentBlock::RedactedThinking {
-                                    data: String::new(),
-                                });
-                            }
-                            ModelStreamItem::ToolCall(request) => {
-                                pending_tool_calls.push(ToolCall {
-                                    id: request.id,
-                                    name: request.name,
-                                    arguments: request.arguments,
-                                });
-                            }
-                            ModelStreamItem::Complete => break,
-                            ModelStreamItem::Fallback { from, to } => {
-                                let _ = self
-                                    .event_tx
-                                    .send(Event::Model(ModelEvent::Fallback {
-                                        agent_id: self.id.clone(),
-                                        from,
-                                        to,
-                                    }))
-                                    .await;
-                            }
-                            ModelStreamItem::TokenUsage {
+                        ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
+                            current_text.push_str(&text);
+                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
+                                agent_id: self.id.clone(),
+                                content: ContentChunk::Text(text),
+                            })).await;
+                        }
+                        ModelStreamItem::Chunk(ContentChunk::Thinking { thinking, signature }) => {
+                            current_thinking.push_str(&thinking);
+                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
+                                agent_id: self.id.clone(),
+                                content: ContentChunk::Thinking { thinking, signature },
+                            })).await;
+                        }
+                        ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
+                            content_blocks.push(ContentBlock::RedactedThinking {
+                                data: String::new(),
+                            });
+                        }
+                        ModelStreamItem::ToolCall(request) => {
+                            pending_tool_calls.push(ToolCall {
+                                id: request.id,
+                                name: request.name,
+                                arguments: request.arguments,
+                            });
+                        }
+                        ModelStreamItem::Complete => break,
+                        ModelStreamItem::Fallback { from, to } => {
+                            let _ = self.event_tx.send(Event::Model(ModelEvent::Fallback {
+                                agent_id: self.id.clone(),
+                                from,
+                                to,
+                            })).await;
+                        }
+                        ModelStreamItem::TokenUsage { prompt_tokens, completion_tokens } => {
+                            // NOTE: this is right because each response's prompt_tokens will contain whole history
+                            let total = prompt_tokens + completion_tokens;
+                            self.pending_token_usage = Some(MessageTokenUsage {
                                 prompt_tokens,
                                 completion_tokens,
-                            } => {
-                                let total_tokens = prompt_tokens + completion_tokens;
-                                let _ = self
-                                    .event_tx
-                                    .send(Event::Model(ModelEvent::TokenUsage {
-                                        agent_id: self.id.clone(),
-                                        prompt_tokens,
-                                        completion_tokens,
-                                        total_tokens,
-                                    }))
-                                    .await;
-                            }
+                                total_tokens: total,
+                            });
+                            // Get context window from compactor or use default
+                            let context_window = self.shared.compactor.as_ref()
+                                .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
+                            let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
+                                agent_id: self.id.clone(),
+                                prompt_tokens,
+                                completion_tokens,
+                                total_tokens: total,
+                                context_window,
+                            })).await;
+                        }
                     },
                     Ok(None) => break,
                     Err(e) => return Err(e),
@@ -472,22 +516,82 @@ impl Agent {
             content_blocks.push(ContentBlock::Text { text: current_text });
         }
 
-        if !content_blocks.is_empty() || !pending_tool_calls.is_empty() {
-            let mut msg = Message::with_blocks(Role::Assistant, content_blocks);
-            if !pending_tool_calls.is_empty() {
-                msg.tool_calls = Some(pending_tool_calls);
-            }
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
+        Ok((content_blocks, pending_tool_calls))
+    }
+
+    /// Check and run compaction if needed
+    async fn maybe_compact_messages(&mut self) {
+        let Some(compactor) = &self.shared.compactor else {
+            return; // No compactor configured, skip
+        };
+        let should_compact = compactor.should_compact(self.message_buffer.messages());
+        if !should_compact {
+            return;
         }
 
-        if self
+        // Emit start event (before borrowing self mutably for messages)
+        let agent_id = self.id.clone();
+        let _ = self
+            .event_tx
+            .send(Event::Model(ModelEvent::Compacting {
+                agent_id: agent_id.clone(),
+                active: true,
+            }))
+            .await;
+
+        let messages = self.message_buffer.messages_mut();
+        let result = compactor
+            .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
+            .await;
+
+        // Handle result before emitting end event (while messages is still borrowed)
+        match &result {
+            Ok(Some(compaction_result)) => {
+                if compaction_result.is_full_compaction() {
+                    tracing::info!(
+                        "Agent {} performed full compaction: {} messages summarized",
+                        agent_id,
+                        compaction_result.compacted_count
+                    );
+                } else {
+                    tracing::info!("Agent {} performed micro-compaction", agent_id);
+                }
+                // Persist compacted state
+                if let Some(storage) = &self.shared.storage {
+                    let sid = crate::types::SessionId(self.session_id.clone());
+                    if let Err(e) = storage.set_messages(&sid, messages).await {
+                        tracing::warn!(
+                            "Agent {} failed to persist compacted messages: {}",
+                            agent_id,
+                            e
+                        );
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Agent {} compaction failed: {}", agent_id, e),
+        }
+
+        // Emit end event (after match block, messages borrow is released)
+        let _ = self
+            .event_tx
+            .send(Event::Model(ModelEvent::Compacting {
+                agent_id: self.id.clone(),
+                active: false,
+            }))
+            .await;
+    }
+
+    /// Transition to appropriate state after streaming completes
+    async fn transition_after_streaming(&self) -> Result<()> {
+        let has_tool_calls = self
             .message_buffer
             .messages()
             .last()
             .and_then(|m| m.tool_calls.as_ref())
-            .is_some()
-        {
+            .is_some();
+
+        if has_tool_calls {
             let tool_count = self
                 .message_buffer
                 .messages()
@@ -540,8 +644,7 @@ impl Agent {
         }
 
         let results =
-            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.shared.tool_registry)
-                .await;
+            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.tool_registry).await;
 
         for result in results {
             if self.cancel_token.is_cancelled() {
@@ -577,13 +680,14 @@ impl Agent {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt >= max_retries => {
-                    tracing::error!("Streaming failed after {} attempts: {}", attempt, e);
-                    return Err(e);
+                    return self
+                        .fail_agent("Streaming failed after max retries", e)
+                        .await;
                 }
                 Err(e) if !Self::is_retryable_error(&e) => {
-                    // Client errors (4xx) should not be retried
-                    tracing::error!("Streaming failed with non-retryable error: {}", e);
-                    return Err(e);
+                    return self
+                        .fail_agent("Streaming failed with non-retryable error", e)
+                        .await;
                 }
                 Err(e) => {
                     attempt += 1;
@@ -597,6 +701,7 @@ impl Agent {
 
     /// Check if an error is retryable.
     fn is_retryable_error(error: &anyhow::Error) -> bool {
+        warn!("Streaming error: {}", error);
         if let Some(http_err) = error.downcast_ref::<crate::providers::HttpError>() {
             return http_err.is_retryable();
         }

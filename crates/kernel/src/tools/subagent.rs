@@ -1,6 +1,7 @@
-use crate::agent::{Agent, AgentInput, AgentShared, SubAgentMode};
+use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, SubAgentMode};
 use crate::event::Event;
 use crate::skill::Skill;
+use crate::storage::Storage;
 use crate::tools::Tool;
 use crate::types::{AgentId, ContentBlock, ToolOutput};
 use anyhow::Result;
@@ -17,22 +18,100 @@ pub struct SubAgentTool {
     parent_input_tx: mpsc::Sender<AgentInput>,
     /// Skills inherited from parent agent
     skills: Vec<Arc<Skill>>,
+    /// Storage for transcript recording (optional)
+    storage: Option<Arc<dyn Storage>>,
+    /// Working directory for sub-agent
+    working_dir: std::path::PathBuf,
+    /// Parent session ID for task store sharing
+    parent_session_id: String,
 }
 
 impl SubAgentTool {
-    pub const fn new(
+    pub fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
         parent_input_tx: mpsc::Sender<AgentInput>,
         skills: Vec<Arc<Skill>>,
+        storage: Option<Arc<dyn Storage>>,
+        working_dir: impl Into<std::path::PathBuf>,
+        parent_session_id: String,
     ) -> Self {
         Self {
             parent_id,
             shared,
             parent_input_tx,
             skills,
+            storage,
+            working_dir: working_dir.into(),
+            parent_session_id,
         }
     }
+
+    /// Build the system prompt for the sub-agent
+    fn build_system_prompt(&self) -> String {
+        format!(
+            r"You are a sub-agent spawned by parent agent {parent_id}.
+
+## Your Role
+You are a specialist agent handling a specific task delegated by the parent agent. You have zero context about the parent conversation - rely on the user message for complete task information.
+
+## Guidelines
+- Focus solely on the task described in the user message
+- If the task involves code changes, read the relevant files first
+- Report your findings concisely; avoid unnecessary verbosity
+- If you need more information, use the available tools to gather it
+- When complete, provide a clear summary of what you found or accomplished
+- Do NOT make assumptions about files or code you haven't examined
+
+## Output Format
+Provide your response in a structured format:
+1. **Summary**: Brief overview of what you did
+2. **Details**: Specific findings, changes, or results
+3. **Recommendations**: Any follow-up actions needed (if applicable)
+",
+            parent_id = self.parent_id,
+        )
+    }
+
+    /// Collect output from sub-agent events
+    /// Returns (output, status) where status indicates completion state
+    async fn collect_subagent_output(
+        event_rx: &mut mpsc::Receiver<Event>,
+        output: &mut String,
+    ) -> SubAgentStatus {
+        use crate::event::{AgentEvent, ContentChunk, ModelEvent};
+
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                Event::Model(ModelEvent::Chunk {
+                    content: ContentChunk::Text(text),
+                    ..
+                }) => {
+                    // Only capture text output to avoid bloating parent context
+                    output.push_str(&text);
+                }
+                Event::Agent(AgentEvent::Completed { .. }) => {
+                    return SubAgentStatus::Completed;
+                }
+                Event::Agent(AgentEvent::Failed { error, .. }) => {
+                    return SubAgentStatus::Failed(error);
+                }
+                Event::Agent(AgentEvent::Cancelled { .. }) => {
+                    return SubAgentStatus::Cancelled;
+                }
+                _ => {}
+            }
+        }
+        SubAgentStatus::Disconnected
+    }
+}
+
+/// Sub-agent completion status
+enum SubAgentStatus {
+    Completed,
+    Failed(String),
+    Cancelled,
+    Disconnected,
 }
 
 #[async_trait]
@@ -42,31 +121,63 @@ impl Tool for SubAgentTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Spawn a sub-agent to handle a specific task. \
-         Use 'sync' mode to wait for completion and get results, \
-         or 'async' mode to spawn and continue immediately."
+        r#"Launch a new agent to handle complex, multi-step tasks autonomously.
+
+## When to Use
+- Research tasks requiring multiple file reads or searches
+- Implementation work that requires changes across multiple files
+- Tasks that can be parallelized for better performance
+- Complex analysis that would clutter the main context with intermediate results
+
+## When NOT to Use
+- Simple file reads - use the read tool directly
+- Single grep/search operations - use bash or search tools
+- Tasks requiring only 1-2 quick edits
+
+## Writing the Prompt
+Brief the agent like a smart colleague who just walked into the room:
+- Explain what you're trying to accomplish and why
+- Describe what you've already learned or ruled out
+- Give enough context for the agent to make judgment calls
+- If you need a short response, say so ("report in under 200 words")
+- Lookups: hand over the exact command
+- Investigations: hand over the question
+
+## Never Delegate Understanding
+Don't write "based on your findings, fix the bug" - write prompts that prove YOU understood. Include file paths, line numbers, what specifically to change.
+
+## Execution Modes
+- **sync** (default): Wait for sub-agent completion, returns full results
+- **async**: Returns immediately, results sent as background notification when ready. Use async when you have genuinely independent work to do in parallel."#
     }
 
     fn params(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Short summary (3-5 words) of what the sub-agent will do, e.g., 'Audit dependencies', 'Refactor auth module'"
+                },
                 "task": {
                     "type": "string",
-                    "description": "The specific task description for the sub-agent"
+                    "description": "The specific task description for the sub-agent. Be detailed - the sub-agent has no context about your conversation."
                 },
                 "mode": {
                     "type": "string",
                     "enum": ["async", "sync"],
-                    "description": "Execution mode: 'async' returns immediately with sub-agent ID, 'sync' waits for completion and returns results",
+                    "description": "Execution mode: 'async' returns immediately with sub-agent ID (use for parallel work), 'sync' waits for completion and returns results (use when you need the results to proceed)",
                     "default": "sync"
                 }
             },
-            "required": ["task"]
+            "required": ["description", "task"]
         })
     }
 
     async fn exec(&self, args: Value) -> Result<ToolOutput> {
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?;
         let task = args["task"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'task' argument"))?;
@@ -80,29 +191,49 @@ impl Tool for SubAgentTool {
         tracing::info!(
             "Spawning sub-agent for parent {} with task: {}",
             self.parent_id,
-            task
+            description
         );
 
-        // Spawn the sub-agent
-        let base_prompt = format!(
-            "You are a sub-agent. Parent: {}. Task: {}",
-            self.parent_id, task
-        );
-        let (handle, mut event_rx) = Agent::spawn(
-            AgentId::new(),
-            &self.shared,
-            base_prompt,
-            self.skills.clone(), // Inherit skills from parent
-            Vec::new(),          // No history for sub-agents
-            None,
-            None,
-            10,
-            false,
-        );
+        // Build system prompt (role definition only, no task specifics)
+        let system_prompt = self.build_system_prompt();
+
+        // Create session for transcript recording if storage is available
+        let subagent_session_id = if let Some(storage) = &self.storage {
+            match storage.create_session().await {
+                Ok(sid) => {
+                    tracing::debug!(
+                        "Created sub-agent session: {} for agent {}",
+                        sid.0,
+                        self.parent_id
+                    );
+                    sid.0
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create sub-agent session: {}", e);
+                    return Ok(ToolOutput::new_err(
+                        "Failed to create storage session for sub-agent",
+                    ));
+                }
+            }
+        } else {
+            return Ok(ToolOutput::new_err(
+                "Storage is required to spawn sub-agents for transcript recording",
+            ));
+        };
+
+        let config = AgentSpawnArgs::new(system_prompt, subagent_session_id)
+            .with_skills(self.skills.clone())
+            .with_parent_session(&self.parent_session_id)
+            .with_max_iterations(20)
+            .without_sub_agents()
+            .with_working_dir(self.working_dir.clone());
+
+        let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 
         let sub_agent_id = handle.id.clone();
 
-        // Send the task (as text content block)
+        // Send the task as the first user message
+        // Pattern: system prompt defines role, user message provides task
         handle.send_text(task.to_string()).await.ok();
 
         match mode {
@@ -110,60 +241,46 @@ impl Tool for SubAgentTool {
                 // Spawn background task to collect results and forward to parent
                 let parent_tx = self.parent_input_tx.clone();
                 let sub_id = sub_agent_id.clone();
+                let desc = description.to_string();
                 tokio::spawn(async move {
                     let mut output = String::new();
-                    let mut completed = false;
+                    let status = Self::collect_subagent_output(&mut event_rx, &mut output).await;
 
-                    while let Some(event) = event_rx.recv().await {
-                        match event {
-                            Event::Model(crate::event::ModelEvent::Chunk { content, .. }) => {
-                                use crate::event::ContentChunk;
-                                match content {
-                                    ContentChunk::Text(text) => output.push_str(&text),
-                                    ContentChunk::Thinking { thinking, .. } => {
-                                        output.push_str("\n[Thinking]: ");
-                                        output.push_str(&thinking);
-                                    }
-                                    ContentChunk::RedactedThinking => {
-                                        output.push_str("\n[Redacted thinking]");
-                                    }
-                                }
-                            }
-                            Event::Agent(crate::event::AgentEvent::Completed { .. }) => {
-                                completed = true;
-                                break;
-                            }
-                            Event::Agent(crate::event::AgentEvent::Failed { error, .. }) => {
-                                use std::fmt::Write;
-                                let _ = write!(output, "\n[Sub-agent failed: {error}]");
-                                break;
-                            }
-                            Event::Agent(crate::event::AgentEvent::Cancelled { .. }) => {
-                                output.push_str("\n[Sub-agent was cancelled]");
-                                break;
-                            }
-                            _ => {}
+                    // Append error/cancelled markers to output
+                    match &status {
+                        SubAgentStatus::Failed(error) => {
+                            use std::fmt::Write;
+                            let _ = write!(output, "\n\n[Sub-agent failed: {error}]");
                         }
+                        SubAgentStatus::Cancelled => {
+                            output.push_str("\n\n[Sub-agent was cancelled]");
+                        }
+                        _ => {}
                     }
 
-                    // Forward result to parent agent
+                    // Forward result to parent agent with structured format
+                    let completed = matches!(status, SubAgentStatus::Completed);
                     let result_text = if completed {
-                        format!("\n\n[Async Sub-agent {sub_id} completed]\nResult:\n{output}")
+                        format!(
+                            "## Sub-agent Task Completed\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Result\n{output}",
+                        )
                     } else {
-                        format!("\n\n[Async Sub-agent {sub_id} ended]\nPartial result:\n{output}")
+                        format!(
+                            "## Sub-agent Task Ended (Incomplete)\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Partial Result\n{output}"
+                        )
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)
                     let _ = parent_tx
-                        .send(AgentInput::ToolResult {
-                            tool_id: format!("subagent_{sub_id}"),
+                        .send(AgentInput::TaskResult {
+                            task_id: sub_id.to_string(),
                             content: vec![ContentBlock::Text { text: result_text }],
                         })
                         .await;
                 });
 
                 let result = format!(
-                    "Sub-agent {sub_agent_id} spawned in async mode. Results will be sent when complete. Task: {task}"
+                    "Sub-agent '{description}' ({sub_agent_id}) spawned in async mode. Results will be sent when complete."
                 );
                 Ok(ToolOutput {
                     stdout: result,
@@ -172,61 +289,31 @@ impl Tool for SubAgentTool {
                 })
             }
             SubAgentMode::Sync => {
-                // Collect all output from sub-agent
+                // Collect output from sub-agent
                 let mut output = String::new();
-                let mut completed = false;
+                let status = Self::collect_subagent_output(&mut event_rx, &mut output).await;
 
-                while let Some(event) = event_rx.recv().await {
-                    match event {
-                        Event::Model(crate::event::ModelEvent::Chunk { content, .. }) => {
-                            use crate::event::ContentChunk;
-                            match content {
-                                ContentChunk::Text(text) => output.push_str(&text),
-                                ContentChunk::Thinking { thinking, .. } => {
-                                    output.push_str("\n[Thinking]: ");
-                                    output.push_str(&thinking);
-                                }
-                                ContentChunk::RedactedThinking => {
-                                    output.push_str("\n[Redacted thinking]");
-                                }
-                            }
-                        }
-                        Event::Agent(crate::event::AgentEvent::Completed { .. }) => {
-                            completed = true;
-                            break;
-                        }
-                        Event::Agent(crate::event::AgentEvent::Failed { error, .. }) => {
-                            return Ok(ToolOutput {
-                                stdout: output,
-                                stderr: format!("Sub-agent failed: {error}"),
-                                exit_code: 1,
-                            });
-                        }
-                        Event::Agent(crate::event::AgentEvent::Cancelled { .. }) => {
-                            return Ok(ToolOutput {
-                                stdout: output,
-                                stderr: "Sub-agent was cancelled".to_string(),
-                                exit_code: 1,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-
-                if completed {
-                    use std::fmt::Write;
-                    let _ = write!(output, "\n\n[Sub-agent {sub_agent_id} completed]");
-                    Ok(ToolOutput {
+                match status {
+                    SubAgentStatus::Completed => Ok(ToolOutput {
                         stdout: output,
                         stderr: String::new(),
                         exit_code: 0,
-                    })
-                } else {
-                    Ok(ToolOutput {
+                    }),
+                    SubAgentStatus::Failed(error) => Ok(ToolOutput {
+                        stdout: output,
+                        stderr: format!("Sub-agent failed: {error}"),
+                        exit_code: 1,
+                    }),
+                    SubAgentStatus::Cancelled => Ok(ToolOutput {
+                        stdout: output,
+                        stderr: "Sub-agent was cancelled".to_string(),
+                        exit_code: 1,
+                    }),
+                    SubAgentStatus::Disconnected => Ok(ToolOutput {
                         stdout: output,
                         stderr: "Sub-agent ended without completion".to_string(),
                         exit_code: 1,
-                    })
+                    }),
                 }
             }
         }

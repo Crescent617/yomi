@@ -1,6 +1,7 @@
 use crate::event::ToolEvent;
 use crate::tools::{Tool, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
+use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -14,14 +15,9 @@ pub struct ToolExecutionResult {
     pub event: ToolEvent,
 }
 
-/// Truncate output if it exceeds max length
-fn truncate_output(output: String) -> String {
-    if output.len() > MAX_OUTPUT_LENGTH {
-        let truncate_at = MAX_OUTPUT_LENGTH.saturating_sub(TRUNCATION_MESSAGE.len());
-        format!("{}{}", &output[..truncate_at], TRUNCATION_MESSAGE)
-    } else {
-        output
-    }
+/// Truncate output if it exceeds max length (UTF-8 safe)
+fn truncate_output(output: &str) -> String {
+    strs::truncate_with_suffix(output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
 /// Execute multiple tool calls in parallel
@@ -72,8 +68,8 @@ pub async fn execute_tools_parallel(
             let success = result.success();
 
             // Truncate output if too long
-            let stdout = truncate_output(result.stdout);
-            let stderr = truncate_output(result.stderr);
+            let stdout = truncate_output(&result.stdout);
+            let stderr = truncate_output(&result.stderr);
 
             let (event, message) = if success {
                 let output = stdout;
@@ -90,6 +86,7 @@ pub async fn execute_tools_parallel(
                         tool_calls: None,
                         tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
+                        token_usage: None,
                     },
                 )
             } else {
@@ -107,6 +104,7 @@ pub async fn execute_tools_parallel(
                         tool_calls: None,
                         tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
+                        token_usage: None,
                     },
                 )
             };

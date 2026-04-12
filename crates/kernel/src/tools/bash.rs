@@ -1,9 +1,10 @@
 use crate::agent::AgentInput;
 use crate::tools::Tool;
 use crate::types::{AgentId, ToolOutput};
+use crate::utils::id::gen_base56_id;
+
 use anyhow::Result;
 use async_trait::async_trait;
-use rand::Rng;
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::Duration;
@@ -12,19 +13,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-
-const BASE56_CHARS: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
-
-/// Generate a random base56 ID of specified length
-fn gen_base56_id(len: usize) -> String {
-    let mut rng = rand::thread_rng();
-    (0..len)
-        .map(|_| {
-            let idx = rng.gen_range(0..BASE56_CHARS.len());
-            BASE56_CHARS[idx] as char
-        })
-        .collect()
-}
 
 #[derive(Clone)]
 pub struct BashToolCtx {
@@ -76,7 +64,7 @@ impl Tool for BashTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Execute a bash command in the working directory. Use 'background: true' to run long commands asynchronously. DO NOT use `git push` or other dangerous commands unless user explicitly asks for it. Always consider the security implications of the command being executed."
+        "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
     }
 
     fn params(&self) -> Value {

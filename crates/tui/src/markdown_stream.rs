@@ -10,6 +10,7 @@ use tuirealm::ratatui::{
 };
 
 use crate::theme::{chars, colors, Styles};
+use crate::utils::text::preprocess;
 
 /// Tracks the state of markdown parsing for incremental rendering
 #[derive(Debug, Clone, Copy)]
@@ -348,19 +349,21 @@ impl StreamingMarkdownRenderer {
                                 ));
                                 current_line = Vec::new();
                             }
+                            // Convert tabs to 2 spaces for consistent display width
+                            let expanded_line = line.replace('\t', "  ");
                             self.lines.push(Line::from(vec![
                                 Span::styled(
                                     format!("{} ", chars::CODE_VERTICAL),
                                     Style::default().fg(colors::code_border()),
                                 ),
                                 Span::styled(
-                                    line.to_string(),
+                                    expanded_line,
                                     Style::default().fg(colors::code_fg()),
                                 ),
                             ]));
                         }
                     } else {
-                        current_line.push(Span::styled(text.to_string(), current_style));
+                        current_line.push(Span::styled(preprocess(&text), current_style));
                     }
                 }
                 MdEvent::Code(code) => {

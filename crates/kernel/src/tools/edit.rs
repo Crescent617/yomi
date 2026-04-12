@@ -1,28 +1,64 @@
+use crate::tools::edit_utils::{find_actual_string, generate_diff};
+use crate::tools::file_state::FileStateStore;
+use crate::tools::line_numbers::format_file_lines;
+use crate::tools::read::MAX_FILE_SIZE;
 use crate::tools::Tool;
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct EditTool {
     base_dir: PathBuf,
+    file_state_store: Option<Arc<FileStateStore>>,
 }
 
 impl EditTool {
     pub fn new(base_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
+            file_state_store: None,
         }
     }
 
-    fn resolve_path(&self, relative: &str) -> Result<PathBuf> {
+    /// Set the file state store for tracking reads
+    #[must_use]
+    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
+        self.file_state_store = Some(store);
+        self
+    }
+
+    fn resolve_path(&self, relative: &str) -> PathBuf {
         let path = self.base_dir.join(relative);
-        let canonical = path.canonicalize().unwrap_or(path);
-        if !canonical.starts_with(&self.base_dir) {
-            return Err(anyhow::anyhow!("Path escapes base directory: {relative}"));
+        path.canonicalize().unwrap_or(path)
+    }
+
+    /// Get file modification time in milliseconds since epoch
+    async fn get_mtime(&self, path: &PathBuf) -> Result<u64> {
+        let metadata = tokio::fs::metadata(path).await?;
+        let mtime = metadata.modified()?;
+        let duration = mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Ok(duration.as_millis() as u64)
+    }
+
+    /// Check if the file has been modified since it was last read
+    async fn check_staleness(&self, path: &PathBuf) -> Option<String> {
+        let store = self.file_state_store.as_ref()?;
+
+        // Check if file has been modified (mtime changed)
+        let current_mtime = self.get_mtime(path).await.ok()?;
+        if store.is_stale(path, current_mtime) {
+            return Some(
+                "File has been modified since it was read. Read the file again before editing."
+                    .to_string(),
+            );
         }
-        Ok(canonical)
+
+        None
     }
 }
 
@@ -33,7 +69,7 @@ impl Tool for EditTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Replace text in a file. Use old_str to locate the text and new_str to replace it."
+        "Replace text in a file. Use this instead of sed. Provide old_str to locate the text (should be unique enough) and new_str to replace it. Supports replace_all=true to replace all occurrences."
     }
 
     fn params(&self) -> Value {
@@ -52,7 +88,7 @@ impl Tool for EditTool {
                     "type": "string",
                     "description": "The new text to replace old_str with"
                 },
-                "multi": {
+                "replace_all": {
                     "type": "boolean",
                     "description": "If true, replace all occurrences. Default false (replace first only).",
                     "default": false
@@ -72,38 +108,180 @@ impl Tool for EditTool {
         let new_str = args["new_str"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'new_str' argument"))?;
-        let multi = args["multi"].as_bool().unwrap_or(false);
+        let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = self.resolve_path(path_str)?;
+        let path = self.resolve_path(path_str);
 
         tracing::debug!("Edit: replace in {}", path.display());
 
+        // Check if file exists
+        if !tokio::fs::try_exists(&path).await? {
+            return Ok(ToolOutput::new_err(format!(
+                "File does not exist: {path_str}"
+            )));
+        }
+        // Check file size
+        if tokio::fs::metadata(&path).await?.len() > MAX_FILE_SIZE {
+            return Ok(ToolOutput::new_err(format!(
+                "File is too large to edit: {path_str}"
+            )));
+        }
+
+        // Check if file has been read before editing
+        if let Some(ref store) = self.file_state_store {
+            if !store.has_recorded(&path) {
+                return Ok(ToolOutput::new_err(format!(
+                    "File has not been read yet. Read it first before editing: {path_str}"
+                )));
+            }
+
+            // Check for staleness
+            if let Some(error) = self.check_staleness(&path).await {
+                return Ok(ToolOutput::new_err(error));
+            }
+        }
+
         let content = tokio::fs::read_to_string(&path).await?;
 
-        if !content.contains(old_str) {
-            return Ok(ToolOutput::new(
-                "",
-                format!("Could not find 'old_str' in {}", path.display()),
+        // Validate old_str is not empty (except for creating new files)
+        if old_str.is_empty() && !content.is_empty() {
+            return Ok(ToolOutput::new_err(
+                "Cannot use empty old_str on existing file with content. Provide the text to replace."
             ));
         }
 
-        let new_content = if multi {
-            content.replace(old_str, new_str)
-        } else {
-            content.replacen(old_str, new_str, 1)
+        // Check if old_str and new_str are the same
+        if old_str == new_str {
+            return Ok(ToolOutput::new_err(
+                "No changes to make: old_str and new_str are exactly the same.",
+            ));
+        }
+
+        // Find the actual string in the file (handles quote normalization)
+        let Some(actual_old_str) = find_actual_string(&content, old_str) else {
+            return Ok(ToolOutput::new_err(format!(
+                "Could not find 'old_str' in file. String not found:\n{old_str}"
+            )));
         };
 
-        tokio::fs::write(&path, new_content).await?;
+        // Count occurrences
+        let occurrences = content.matches(&actual_old_str).count();
+        if occurrences == 0 {
+            return Ok(ToolOutput::new_err(format!(
+                "Could not find 'old_str' in file. String not found:\n{old_str}"
+            )));
+        }
 
-        let occurrences = if multi {
-            content.matches(old_str).count()
+        // Check for multiple matches when replace_all is false
+        if occurrences > 1 && !replace_all {
+            return Ok(ToolOutput::new_err(format!(
+                "Found {occurrences} matches of the string to replace, but replace_all is false. \
+                 To replace all occurrences, set replace_all to true. \
+                 To replace only one occurrence, please provide more context to uniquely identify the instance.\n\
+                 String: {old_str}"
+            )));
+        }
+
+        // Perform the replacement
+        let new_content = if replace_all {
+            content.replace(&actual_old_str, new_str)
         } else {
-            1
+            content.replacen(&actual_old_str, new_str, 1)
         };
 
-        Ok(ToolOutput::new(
-            format!("Replaced {occurrences} occurrence(s) in {}", path.display()),
-            "",
-        ))
+        // Write the new content
+        tokio::fs::write(&path, &new_content).await?;
+
+        // Update file mtime in store
+        if let Some(ref store) = self.file_state_store {
+            let mtime = self.get_mtime(&path).await.unwrap_or(0);
+            store.record(path.clone(), mtime);
+        }
+
+        // Generate diff
+        let diff = generate_diff(&content, &new_content, 3);
+
+        // Build success message
+        let action = if replace_all {
+            format!("Replaced all {occurrences} occurrences")
+        } else {
+            "Replaced 1 occurrence".to_string()
+        };
+
+        let response = format!(
+            "{} in {}\n\nDiff:\n{}",
+            action,
+            path_str,
+            format_file_lines(&diff, 1)
+        );
+
+        Ok(ToolOutput::new(response, ""))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_edit_tool_basic() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "hello world").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+        let full_path = path.join(file_name);
+
+        let tool = EditTool::new(path);
+
+        // First, simulate a read by setting file state with actual file's mtime
+        let store = Arc::new(FileStateStore::new());
+        let _content = "hello world".to_string();
+
+        // Get actual file mtime
+        let metadata = tokio::fs::metadata(&full_path).await.unwrap();
+        let mtime = metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        store.record(full_path.clone(), mtime);
+
+        let tool = tool.with_file_state_store(store);
+
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "hello",
+            "new_str": "goodbye"
+        });
+
+        let result = tool.exec(args).await.unwrap();
+        assert!(result.stdout.contains("Replaced"));
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "goodbye world\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_tool_no_read_first() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "hello world").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let tool = EditTool::new(path).with_file_state_store(store);
+
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "hello",
+            "new_str": "goodbye"
+        });
+
+        let result = tool.exec(args).await.unwrap();
+        assert!(result.stderr.contains("not been read"));
     }
 }
