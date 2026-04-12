@@ -14,6 +14,7 @@ use tuirealm::{
 };
 
 use kernel::event::Event as AppEvent;
+use kernel::types::Message;
 
 use crate::{
     components::{ChatViewComponent, InfoBarComponent, InputComponent, StatusBarComponent},
@@ -55,6 +56,15 @@ pub struct Model {
     is_streaming: bool,
     /// Application mode - single source of truth
     mode: AppMode,
+    /// Input history for the current working directory (loaded + new)
+    input_history: Vec<String>,
+    /// Initial history length (to identify new entries on exit)
+    initial_history_len: usize,
+    /// Working directory (kept for future use)
+    #[allow(dead_code)]
+    working_dir: std::path::PathBuf,
+    /// Session messages to display on startup (for resumed sessions)
+    session_messages: Vec<Message>,
 }
 
 impl Model {
@@ -62,6 +72,9 @@ impl Model {
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<String>,
         cancel_tx: mpsc::Sender<()>,
+        input_history: Vec<String>,
+        working_dir: std::path::PathBuf,
+        session_messages: Vec<Message>,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
@@ -79,7 +92,43 @@ impl Model {
             thinking_start_time: None,
             is_streaming: false,
             mode: AppMode::Normal,
+            initial_history_len: input_history.len(),
+            input_history,
+            working_dir,
+            session_messages,
         })
+    }
+
+    /// Get new history entries collected during this session
+    pub fn get_new_history_entries(&self) -> Vec<String> {
+        self.input_history[self.initial_history_len..].to_vec()
+    }
+
+    /// Initialize input history in the InputBox component
+    pub fn init_input_history(&mut self) -> Result<()> {
+        // Serialize history to JSON string
+        let history_json = serde_json::to_string(&self.input_history)?;
+        self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("history"),
+            AttrValue::String(history_json),
+        )?;
+        Ok(())
+    }
+
+    /// Display session messages in ChatView (for resumed sessions)
+    fn init_session_messages(&mut self) -> Result<()> {
+        if self.session_messages.is_empty() {
+            return Ok(());
+        }
+        // Serialize messages to JSON and pass to ChatView
+        let messages_json = serde_json::to_string(&self.session_messages)?;
+        self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("init_history"),
+            AttrValue::String(messages_json),
+        )?;
+        Ok(())
     }
 
     /// Initialize banner with real data (called once at startup)
@@ -489,7 +538,7 @@ impl Model {
 
     /// Run the main loop
     #[allow(clippy::future_not_send)]
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(mut self) -> Result<Vec<String>> {
         // Enter alternate screen
         self.terminal.enter_alternate_screen()?;
         self.terminal.enable_raw_mode()?;
@@ -497,13 +546,14 @@ impl Model {
         // Hide cursor by default (will be shown by InputComponent when needed)
         crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide)?;
 
-        let result = self.run_loop().await;
+        let _result = self.run_loop().await;
 
         // Cleanup
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
 
-        result
+        // Return new history entries
+        Ok(self.get_new_history_entries())
     }
 
     #[allow(clippy::future_not_send)]
@@ -560,6 +610,11 @@ impl Update<Msg> for Model {
                 Msg::InputSubmit(content) => {
                     if self.mode == AppMode::Browse {
                         return None;
+                    }
+                    // Save to history for C-n/C-p navigation
+                    if !content.trim().is_empty() {
+                        self.input_history.push(content.clone());
+                        let _ = self.init_input_history();
                     }
                     // Add user message to chat view
                     let _ = self.app.attr(
@@ -743,8 +798,23 @@ pub async fn run_tui(
     cancel_tx: mpsc::Sender<()>,
     working_dir: String,
     skills: Vec<String>,
-) -> Result<()> {
-    let mut model = Model::new(event_rx, input_tx, cancel_tx)?;
+    input_history: Vec<String>,
+    session_messages: Vec<Message>,
+) -> Result<Vec<String>> {
+    let working_dir_path = std::path::PathBuf::from(&working_dir);
+    let mut model = Model::new(
+        event_rx,
+        input_tx,
+        cancel_tx,
+        input_history,
+        working_dir_path,
+        session_messages,
+    )?;
     model.init_banner(working_dir, skills)?;
+    // Set input history after banner init
+    model.init_input_history()?;
+    // Display session messages (for resumed sessions)
+    model.init_session_messages()?;
+    // run() consumes model and returns the new history entries
     model.run().await
 }

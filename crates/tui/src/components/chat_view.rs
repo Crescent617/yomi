@@ -1112,6 +1112,46 @@ impl ChatViewComponent {
             component: ChatView::new(),
         }
     }
+
+    /// Initialize history from kernel messages (for session resume)
+    pub fn init_history(&mut self, messages: &[kernel::types::Message]) {
+        for msg in messages {
+            match msg.role {
+                kernel::types::Role::User => {
+                    let text = msg.text_content();
+                    if !text.is_empty() {
+                        self.component.add_user_message(text);
+                    }
+                }
+                kernel::types::Role::Assistant => {
+                    let content = msg.text_content();
+                    let thinking = msg.thinking_content();
+                    self.component.add_assistant_message(content, thinking, None);
+
+                    // Handle tool calls
+                    if let Some(ref tool_calls) = msg.tool_calls {
+                        for call in tool_calls {
+                            let args = serde_json::to_string(&call.arguments).ok();
+                            self.component.start_tool(
+                                call.id.clone(),
+                                call.name.clone(),
+                                args,
+                            );
+                        }
+                    }
+                }
+                kernel::types::Role::Tool => {
+                    if let Some(ref tool_call_id) = msg.tool_call_id {
+                        let output = msg.text_content();
+                        // For tool messages, we need to find the corresponding tool in history
+                        // and mark it as completed. Since we don't have elapsed_ms, use 0.
+                        self.component.complete_tool(tool_call_id.clone(), output, 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl MockComponent for ChatViewComponent {
@@ -1124,7 +1164,17 @@ impl MockComponent for ChatViewComponent {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        self.component.attr(attr, value);
+        match attr {
+            Attribute::Custom("init_history") => {
+                if let AttrValue::String(json) = value {
+                    if let Ok(messages) = serde_json::from_str::<Vec<kernel::types::Message>>(&json)
+                    {
+                        self.init_history(&messages);
+                    }
+                }
+            }
+            _ => self.component.attr(attr, value),
+        }
     }
 
     fn state(&self) -> State {

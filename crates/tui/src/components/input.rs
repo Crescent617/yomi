@@ -309,6 +309,10 @@ impl MockComponent for InputMock {
 pub struct InputComponent {
     component: InputMock,
     mode: crate::app::AppMode,
+    // History fields
+    history: Vec<String>,
+    history_index: Option<usize>, // None = new input, Some(i) = editing history[i]
+    saved_input: String,          // Buffer for current input when browsing history
 }
 
 impl Default for InputComponent {
@@ -322,12 +326,72 @@ impl InputComponent {
         Self {
             component: InputMock::new(),
             mode: crate::app::AppMode::Normal,
+            history: Vec::new(),
+            history_index: None,
+            saved_input: String::new(),
         }
     }
 
     /// Set the current mode
     pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
+    }
+
+    /// Set the history entries
+    pub fn set_history(&mut self, history: Vec<String>) {
+        self.history = history;
+        self.history_index = None;
+        self.saved_input = String::new();
+    }
+
+    /// Navigate to previous history entry (Ctrl+P)
+    fn history_prev(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        match self.history_index {
+            None => {
+                // Save current input and go to last history entry
+                self.saved_input = self.component.content().to_string();
+                let last_idx = self.history.len() - 1;
+                self.component = InputMock::new();
+                self.component.insert_str(&self.history[last_idx]);
+                self.history_index = Some(last_idx);
+            }
+            Some(idx) if idx > 0 => {
+                // Go to older entry
+                let new_idx = idx - 1;
+                self.component = InputMock::new();
+                self.component.insert_str(&self.history[new_idx]);
+                self.history_index = Some(new_idx);
+            }
+            Some(_) => {
+                // Already at oldest
+            }
+        }
+    }
+
+    /// Navigate to next history entry (Ctrl+N)
+    fn history_next(&mut self) {
+        match self.history_index {
+            None => {
+                // Already at newest (editing new input)
+            }
+            Some(idx) if idx + 1 < self.history.len() => {
+                // Go to newer entry
+                let new_idx = idx + 1;
+                self.component = InputMock::new();
+                self.component.insert_str(&self.history[new_idx]);
+                self.history_index = Some(new_idx);
+            }
+            Some(_) => {
+                // Return to saved input
+                self.component = InputMock::new();
+                self.component.insert_str(&self.saved_input);
+                self.history_index = None;
+            }
+        }
     }
 }
 
@@ -348,6 +412,13 @@ impl MockComponent for InputComponent {
                         1 => crate::app::AppMode::Browse,
                         _ => crate::app::AppMode::Normal,
                     };
+                }
+            }
+            Attribute::Custom("history") => {
+                if let AttrValue::String(data) = value {
+                    if let Ok(history) = serde_json::from_str::<Vec<String>>(&data) {
+                        self.set_history(history);
+                    }
                 }
             }
             _ => self.component.attr(attr, value),
@@ -492,6 +563,21 @@ impl InputComponent {
                 modifiers: KeyModifiers::CONTROL,
             }) => {
                 self.component.delete_word();
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
+            // History navigation: Ctrl+P = previous, Ctrl+N = next
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.history_prev();
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.history_next();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {

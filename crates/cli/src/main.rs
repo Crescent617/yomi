@@ -5,8 +5,9 @@ use kernel::{
     config::{env_names, Config, ModelProvider},
     expand_tilde,
     skill::SkillLoader,
-    storage::FsStorage,
+    storage::{FsStorage, Storage},
     tools::{enable_yolo_mode, ToolRegistry},
+    types::SessionId,
     utils::strs,
     ReadTool,
 };
@@ -16,6 +17,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tui::run_tui;
+
+mod storage;
+use storage::AppStorage;
 
 #[derive(Parser)]
 #[command(name = "yomi")]
@@ -32,6 +36,10 @@ struct Args {
     /// Skip all confirmations (YOLO mode)
     #[arg(long)]
     yolo: bool,
+
+    /// Resume the last session for this working directory
+    #[arg(short, long)]
+    resume: bool,
 }
 
 #[tokio::main]
@@ -71,6 +79,9 @@ async fn main() -> Result<()> {
 
     // Create data directory
     tokio::fs::create_dir_all(&config.data_dir).await?;
+
+    // Initialize AppStorage for session index and input history
+    let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
 
     // Initialize logging with file output and env filter
     init_logging(&config)?;
@@ -122,7 +133,7 @@ async fn main() -> Result<()> {
     tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
 
     let coordinator = Arc::new(Coordinator::new(
-        storage,
+        storage.clone(),
         provider,
         tool_registry,
         config.model.clone(),
@@ -139,11 +150,58 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let session_config = SessionConfig {
-        agent: agent_config,
-        project_path: working_dir.clone(),
+    // Create or restore session
+    let session_id = if args.resume {
+        // Try to restore last session
+        match app_storage.get_last_session(&working_dir).await? {
+            Some(session_id_str) => {
+                let session_id = SessionId(session_id_str);
+                tracing::info!("Restoring session: {}", session_id.0);
+                println!("Restoring previous session: {}", session_id.0);
+
+                let session_config = SessionConfig {
+                    agent: agent_config.clone(),
+                    project_path: working_dir.clone(),
+                };
+
+                match coordinator
+                    .restore_session(&session_id, session_config)
+                    .await
+                {
+                    Ok(_) => session_id,
+                    Err(e) => {
+                        println!("Failed to restore session: {}", e);
+                        println!("Starting new session instead");
+                        let session_config = SessionConfig {
+                            agent: agent_config,
+                            project_path: working_dir.clone(),
+                        };
+                        coordinator.create_session(session_config).await?
+                    }
+                }
+            }
+            None => {
+                println!("No previous session found, starting new session");
+                let session_config = SessionConfig {
+                    agent: agent_config,
+                    project_path: working_dir.clone(),
+                };
+                coordinator.create_session(session_config).await?
+            }
+        }
+    } else {
+        // Create new session
+        let session_config = SessionConfig {
+            agent: agent_config,
+            project_path: working_dir.clone(),
+        };
+        coordinator.create_session(session_config).await?
     };
-    let session_id = coordinator.create_session(session_config).await?;
+
+    // Record this session for future --continue
+    app_storage
+        .record_session(&working_dir, &session_id.0)
+        .await?;
 
     println!("yomi session started: {}", session_id.0);
     println!("Working directory: {}", working_dir.display());
@@ -158,6 +216,9 @@ async fn main() -> Result<()> {
     };
     println!("API Key: {key_preview}");
     println!("Starting TUI...\n");
+
+    // Load session messages for displaying in chat view
+    let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
 
     // Create channel for input forwarding
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
@@ -195,8 +256,28 @@ async fn main() -> Result<()> {
         .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
-    // Run TUI with banner data
-    run_tui(event_rx, input_tx, cancel_tx, working_dir_str, skill_names).await?;
+    // Load input history for this working directory
+    let input_history = app_storage
+        .load_input_history(&working_dir)
+        .await
+        .unwrap_or_default();
+
+    // Run TUI with banner data, input history and session messages
+    let new_history_entries = run_tui(
+        event_rx,
+        input_tx,
+        cancel_tx,
+        working_dir_str,
+        skill_names,
+        input_history,
+        session_messages,
+    )
+    .await?;
+
+    // Save new history entries
+    for entry in &new_history_entries {
+        app_storage.add_input_entry(&working_dir, entry).await?;
+    }
 
     println!("Goodbye!");
     Ok(())
