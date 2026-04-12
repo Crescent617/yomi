@@ -365,6 +365,20 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
+                AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
+                    // Show/hide compacting status in InfoBar
+                    let attr = if active {
+                        Attribute::Custom("start_compacting")
+                    } else {
+                        Attribute::Custom("stop_compacting")
+                    };
+                    self.app.attr(
+                        &Id::InfoBar,
+                        attr,
+                        AttrValue::Flag(active),
+                    )?;
+                    self.redraw = true;
+                }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
                     tool_name,
