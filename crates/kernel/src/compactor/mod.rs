@@ -6,6 +6,7 @@
 
 mod types;
 
+use serde::{Deserialize, Serialize};
 pub use types::*;
 
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
@@ -27,7 +28,7 @@ const SUMMARY_MAX_TOKENS: u32 = 4000;
 const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
 
 /// Compactor for managing conversation context
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Compactor {
     /// Token threshold to trigger compaction
     pub compact_threshold: u32,

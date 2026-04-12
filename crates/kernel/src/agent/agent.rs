@@ -521,7 +521,7 @@ impl Agent {
                         compaction_result.compacted_count
                     );
                 } else {
-                    tracing::debug!("Agent {} performed micro-compaction", agent_id);
+                    tracing::info!("Agent {} performed micro-compaction", agent_id);
                 }
                 // Persist compacted state
                 if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {

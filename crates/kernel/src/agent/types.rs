@@ -17,7 +17,6 @@ pub struct AgentConfig {
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
     /// Compactor configuration for context management
-    #[serde(skip)]
     pub compactor: Compactor,
 }
 
