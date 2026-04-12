@@ -3,8 +3,6 @@
 //! Loads project instructions from current directory only:
 //! - CLAUDE.md: Project instructions
 //! - AGENTS.md: Agent definitions
-//! - .claude/CLAUDE.md: Alternative location
-//! - .claude/rules/*.md: Rule files
 
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -15,18 +13,6 @@ use tracing::info;
 pub struct MemoryFile {
     pub path: PathBuf,
     pub content: String,
-    pub ty: MemoryType,
-}
-
-/// Type of memory file
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MemoryType {
-    /// Project-level instructions (CLAUDE.md)
-    Project,
-    /// Agent definitions (AGENTS.md)
-    Agents,
-    /// Rule files (.claude/rules/*.md)
-    Rule,
 }
 
 /// Load CLAUDE.md and AGENTS.md from current directory
@@ -41,13 +27,11 @@ pub async fn load(cwd: &Path) -> anyhow::Result<MemoryFiles> {
         files.push(MemoryFile {
             path: agents_md,
             content,
-            ty: MemoryType::Agents,
         });
     } else if let Ok(content) = fs::read_to_string(&claude_md).await {
         files.push(MemoryFile {
             path: claude_md,
             content,
-            ty: MemoryType::Project,
         });
     }
 
@@ -77,45 +61,16 @@ impl MemoryFiles {
         self.files.len()
     }
 
-    /// Get project instructions (CLAUDE.md content)
-    pub fn project_instructions(&self) -> Vec<&str> {
-        self.files
-            .iter()
-            .filter(|f| f.ty == MemoryType::Project)
-            .map(|f| f.content.as_str())
-            .collect()
-    }
-
-    /// Get agent definitions (AGENTS.md content)
-    pub fn agent_definitions(&self) -> Vec<&str> {
-        self.files
-            .iter()
-            .filter(|f| f.ty == MemoryType::Agents)
-            .map(|f| f.content.as_str())
-            .collect()
-    }
-
-    /// Get rule files
-    pub fn rules(&self) -> Vec<&str> {
-        self.files
-            .iter()
-            .filter(|f| f.ty == MemoryType::Rule)
-            .map(|f| f.content.as_str())
-            .collect()
-    }
-
-    /// Build system prompt from all project instructions
+    /// Build system prompt from all memory files
     pub fn build_system_prompt(&self, base_prompt: &str) -> String {
         let mut parts = vec![base_prompt.to_string()];
 
         for file in &self.files {
-            if file.ty == MemoryType::Project {
-                parts.push(format!(
-                    "\n\n# Project Instructions ({}):\n\n{}",
-                    file.path.display(),
-                    file.content.trim()
-                ));
-            }
+            parts.push(format!(
+                "\n\n# Project Instructions ({}):\n\n{}",
+                file.path.display(),
+                file.content.trim()
+            ));
         }
 
         parts.join("")
@@ -141,7 +96,6 @@ mod tests {
 
         let files = load(temp.path()).await.unwrap();
         assert_eq!(files.len(), 1);
-        assert!(files.project_instructions()[0].contains("Test Instructions"));
     }
 
     #[tokio::test]
