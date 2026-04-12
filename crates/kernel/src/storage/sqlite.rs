@@ -203,7 +203,7 @@ impl Storage for SqliteStorage {
         }
         // Update session statistics
         sqlx::query(
-            "UPDATE sessions SET message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+            "UPDATE sessions SET message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         )
         .bind(messages.len() as i32)
         .bind(&session_id.0)

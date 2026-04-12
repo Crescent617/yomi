@@ -60,7 +60,7 @@ impl Agent {
         session_id: Option<String>,
         max_iterations: usize,
         enable_sub_agents: bool,
-        project_memory: crate::project_memory::MemoryFiles,
+        project_memory: &crate::project_memory::MemoryFiles,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -123,7 +123,7 @@ impl Agent {
             id: id.clone(),
             shared,
             message_buffer,
-            event_tx: event_tx.clone(),
+            event_tx,
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
@@ -522,8 +522,7 @@ impl Agent {
                     tracing::debug!("Agent {} performed micro-compaction", agent_id);
                 }
                 // Persist compacted state
-                if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id)
-                {
+                if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
                     let sid = crate::types::SessionId(session_id.clone());
                     if let Err(e) = storage.set_messages(&sid, messages).await {
                         tracing::warn!(

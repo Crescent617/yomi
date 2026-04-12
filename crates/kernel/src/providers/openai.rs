@@ -705,7 +705,10 @@ mod tests {
     fn test_assembler_no_choices() {
         let mut assembler = ToolCallAssembler::new();
 
-        let response = OpenAIStreamResponse { choices: vec![], usage: None };
+        let response = OpenAIStreamResponse {
+            choices: vec![],
+            usage: None,
+        };
         let json = serde_json::to_string(&response).unwrap();
         let items = assembler.process(&json).unwrap();
 

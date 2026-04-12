@@ -14,11 +14,11 @@ macro_rules! env_name {
 }
 
 pub mod agent;
-pub mod project_memory;
 pub mod app;
 pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod project_memory;
 pub mod prompt;
 pub mod providers;
 pub mod skill;

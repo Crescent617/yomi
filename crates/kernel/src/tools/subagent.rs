@@ -96,7 +96,7 @@ impl Tool for SubAgentTool {
             None,
             10,
             false,
-            crate::project_memory::MemoryFiles::default(),
+            &crate::project_memory::MemoryFiles::default(),
         );
 
         let sub_agent_id = handle.id.clone();
@@ -150,7 +150,9 @@ impl Tool for SubAgentTool {
                     let result_text = if completed {
                         format!("\n\n[Async Sub-agent task {sub_id} completed]\nResult:\n{output}")
                     } else {
-                        format!("\n\n[Async Sub-agent task {sub_id} ended]\nPartial result:\n{output}")
+                        format!(
+                            "\n\n[Async Sub-agent task {sub_id} ended]\nPartial result:\n{output}"
+                        )
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)

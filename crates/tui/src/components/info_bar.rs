@@ -120,7 +120,7 @@ impl InfoBar {
         self.thinking.push_str(text);
     }
 
-    pub fn tick(&mut self) {
+    pub const fn tick(&mut self) {
         if self.state.is_active() {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }

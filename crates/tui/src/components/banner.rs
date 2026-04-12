@@ -202,11 +202,10 @@ impl MockComponent for BannerComponent {
 impl Component<Msg, crate::msg::UserEvent> for BannerComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Handle tick events for blinking animation
-        if ev == tuirealm::Event::Tick
-            && self.tick() {
-                // Animation state changed, trigger redraw
-                return Some(Msg::Redraw);
-            }
+        if ev == tuirealm::Event::Tick && self.tick() {
+            // Animation state changed, trigger redraw
+            return Some(Msg::Redraw);
+        }
         None
     }
 }

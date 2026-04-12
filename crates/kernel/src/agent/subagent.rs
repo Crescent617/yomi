@@ -58,9 +58,9 @@ impl SubAgentManager {
             Vec::new(),          // No history for sub-agents
             None,                // Sub-agents don't persist to storage
             None,
-            10,    // Sub-agents get fewer iterations
-            false, // Sub-agents don't spawn more sub-agents
-            crate::project_memory::MemoryFiles::default(), // Sub-agents don't load project memory
+            10,                                            // Sub-agents get fewer iterations
+            false,                                         // Sub-agents don't spawn more sub-agents
+            &crate::project_memory::MemoryFiles::default(),
         );
 
         let id = handle.id.clone();

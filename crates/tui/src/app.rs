@@ -372,11 +372,7 @@ impl Model {
                     } else {
                         Attribute::Custom("stop_compacting")
                     };
-                    self.app.attr(
-                        &Id::InfoBar,
-                        attr,
-                        AttrValue::Flag(active),
-                    )?;
+                    self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
