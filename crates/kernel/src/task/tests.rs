@@ -74,10 +74,7 @@ mod tests {
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         };
-        let updated = storage
-            .update_task("session1", "1", updates)
-            .await
-            .unwrap();
+        let updated = storage.update_task("session1", "1", updates).await.unwrap();
         assert!(updated.is_some());
         let updated = updated.unwrap();
         assert_eq!(updated.subject, "Updated subject");
@@ -382,7 +379,10 @@ mod tests {
             ..Default::default()
         };
 
-        let result = storage.update_task("session1", "999", updates).await.unwrap();
+        let result = storage
+            .update_task("session1", "999", updates)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -508,7 +508,10 @@ mod tests {
                 active_form: None,
                 metadata: None,
             };
-            storage.create_task("session1", input.clone()).await.unwrap();
+            storage
+                .create_task("session1", input.clone())
+                .await
+                .unwrap();
             storage.create_task("session2", input).await.unwrap();
         }
 

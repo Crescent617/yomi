@@ -35,8 +35,8 @@ impl AppStorage {
     /// Create new `AppStorage` at the given base directory
     ///
     /// The base directory is typically `~/.yomi/`, data will be stored in `~/.yomi/appdata/`
-    pub fn new(base_dir: PathBuf) -> Result<Self> {
-        let app_data_dir = base_dir.join(APP_DATA_DIR);
+    pub fn new(base_dir: impl AsRef<std::path::Path>) -> Result<Self> {
+        let app_data_dir = base_dir.as_ref().join(APP_DATA_DIR);
 
         // Create subdirectories
         std::fs::create_dir_all(&app_data_dir).with_context(|| {

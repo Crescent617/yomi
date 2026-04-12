@@ -1,6 +1,6 @@
 use crate::types::{AgentId, SessionId};
 use crate::{
-    agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentState},
+    agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
     event::Event,
     storage::Storage,
 };
@@ -53,22 +53,20 @@ impl Session {
             .await
             .unwrap_or_default();
 
-        // Load project memory (CLAUDE.md/AGENTS.md)
-        let project_memory = crate::project_memory::load(&self.config.project_path).await?;
+        let config =
+            AgentSpawnArgs::new(self.config.agent.system_prompt.clone(), self.id.0.clone())
+                .with_skills(self.config.agent.skills.clone())
+                .with_history(history)
+                .with_max_iterations(self.config.agent.max_iterations)
+                .with_working_dir(self.config.project_path.clone());
 
-        let (handle, event_rx) = Agent::spawn(
-            AgentId::new(),
-            &self.agent_shared,
-            &self.config.agent.system_prompt, // Base prompt
-            self.config.agent.skills.clone(), // Skills (Agent will build system prompt)
-            history,
-            Some(self.storage.clone()),
-            Some(self.id.0.clone()),
-            self.config.agent.max_iterations,
-            self.config.agent.enable_sub_agents,
-            &project_memory,
-            Some(self.config.agent.compactor.clone()),
-        );
+        let config = if self.config.agent.enable_sub_agents {
+            config
+        } else {
+            config.without_sub_agents()
+        };
+
+        let (handle, event_rx) = Agent::spawn(AgentId::new(), &self.agent_shared, config);
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
         self.main_agent = Some(handle);

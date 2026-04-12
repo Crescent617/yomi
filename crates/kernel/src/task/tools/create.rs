@@ -10,22 +10,15 @@ pub const TASK_CREATE_TOOL_NAME: &str = "TaskCreate";
 
 pub struct TaskCreateTool {
     store: SharedTaskStore,
-    get_session_id: Box<dyn Fn() -> String + Send + Sync>,
+    task_list_id: String,
 }
 
 impl TaskCreateTool {
-    pub fn new<F>(store: SharedTaskStore, get_session_id: F) -> Self
-    where
-        F: Fn() -> String + Send + Sync + 'static,
-    {
+    pub const fn new(store: SharedTaskStore, task_list_id: String) -> Self {
         Self {
             store,
-            get_session_id: Box::new(get_session_id),
+            task_list_id,
         }
-    }
-
-    fn get_task_list_id(&self) -> String {
-        (self.get_session_id)()
     }
 }
 
@@ -90,8 +83,7 @@ impl Tool for TaskCreateTool {
             metadata,
         };
 
-        let task_list_id = self.get_task_list_id();
-        let task = self.store.create_task(&task_list_id, input).await?;
+        let task = self.store.create_task(&self.task_list_id, input).await?;
 
         let output = CreateTaskOutput {
             task: TaskSummary {

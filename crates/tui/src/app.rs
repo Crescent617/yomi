@@ -837,6 +837,7 @@ impl Update<Msg> for Model {
 }
 
 /// Run the TUI application
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,

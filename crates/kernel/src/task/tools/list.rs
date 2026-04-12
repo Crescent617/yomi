@@ -10,22 +10,15 @@ pub const TASK_LIST_TOOL_NAME: &str = "TaskList";
 
 pub struct TaskListTool {
     store: SharedTaskStore,
-    get_session_id: Box<dyn Fn() -> String + Send + Sync>,
+    task_list_id: String,
 }
 
 impl TaskListTool {
-    pub fn new<F>(store: SharedTaskStore, get_session_id: F) -> Self
-    where
-        F: Fn() -> String + Send + Sync + 'static,
-    {
+    pub const fn new(store: SharedTaskStore, task_list_id: String) -> Self {
         Self {
             store,
-            get_session_id: Box::new(get_session_id),
+            task_list_id,
         }
-    }
-
-    fn get_task_list_id(&self) -> String {
-        (self.get_session_id)()
     }
 }
 
@@ -53,8 +46,7 @@ impl Tool for TaskListTool {
     }
 
     async fn exec(&self, args: Value) -> Result<ToolOutput> {
-        let task_list_id = self.get_task_list_id();
-        let all_tasks = self.store.list_tasks(&task_list_id).await?;
+        let all_tasks = self.store.list_tasks(&self.task_list_id).await?;
 
         let include_completed = args["includeCompleted"].as_bool().unwrap_or(false);
 

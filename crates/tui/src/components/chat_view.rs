@@ -1159,7 +1159,7 @@ impl ChatViewComponent {
                             .complete_tool(tool_call_id.clone(), output, 0);
                     }
                 }
-                _ => {}
+                kernel::types::Role::System => {}
             }
         }
     }

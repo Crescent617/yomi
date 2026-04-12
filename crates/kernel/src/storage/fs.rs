@@ -101,7 +101,9 @@ impl FsStorage {
                 }
                 SessionEvent::MessageAdded { timestamp, .. }
                 | SessionEvent::Forked { timestamp, .. }
-                | SessionEvent::Completed { completed_at: timestamp } => {
+                | SessionEvent::Completed {
+                    completed_at: timestamp,
+                } => {
                     if let Some(ref mut s) = session {
                         s.updated_at = *timestamp;
                     }

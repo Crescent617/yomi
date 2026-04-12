@@ -53,7 +53,8 @@ pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool, SubAgentTo
 // Task system re-exports
 pub use task::{
     CreateTaskInput, CreateTaskOutput, GetTaskOutput, ListTasksOutput, SharedTaskStore,
-    SqliteTaskStorage, StatusChange, Task, TaskCreateTool, TaskEvent, TaskGetTool, TaskListItem, TaskListTool,
-    TaskStatus, TaskStore, TaskSummary, TaskUpdateTool, TaskUpdates, UpdateTaskOutput,
-    TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
+    SqliteTaskStorage, StatusChange, Task, TaskCreateTool, TaskEvent, TaskGetTool, TaskListItem,
+    TaskListTool, TaskStatus, TaskStore, TaskSummary, TaskUpdateTool, TaskUpdates,
+    UpdateTaskOutput, TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME,
+    TASK_UPDATE_TOOL_NAME,
 };

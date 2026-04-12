@@ -1,6 +1,7 @@
-use crate::tools::edit_utils::{find_actual_string, generate_diff, preserve_quote_style};
+use crate::tools::edit_utils::{find_actual_string, generate_diff};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
+use crate::tools::read::MAX_FILE_SIZE;
 use crate::tools::Tool;
 use crate::types::ToolOutput;
 use anyhow::Result;
@@ -29,13 +30,9 @@ impl EditTool {
         self
     }
 
-    fn resolve_path(&self, relative: &str) -> Result<PathBuf> {
+    fn resolve_path(&self, relative: &str) -> PathBuf {
         let path = self.base_dir.join(relative);
-        let canonical = path.canonicalize().unwrap_or(path);
-        if !canonical.starts_with(&self.base_dir) {
-            return Err(anyhow::anyhow!("Path escapes base directory: {relative}"));
-        }
-        Ok(canonical)
+        path.canonicalize().unwrap_or(path)
     }
 
     /// Get file modification time in milliseconds since epoch
@@ -51,24 +48,14 @@ impl EditTool {
     /// Check if the file has been modified since it was last read
     async fn check_staleness(&self, path: &PathBuf) -> Option<String> {
         let store = self.file_state_store.as_ref()?;
-        let state = store.get(path)?;
 
-        // If it was a partial read, always require re-read
-        if state.is_partial_view {
-            return Some("File was partially read. Read the full file before editing.".to_string());
-        }
-
-        // Check if file has been modified
+        // Check if file has been modified (mtime changed)
         let current_mtime = self.get_mtime(path).await.ok()?;
-        if current_mtime > state.timestamp {
-            // File was modified externally - check if content actually changed
-            let current_content = tokio::fs::read_to_string(path).await.ok()?;
-            if current_content != state.content {
-                return Some(
-                    "File has been modified since it was read. Read the file again before editing."
-                        .to_string(),
-                );
-            }
+        if store.is_stale(path, current_mtime) {
+            return Some(
+                "File has been modified since it was read. Read the file again before editing."
+                    .to_string(),
+            );
         }
 
         None
@@ -123,32 +110,34 @@ impl Tool for EditTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'new_str' argument"))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = self.resolve_path(path_str)?;
+        let path = self.resolve_path(path_str);
 
         tracing::debug!("Edit: replace in {}", path.display());
 
         // Check if file exists
         if !tokio::fs::try_exists(&path).await? {
-            return Ok(
-                ToolOutput::new("", format!("File does not exist: {path_str}")).with_exit_code(1),
-            );
+            return Ok(ToolOutput::new_err(format!(
+                "File does not exist: {path_str}"
+            )));
+        }
+        // Check file size
+        if tokio::fs::metadata(&path).await?.len() > MAX_FILE_SIZE {
+            return Ok(ToolOutput::new_err(format!(
+                "File is too large to edit: {path_str}"
+            )));
         }
 
         // Check if file has been read before editing
         if let Some(ref store) = self.file_state_store {
-            if !store.has_been_read(&path) {
-                return Ok(ToolOutput::new(
-                    "",
-                    format!(
-                        "File has not been read yet. Read it first before editing: {path_str}"
-                    ),
-                )
-                .with_exit_code(1));
+            if !store.has_recorded(&path) {
+                return Ok(ToolOutput::new_err(format!(
+                    "File has not been read yet. Read it first before editing: {path_str}"
+                )));
             }
 
             // Check for staleness
             if let Some(error) = self.check_staleness(&path).await {
-                return Ok(ToolOutput::new("", error).with_exit_code(1));
+                return Ok(ToolOutput::new_err(error));
             }
         }
 
@@ -156,82 +145,57 @@ impl Tool for EditTool {
 
         // Validate old_str is not empty (except for creating new files)
         if old_str.is_empty() && !content.is_empty() {
-            return Ok(ToolOutput::new(
-                "",
+            return Ok(ToolOutput::new_err(
                 "Cannot use empty old_str on existing file with content. Provide the text to replace."
-                    .to_string(),
-            )
-            .with_exit_code(1));
+            ));
         }
 
         // Check if old_str and new_str are the same
         if old_str == new_str {
-            return Ok(ToolOutput::new(
-                "",
-                "No changes to make: old_str and new_str are exactly the same.".to_string(),
-            )
-            .with_exit_code(1));
+            return Ok(ToolOutput::new_err(
+                "No changes to make: old_str and new_str are exactly the same.",
+            ));
         }
 
         // Find the actual string in the file (handles quote normalization)
-        let actual_old_str = match find_actual_string(&content, old_str) {
-            Some(s) => s,
-            None => {
-                return Ok(ToolOutput::new(
-                    "",
-                    format!(
-                        "Could not find 'old_str' in file. String not found:\n{old_str}"
-                    ),
-                )
-                .with_exit_code(1));
-            }
+        let Some(actual_old_str) = find_actual_string(&content, old_str) else {
+            return Ok(ToolOutput::new_err(format!(
+                "Could not find 'old_str' in file. String not found:\n{old_str}"
+            )));
         };
 
         // Count occurrences
         let occurrences = content.matches(&actual_old_str).count();
         if occurrences == 0 {
-            return Ok(ToolOutput::new(
-                "",
-                format!(
-                    "Could not find 'old_str' in file. String not found:\n{old_str}"
-                ),
-            )
-            .with_exit_code(1));
+            return Ok(ToolOutput::new_err(format!(
+                "Could not find 'old_str' in file. String not found:\n{old_str}"
+            )));
         }
 
         // Check for multiple matches when replace_all is false
         if occurrences > 1 && !replace_all {
-            return Ok(ToolOutput::new(
-                "",
-                format!(
-                    "Found {occurrences} matches of the string to replace, but replace_all is false. \
-                     To replace all occurrences, set replace_all to true. \
-                     To replace only one occurrence, please provide more context to uniquely identify the instance.\n\
-                     String: {old_str}"
-                ),
-            )
-            .with_exit_code(1));
+            return Ok(ToolOutput::new_err(format!(
+                "Found {occurrences} matches of the string to replace, but replace_all is false. \
+                 To replace all occurrences, set replace_all to true. \
+                 To replace only one occurrence, please provide more context to uniquely identify the instance.\n\
+                 String: {old_str}"
+            )));
         }
-
-        // Preserve quote style when making edits
-        let actual_new_str = preserve_quote_style(old_str, &actual_old_str, new_str);
 
         // Perform the replacement
         let new_content = if replace_all {
-            content.replace(&actual_old_str, &actual_new_str)
+            content.replace(&actual_old_str, &new_str)
         } else {
-            content.replacen(&actual_old_str, &actual_new_str, 1)
+            content.replacen(&actual_old_str, &new_str, 1)
         };
 
         // Write the new content
         tokio::fs::write(&path, &new_content).await?;
 
-        // Update file state store with new content
+        // Update file mtime in store
         if let Some(ref store) = self.file_state_store {
             let mtime = self.get_mtime(&path).await.unwrap_or(0);
-            let new_state =
-                crate::tools::file_state::FileState::full_read(new_content.clone(), mtime);
-            store.set(path.clone(), new_state);
+            store.record(path.clone(), mtime);
         }
 
         // Generate diff
@@ -273,7 +237,7 @@ mod tests {
 
         // First, simulate a read by setting file state with actual file's mtime
         let store = Arc::new(FileStateStore::new());
-        let content = "hello world".to_string();
+        let _content = "hello world".to_string();
 
         // Get actual file mtime
         let metadata = tokio::fs::metadata(&full_path).await.unwrap();
@@ -284,10 +248,7 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
 
-        store.set(
-            full_path.clone(),
-            crate::tools::file_state::FileState::full_read(content, mtime),
-        );
+        store.record(full_path.clone(), mtime);
 
         let tool = tool.with_file_state_store(store);
 

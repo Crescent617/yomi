@@ -3,7 +3,6 @@ use crate::app::session::{Session, SessionConfig};
 use crate::event::Event;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::Storage;
-use crate::tools::ToolRegistry;
 use crate::types::SessionId;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -20,13 +19,18 @@ impl Coordinator {
     pub fn new(
         storage: Arc<dyn Storage>,
         provider: Arc<dyn Provider>,
-        tool_registry: ToolRegistry,
         model_config: ModelConfig,
+        task_store: Option<Arc<crate::task::TaskStore>>,
+        project_memory: crate::project_memory::MemoryFiles,
+        compactor: Option<crate::compactor::Compactor>,
     ) -> Self {
         let agent_shared = Arc::new(AgentShared::new(
             provider,
-            Arc::new(tool_registry),
-            model_config,
+            Arc::new(model_config),
+            task_store,
+            Arc::new(project_memory),
+            compactor,
+            Some(storage.clone()),
         ));
         Self {
             storage,

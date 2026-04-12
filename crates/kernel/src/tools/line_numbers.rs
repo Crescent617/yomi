@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 /// Add line numbers to file content
 ///
 /// Format matches claude-code: line number prefix followed by tab character.
@@ -13,12 +15,11 @@ pub fn add_line_numbers(content: &str, start_line: usize) -> String {
     // Calculate the width needed for the largest line number
     let num_width = num_digits(total_lines);
 
-    let mut result = String::new();
+        let mut result = String::new();
     for (i, line) in lines.iter().enumerate() {
         let line_num = start_line + i;
         // Format: right-aligned line number, padded with spaces, followed by tab
-        result.push_str(&format!("{line_num:>num_width$}\t{line}"));
-        result.push('\n');
+        writeln!(result, "{line_num:>num_width$}\t{line}").unwrap();
     }
 
     // Remove trailing newline if original content didn't have one
@@ -98,11 +99,20 @@ mod tests {
     #[test]
     fn test_add_line_numbers_padding() {
         // Content with 10 lines to trigger padding for single digits
-        let content = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10";
+        let content =
+            "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10";
         let result = add_line_numbers(content, 1);
         // Line numbers should be aligned
-        assert!(result.contains(" 1\tline 1"), "Expected ' 1' padding, got: {}", result);
-        assert!(result.contains("10\tline 10"), "Expected '10' no padding, got: {}", result);
+        assert!(
+            result.contains(" 1\tline 1"),
+            "Expected ' 1' padding, got: {}",
+            result
+        );
+        assert!(
+            result.contains("10\tline 10"),
+            "Expected '10' no padding, got: {}",
+            result
+        );
     }
 
     #[test]

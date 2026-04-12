@@ -20,7 +20,7 @@ Yomi is a production-grade AI coding assistant CLI tool written in Rust. It feat
 
 ### Naming Conventions
 
-- Use concise and descriptive names for variables, functions, and types.
+- Short is better than long, but not at the cost of clarity. e.g. `ctx` for `context`, `cfg` for `config`, `svc` for `service`
      
 ### Error Handling
 

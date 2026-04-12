@@ -37,6 +37,9 @@ sqlx = { workspace = true, optional = true }
 # Task system dependencies
 # Note: fs4 removed - using SQLite instead of file-based storage
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"

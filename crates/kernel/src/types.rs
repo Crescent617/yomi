@@ -388,6 +388,14 @@ impl ToolOutput {
         self
     }
 
+    pub fn new_err(stderr: impl Into<String>) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: stderr.into(),
+            exit_code: 1,
+        }
+    }
+
     pub const fn success(&self) -> bool {
         self.exit_code == 0
     }

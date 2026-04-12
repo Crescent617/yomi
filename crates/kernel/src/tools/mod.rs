@@ -1,9 +1,10 @@
+use crate::task::{SharedTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool};
 use crate::types::{ToolDefinition, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 pub mod bash;
 pub mod edit;
@@ -29,16 +30,17 @@ pub trait Tool: Send + Sync {
     async fn exec(&self, args: Value) -> Result<ToolOutput>;
 }
 
-/// Tool registry - manages available tools
-#[derive(Clone)]
+/// Tool registry - manages available tools for an agent
+#[derive(Default)]
 pub struct ToolRegistry {
-    tools: Arc<RwLock<HashMap<String, Arc<dyn Tool>>>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
 }
 
-impl Default for ToolRegistry {
-    fn default() -> Self {
+
+impl Clone for ToolRegistry {
+    fn clone(&self) -> Self {
         Self {
-            tools: Arc::new(RwLock::new(HashMap::new())),
+            tools: self.tools.clone(),
         }
     }
 }
@@ -46,28 +48,23 @@ impl Default for ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
-            tools: Arc::new(RwLock::new(HashMap::new())),
+            tools: HashMap::new(),
         }
     }
 
-    pub fn register(&self, tool: Arc<dyn Tool>) {
+    /// Register a tool (mutable because registry is built during agent initialization)
+    pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
-        self.tools.write().unwrap().insert(name, tool);
-    }
-
-    pub fn unregister(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.write().unwrap().remove(name)
+        self.tools.insert(name, Arc::new(tool));
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.read().unwrap().get(name).cloned()
+        self.tools.get(name).cloned()
     }
 
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let defs: Vec<ToolDefinition> = self
             .tools
-            .read()
-            .unwrap()
             .values()
             .map(|tool| ToolDefinition {
                 name: tool.name().to_string(),
@@ -84,11 +81,11 @@ impl ToolRegistry {
     }
 
     pub fn list(&self) -> Vec<String> {
-        self.tools.read().unwrap().keys().cloned().collect()
+        self.tools.keys().cloned().collect()
     }
 
     pub fn has(&self, name: &str) -> bool {
-        self.tools.read().unwrap().contains_key(name)
+        self.tools.contains_key(name)
     }
 }
 
@@ -103,25 +100,11 @@ pub fn is_yolo_mode() -> bool {
     YOLO_MODE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-use crate::task::{SharedTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool};
-
 impl ToolRegistry {
-    pub fn register_task_tools<F>(&self, store: SharedTaskStore, get_session_id: F)
-    where
-        F: Fn() -> String + Send + Sync + Clone + 'static,
-    {
-        self.register(Arc::new(TaskCreateTool::new(
-            store.clone(),
-            get_session_id.clone(),
-        )));
-        self.register(Arc::new(TaskUpdateTool::new(
-            store.clone(),
-            get_session_id.clone(),
-        )));
-        self.register(Arc::new(TaskListTool::new(
-            store.clone(),
-            get_session_id.clone(),
-        )));
-        self.register(Arc::new(TaskGetTool::new(store, get_session_id)));
+    pub fn register_task_tools(&mut self, store: SharedTaskStore, task_list_id: String) {
+        self.register(TaskCreateTool::new(store.clone(), task_list_id.clone()));
+        self.register(TaskUpdateTool::new(store.clone(), task_list_id.clone()));
+        self.register(TaskListTool::new(store.clone(), task_list_id.clone()));
+        self.register(TaskGetTool::new(store, task_list_id));
     }
 }

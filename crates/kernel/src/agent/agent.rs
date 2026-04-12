@@ -1,11 +1,12 @@
 use super::message_buffer::MessageBuffer;
-use super::{AgentExecutionContext, AgentHandle, AgentShared, AgentState, CancelToken};
-use crate::compactor::{self, Compactor};
+use super::{
+    AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
+};
+use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
 use crate::prompt::SystemPromptBuilder;
 use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
-use crate::tools::SubAgentTool;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
 use anyhow::Result;
 use futures::TryStreamExt;
@@ -36,33 +37,21 @@ pub struct Agent {
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
     cancel_token: CancelToken,
-    // Storage for message persistence
-    storage: Option<Arc<dyn crate::storage::Storage>>,
-    session_id: Option<String>,
-    // Agent-specific configuration (not shared)
+    session_id: String,
     max_iterations: usize,
+    // Tool registry - each agent has its own set of tools
+    tool_registry: crate::tools::ToolRegistry,
     // Store the last error message for display
     last_error: Option<String>,
-    // Context compactor for managing long conversations
-    compactor: Option<Compactor>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
 }
 
 impl Agent {
-    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         id: AgentId,
         shared: &Arc<AgentShared>,
-        base_prompt: impl AsRef<str>, // Base system prompt
-        skills: Vec<Arc<Skill>>,      // Skills to include in system prompt
-        history: Vec<Message>,        // Historical messages (may include old system message)
-        storage: Option<Arc<dyn crate::storage::Storage>>,
-        session_id: Option<String>,
-        max_iterations: usize,
-        enable_sub_agents: bool,
-        project_memory: &crate::project_memory::MemoryFiles,
-        compactor: Option<Compactor>, // None for sub-agents
+        args: AgentSpawnArgs,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -70,20 +59,19 @@ impl Agent {
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         // Build system prompt with project memory and skills
-        let base_prompt = base_prompt.as_ref();
-        let system_prompt = if project_memory.is_empty() {
+        let system_prompt = if shared.project_memory.is_empty() {
             // No project memory, use original builder
             SystemPromptBuilder::new()
-                .base_prompt(base_prompt)
-                .with_skills(&skills)
+                .base_prompt(&args.base_prompt)
+                .with_skills(&args.skills)
                 .build()
         } else {
             // Merge project memory with base prompt
-            let memory_prompt = project_memory.build_system_prompt(base_prompt);
+            let memory_prompt = shared.project_memory.build_system_prompt(&args.base_prompt);
             // Add skills after project memory
             SystemPromptBuilder::new()
                 .base_prompt(&memory_prompt)
-                .with_skills(&skills)
+                .with_skills(&args.skills)
                 .build()
         };
 
@@ -93,47 +81,22 @@ impl Agent {
             system_prompt
         );
         let mut messages = vec![Message::system(system_prompt)];
-        messages.extend(history.into_iter().filter(|m| m.role != Role::System));
+        messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
         let message_buffer = MessageBuffer::from_messages(messages);
 
-        let shared = {
-            let new_shared = shared.with_cloned_registry();
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let shared = shared.clone();
 
-            // Create file state store for tracking reads
-            let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
-
-            let bash_ctx =
-                crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
-            let bash_tool = crate::tools::BashTool::new(&working_dir).with_ctx(bash_ctx);
-            new_shared.tool_registry.register(Arc::new(bash_tool));
-
-            // Register Read tool with file state store
-            let read_tool = crate::tools::ReadTool::new(&working_dir)
-                .with_file_state_store(file_state_store.clone());
-            new_shared.tool_registry.register(Arc::new(read_tool));
-
-            // Register Edit tool with file state store
-            let edit_tool = crate::tools::EditTool::new(&working_dir)
-                .with_file_state_store(file_state_store);
-            new_shared.tool_registry.register(Arc::new(edit_tool));
-
-            if enable_sub_agents {
-                let input_tx_for_subagent = input_tx.clone();
-                new_shared
-                    .tool_registry
-                    .register(Arc::new(SubAgentTool::new(
-                        id.clone(),
-                        Arc::new(new_shared.clone()),
-                        input_tx_for_subagent,
-                        skills,
-                        storage.clone(),
-                    )));
-            }
-
-            Arc::new(new_shared)
-        };
+        // Create agent-specific tool registry with standard tools
+        let tool_registry = Self::create_tool_registry(
+            &id,
+            &shared,
+            &args.working_dir,
+            &input_tx,
+            args.skills,
+            &args.session_id,
+            args.parent_session_id.as_deref(),
+            args.enable_sub_agents,
+        );
 
         let agent = Self {
             id: id.clone(),
@@ -143,11 +106,10 @@ impl Agent {
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
-            storage,
-            session_id,
-            max_iterations,
+            session_id: args.session_id,
+            max_iterations: args.max_iterations,
+            tool_registry,
             last_error: None,
-            compactor,
             pending_token_usage: None,
         };
 
@@ -162,10 +124,65 @@ impl Agent {
         (handle, event_rx)
     }
 
+    /// Create tool registry for an agent with standard tools
+    #[allow(clippy::too_many_arguments)]
+    fn create_tool_registry(
+        agent_id: &AgentId,
+        shared: &Arc<AgentShared>,
+        working_dir: &std::path::PathBuf,
+        input_tx: &mpsc::Sender<AgentInput>,
+        skills: Vec<Arc<Skill>>,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        enable_sub_agents: bool,
+    ) -> crate::tools::ToolRegistry {
+        use crate::tools::{BashTool, BashToolCtx, EditTool, ReadTool, SubAgentTool};
+
+        let mut registry = crate::tools::ToolRegistry::new();
+        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+
+        // Register Bash tool
+        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.clone(), working_dir.clone());
+        let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
+        registry.register(bash_tool);
+
+        // Register Read tool with file state store
+        let read_tool =
+            ReadTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        registry.register(read_tool);
+
+        // Register Edit tool with file state store
+        let edit_tool = EditTool::new(working_dir).with_file_state_store(file_state_store);
+        registry.register(edit_tool);
+
+        // Register SubAgent tool if enabled
+        if enable_sub_agents {
+            let subagent_tool = SubAgentTool::new(
+                agent_id.clone(),
+                Arc::clone(shared),
+                input_tx.clone(),
+                skills,
+                shared.storage.clone(),
+                working_dir.clone(),
+                session_id.to_owned(),
+            );
+            registry.register(subagent_tool);
+        }
+
+        // Register task tools if task_store is provided
+        if let Some(task_store) = &shared.task_store {
+            // Use parent_session_id for task store if available (subagents share parent's task list)
+            let task_list_id = parent_session_id.unwrap_or(session_id).to_owned();
+            registry.register_task_tools(task_store.clone(), task_list_id);
+        }
+
+        registry
+    }
+
     /// Persist a single message to storage
     async fn persist_message(&self, message: &Message) {
-        if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
-            let session_id = crate::types::SessionId(session_id.clone());
+        if let Some(storage) = &self.shared.storage {
+            let session_id = crate::types::SessionId(self.session_id.clone());
             let _ = storage
                 .append_messages(&session_id, std::slice::from_ref(message))
                 .await;
@@ -353,7 +370,7 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<()> {
-        let tools = self.shared.tool_registry.definitions();
+        let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
             self.id,
@@ -472,7 +489,7 @@ impl Agent {
                                 total_tokens: total,
                             });
                             // Get context window from compactor or use default
-                            let context_window = self.compactor.as_ref()
+                            let context_window = self.shared.compactor.as_ref()
                                 .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
                             let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
@@ -504,7 +521,7 @@ impl Agent {
 
     /// Check and run compaction if needed
     async fn maybe_compact_messages(&mut self) {
-        let Some(compactor) = &self.compactor else {
+        let Some(compactor) = &self.shared.compactor else {
             return; // No compactor configured, skip
         };
         let should_compact = compactor.should_compact(self.message_buffer.messages());
@@ -540,8 +557,8 @@ impl Agent {
                     tracing::info!("Agent {} performed micro-compaction", agent_id);
                 }
                 // Persist compacted state
-                if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
-                    let sid = crate::types::SessionId(session_id.clone());
+                if let Some(storage) = &self.shared.storage {
+                    let sid = crate::types::SessionId(self.session_id.clone());
                     if let Err(e) = storage.set_messages(&sid, messages).await {
                         tracing::warn!(
                             "Agent {} failed to persist compacted messages: {}",
@@ -627,8 +644,7 @@ impl Agent {
         }
 
         let results =
-            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.shared.tool_registry)
-                .await;
+            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.tool_registry).await;
 
         for result in results {
             if self.cancel_token.is_cancelled() {

@@ -1,5 +1,5 @@
-use crate::task::types::TaskUpdates;
 use crate::task::store::SharedTaskStore;
+use crate::task::types::TaskUpdates;
 use crate::task::types::{StatusChange, TaskStatus, UpdateTaskOutput};
 use crate::tools::Tool;
 use crate::types::ToolOutput;
@@ -11,22 +11,15 @@ pub const TASK_UPDATE_TOOL_NAME: &str = "TaskUpdate";
 
 pub struct TaskUpdateTool {
     store: SharedTaskStore,
-    get_session_id: Box<dyn Fn() -> String + Send + Sync>,
+    task_list_id: String,
 }
 
 impl TaskUpdateTool {
-    pub fn new<F>(store: SharedTaskStore, get_session_id: F) -> Self
-    where
-        F: Fn() -> String + Send + Sync + 'static,
-    {
+    pub const fn new(store: SharedTaskStore, task_list_id: String) -> Self {
         Self {
             store,
-            get_session_id: Box::new(get_session_id),
+            task_list_id,
         }
-    }
-
-    fn get_task_list_id(&self) -> String {
-        (self.get_session_id)()
     }
 }
 
@@ -94,9 +87,7 @@ impl Tool for TaskUpdateTool {
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?
             .to_string();
 
-        let task_list_id = self.get_task_list_id();
-
-        let existing = self.store.get_task(&task_list_id, &task_id).await?;
+        let existing = self.store.get_task(&self.task_list_id, &task_id).await?;
         if existing.is_none() {
             let output = UpdateTaskOutput {
                 success: false,
@@ -110,7 +101,7 @@ impl Tool for TaskUpdateTool {
         let existing = existing.unwrap();
 
         if args["status"].as_str() == Some("deleted") {
-            let deleted = self.store.delete_task(&task_list_id, &task_id).await?;
+            let deleted = self.store.delete_task(&self.task_list_id, &task_id).await?;
             let output = UpdateTaskOutput {
                 success: deleted,
                 task_id,
@@ -229,7 +220,7 @@ impl Tool for TaskUpdateTool {
         // Perform single atomic update
         let result = self
             .store
-            .update_task(&task_list_id, &task_id, updates)
+            .update_task(&self.task_list_id, &task_id, updates)
             .await?;
 
         if let Some((task, _)) = result {

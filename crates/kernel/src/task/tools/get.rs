@@ -10,22 +10,15 @@ pub const TASK_GET_TOOL_NAME: &str = "TaskGet";
 
 pub struct TaskGetTool {
     store: SharedTaskStore,
-    get_session_id: Box<dyn Fn() -> String + Send + Sync>,
+    task_list_id: String,
 }
 
 impl TaskGetTool {
-    pub fn new<F>(store: SharedTaskStore, get_session_id: F) -> Self
-    where
-        F: Fn() -> String + Send + Sync + 'static,
-    {
+    pub const fn new(store: SharedTaskStore, task_list_id: String) -> Self {
         Self {
             store,
-            get_session_id: Box::new(get_session_id),
+            task_list_id,
         }
-    }
-
-    fn get_task_list_id(&self) -> String {
-        (self.get_session_id)()
     }
 }
 
@@ -58,8 +51,7 @@ impl Tool for TaskGetTool {
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?
             .to_string();
 
-        let task_list_id = self.get_task_list_id();
-        let task = self.store.get_task(&task_list_id, &task_id).await?;
+        let task = self.store.get_task(&self.task_list_id, &task_id).await?;
 
         let output = GetTaskOutput { task };
 

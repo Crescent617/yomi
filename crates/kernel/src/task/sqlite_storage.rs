@@ -11,14 +11,46 @@ impl SqliteTaskStorage {
     pub async fn new(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
 
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        // Handle special SQLite paths (in-memory databases)
+        let path_str = db_path.to_string_lossy();
+        let is_memory_db = path_str == ":memory:" || path_str.starts_with("file::memory:");
+
+        let conn_str = if is_memory_db {
+            // For in-memory databases, use the standard SQLite format
+            format!("sqlite:{path_str}")
+        } else {
+            // Ensure parent directory exists for file-based databases
+            if let Some(parent) = db_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+
+            // Use absolute path
+            let absolute_path = if db_path.is_absolute() {
+                db_path.to_path_buf()
+            } else {
+                std::env::current_dir()?.join(db_path)
+            };
+
+            // sqlx requires the database file to exist before connecting
+            // Create an empty file if it doesn't exist
+            if !absolute_path.exists() {
+                tokio::fs::File::create(&absolute_path).await?;
+            }
+
+            // Use the file:// URL format which is more reliable
+            // The path needs to be URL-encoded (spaces become %20, etc.)
+            let abs_path_str = absolute_path.to_string_lossy();
+            #[cfg(target_os = "windows")]
+            let url_path = abs_path_str.replace('\\', "/");
+            #[cfg(not(target_os = "windows"))]
+            let url_path = abs_path_str.to_string();
+
+            format!("sqlite://{url_path}")
+        };
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(&format!("sqlite:{}", db_path.display()))
+            .connect(&conn_str)
             .await?;
 
         // Enable foreign keys
@@ -34,7 +66,7 @@ impl SqliteTaskStorage {
 
     async fn init_schema(&self) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS tasks (
                 task_index INTEGER NOT NULL,
                 task_list_id TEXT NOT NULL,
@@ -70,7 +102,7 @@ impl SqliteTaskStorage {
                 task_list_id TEXT PRIMARY KEY,
                 next_index INTEGER NOT NULL DEFAULT 1
             );
-            "#,
+            ",
         )
         .execute(&self.pool)
         .await?;
@@ -83,29 +115,25 @@ impl SqliteTaskStorage {
         Ok(self.pool.begin().await?)
     }
 
-    pub async fn create_task(
-        &self,
-        task_list_id: &str,
-        input: CreateTaskInput,
-    ) -> Result<Task> {
+    pub async fn create_task(&self, task_list_id: &str, input: CreateTaskInput) -> Result<Task> {
         let now = chrono::Utc::now().to_rfc3339();
         let metadata_json = input
             .metadata
             .as_ref()
-            .map(|m| serde_json::to_string(m))
+            .map(serde_json::to_string)
             .transpose()?;
 
         let mut tx = self.begin_tx().await?;
 
         // Get next index for this task_list_id within the same transaction
         let task_index: i64 = sqlx::query_scalar(
-            r#"
+            r"
             INSERT INTO task_sequences (task_list_id, next_index)
             VALUES (?1, 2)
             ON CONFLICT(task_list_id) DO UPDATE SET
                 next_index = task_sequences.next_index + 1
             RETURNING next_index - 1
-            "#,
+            ",
         )
         .bind(task_list_id)
         .fetch_one(&mut *tx)
@@ -113,10 +141,10 @@ impl SqliteTaskStorage {
 
         // Insert the task
         sqlx::query(
-            r#"
+            r"
             INSERT INTO tasks (task_index, task_list_id, subject, description, active_form, owner, status, metadata, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'pending', ?6, ?7, ?7)
-            "#,
+            ",
         )
         .bind(task_index)
         .bind(task_list_id)
@@ -149,11 +177,11 @@ impl SqliteTaskStorage {
         let task_index: i64 = task_index_str.parse()?;
 
         let row = sqlx::query(
-            r#"
+            r"
             SELECT task_index, subject, description, active_form, owner, status, metadata, created_at, updated_at
             FROM tasks
             WHERE task_index = ?1 AND task_list_id = ?2
-            "#,
+            ",
         )
         .bind(task_index)
         .bind(task_list_id)
@@ -168,18 +196,18 @@ impl SqliteTaskStorage {
         let blocks = self.get_blocks(task_list_id, task_index).await?;
         let blocked_by = self.get_blocked_by(task_list_id, task_index).await?;
 
-        Ok(Some(self.row_to_task(row, blocks, blocked_by)?))
+        Ok(Some(self.row_to_task(&row, blocks, blocked_by)?))
     }
 
     async fn get_blocks(&self, task_list_id: &str, task_index: i64) -> Result<Vec<String>> {
         let rows = sqlx::query_scalar::<_, i64>(
             // This task blocks these tasks (these tasks depend on this task)
             // So: select task_index where depends_on_task_index=this task
-            r#"
+            r"
             SELECT task_index
             FROM task_dependencies
             WHERE task_list_id = ?1 AND depends_on_task_index = ?2
-            "#,
+            ",
         )
         .bind(task_list_id)
         .bind(task_index)
@@ -192,11 +220,11 @@ impl SqliteTaskStorage {
     async fn get_blocked_by(&self, task_list_id: &str, task_index: i64) -> Result<Vec<String>> {
         let rows = sqlx::query_scalar::<_, i64>(
             // This task is blocked by (depends on) these tasks
-            r#"
+            r"
             SELECT depends_on_task_index
             FROM task_dependencies
             WHERE task_list_id = ?1 AND task_index = ?2
-            "#,
+            ",
         )
         .bind(task_list_id)
         .bind(task_index)
@@ -206,15 +234,15 @@ impl SqliteTaskStorage {
         Ok(rows.into_iter().map(|idx| idx.to_string()).collect())
     }
 
+    #[allow(clippy::unused_self)]
     fn row_to_task(
         &self,
-        row: sqlx::sqlite::SqliteRow,
+        row: &sqlx::sqlite::SqliteRow,
         blocks: Vec<String>,
         blocked_by: Vec<String>,
     ) -> Result<Task> {
         let status_str: String = row.try_get("status")?;
         let status = match status_str.as_str() {
-            "pending" => TaskStatus::Pending,
             "in_progress" => TaskStatus::InProgress,
             "completed" => TaskStatus::Completed,
             _ => TaskStatus::Pending,
@@ -233,8 +261,14 @@ impl SqliteTaskStorage {
             blocks,
             blocked_by,
             metadata,
-            created_at: chrono::DateTime::parse_from_rfc3339(&row.try_get::<String, _>("created_at")?)?.into(),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&row.try_get::<String, _>("updated_at")?)?.into(),
+            created_at: chrono::DateTime::parse_from_rfc3339(
+                &row.try_get::<String, _>("created_at")?,
+            )?
+            .into(),
+            updated_at: chrono::DateTime::parse_from_rfc3339(
+                &row.try_get::<String, _>("updated_at")?,
+            )?
+            .into(),
         })
     }
 
@@ -251,7 +285,7 @@ impl SqliteTaskStorage {
 
         // Check if task exists
         let exists: bool = sqlx::query_scalar(
-            r#"SELECT EXISTS(SELECT 1 FROM tasks WHERE task_index = ?1 AND task_list_id = ?2)"#
+            r"SELECT EXISTS(SELECT 1 FROM tasks WHERE task_index = ?1 AND task_list_id = ?2)",
         )
         .bind(task_index)
         .bind(task_list_id)
@@ -269,27 +303,27 @@ impl SqliteTaskStorage {
 
         if updates.subject.is_some() {
             params_count += 1;
-            set_clauses.push(format!("subject = ?{}", params_count));
+            set_clauses.push(format!("subject = ?{params_count}"));
         }
         if updates.description.is_some() {
             params_count += 1;
-            set_clauses.push(format!("description = ?{}", params_count));
+            set_clauses.push(format!("description = ?{params_count}"));
         }
         if updates.active_form.is_some() {
             params_count += 1;
-            set_clauses.push(format!("active_form = ?{}", params_count));
+            set_clauses.push(format!("active_form = ?{params_count}"));
         }
         if updates.owner.is_some() {
             params_count += 1;
-            set_clauses.push(format!("owner = ?{}", params_count));
+            set_clauses.push(format!("owner = ?{params_count}"));
         }
         if updates.status.is_some() {
             params_count += 1;
-            set_clauses.push(format!("status = ?{}", params_count));
+            set_clauses.push(format!("status = ?{params_count}"));
         }
         if updates.metadata.is_some() {
             params_count += 1;
-            set_clauses.push(format!("metadata = ?{}", params_count));
+            set_clauses.push(format!("metadata = ?{params_count}"));
         }
 
         // Only update if there are actual changes
@@ -334,7 +368,7 @@ impl SqliteTaskStorage {
         if let Some(blocked_by) = updates.blocked_by {
             // First delete existing dependencies where this task is the dependent
             sqlx::query(
-                r#"DELETE FROM task_dependencies WHERE task_list_id = ?1 AND task_index = ?2"#
+                r"DELETE FROM task_dependencies WHERE task_list_id = ?1 AND task_index = ?2",
             )
             .bind(task_list_id)
             .bind(task_index)
@@ -345,7 +379,7 @@ impl SqliteTaskStorage {
             for blocker_idx_str in blocked_by {
                 let blocker_idx: i64 = blocker_idx_str.parse()?;
                 sqlx::query(
-                    r#"INSERT INTO task_dependencies (task_list_id, task_index, depends_on_task_index) VALUES (?1, ?2, ?3)"#
+                    r"INSERT INTO task_dependencies (task_list_id, task_index, depends_on_task_index) VALUES (?1, ?2, ?3)"
                 )
                 .bind(task_list_id)
                 .bind(task_index)
@@ -359,7 +393,7 @@ impl SqliteTaskStorage {
         if let Some(blocks) = updates.blocks {
             // First delete existing dependencies where this task is the blocker
             sqlx::query(
-                r#"DELETE FROM task_dependencies WHERE task_list_id = ?1 AND depends_on_task_index = ?2"#
+                r"DELETE FROM task_dependencies WHERE task_list_id = ?1 AND depends_on_task_index = ?2"
             )
             .bind(task_list_id)
             .bind(task_index)
@@ -370,7 +404,7 @@ impl SqliteTaskStorage {
             for blocked_idx_str in blocks {
                 let blocked_idx: i64 = blocked_idx_str.parse()?;
                 sqlx::query(
-                    r#"INSERT INTO task_dependencies (task_list_id, task_index, depends_on_task_index) VALUES (?1, ?2, ?3)"#
+                    r"INSERT INTO task_dependencies (task_list_id, task_index, depends_on_task_index) VALUES (?1, ?2, ?3)"
                 )
                 .bind(task_list_id)
                 .bind(blocked_idx)  // The task that is blocked
@@ -389,13 +423,12 @@ impl SqliteTaskStorage {
     pub async fn delete_task(&self, task_list_id: &str, task_index_str: &str) -> Result<bool> {
         let task_index: i64 = task_index_str.parse()?;
 
-        let result = sqlx::query(
-            r#"DELETE FROM tasks WHERE task_index = ?1 AND task_list_id = ?2"#,
-        )
-        .bind(task_index)
-        .bind(task_list_id)
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query(r"DELETE FROM tasks WHERE task_index = ?1 AND task_list_id = ?2")
+                .bind(task_index)
+                .bind(task_list_id)
+                .execute(&self.pool)
+                .await?;
 
         // Dependencies are deleted automatically via CASCADE
         Ok(result.rows_affected() > 0)
@@ -403,12 +436,12 @@ impl SqliteTaskStorage {
 
     pub async fn list_tasks(&self, task_list_id: &str) -> Result<Vec<Task>> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT task_index, subject, description, active_form, owner, status, metadata, created_at, updated_at
             FROM tasks
             WHERE task_list_id = ?1
             ORDER BY task_index ASC
-            "#,
+            ",
         )
         .bind(task_list_id)
         .fetch_all(&self.pool)
@@ -419,7 +452,7 @@ impl SqliteTaskStorage {
             let task_index: i64 = row.try_get("task_index")?;
             let blocks = self.get_blocks(task_list_id, task_index).await?;
             let blocked_by = self.get_blocked_by(task_list_id, task_index).await?;
-            tasks.push(self.row_to_task(row, blocks, blocked_by)?);
+            tasks.push(self.row_to_task(&row, blocks, blocked_by)?);
         }
 
         Ok(tasks)
@@ -428,12 +461,12 @@ impl SqliteTaskStorage {
     pub async fn reset_tasks(&self, task_list_id: &str) -> Result<()> {
         let mut tx = self.begin_tx().await?;
 
-        sqlx::query(r#"DELETE FROM tasks WHERE task_list_id = ?1"#)
+        sqlx::query(r"DELETE FROM tasks WHERE task_list_id = ?1")
             .bind(task_list_id)
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query(r#"DELETE FROM task_sequences WHERE task_list_id = ?1"#)
+        sqlx::query(r"DELETE FROM task_sequences WHERE task_list_id = ?1")
             .bind(task_list_id)
             .execute(&mut *tx)
             .await?;

@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentInput, AgentShared, SubAgentMode};
+use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, SubAgentMode};
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::storage::Storage;
@@ -20,6 +20,10 @@ pub struct SubAgentTool {
     skills: Vec<Arc<Skill>>,
     /// Storage for transcript recording (optional)
     storage: Option<Arc<dyn Storage>>,
+    /// Working directory for sub-agent
+    working_dir: std::path::PathBuf,
+    /// Parent session ID for task store sharing
+    parent_session_id: String,
 }
 
 impl SubAgentTool {
@@ -29,6 +33,8 @@ impl SubAgentTool {
         parent_input_tx: mpsc::Sender<AgentInput>,
         skills: Vec<Arc<Skill>>,
         storage: Option<Arc<dyn Storage>>,
+        working_dir: impl Into<std::path::PathBuf>,
+        parent_session_id: String,
     ) -> Self {
         Self {
             parent_id,
@@ -36,6 +42,8 @@ impl SubAgentTool {
             parent_input_tx,
             skills,
             storage,
+            working_dir: working_dir.into(),
+            parent_session_id,
         }
     }
 
@@ -190,7 +198,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         let system_prompt = self.build_system_prompt();
 
         // Create session for transcript recording if storage is available
-        let session_id = if let Some(storage) = &self.storage {
+        let subagent_session_id = if let Some(storage) = &self.storage {
             match storage.create_session().await {
                 Ok(sid) => {
                     tracing::debug!(
@@ -198,30 +206,29 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                         sid.0,
                         self.parent_id
                     );
-                    Some(sid.0)
+                    sid.0
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create sub-agent session: {}", e);
-                    None
+                    return Ok(ToolOutput::new_err(
+                        "Failed to create storage session for sub-agent",
+                    ));
                 }
             }
         } else {
-            None
+            return Ok(ToolOutput::new_err(
+                "Storage is required to spawn sub-agents for transcript recording",
+            ));
         };
 
-        let (handle, mut event_rx) = Agent::spawn(
-            AgentId::new(),
-            &self.shared,
-            system_prompt,
-            self.skills.clone(), // Inherit skills from parent
-            Vec::new(),          // No history for sub-agents
-            self.storage.clone(),
-            session_id.clone(),
-            20,
-            false,
-            &crate::project_memory::MemoryFiles::default(),
-            None, // Sub-agents don't use compactor
-        );
+        let config = AgentSpawnArgs::new(system_prompt, subagent_session_id)
+            .with_skills(self.skills.clone())
+            .with_parent_session(&self.parent_session_id)
+            .with_max_iterations(20)
+            .without_sub_agents()
+            .with_working_dir(self.working_dir.clone());
+
+        let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 
         let sub_agent_id = handle.id.clone();
 

@@ -6,12 +6,11 @@ use kernel::{
     expand_tilde,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
-    tools::{enable_yolo_mode, file_state::FileStateStore, ToolRegistry},
+    tools::enable_yolo_mode,
     types::SessionId,
     utils::strs,
-    ReadTool, TaskStore,
 };
-use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
+use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
 use kernel::{Coordinator, SessionConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -127,37 +126,19 @@ async fn main() -> Result<()> {
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
 
-    // Create task store with shared session ID
+    // Create task store for all agents
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
-    let current_session_id = Arc::new(std::sync::Mutex::new(String::new()));
 
-    // Create file state store for tracking reads
-    let file_state_store = Arc::new(FileStateStore::new());
-
-    // Create tool registry
-    let tool_registry = ToolRegistry::new();
-
-    // Register Edit tool with file state store
-    tool_registry.register(Arc::new(
-        EditTool::new(&working_dir).with_file_state_store(file_state_store.clone()),
-    ));
-
-    // Register Read tool with file state store
-    tool_registry.register(Arc::new(
-        ReadTool::new(&working_dir).with_file_state_store(file_state_store.clone()),
-    ));
-
-    // Register task tools
-    let session_id_for_tasks = current_session_id.clone();
-    tool_registry.register_task_tools(task_store, move || {
-        session_id_for_tasks.lock().unwrap().clone()
-    });
+    // Load project memory (CLAUDE.md/AGENTS.md)
+    let project_memory = kernel::project_memory::load(&working_dir).await?;
 
     let coordinator = Arc::new(Coordinator::new(
         storage.clone(),
         provider,
-        tool_registry,
         config.model.clone(),
+        Some(task_store),
+        project_memory,
+        None, // Compactor is per-agent via agent_config
     ));
 
     // Prepare banner data (before skills is moved)
@@ -174,56 +155,39 @@ async fn main() -> Result<()> {
     // Extract context_window before agent_config is moved
     let context_window = agent_config.compactor.context_window;
 
+    // Helper to create session config
+    let mk_config = |agent: AgentConfig| SessionConfig {
+        agent,
+        project_path: working_dir.clone(),
+    };
+
     // Create or restore session
     let session_id = if args.resume {
-        // Try to restore last session
         match app_storage.get_last_session(&working_dir).await? {
-            Some(session_id_str) => {
-                let session_id = SessionId(session_id_str);
-                tracing::info!("Restoring session: {}", session_id.0);
+            Some(id) => {
+                let session_id = SessionId(id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                let session_config = SessionConfig {
-                    agent: agent_config.clone(),
-                    project_path: working_dir.clone(),
-                };
-
                 match coordinator
-                    .restore_session(&session_id, session_config)
+                    .restore_session(&session_id, mk_config(agent_config.clone()))
                     .await
                 {
                     Ok(_) => session_id,
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        let session_config = SessionConfig {
-                            agent: agent_config,
-                            project_path: working_dir.clone(),
-                        };
-                        coordinator.create_session(session_config).await?
+                        coordinator.create_session(mk_config(agent_config)).await?
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                let session_config = SessionConfig {
-                    agent: agent_config,
-                    project_path: working_dir.clone(),
-                };
-                coordinator.create_session(session_config).await?
+                coordinator.create_session(mk_config(agent_config)).await?
             }
         }
     } else {
-        // Create new session
-        let session_config = SessionConfig {
-            agent: agent_config,
-            project_path: working_dir.clone(),
-        };
-        coordinator.create_session(session_config).await?
+        coordinator.create_session(mk_config(agent_config)).await?
     };
-
-    // Update current session ID for task tools
-    *current_session_id.lock().unwrap() = session_id.0.clone();
 
     // Record this session for future --continue
     app_storage

@@ -116,6 +116,7 @@ impl StatusBar {
 
     fn render_right_section(&self) -> Span<'static> {
         // Display context window usage: "Context: 0.5%"
+        #[allow(clippy::cast_precision_loss)]
         if let Some((tokens, context_window)) = self.ctx_usage {
             let percentage = tokens as f32 / context_window as f32;
             let cw_k = context_window / 1000;

@@ -8,4 +8,6 @@ mod types;
 pub use agent::{Agent, AgentInput};
 pub use cancel::CancelToken;
 pub use handle::AgentHandle;
-pub use types::{AgentConfig, AgentExecutionContext, AgentShared, AgentState, SubAgentMode};
+pub use types::{
+    AgentConfig, AgentExecutionContext, AgentShared, AgentSpawnArgs, AgentState, SubAgentMode,
+};

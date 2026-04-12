@@ -1,4 +1,4 @@
-use crate::tools::file_state::{FileState, FileStateStore};
+use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
 use crate::tools::Tool;
 use crate::types::ToolOutput;
@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
 pub struct ReadTool {
     base_dir: PathBuf,
@@ -30,13 +30,10 @@ impl ReadTool {
         self
     }
 
-    fn resolve_path(&self, relative: &str) -> Result<PathBuf> {
+    fn resolve_path(&self, relative: &str) -> PathBuf {
         let path = self.base_dir.join(relative);
-        let canonical = path.canonicalize().unwrap_or(path);
-        if !canonical.starts_with(&self.base_dir) {
-            return Err(anyhow::anyhow!("Path escapes base directory: {relative}"));
-        }
-        Ok(canonical)
+
+        path.canonicalize().unwrap_or(path)
     }
 
     /// Get file modification time in milliseconds since epoch
@@ -89,21 +86,20 @@ impl Tool for ReadTool {
         let offset = args["offset"].as_u64().map_or(1, |n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n as usize);
 
-        let path = self.resolve_path(path_str)?;
+        let path = self.resolve_path(path_str);
 
         tracing::debug!("Read: {}", path.display());
 
         // Check if file exists
         if !tokio::fs::try_exists(&path).await? {
-            return Ok(
-                ToolOutput::new("", format!("File does not exist: {path_str}")).with_exit_code(1),
-            );
+            return Ok(ToolOutput::new_err(format!(
+                "File does not exist: {path_str}"
+            )));
         }
         if tokio::fs::metadata(&path).await?.len() > MAX_FILE_SIZE {
-            return Ok(
-                ToolOutput::new("", format!("File is too large to read: {path_str}"))
-                    .with_exit_code(1),
-            );
+            return Ok(ToolOutput::new_err(format!(
+                "File is too large to read: {path_str}"
+            )));
         }
 
         let content = tokio::fs::read_to_string(&path).await?;
@@ -114,11 +110,9 @@ impl Tool for ReadTool {
         let end = limit.map_or(total_lines, |l| start + l).min(total_lines);
 
         if start >= total_lines {
-            return Ok(ToolOutput::new(
-                "",
-                format!("File has {total_lines} lines, offset {offset} is out of range"),
-            )
-            .with_exit_code(1));
+            return Ok(ToolOutput::new_err(format!(
+                "File has {total_lines} lines, offset {offset} is out of range"
+            )));
         }
 
         let result_content = if start == 0 && end == total_lines {
@@ -132,22 +126,15 @@ impl Tool for ReadTool {
         // Add line numbers to the result
         let formatted_result = format_file_lines(&result_content, offset);
 
-        // Track file state if store is available
+        // Track file mtime if store is available
         if let Some(ref store) = self.file_state_store {
             let mtime = self.get_mtime(&path).await.unwrap_or(0);
-            let state = if start == 0 && end == total_lines {
-                FileState::full_read(content.clone(), mtime)
-            } else {
-                FileState::partial_read(result_content.clone(), mtime, offset, limit)
-            };
-            store.set(path.clone(), state);
+            store.record(path.clone(), mtime);
         }
 
         // Build response with file info
         let response = if start == 0 && end == total_lines {
-            format!(
-                "{formatted_result}\n\n[File: {path_str} | Lines: {total_lines}]"
-            )
+            format!("{formatted_result}\n\n[File: {path_str} | Lines: {total_lines}]")
         } else {
             format!(
                 "{formatted_result}\n\n[File: {path_str} | Lines: {offset}-{end} of {total_lines}]"

@@ -146,6 +146,7 @@ impl TaskStore {
                         tasks[idx] = task.clone();
                     }
                 }
+                drop(cache);
             }
 
             let _ = self.event_tx.send(TaskEvent::Updated {
@@ -194,7 +195,6 @@ impl TaskStore {
 
         Ok(tasks)
     }
-
 }
 
 pub type SharedTaskStore = Arc<TaskStore>;

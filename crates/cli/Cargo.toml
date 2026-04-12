@@ -28,5 +28,8 @@ directories = "6.0"
 toml = "1.1"
 md5 = "0.8"
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tempfile = "3.0"
