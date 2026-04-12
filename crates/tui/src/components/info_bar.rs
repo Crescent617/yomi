@@ -28,6 +28,60 @@ pub enum InfoBarState {
     Cancelled,
 }
 
+impl InfoBarState {
+    /// Returns true if this state is active (shows spinner and elapsed time)
+    const fn is_active(self) -> bool {
+        matches!(self, Self::Streaming | Self::Compacting)
+    }
+
+    /// Returns true if this state clears the timer
+    const fn clears_timer(self) -> bool {
+        matches!(self, Self::Idle | Self::Completed | Self::Cancelled)
+    }
+
+    /// Get the spinner frame and style for this state
+    fn spinner(self, tick_frame: usize) -> (String, Style, &'static str) {
+        match self {
+            Self::Streaming => {
+                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
+                let frame = FRAMES[(tick_frame / 3) % FRAMES.len()];
+                (
+                    frame.to_string(),
+                    Style::default()
+                        .fg(colors::accent_system())
+                        .add_modifier(Modifier::BOLD),
+                    "",
+                )
+            }
+            Self::Compacting => {
+                const FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
+                let frame = FRAMES[tick_frame % FRAMES.len()];
+                (
+                    frame.to_string(),
+                    Style::default()
+                        .fg(colors::accent_warning())
+                        .add_modifier(Modifier::BOLD),
+                    "Compacting...",
+                )
+            }
+            Self::Cancelled => (
+                "✕".to_string(),
+                Style::default()
+                    .fg(colors::accent_error())
+                    .add_modifier(Modifier::BOLD),
+                "",
+            ),
+            Self::Completed | Self::Idle => (
+                "✓".to_string(),
+                Style::default()
+                    .fg(colors::accent_success())
+                    .add_modifier(Modifier::BOLD),
+                "",
+            ),
+        }
+    }
+}
+
 /// Info bar component showing streaming progress
 #[derive(Debug, Default)]
 pub struct InfoBar {
@@ -46,18 +100,15 @@ impl InfoBar {
 
     pub fn set_state(&mut self, state: InfoBarState) {
         self.state = state;
-        match state {
-            InfoBarState::Streaming | InfoBarState::Compacting => {
-                self.tick_frame = 0;
-                if state == InfoBarState::Streaming {
-                    self.content.clear();
-                    self.thinking.clear();
-                }
-                self.start_time = Some(std::time::Instant::now());
+        if state.is_active() {
+            self.tick_frame = 0;
+            if state == InfoBarState::Streaming {
+                self.content.clear();
+                self.thinking.clear();
             }
-            InfoBarState::Idle | InfoBarState::Completed | InfoBarState::Cancelled => {
-                self.start_time = None;
-            }
+            self.start_time = Some(std::time::Instant::now());
+        } else if state.clears_timer() {
+            self.start_time = None;
         }
     }
 
@@ -70,9 +121,23 @@ impl InfoBar {
     }
 
     pub fn tick(&mut self) {
-        if self.state == InfoBarState::Streaming || self.state == InfoBarState::Compacting {
+        if self.state.is_active() {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
+    }
+
+    /// Format elapsed time for display (e.g., " · 1.5s" or " · 2m30s")
+    fn format_elapsed(&self) -> Option<String> {
+        let start = self.start_time?;
+        let elapsed = start.elapsed().as_secs_f64();
+        let time_str = if elapsed < 60.0 {
+            format!(" · {elapsed:.1}s")
+        } else {
+            let mins = (elapsed / 60.0) as u64;
+            let secs = (elapsed % 60.0) as u64;
+            format!(" · {mins}m{secs:02}s")
+        };
+        Some(time_str)
     }
 
     fn render(&self) -> Line<'static> {
@@ -83,55 +148,15 @@ impl InfoBar {
 
         let mut spans = Vec::new();
 
-        // Indicator and status text based on state
-        let (indicator, status_text, indicator_style) = match self.state {
-            InfoBarState::Streaming => {
-                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
-                let frame_idx = (self.tick_frame / 3) % FRAMES.len();
-                (
-                    FRAMES[frame_idx],
-                    "",
-                    Style::default()
-                        .fg(colors::accent_system())
-                        .add_modifier(Modifier::BOLD),
-                )
-            }
-            InfoBarState::Compacting => {
-                const FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
-                let frame_idx = self.tick_frame % FRAMES.len();
-                (
-                    FRAMES[frame_idx],
-                    "Compacting...",
-                    Style::default()
-                        .fg(colors::accent_warning())
-                        .add_modifier(Modifier::BOLD),
-                )
-            }
-            InfoBarState::Cancelled => (
-                "✕",
-                "",
-                Style::default()
-                    .fg(colors::accent_error())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            InfoBarState::Completed | InfoBarState::Idle => (
-                "✓",
-                "",
-                Style::default()
-                    .fg(colors::accent_success())
-                    .add_modifier(Modifier::BOLD),
-            ),
-        };
-
+        // Get spinner/indicator and style from state
+        let (indicator, indicator_style, status_text) = self.state.spinner(self.tick_frame);
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
 
         // Status text (e.g., "Compacting...")
         if !status_text.is_empty() {
             spans.push(Span::styled(
                 format!("{status_text} "),
-                Style::default()
-                    .fg(colors::accent_warning())
-                    .add_modifier(Modifier::BOLD),
+                indicator_style, // Use same style as indicator for consistency
             ));
         }
 
@@ -144,19 +169,9 @@ impl InfoBar {
         let token_text = format!("{} tokens", tokens::format_token_count(total_tokens));
         spans.push(Span::styled(token_text, token_style));
 
-        // Elapsed time (when streaming or compacting)
-        if self.state == InfoBarState::Streaming || self.state == InfoBarState::Compacting {
-            if let Some(start) = self.start_time {
-                let elapsed = start.elapsed().as_secs_f64();
-                let time_str = if elapsed < 60.0 {
-                    format!(" · {elapsed:.1}s")
-                } else {
-                    let mins = (elapsed / 60.0) as u64;
-                    let secs = (elapsed % 60.0) as u64;
-                    format!(" · {mins}m{secs:02}s")
-                };
-                spans.push(Span::styled(time_str, token_style));
-            }
+        // Elapsed time (when active)
+        if let Some(time_str) = self.format_elapsed() {
+            spans.push(Span::styled(time_str, token_style));
         }
 
         Line::from(spans)

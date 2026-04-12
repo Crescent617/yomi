@@ -131,7 +131,7 @@ impl Agent {
             session_id,
             max_iterations,
             last_error: None,
-            compactor: Compactor::default().with_event_tx(event_tx, id.clone()),
+            compactor: Compactor::default(),
             pending_token_usage: None,
         };
 
@@ -493,37 +493,59 @@ impl Agent {
             return;
         }
 
+        // Emit start event (before borrowing self mutably for messages)
+        let agent_id = self.id.clone();
+        let _ = self
+            .event_tx
+            .send(Event::Model(ModelEvent::Compacting {
+                agent_id: agent_id.clone(),
+                active: true,
+            }))
+            .await;
+
         let messages = self.message_buffer.messages_mut();
-        match self
+        let result = self
             .compactor
             .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
-            .await
-        {
-            Ok(Some(result)) => {
-                if result.is_full_compaction() {
+            .await;
+
+        // Handle result before emitting end event (while messages is still borrowed)
+        match &result {
+            Ok(Some(compaction_result)) => {
+                if compaction_result.is_full_compaction() {
                     tracing::info!(
                         "Agent {} performed full compaction: {} messages summarized",
-                        self.id,
-                        result.compacted_count
+                        agent_id,
+                        compaction_result.compacted_count
                     );
                 } else {
-                    tracing::debug!("Agent {} performed micro-compaction", self.id);
+                    tracing::debug!("Agent {} performed micro-compaction", agent_id);
                 }
                 // Persist compacted state
-                if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id) {
+                if let (Some(storage), Some(session_id)) = (&self.storage, &self.session_id)
+                {
                     let sid = crate::types::SessionId(session_id.clone());
                     if let Err(e) = storage.set_messages(&sid, messages).await {
                         tracing::warn!(
                             "Agent {} failed to persist compacted messages: {}",
-                            self.id,
+                            agent_id,
                             e
                         );
                     }
                 }
             }
             Ok(None) => {}
-            Err(e) => tracing::warn!("Agent {} compaction failed: {}", self.id, e),
+            Err(e) => tracing::warn!("Agent {} compaction failed: {}", agent_id, e),
         }
+
+        // Emit end event (after match block, messages borrow is released)
+        let _ = self
+            .event_tx
+            .send(Event::Model(ModelEvent::Compacting {
+                agent_id: self.id.clone(),
+                active: false,
+            }))
+            .await;
     }
 
     /// Transition to appropriate state after streaming completes
