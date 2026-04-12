@@ -2,6 +2,8 @@ use crate::agent::AgentConfig;
 use crate::env_name;
 use crate::providers::ModelConfig;
 use crate::storage::StorageConfig;
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Expand `~` to the user's home directory
@@ -64,7 +66,8 @@ pub mod env_names {
 }
 
 /// Provider type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ModelProvider {
     #[default]
     OpenAI,
@@ -132,7 +135,8 @@ impl std::fmt::Display for ModelProvider {
 }
 
 /// Complete yomi configuration from environment
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub provider: ModelProvider,
     pub model: ModelConfig,
@@ -164,79 +168,92 @@ impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Self {
         let mut config = Self::default();
+        config.load_from_env();
+        config
+    }
 
-        // Provider selection
+    /// Load configuration from file, then apply environment variable overrides
+    pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        let mut config: Self = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        // Env vars always override file config
+        config.load_from_env();
+        Ok(config)
+    }
+
+    /// Apply environment variable overrides to this config
+    pub fn apply_env_overrides(&mut self) {
+        self.load_from_env();
+    }
+
+    /// Internal: Load all environment variables into config
+    fn load_from_env(&mut self) {
+        // Provider selection (may affect subsequent provider-specific lookups)
         if let Some(provider) = env_var(env_names::PROVIDER) {
             if let Ok(p) = provider.parse() {
-                config.provider = p;
+                self.provider = p;
             }
         }
 
-        // Load provider-specific or generic API settings
-        // Priority: Provider-specific (YOMI_) > Provider-specific (standard) > Generic (YOMI_) > Defaults
-        let provider = config.provider;
+        let provider = self.provider;
 
-        config.model.api_key = env_var(provider.standard_api_key_env())
-            .or_else(|| env_var(env_names::API_KEY))
-            .unwrap_or_default();
-
-        // Model: YOMI_OPENAI_MODEL > OPENAI_MODEL > YOMI_MODEL > defaults
-        config.model.model_id = env_var(provider.standard_model_env())
-            .or_else(|| env_var(env_names::MODEL))
-            .unwrap_or_else(|| default_model(provider));
-
-        // Endpoint: YOMI_OPENAI_ENDPOINT > OPENAI_ENDPOINT > YOMI_ENDPOINT > YOMI_OPENAI_API_BASE > OPENAI_API_BASE > YOMI_API_BASE > defaults
-        config.model.endpoint = env_var(env_names::API_BASE)
-            .or_else(|| env_var(provider.standard_api_base_env()))
-            .unwrap_or_else(|| default_endpoint(provider));
-
-        // Max tokens
-        if let Some(tokens) = env_var(env_names::MAX_TOKENS).and_then(|s| s.parse().ok()) {
-            config.model.max_tokens = Some(tokens);
-            config.agent.model.max_tokens = Some(tokens);
+        // API Key: YOMI_ generic > provider-specific standard
+        if let Some(key) = env_first(&[env_names::API_KEY, provider.standard_api_key_env()]) {
+            self.model.api_key = key;
         }
 
-        // Temperature
-        if let Some(temp) = env_var(env_names::TEMPERATURE).and_then(|s| s.parse().ok()) {
-            config.model.temperature = Some(temp);
+        // Model: YOMI_ generic > provider-specific standard
+        if let Some(model) = env_first(&[env_names::MODEL, provider.standard_model_env()]) {
+            self.model.model_id = model;
         }
 
-        // Sandbox mode
-        config.sandbox = env_bool(env_names::SANDBOX);
-
-        // YOLO mode
-        config.yolo = env_bool(env_names::YOLO);
-
-        // Data directory
-        if let Some(dir) = env_var(env_names::DATA_DIR) {
-            config.data_dir = expand_tilde(dir);
-            config.storage.url = config.data_dir.to_string_lossy().to_string();
+        // Endpoint: YOMI_ generic > provider-specific standard
+        if let Some(endpoint) = env_first(&[env_names::API_BASE, provider.standard_api_base_env()])
+        {
+            self.model.endpoint = endpoint;
         }
 
-        // Max iterations
-        if let Some(iters) = env_var(env_names::MAX_ITERATIONS).and_then(|s| s.parse().ok()) {
-            config.agent.max_iterations = iters;
+        // Numeric settings
+        if let Some(tokens) = env_parse::<u32>(env_names::MAX_TOKENS) {
+            self.model.max_tokens = Some(tokens);
         }
+        if let Some(temp) = env_parse::<f32>(env_names::TEMPERATURE) {
+            self.model.temperature = Some(temp);
+        }
+        if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
+            self.agent.max_iterations = iters;
+        }
+        if let Some(budget) = env_parse::<u32>(env_names::THINKING_BUDGET) {
+            self.model.thinking.budget_tokens = budget;
+        }
+
+        // Boolean settings
+        if let Some(enabled) = env_bool_opt(env_names::THINKING) {
+            self.model.thinking.enabled = enabled;
+        }
+        self.sandbox = env_bool(env_names::SANDBOX);
+        self.yolo = env_bool(env_names::YOLO);
 
         // Enable sub-agents (default true unless explicitly set to "false")
-        config.agent.enable_sub_agents =
-            env_var(env_names::ENABLE_SUB_AGENTS).as_deref() != Some("false");
-
-        // Thinking configuration
-        config.model.thinking.enabled = env_bool_opt(env_names::THINKING).unwrap_or(true);
-        if let Some(budget) = env_var(env_names::THINKING_BUDGET).and_then(|s| s.parse().ok()) {
-            config.model.thinking.budget_tokens = budget;
+        if let Some(val) = env_var(env_names::ENABLE_SUB_AGENTS) {
+            self.agent.enable_sub_agents = val != "false";
         }
 
-        // Skill folders from env (comma-separated)
+        // Data directory (expands ~ to home)
+        if let Some(dir) = env_var(env_names::DATA_DIR) {
+            self.data_dir = expand_tilde(dir);
+            self.storage.url = self.data_dir.to_string_lossy().to_string();
+        }
+
+        // Skill folders (comma-separated)
         if let Some(folders) = env_var(env_names::SKILL_FOLDERS) {
-            config.skill_folders = folders.split(',').map(String::from).collect();
+            self.skill_folders = folders.split(',').map(String::from).collect();
         }
 
-        // Update agent config model (must be after all model config)
-        config.agent.model = config.model.clone();
-
-        config
+        // Sync model config to agent config
+        self.agent.model = self.model.clone();
     }
 
     /// Get the API key for the current provider
@@ -266,6 +283,18 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// Try multiple env vars in order, return first set value
+#[inline]
+fn env_first(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| env_var(name))
+}
+
+/// Parse environment variable as a specific type
+#[inline]
+fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
+    env_var(name).and_then(|s| s.parse().ok())
+}
+
 /// Parse boolean from environment variable
 #[inline]
 fn env_bool(name: &str) -> bool {
@@ -281,19 +310,22 @@ fn env_bool_opt(name: &str) -> Option<bool> {
         .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
 }
 
-#[inline]
-fn default_model(provider: ModelProvider) -> String {
-    match provider {
-        ModelProvider::OpenAI => "gpt-4".to_string(),
-        ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
-    }
-}
+#[cfg(test)]
+mod test_helpers {
+    use super::ModelProvider;
 
-#[inline]
-fn default_endpoint(provider: ModelProvider) -> String {
-    match provider {
-        ModelProvider::OpenAI => "https://api.openai.com/v1".to_string(),
-        ModelProvider::Anthropic => "https://api.anthropic.com".to_string(),
+    pub fn default_model(provider: ModelProvider) -> String {
+        match provider {
+            ModelProvider::OpenAI => "gpt-4".to_string(),
+            ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
+        }
+    }
+
+    pub fn default_endpoint(provider: ModelProvider) -> String {
+        match provider {
+            ModelProvider::OpenAI => "https://api.openai.com/v1".to_string(),
+            ModelProvider::Anthropic => "https://api.anthropic.com".to_string(),
+        }
     }
 }
 
@@ -336,14 +368,14 @@ mod tests {
 
     #[test]
     fn test_default_model() {
-        assert_eq!(default_model(ModelProvider::OpenAI), "gpt-4");
-        assert!(default_model(ModelProvider::Anthropic).contains("claude"));
+        assert_eq!(test_helpers::default_model(ModelProvider::OpenAI), "gpt-4");
+        assert!(test_helpers::default_model(ModelProvider::Anthropic).contains("claude"));
     }
 
     #[test]
     fn test_default_endpoint() {
-        assert!(default_endpoint(ModelProvider::OpenAI).contains("openai.com"));
-        assert!(default_endpoint(ModelProvider::Anthropic).contains("anthropic.com"));
+        assert!(test_helpers::default_endpoint(ModelProvider::OpenAI).contains("openai.com"));
+        assert!(test_helpers::default_endpoint(ModelProvider::Anthropic).contains("anthropic.com"));
     }
 
     #[test]

@@ -132,7 +132,7 @@ impl Agent {
             session_id,
             max_iterations,
             last_error: None,
-            compactor: compactor,
+            compactor,
             pending_token_usage: None,
         };
 
@@ -487,9 +487,8 @@ impl Agent {
 
     /// Check and run compaction if needed
     async fn maybe_compact_messages(&mut self) {
-        let compactor = match &self.compactor {
-            Some(c) => c,
-            None => return, // No compactor configured, skip
+        let Some(compactor) = &self.compactor else {
+            return; // No compactor configured, skip
         };
         let should_compact = compactor.should_compact(self.message_buffer.messages());
         if !should_compact {

@@ -1,3 +1,9 @@
+pub mod fs;
+pub mod sqlite;
+
+pub use fs::FsStorage;
+pub use sqlite::SqliteStorage;
+
 use crate::config::DEFAULT_DATA_DIR;
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
@@ -17,12 +23,6 @@ pub trait Storage: Send + Sync {
     /// Replace all messages for a session (used after compaction)
     async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
 }
-
-pub mod fs;
-pub mod sqlite;
-
-pub use fs::FsStorage;
-pub use sqlite::SqliteStorage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {

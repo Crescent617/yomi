@@ -58,8 +58,8 @@ impl SubAgentManager {
             Vec::new(),          // No history for sub-agents
             None,                // Sub-agents don't persist to storage
             None,
-            10,                                            // Sub-agents get fewer iterations
-            false,                                         // Sub-agents don't spawn more sub-agents
+            10,    // Sub-agents get fewer iterations
+            false, // Sub-agents don't spawn more sub-agents
             &crate::project_memory::MemoryFiles::default(),
             None, // Sub-agents don't use compactor
         );
