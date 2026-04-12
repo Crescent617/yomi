@@ -35,7 +35,7 @@ eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
 # Task system dependencies
-fs4 = { version = "0.12", features = ["tokio"] }
+# Note: fs4 removed - using SQLite instead of file-based storage
 
 [dev-dependencies]
 tokio-test = "0.4"

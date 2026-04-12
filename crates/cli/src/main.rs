@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
     };
 
     // Create task store with shared session ID
-    let task_store = Arc::new(TaskStore::new(&config.data_dir));
+    let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
     let current_session_id = Arc::new(std::sync::Mutex::new(String::new()));
 
     // Create tool registry

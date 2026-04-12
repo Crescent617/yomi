@@ -1,5 +1,5 @@
-use crate::task::storage::{TaskStorage, TaskUpdates};
-use crate::task::types::{CreateTaskInput, Task};
+use crate::task::sqlite_storage::SqliteTaskStorage;
+use crate::task::types::{CreateTaskInput, Task, TaskUpdates};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,18 +27,18 @@ pub enum TaskEvent {
 }
 
 pub struct TaskStore {
-    storage: TaskStorage,
+    storage: SqliteTaskStorage,
     event_tx: broadcast::Sender<TaskEvent>,
     cache: RwLock<HashMap<String, Vec<Task>>>,
 }
 
 impl TaskStore {
-    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
-        let base_dir = data_dir.into().join("tasks");
-        Self::with_storage(TaskStorage::new(base_dir))
+    pub async fn new(data_dir: impl Into<PathBuf>) -> Result<Self> {
+        let db_path = data_dir.into().join("tasks.db");
+        Ok(Self::with_storage(SqliteTaskStorage::new(db_path).await?))
     }
 
-    pub fn with_storage(storage: TaskStorage) -> Self {
+    pub fn with_storage(storage: SqliteTaskStorage) -> Self {
         let (event_tx, _) = broadcast::channel(100);
         Self {
             storage,
@@ -132,9 +132,16 @@ impl TaskStore {
             .await?;
 
         if let Some(ref task) = task {
+            // If dependency relationships changed, invalidate entire cache
+            // because other tasks may reference this task
+            let deps_changed = updated_fields.contains(&"blocks".to_string())
+                || updated_fields.contains(&"blocked_by".to_string());
+
             {
                 let mut cache = self.cache.write().await;
-                if let Some(tasks) = cache.get_mut(task_list_id) {
+                if deps_changed {
+                    cache.remove(task_list_id);
+                } else if let Some(tasks) = cache.get_mut(task_list_id) {
                     if let Some(idx) = tasks.iter().position(|t| t.id == task_id) {
                         tasks[idx] = task.clone();
                     }
@@ -155,11 +162,11 @@ impl TaskStore {
         let deleted = self.storage.delete_task(task_list_id, task_id).await?;
 
         if deleted {
+            // Remove entire cache entry to ensure consistency
+            // (other tasks may have had this task in their blocks/blocked_by)
             {
                 let mut cache = self.cache.write().await;
-                if let Some(tasks) = cache.get_mut(task_list_id) {
-                    tasks.retain(|t| t.id != task_id);
-                }
+                cache.remove(task_list_id);
             }
 
             let _ = self.event_tx.send(TaskEvent::Deleted {

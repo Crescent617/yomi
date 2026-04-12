@@ -123,3 +123,15 @@ pub struct TaskListItem {
 pub struct GetTaskOutput {
     pub task: Option<Task>,
 }
+
+#[derive(Debug, Default)]
+pub struct TaskUpdates {
+    pub subject: Option<String>,
+    pub description: Option<String>,
+    pub active_form: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub owner: Option<String>,
+    pub blocks: Option<Vec<String>>,
+    pub blocked_by: Option<Vec<String>>,
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+}

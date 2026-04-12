@@ -1,4 +1,4 @@
-use crate::task::storage::TaskUpdates;
+use crate::task::types::TaskUpdates;
 use crate::task::store::SharedTaskStore;
 use crate::task::types::{StatusChange, TaskStatus, UpdateTaskOutput};
 use crate::tools::Tool;
@@ -27,60 +27,6 @@ impl TaskUpdateTool {
 
     fn get_task_list_id(&self) -> String {
         (self.get_session_id)()
-    }
-
-    /// Add a dependency relationship: this_task blocks target_task
-    async fn add_reverse_blocked_by(
-        &self,
-        task_list_id: &str,
-        this_task_id: &str,
-        target_task_id: &str,
-    ) -> Result<()> {
-        let target = self.store.get_task(task_list_id, target_task_id).await?;
-        if let Some(target) = target {
-            if !target.blocked_by.contains(&this_task_id.to_string()) {
-                let mut new_blocked_by = target.blocked_by.clone();
-                new_blocked_by.push(this_task_id.to_string());
-                self.store
-                    .update_task(
-                        task_list_id,
-                        target_task_id,
-                        TaskUpdates {
-                            blocked_by: Some(new_blocked_by),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Add a dependency relationship: blocker_task blocks this_task
-    async fn add_reverse_blocks(
-        &self,
-        task_list_id: &str,
-        this_task_id: &str,
-        blocker_task_id: &str,
-    ) -> Result<()> {
-        let blocker = self.store.get_task(task_list_id, blocker_task_id).await?;
-        if let Some(blocker) = blocker {
-            if !blocker.blocks.contains(&this_task_id.to_string()) {
-                let mut new_blocks = blocker.blocks.clone();
-                new_blocks.push(this_task_id.to_string());
-                self.store
-                    .update_task(
-                        task_list_id,
-                        blocker_task_id,
-                        TaskUpdates {
-                            blocks: Some(new_blocks),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -287,21 +233,6 @@ impl Tool for TaskUpdateTool {
             .await?;
 
         if let Some((task, _)) = result {
-            // Update reverse relationships (the other side of the dependency)
-            if let Some(add_blocks) = args["addBlocks"].as_array() {
-                for block_id in add_blocks.iter().filter_map(|v| v.as_str()) {
-                    self.add_reverse_blocked_by(&task_list_id, &task_id, block_id)
-                        .await?;
-                }
-            }
-
-            if let Some(add_blocked_by) = args["addBlockedBy"].as_array() {
-                for blocker_id in add_blocked_by.iter().filter_map(|v| v.as_str()) {
-                    self.add_reverse_blocks(&task_list_id, &task_id, blocker_id)
-                        .await?;
-                }
-            }
-
             let output = UpdateTaskOutput {
                 success: true,
                 task_id,
