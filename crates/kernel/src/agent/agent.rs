@@ -123,7 +123,7 @@ impl Agent {
             id: id.clone(),
             shared,
             message_buffer,
-            event_tx,
+            event_tx: event_tx.clone(),
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
@@ -131,7 +131,7 @@ impl Agent {
             session_id,
             max_iterations,
             last_error: None,
-            compactor: Compactor::default(),
+            compactor: Compactor::default().with_event_tx(event_tx, id.clone()),
             pending_token_usage: None,
         };
 

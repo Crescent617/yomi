@@ -8,11 +8,13 @@ mod types;
 
 pub use types::*;
 
+use crate::event::{Event, ModelEvent};
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
-use crate::types::{ContentBlock, Message, Role};
+use crate::types::{AgentId, ContentBlock, Message, Role};
 use crate::utils::tokens::estimate_tokens_for_messages;
 use anyhow::Result;
 use futures::TryStreamExt;
+use tokio::sync::mpsc;
 
 /// Default token threshold to trigger compaction (80% of context window)
 const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
@@ -37,6 +39,10 @@ pub struct Compactor {
     pub keep_recent: usize,
     /// Max tokens for summary
     pub summary_max_tokens: u32,
+    /// Event sender for compaction status
+    event_tx: Option<mpsc::Sender<Event>>,
+    /// Agent ID for events
+    agent_id: Option<AgentId>,
 }
 
 impl Default for Compactor {
@@ -46,6 +52,8 @@ impl Default for Compactor {
             context_window: DEFAULT_CONTEXT_WINDOW,
             keep_recent: KEEP_RECENT_MESSAGES,
             summary_max_tokens: SUMMARY_MAX_TOKENS,
+            event_tx: None,
+            agent_id: None,
         }
     }
 }
@@ -63,6 +71,27 @@ impl Compactor {
             context_window,
             keep_recent,
             summary_max_tokens,
+            event_tx: None,
+            agent_id: None,
+        }
+    }
+
+    /// Set the event sender for compaction status
+    pub fn with_event_tx(mut self, event_tx: mpsc::Sender<Event>, agent_id: AgentId) -> Self {
+        self.event_tx = Some(event_tx);
+        self.agent_id = Some(agent_id);
+        self
+    }
+
+    /// Emit a compacting event
+    async fn emit_compacting(&self, active: bool) {
+        if let (Some(tx), Some(agent_id)) = (&self.event_tx, &self.agent_id) {
+            let _ = tx
+                .send(Event::Model(ModelEvent::Compacting {
+                    agent_id: agent_id.clone(),
+                    active,
+                }))
+                .await;
         }
     }
 
@@ -184,10 +213,15 @@ impl Compactor {
             return Ok(None);
         }
 
+        // Emit start event
+        self.emit_compacting(true).await;
+
         // Try micro-compaction first
         if self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
             if !self.should_compact(messages) {
+                // Emit end event
+                self.emit_compacting(false).await;
                 return Ok(Some(CompactionResult {
                     summary: None,
                     keep_messages: messages.clone(),
@@ -208,6 +242,9 @@ impl Compactor {
         } else {
             result.keep_messages.clone()
         };
+
+        // Emit end event
+        self.emit_compacting(false).await;
 
         Ok(Some(result))
     }
