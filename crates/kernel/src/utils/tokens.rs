@@ -1,6 +1,6 @@
 //! Token counting utilities
 //!
-//! Uses the same estimation strategy as Claude Code:
+//! Estimation strategy:
 //! - 1 token ≈ 4 characters (for all text)
 //! - JSON is denser: 1 token ≈ 2 characters
 

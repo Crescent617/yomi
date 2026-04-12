@@ -12,6 +12,7 @@ use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use tracing::warn;
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
@@ -100,10 +101,23 @@ impl Agent {
             let working_dir =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
+            // Create file state store for tracking reads
+            let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+
             let bash_ctx =
                 crate::tools::BashToolCtx::new(id.clone(), input_tx.clone(), working_dir.clone());
             let bash_tool = crate::tools::BashTool::new(&working_dir).with_ctx(bash_ctx);
             new_shared.tool_registry.register(Arc::new(bash_tool));
+
+            // Register Read tool with file state store
+            let read_tool = crate::tools::ReadTool::new(&working_dir)
+                .with_file_state_store(file_state_store.clone());
+            new_shared.tool_registry.register(Arc::new(read_tool));
+
+            // Register Edit tool with file state store
+            let edit_tool = crate::tools::EditTool::new(&working_dir)
+                .with_file_state_store(file_state_store);
+            new_shared.tool_registry.register(Arc::new(edit_tool));
 
             if enable_sub_agents {
                 let input_tx_for_subagent = input_tx.clone();
@@ -370,11 +384,8 @@ impl Agent {
             }
             result = stream_future => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return self.fail_agent("Stream creation failed", e).await,
-                Err(_) => return self.fail_agent(
-                    "Stream creation timed out",
-                    anyhow::anyhow!("timeout after 10s"),
-                ).await,
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
         };
 
@@ -653,13 +664,14 @@ impl Agent {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt >= max_retries => {
-                    tracing::error!("Streaming failed after {} attempts: {}", attempt, e);
-                    return Err(e);
+                    return self
+                        .fail_agent("Streaming failed after max retries", e)
+                        .await;
                 }
                 Err(e) if !Self::is_retryable_error(&e) => {
-                    // Client errors (4xx) should not be retried
-                    tracing::error!("Streaming failed with non-retryable error: {}", e);
-                    return Err(e);
+                    return self
+                        .fail_agent("Streaming failed with non-retryable error", e)
+                        .await;
                 }
                 Err(e) => {
                     attempt += 1;
@@ -673,6 +685,7 @@ impl Agent {
 
     /// Check if an error is retryable.
     fn is_retryable_error(error: &anyhow::Error) -> bool {
+        warn!("Streaming error: {}", error);
         if let Some(http_err) = error.downcast_ref::<crate::providers::HttpError>() {
             return http_err.is_retryable();
         }

@@ -61,7 +61,7 @@ impl AppStorage {
     fn hash_path(working_dir: &Path) -> String {
         let path_str = working_dir.to_string_lossy();
         let hash = md5::compute(path_str.as_bytes());
-        format!("{:x}", hash)
+        format!("{hash:x}")
     }
 
     fn proj_meta_path(&self, working_dir: &Path) -> PathBuf {

@@ -7,6 +7,9 @@ use std::sync::{Arc, RwLock};
 
 pub mod bash;
 pub mod edit;
+pub mod edit_utils;
+pub mod file_state;
+pub mod line_numbers;
 pub mod parallel;
 pub mod read;
 pub mod subagent;

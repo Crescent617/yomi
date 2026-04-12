@@ -382,6 +382,12 @@ impl ToolOutput {
         }
     }
 
+    #[must_use]
+    pub const fn with_exit_code(mut self, exit_code: i32) -> Self {
+        self.exit_code = exit_code;
+        self
+    }
+
     pub const fn success(&self) -> bool {
         self.exit_code == 0
     }

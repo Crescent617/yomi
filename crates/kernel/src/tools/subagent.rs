@@ -40,7 +40,6 @@ impl SubAgentTool {
     }
 
     /// Build the system prompt for the sub-agent
-    /// Based on Claude Code's approach: system prompt defines role, user message provides task
     fn build_system_prompt(&self) -> String {
         format!(
             r"You are a sub-agent spawned by parent agent {parent_id}.
@@ -227,7 +226,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         let sub_agent_id = handle.id.clone();
 
         // Send the task as the first user message
-        // This follows Claude Code's pattern: system prompt defines role, user message provides task
+        // Pattern: system prompt defines role, user message provides task
         handle.send_text(task.to_string()).await.ok();
 
         match mode {

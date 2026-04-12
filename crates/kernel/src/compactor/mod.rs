@@ -2,7 +2,7 @@
 //!
 //! Implements two strategies:
 //! 1. Micro-compaction: Clear old tool result content (fast, no API call)
-//! 2. Full summarization: Use API to generate conversation summary (Claude Code style)
+//! 2. Full summarization: Use API to generate conversation summary
 
 mod types;
 

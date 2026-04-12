@@ -6,7 +6,7 @@ use kernel::{
     expand_tilde,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
-    tools::{enable_yolo_mode, ToolRegistry},
+    tools::{enable_yolo_mode, file_state::FileStateStore, ToolRegistry},
     types::SessionId,
     utils::strs,
     ReadTool, TaskStore,
@@ -131,10 +131,21 @@ async fn main() -> Result<()> {
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
     let current_session_id = Arc::new(std::sync::Mutex::new(String::new()));
 
+    // Create file state store for tracking reads
+    let file_state_store = Arc::new(FileStateStore::new());
+
     // Create tool registry
     let tool_registry = ToolRegistry::new();
-    tool_registry.register(Arc::new(EditTool::new(&working_dir)));
-    tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
+
+    // Register Edit tool with file state store
+    tool_registry.register(Arc::new(
+        EditTool::new(&working_dir).with_file_state_store(file_state_store.clone()),
+    ));
+
+    // Register Read tool with file state store
+    tool_registry.register(Arc::new(
+        ReadTool::new(&working_dir).with_file_state_store(file_state_store.clone()),
+    ));
 
     // Register task tools
     let session_id_for_tasks = current_session_id.clone();

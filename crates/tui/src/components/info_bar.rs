@@ -160,7 +160,6 @@ impl InfoBar {
             ));
         }
 
-        // Token count estimation (same as Claude Code: ~4 chars per token)
         let content_tokens = tokens::estimate_tokens(&self.content);
         let thinking_tokens = tokens::estimate_tokens(&self.thinking);
         let total_tokens = content_tokens + thinking_tokens;

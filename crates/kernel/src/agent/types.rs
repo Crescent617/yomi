@@ -2,6 +2,7 @@ use crate::compactor::Compactor;
 use crate::providers::ModelConfig;
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
+use crate::tools::file_state::FileStateStore;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -182,6 +183,8 @@ pub struct AgentShared {
     pub provider: Arc<dyn crate::providers::Provider>,
     pub tool_registry: Arc<crate::tools::ToolRegistry>,
     pub model_config: ModelConfig,
+    /// Tracks file read state for staleness detection
+    pub file_state_store: FileStateStore,
 }
 
 impl AgentShared {
@@ -194,6 +197,7 @@ impl AgentShared {
             provider,
             tool_registry,
             model_config,
+            file_state_store: FileStateStore::new(),
         }
     }
 
@@ -203,6 +207,7 @@ impl AgentShared {
             provider: Arc::clone(&self.provider),
             tool_registry: Arc::new(self.tool_registry.as_ref().clone()),
             model_config: self.model_config.clone(),
+            file_state_store: self.file_state_store.clone(),
         }
     }
 }
