@@ -23,6 +23,7 @@ pub enum InfoBarState {
     #[default]
     Idle,
     Streaming,
+    Compacting,
     Completed,
     Cancelled,
 }
@@ -46,10 +47,12 @@ impl InfoBar {
     pub fn set_state(&mut self, state: InfoBarState) {
         self.state = state;
         match state {
-            InfoBarState::Streaming => {
+            InfoBarState::Streaming | InfoBarState::Compacting => {
                 self.tick_frame = 0;
-                self.content.clear();
-                self.thinking.clear();
+                if state == InfoBarState::Streaming {
+                    self.content.clear();
+                    self.thinking.clear();
+                }
                 self.start_time = Some(std::time::Instant::now());
             }
             InfoBarState::Idle | InfoBarState::Completed | InfoBarState::Cancelled => {
@@ -67,39 +70,53 @@ impl InfoBar {
     }
 
     pub fn tick(&mut self) {
-        if self.state == InfoBarState::Streaming {
+        if self.state == InfoBarState::Streaming || self.state == InfoBarState::Compacting {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
     }
 
     fn render(&self) -> Line<'static> {
-        // Show when streaming or has content
+        // Show when streaming, compacting, or has content
         if self.state == InfoBarState::Idle && self.content.is_empty() && self.thinking.is_empty() {
             return Line::from("");
         }
 
         let mut spans = Vec::new();
 
-        // Indicator based on state
-        let (indicator, indicator_style) = match self.state {
+        // Indicator and status text based on state
+        let (indicator, status_text, indicator_style) = match self.state {
             InfoBarState::Streaming => {
                 const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
                 let frame_idx = (self.tick_frame / 3) % FRAMES.len();
                 (
                     FRAMES[frame_idx],
+                    "",
                     Style::default()
                         .fg(colors::accent_system())
                         .add_modifier(Modifier::BOLD),
                 )
             }
+            InfoBarState::Compacting => {
+                const FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
+                let frame_idx = self.tick_frame % FRAMES.len();
+                (
+                    FRAMES[frame_idx],
+                    "Compacting...",
+                    Style::default()
+                        .fg(colors::accent_warning())
+                        .add_modifier(Modifier::BOLD),
+                )
+            }
             InfoBarState::Cancelled => (
                 "✕",
+                "",
                 Style::default()
                     .fg(colors::accent_error())
                     .add_modifier(Modifier::BOLD),
             ),
             InfoBarState::Completed | InfoBarState::Idle => (
                 "✓",
+                "",
                 Style::default()
                     .fg(colors::accent_success())
                     .add_modifier(Modifier::BOLD),
@@ -107,6 +124,16 @@ impl InfoBar {
         };
 
         spans.push(Span::styled(format!("{indicator} "), indicator_style));
+
+        // Status text (e.g., "Compacting...")
+        if !status_text.is_empty() {
+            spans.push(Span::styled(
+                format!("{status_text} "),
+                Style::default()
+                    .fg(colors::accent_warning())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
 
         // Token count estimation (same as Claude Code: ~4 chars per token)
         let content_tokens = tokens::estimate_tokens(&self.content);
@@ -117,8 +144,8 @@ impl InfoBar {
         let token_text = format!("{} tokens", tokens::format_token_count(total_tokens));
         spans.push(Span::styled(token_text, token_style));
 
-        // Elapsed time (only when streaming)
-        if self.state == InfoBarState::Streaming {
+        // Elapsed time (when streaming or compacting)
+        if self.state == InfoBarState::Streaming || self.state == InfoBarState::Compacting {
             if let Some(start) = self.start_time {
                 let elapsed = start.elapsed().as_secs_f64();
                 let time_str = if elapsed < 60.0 {
@@ -157,6 +184,13 @@ impl MockComponent for InfoBar {
             }
             Attribute::Custom("cancel_streaming") => {
                 self.set_state(InfoBarState::Cancelled);
+            }
+            Attribute::Custom("start_compacting") => {
+                self.set_state(InfoBarState::Compacting);
+            }
+            Attribute::Custom("stop_compacting") => {
+                // Return to idle or completed based on previous state
+                self.set_state(InfoBarState::Idle);
             }
             Attribute::Custom("append_content") => {
                 if let AttrValue::String(text) = value {
