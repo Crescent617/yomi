@@ -9,12 +9,12 @@ use kernel::{
     tools::{enable_yolo_mode, ToolRegistry},
     types::SessionId,
     utils::strs,
-    ReadTool,
+    ReadTool, TaskStore,
 };
 use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
 use kernel::{Coordinator, SessionConfig};
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tui::run_tui;
 
@@ -127,10 +127,20 @@ async fn main() -> Result<()> {
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
 
+    // Create task store with shared session ID
+    let task_store = Arc::new(TaskStore::new(&config.data_dir));
+    let current_session_id = Arc::new(std::sync::Mutex::new(String::new()));
+
     // Create tool registry
     let tool_registry = ToolRegistry::new();
     tool_registry.register(Arc::new(EditTool::new(&working_dir)));
     tool_registry.register(Arc::new(ReadTool::new(&working_dir)));
+
+    // Register task tools
+    let session_id_for_tasks = current_session_id.clone();
+    tool_registry.register_task_tools(task_store, move || {
+        session_id_for_tasks.lock().unwrap().clone()
+    });
 
     let coordinator = Arc::new(Coordinator::new(
         storage.clone(),
@@ -200,6 +210,9 @@ async fn main() -> Result<()> {
         };
         coordinator.create_session(session_config).await?
     };
+
+    // Update current session ID for task tools
+    *current_session_id.lock().unwrap() = session_id.0.clone();
 
     // Record this session for future --continue
     app_storage

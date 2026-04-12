@@ -34,6 +34,9 @@ reqwest = { workspace = true, optional = true }
 eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
+# Task system dependencies
+fs4 = { version = "0.12", features = ["tokio"] }
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.0"

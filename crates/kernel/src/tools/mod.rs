@@ -99,3 +99,33 @@ pub fn enable_yolo_mode() {
 pub fn is_yolo_mode() -> bool {
     YOLO_MODE.load(std::sync::atomic::Ordering::SeqCst)
 }
+
+use crate::task::{SharedTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool};
+
+impl ToolRegistry {
+    pub fn register_task_tools<F>(
+        &self,
+        store: SharedTaskStore,
+        get_session_id: F,
+    )
+    where
+        F: Fn() -> String + Send + Sync + Clone + 'static,
+    {
+        self.register(Arc::new(TaskCreateTool::new(
+            store.clone(),
+            get_session_id.clone(),
+        )));
+        self.register(Arc::new(TaskUpdateTool::new(
+            store.clone(),
+            get_session_id.clone(),
+        )));
+        self.register(Arc::new(TaskListTool::new(
+            store.clone(),
+            get_session_id.clone(),
+        )));
+        self.register(Arc::new(TaskGetTool::new(
+            store,
+            get_session_id,
+        )));
+    }
+}

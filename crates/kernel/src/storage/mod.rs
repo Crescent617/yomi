@@ -1,8 +1,6 @@
 pub mod fs;
-pub mod sqlite;
 
 pub use fs::FsStorage;
-pub use sqlite::SqliteStorage;
 
 use crate::config::DEFAULT_DATA_DIR;
 use crate::types::{Message, SessionId, SessionRecord};

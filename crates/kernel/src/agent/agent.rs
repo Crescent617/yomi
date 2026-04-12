@@ -114,6 +114,8 @@ impl Agent {
                         Arc::new(new_shared.clone()),
                         input_tx_for_subagent,
                         skills,
+                        storage.clone(),
+                        &working_dir,
                     )));
             }
 
