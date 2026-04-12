@@ -14,7 +14,12 @@ use tuirealm::{
     Component, Frame, MockComponent, State,
 };
 
-use crate::{markdown_stream::StreamingMarkdownRenderer, msg::Msg, theme::colors, utils::strs};
+use crate::{
+    markdown_stream::StreamingMarkdownRenderer,
+    msg::Msg,
+    theme::colors,
+    utils::{strs, text::preprocess},
+};
 use kernel::utils::tokens;
 
 use super::banner::MascotAnimator;
@@ -520,7 +525,7 @@ impl ChatView {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            line.to_string(),
+                            preprocess(line),
                             Style::default().fg(colors::text_primary()),
                         ),
                     ]));
@@ -656,7 +661,7 @@ impl ChatView {
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
-                                        line.to_string(),
+                                        preprocess(line),
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                 ]));
@@ -669,7 +674,7 @@ impl ChatView {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_error())),
                                 Span::styled(
-                                    line.to_string(),
+                                    preprocess(line),
                                     Style::default().fg(colors::accent_error()),
                                 ),
                             ]));
@@ -688,7 +693,7 @@ impl ChatView {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_system())),
                                 Span::styled(
-                                    line.to_string(),
+                                    preprocess(line),
                                     Style::default().fg(colors::text_primary()),
                                 ),
                             ]));
@@ -728,7 +733,7 @@ impl ChatView {
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            line.to_string(),
+                            preprocess(line),
                             Style::default().fg(colors::accent_error()),
                         ),
                     ]));
@@ -795,7 +800,7 @@ impl ChatView {
                 lines.push(Line::from(vec![
                     Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                     Span::styled(
-                        line.to_string(),
+                        preprocess(line),
                         Style::default().fg(colors::text_secondary()),
                     ),
                 ]));
@@ -901,7 +906,12 @@ impl MockComponent for ChatView {
         };
 
         let end_line = (start_line + visible_height).min(all_lines.len());
-        let visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
+        let mut visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
+
+        // Pad with empty lines to fill the entire area and prevent residue
+        while visible_lines.len() < visible_height {
+            visible_lines.push(Line::from(""));
+        }
 
         let paragraph = Paragraph::new(Text::from(visible_lines))
             .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
@@ -914,21 +924,27 @@ impl MockComponent for ChatView {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        match attr {
-            Attribute::Custom("add_user_message") => {
+        // Extract the custom string first, then match on it
+        let Attribute::Custom(cmd) = attr else {
+            self.props.set(attr, value);
+            return;
+        };
+
+        match cmd {
+            "add_user_message" => {
                 if let AttrValue::String(content) = value {
                     self.add_user_message(content);
                 }
             }
-            Attribute::Custom("add_error_message") => {
+            "add_error_message" => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
                 }
             }
-            Attribute::Custom("add_assistant_with_thinking") => {
+            "add_assistant_with_thinking" => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
-                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let content = parts.first().map_or(String::new(), |s| (*s).to_string());
                     let thinking = parts
                         .get(1)
                         .filter(|s| !s.is_empty())
@@ -937,33 +953,24 @@ impl MockComponent for ChatView {
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
             }
-            Attribute::Custom("set_banner") => {
+            "set_banner" => {
                 if let AttrValue::String(banner_str) = value {
-                    let parts: Vec<&str> = banner_str.split('|').collect();
-                    let working_dir = (*parts.first().unwrap_or(&"")).to_string();
-                    let skills = parts
-                        .get(1)
-                        .map(|s| s.split(',').map(|skill| skill.trim().to_string()).collect())
-                        .unwrap_or_default();
+                    let parts: Vec<&str> = banner_str.split('\x00').collect();
+                    let working_dir = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let skills = parts.get(1).map_or(Vec::new(), |s| {
+                        s.split(',').map(|skill| skill.trim().to_string()).collect()
+                    });
                     self.set_banner(crate::components::BannerData::new(working_dir, skills));
                 }
             }
-            Attribute::Custom("start_streaming") => {
-                self.start_streaming();
-            }
-            Attribute::Custom("stop_streaming") => {
-                self.stop_streaming();
-            }
-            Attribute::Custom("clear_streaming") => {
-                self.clear_streaming();
-            }
-            Attribute::Custom("cancel_streaming") => {
-                self.cancel_streaming();
-            }
-            Attribute::Custom("cancel_streaming_with_content") => {
+            "start_streaming" => self.start_streaming(),
+            "stop_streaming" => self.stop_streaming(),
+            "clear_streaming" => self.clear_streaming(),
+            "cancel_streaming" => self.cancel_streaming(),
+            "cancel_streaming_with_content" => {
                 if let AttrValue::String(combined) = value {
-                    let parts: Vec<&str> = combined.split(' ').collect();
-                    let content = (*parts.first().unwrap_or(&"")).to_string();
+                    let parts: Vec<&str> = combined.split('\x00').collect();
+                    let content = parts.first().map_or(String::new(), |s| (*s).to_string());
                     let thinking = parts
                         .get(1)
                         .filter(|s| !s.is_empty())
@@ -1003,81 +1010,58 @@ impl MockComponent for ChatView {
                     self.is_streaming = false;
                 }
             }
-            Attribute::Custom("append_content") => {
+            "append_content" => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_content(&text);
                 }
             }
-            Attribute::Custom("append_thinking") => {
+            "append_thinking" => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_thinking(&text);
                 }
             }
-            Attribute::Custom("scroll_up") => {
-                self.scroll_up(3);
-            }
-            Attribute::Custom("scroll_down") => {
-                self.scroll_down(3);
-            }
-            Attribute::Custom("scroll_to_bottom") => {
-                self.scroll_to_bottom();
-            }
-            Attribute::Custom("scroll_to_top") => {
-                self.scroll_to_top();
-            }
-            Attribute::Custom("toggle_thinking") => {
-                self.toggle_last_thinking();
-            }
-            Attribute::Custom("toggle_expand_all") => {
-                self.toggle_expand_all();
-            }
-            Attribute::Custom("expand_all") => {
-                self.expand_all();
-            }
-            Attribute::Custom("collapse_all") => {
-                self.collapse_all();
-            }
-            Attribute::Custom("start_tool") => {
+            "scroll_up" => self.scroll_up(3),
+            "scroll_down" => self.scroll_down(3),
+            "scroll_to_bottom" => self.scroll_to_bottom(),
+            "scroll_to_top" => self.scroll_to_top(),
+            "toggle_thinking" => self.toggle_last_thinking(),
+            "toggle_expand_all" => self.toggle_expand_all(),
+            "expand_all" => self.expand_all(),
+            "collapse_all" => self.collapse_all(),
+            "start_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let tool_name = (*parts.get(1).unwrap_or(&"tool")).to_string();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let tool_name = parts
+                        .get(1)
+                        .map_or_else(|| "tool".to_string(), |s| (*s).to_string());
                     let arguments = parts.get(2).map(|s| (*s).to_string());
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }
-            Attribute::Custom("complete_tool") => {
+            "complete_tool" | "fail_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let output = (*parts.get(1).unwrap_or(&"")).to_string();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let second = parts.get(1).map_or(String::new(), |s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.complete_tool(tool_id, output, elapsed_ms);
+                    match cmd {
+                        "complete_tool" => self.complete_tool(tool_id, second, elapsed_ms),
+                        "fail_tool" => self.fail_tool(tool_id, second, elapsed_ms),
+                        _ => {}
+                    }
                 }
             }
-            Attribute::Custom("fail_tool") => {
-                if let AttrValue::String(text) = value {
-                    let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = (*parts.first().unwrap_or(&"")).to_string();
-                    let error = (*parts.get(1).unwrap_or(&"")).to_string();
-                    let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.fail_tool(tool_id, error, elapsed_ms);
-                }
-            }
-            // Page navigation
-            Attribute::Custom("page_up") => {
+            "page_up" | "page_down" => {
                 if let AttrValue::Number(height) = value {
-                    self.page_up(height as usize);
+                    match cmd {
+                        "page_up" => self.page_up(height as usize),
+                        "page_down" => self.page_down(height as usize),
+                        _ => {}
+                    }
                 }
             }
-            Attribute::Custom("page_down") => {
-                if let AttrValue::Number(height) = value {
-                    self.page_down(height as usize);
-                }
-            }
-            _ => {
-                self.props.set(attr, value);
-            }
+            _ => {}
         }
     }
 
@@ -1086,7 +1070,7 @@ impl MockComponent for ChatView {
         self.banner.as_ref().map_or_else(
             || State::None,
             |banner| {
-                let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
+                let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
                 State::One(tuirealm::StateValue::String(banner_str))
             },
         )

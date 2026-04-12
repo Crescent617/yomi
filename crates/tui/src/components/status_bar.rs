@@ -185,9 +185,9 @@ impl MockComponent for StatusBar {
                 }
             }
             Attribute::Custom("show_message") => {
-                // Parse duration (ms) and message from "duration_ms|message" format
+                // Parse duration (ms) and message from "duration_ms\x00message" format
                 if let AttrValue::String(value_str) = value {
-                    let parts: Vec<&str> = value_str.splitn(2, '|').collect();
+                    let parts: Vec<&str> = value_str.splitn(2, '\x00').collect();
                     if parts.len() == 2 {
                         let duration_ms = parts[0].parse::<u64>().unwrap_or(0);
                         self.center_message = Some(parts[1].to_string());
@@ -211,9 +211,9 @@ impl MockComponent for StatusBar {
                 self.message_timeout = None;
             }
             Attribute::Custom("set_ctx_usage") => {
-                // Parse "tokens/context_window" format
+                // Parse "tokens\x00context_window" format
                 if let AttrValue::String(value_str) = value {
-                    let parts: Vec<&str> = value_str.split('/').collect();
+                    let parts: Vec<&str> = value_str.split('\x00').collect();
                     if parts.len() == 2 {
                         if let (Ok(tokens), Ok(context_window)) =
                             (parts[0].parse::<u32>(), parts[1].parse::<u32>())

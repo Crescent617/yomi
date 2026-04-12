@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::SubEventClause;
+use unicode_width::UnicodeWidthStr;
 use tuirealm::{
     application::PollStrategy,
     ratatui::layout::{Constraint, Direction, Layout},
@@ -159,7 +160,7 @@ impl Model {
 
     /// Initialize context window display in status bar
     pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
-        let usage_str = format!("{tokens}/{context_window}");
+        let usage_str = format!("{tokens}\x00{context_window}");
         self.app.attr(
             &Id::StatusBar,
             Attribute::Custom("set_ctx_usage"),
@@ -172,8 +173,8 @@ impl Model {
     pub fn update_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
         use crate::components::BannerData;
         let banner = BannerData::new(working_dir, skills);
-        // Serialize banner data: working_dir|skill1,skill2,...
-        let banner_str = format!("{}|{}", banner.working_dir, banner.skills.join(","));
+        // Serialize banner data: working_dir\x00skill1,skill2,...
+        let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
         self.app.attr(
             &Id::ChatView,
             Attribute::Custom("set_banner"),
@@ -182,21 +183,34 @@ impl Model {
         Ok(())
     }
 
-    /// Calculate input box height based on content (3-5 lines, including borders)
-    fn calculate_input_height(&self) -> u16 {
-        // Content lines (1-3), plus 2 for borders = total 3-5
-        let content_lines = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
-            self.app.state(&Id::InputBox)
-        {
-            // Count newlines + 1 to handle trailing newlines correctly
-            // "hello\nworld" -> 1 newline + 1 = 2 lines
-            // "hello\n" -> 1 newline + 1 = 2 lines (lines() would return 1)
-            let line_count = content.matches('\n').count() + 1;
-            (line_count.max(1) as u16).min(3)
-        } else {
+    /// Calculate input box height based on content (3-10 lines, including borders)
+    /// Accounts for text wrapping based on available terminal width
+    fn calculate_input_height_for_content(content: &str, terminal_width: u16) -> u16 {
+        // Account for borders and padding in the layout
+        // Input area has left/right borders (2 chars)
+        let content_width = (terminal_width.saturating_sub(2) as usize).max(1);
+
+        // Get content and calculate visual lines
+        let visual_lines = if content.is_empty() {
             1
+        } else {
+            // Calculate how many visual lines are needed considering wrap
+            let lines: Vec<&str> = content.split('\n').collect();
+            let mut total_visual_lines = 0;
+
+            for line in lines {
+                // Each line needs at least 1 visual line
+                // Calculate how many lines it wraps to based on content width
+                let line_width = line.width();
+                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1) / content_width.max(1);
+                total_visual_lines += wrapped_lines.max(1);
+            }
+
+            // Clamp between 1 and 8 content lines (to prevent excessive growth)
+            total_visual_lines.clamp(1, 8)
         };
-        content_lines + 2 // Add 2 for top/bottom borders
+
+        visual_lines as u16 + 2 // Add 2 for top/bottom borders
     }
 
     /// Save partial content (content and thinking) to chat history
@@ -237,9 +251,19 @@ impl Model {
     }
 
     pub fn view(&mut self) {
-        let input_height = self.calculate_input_height();
+        // Pre-fetch content to calculate height without borrowing self in closure
+        let input_content = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
+            self.app.state(&Id::InputBox)
+        {
+            content
+        } else {
+            String::new()
+        };
 
         let _ = self.terminal.draw(|f| {
+            // Calculate input height inside draw closure to access terminal area
+            let input_height = Self::calculate_input_height_for_content(&input_content, f.area().width);
+
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
                 let chunks = Layout::default()
@@ -462,7 +486,7 @@ impl Model {
                     ..
                 }) => {
                     // Update context window usage in status bar
-                    let usage_str = format!("{total_tokens}/{context_window}");
+                    let usage_str = format!("{total_tokens}\x00{context_window}");
                     self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("set_ctx_usage"),
@@ -721,8 +745,8 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {
-                    // Format: "duration_ms|message"
-                    let value = format!("{duration_ms}|{msg}");
+                    // Format: "duration_ms\x00message"
+                    let value = format!("{duration_ms}\x00{msg}");
                     let _ = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
@@ -759,7 +783,7 @@ impl Update<Msg> for Model {
                                 &Id::StatusBar,
                                 Attribute::Custom("show_message"),
                                 AttrValue::String(
-                                    "0|C-o toggle, j/k/g/G scroll, q exit".to_string(),
+                                    "0\x00C-o toggle, j/k/g/G scroll, q exit".to_string(),
                                 ),
                             );
                         }

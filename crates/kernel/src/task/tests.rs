@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod task_tests {
     use super::super::*;
 
     async fn create_test_storage() -> SqliteTaskStorage {
@@ -39,8 +39,8 @@ mod tests {
         // Create multiple tasks
         for i in 1..=3 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };
@@ -243,8 +243,8 @@ mod tests {
         // Create three tasks: 1 blocks 2, 2 blocks 3
         for i in 1..=3 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };
@@ -348,8 +348,8 @@ mod tests {
         // Create tasks
         for i in 1..=3 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };
@@ -393,8 +393,8 @@ mod tests {
         // Create tasks
         for i in 1..=3 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };
@@ -451,8 +451,8 @@ mod tests {
         // Create tasks
         for i in 1..=3 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };
@@ -503,8 +503,8 @@ mod tests {
         // Create tasks in different sessions with same IDs
         for i in 1..=2 {
             let input = CreateTaskInput {
-                subject: format!("Task {}", i),
-                description: format!("Description {}", i),
+                subject: format!("Task {i}"),
+                description: format!("Description {i}"),
                 active_form: None,
                 metadata: None,
             };

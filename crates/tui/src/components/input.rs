@@ -12,7 +12,7 @@ use tuirealm::{
     },
     Component, Frame, MockComponent, State, StateValue,
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{msg::Msg, theme::colors};
 
@@ -80,12 +80,160 @@ impl InputMock {
         }
     }
 
-    pub const fn move_to_start(&mut self) {
-        self.cursor_pos = 0;
+    /// Move cursor to start of current line (like Ctrl-a in readline)
+    pub fn move_to_start_of_line(&mut self) {
+        let line_start = self.content[..self.cursor_pos]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        self.cursor_pos = line_start;
     }
 
-    pub const fn move_to_end(&mut self) {
-        self.cursor_pos = self.content.len();
+    /// Move cursor to end of current line (like Ctrl-e in readline)
+    pub fn move_to_end_of_line(&mut self) {
+        let line_end = self.content[self.cursor_pos..]
+            .find('\n')
+            .map_or(self.content.len(), |i| self.cursor_pos + i);
+        self.cursor_pos = line_end;
+    }
+
+    /// Move cursor to previous line, keeping column position if possible
+    pub fn move_up(&mut self) {
+        // Find the start of current line
+        let line_start = self.content[..self.cursor_pos]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        // Calculate column position
+        let col = self.cursor_pos - line_start;
+        
+        if line_start > 0 {
+            // Find the start of previous line
+            let prev_line_start = self.content[..line_start - 1]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
+            // Find the end of previous line
+            let prev_line_end = line_start - 1;
+            // Move to same column, or end of line if shorter
+            let prev_line_len = prev_line_end - prev_line_start;
+            self.cursor_pos = prev_line_start + col.min(prev_line_len);
+        }
+    }
+
+    /// Move cursor to next line, keeping column position if possible
+    pub fn move_down(&mut self) {
+        // Find the end of current line
+        let line_end = self.content[self.cursor_pos..]
+            .find('\n')
+            .map_or(self.content.len(), |i| self.cursor_pos + i);
+        // Calculate column position
+        let line_start = self.content[..self.cursor_pos]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        let col = self.cursor_pos - line_start;
+        
+        if line_end < self.content.len() {
+            // Find the end of next line
+            let next_line_end = self.content[line_end + 1..]
+                .find('\n')
+                .map_or(self.content.len(), |i| line_end + 1 + i);
+            // Move to same column, or end of line if shorter
+            let next_line_start = line_end + 1;
+            let next_line_len = next_line_end - next_line_start;
+            self.cursor_pos = next_line_start + col.min(next_line_len);
+        }
+    }
+
+    /// Check if cursor is on the first line
+    pub fn is_on_first_line(&self) -> bool {
+        !self.content[..self.cursor_pos].contains('\n')
+    }
+
+    /// Check if cursor is on the last line
+    pub fn is_on_last_line(&self) -> bool {
+        !self.content[self.cursor_pos..].contains('\n')
+    }
+
+    /// Move cursor to previous word boundary (like Alt-b in readline)
+    pub fn move_word_left(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        // Skip trailing whitespace
+        let mut pos = self.cursor_pos;
+        while pos > 0 {
+            let mut prev = pos - 1;
+            while prev > 0 && !self.content.is_char_boundary(prev) {
+                prev -= 1;
+            }
+            if self.content[prev..pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
+                pos = prev;
+            } else {
+                break;
+            }
+        }
+        // Now find the start of the word
+        while pos > 0 {
+            let mut prev = pos - 1;
+            while prev > 0 && !self.content.is_char_boundary(prev) {
+                prev -= 1;
+            }
+            if self.content[prev..pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
+                break;
+            }
+            pos = prev;
+        }
+        self.cursor_pos = pos;
+    }
+
+    /// Move cursor to next word boundary (like Alt-f in readline)
+    pub fn move_word_right(&mut self) {
+        if self.cursor_pos >= self.content.len() {
+            return;
+        }
+        // Skip current word
+        let mut pos = self.cursor_pos;
+        while pos < self.content.len() {
+            let mut next = pos + 1;
+            while next < self.content.len() && !self.content.is_char_boundary(next) {
+                next += 1;
+            }
+            if self.content[pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
+                break;
+            }
+            pos = next;
+        }
+        // Now skip whitespace to get to next word
+        while pos < self.content.len() {
+            let mut next = pos + 1;
+            while next < self.content.len() && !self.content.is_char_boundary(next) {
+                next += 1;
+            }
+            if self.content[pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
+                pos = next;
+            } else {
+                break;
+            }
+        }
+        self.cursor_pos = pos;
     }
 
     pub fn clear(&mut self) {
@@ -180,44 +328,145 @@ impl InputMock {
     }
 }
 
+/// A visual line with prefix info for cursor calculation
+#[derive(Debug)]
+struct VisualLine {
+    text: String,
+    prefix: &'static str,
+    content_start: usize, // Start index in original content
+    content_end: usize,   // End index in original content
+}
+
+impl InputMock {
+    /// Wrap text into visual lines based on available width
+    fn wrap_lines(&self, content_width: usize) -> Vec<VisualLine> {
+        let mut visual_lines = Vec::new();
+        let mut content_idx = 0;
+
+        for (line_num, line) in self.content.split('\n').enumerate() {
+            let prefix = if line_num == 0 { "❯ " } else { "│ " };
+            let prefix_width = prefix.width();
+            let available_width = content_width.saturating_sub(prefix_width);
+
+            if line.is_empty() {
+                // Empty line - still need a visual line for the prefix
+                visual_lines.push(VisualLine {
+                    text: String::new(),
+                    prefix,
+                    content_start: content_idx,
+                    content_end: content_idx,
+                });
+            } else {
+                // Wrap the line into chunks that fit
+                let mut line_idx = 0;
+                let mut is_first_chunk = true;
+
+                while line_idx < line.len() {
+                    // Find how many chars fit in available_width
+                    let chunk = Self::truncate_to_width(&line[line_idx..], available_width);
+                    let chunk_len = chunk.len();
+                    let chunk_prefix = if is_first_chunk { prefix } else { "│ " };
+
+                    visual_lines.push(VisualLine {
+                        text: chunk.to_string(),
+                        prefix: chunk_prefix,
+                        content_start: content_idx + line_idx,
+                        content_end: content_idx + line_idx + chunk_len,
+                    });
+
+                    line_idx += chunk_len;
+                    is_first_chunk = false;
+                }
+            }
+
+            // +1 for the '\n' character
+            content_idx += line.len() + 1;
+        }
+
+        visual_lines
+    }
+
+    /// Truncate a string to fit within `max_width` display columns
+    fn truncate_to_width(s: &str, max_width: usize) -> &str {
+        if s.width() <= max_width {
+            return s;
+        }
+
+        let mut width = 0;
+        let mut end = 0;
+
+        for (idx, c) in s.char_indices() {
+            let char_width = c.width().unwrap_or(0);
+            if width + char_width > max_width {
+                break;
+            }
+            width += char_width;
+            end = idx + c.len_utf8();
+        }
+
+        &s[..end]
+    }
+
+    /// Find which visual line contains the cursor position
+    fn find_cursor_visual_line(&self, visual_lines: &[VisualLine]) -> Option<(usize, usize, usize)> {
+        // Returns (line_index, column_in_visual_line, visual_line_start_in_content)
+        for (i, line) in visual_lines.iter().enumerate() {
+            if self.cursor_pos >= line.content_start && self.cursor_pos <= line.content_end {
+                let col_in_line = if self.cursor_pos > line.content_start {
+                    self.content[line.content_start..self.cursor_pos].width()
+                } else {
+                    0
+                };
+                return Some((i, col_in_line, line.content_start));
+            }
+        }
+        // Cursor at the end
+        if let Some(last) = visual_lines.last() {
+            let col = last.text.width();
+            return Some((visual_lines.len() - 1, col, last.content_start));
+        }
+        None
+    }
+}
+
 impl MockComponent for InputMock {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        // Calculate cursor position
-        let cursor_line = self.content[..self.cursor_pos.min(self.content.len())]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
+        // Calculate available width for content (accounting for borders)
+        let content_width = (area.width.saturating_sub(2) as usize).max(1); // -2 for borders
+
+        // Get visual lines with wrapping
+        let visual_lines = self.wrap_lines(content_width);
+
+        // Find cursor position in visual lines
+        let (cursor_visual_line, cursor_col, _) = self
+            .find_cursor_visual_line(&visual_lines)
+            .unwrap_or((0, 0, 0));
 
         // Calculate scroll offset to keep cursor visible
-        let visible_height = area.height.saturating_sub(2).max(1) as usize; // -2 for top/bottom borders, min 1
-                                                                            // Use matches('\n') to correctly count lines including trailing newlines
-        let total_lines = self.content.matches('\n').count() + 1;
-        let scroll_offset = if total_lines > visible_height {
+        let visible_height = area.height.saturating_sub(2).max(1) as usize; // -2 for top/bottom borders
+
+        let scroll_offset = if visual_lines.len() > visible_height {
             // Scroll so cursor is visible (prefer showing cursor near bottom)
-            cursor_line
+            cursor_visual_line
                 .saturating_sub(visible_height.saturating_sub(1))
-                .min(total_lines.saturating_sub(visible_height))
+                .min(visual_lines.len().saturating_sub(visible_height))
         } else {
             0
         };
 
-        // Render only visible lines
-        // Use split('\n') instead of lines() to handle trailing newlines correctly
-        let all_lines: Vec<Line> = self
-            .content
-            .split('\n')
-            .enumerate()
-            .map(|(i, line)| {
-                let prefix = if i == 0 { "❯ " } else { "│ " };
+        // Render visible lines
+        let all_lines: Vec<Line> = visual_lines
+            .iter()
+            .map(|vl| {
                 Line::from(vec![
                     Span::styled(
-                        prefix,
+                        vl.prefix,
                         Style::default()
                             .fg(colors::accent_user())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        line.to_string(),
+                        vl.text.clone(),
                         Style::default().fg(colors::text_primary()),
                     ),
                 ])
@@ -227,7 +476,7 @@ impl MockComponent for InputMock {
         // Slice visible lines based on scroll offset
         let start = scroll_offset.min(all_lines.len());
         let end = (scroll_offset + visible_height).min(all_lines.len());
-        let visible_lines: Vec<Line> = all_lines[start..end].to_vec();
+        let visible_line_slices: Vec<Line> = all_lines[start..end].to_vec();
 
         // Show placeholder only when content is truly empty
         let text = if self.content.is_empty() {
@@ -244,7 +493,7 @@ impl MockComponent for InputMock {
                 ),
             ])])
         } else {
-            tuirealm::ratatui::text::Text::from(visible_lines)
+            tuirealm::ratatui::text::Text::from(visible_line_slices)
         };
 
         let paragraph = Paragraph::new(text).block(
@@ -258,16 +507,15 @@ impl MockComponent for InputMock {
 
         frame.render_widget(paragraph, area);
 
-        // Set cursor position (adjusted for scroll)
-        let line_start = self.content[..self.cursor_pos.min(self.content.len())]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        let line_content = &self.content[line_start..self.cursor_pos.min(self.content.len())];
-        let col = line_content.width();
+        // Set cursor position
+        let cursor_x = area.x
+            + visual_lines
+                .get(cursor_visual_line)
+                .map_or(2, |l| l.prefix.width() as u16)
+            + cursor_col as u16;
+        let cursor_y = area.y + 1 + (cursor_visual_line - scroll_offset) as u16;
 
-        let cursor_x = area.x + 2 + col as u16; // 2 for "❯ " prefix
-        let cursor_y = area.y + 1 + (cursor_line - scroll_offset) as u16; // +1 for top border, adjusted for scroll
-
+        // Always show cursor when component is active (even if content is empty)
         if cursor_y < area.y + area.height {
             frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
         }
@@ -335,6 +583,13 @@ impl InputComponent {
     /// Set the current mode
     pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
+    }
+
+    /// Calculate the number of visual lines needed for the current content
+    /// given a specific content width (accounting for wrapping)
+    pub fn calculate_visual_lines(&self, content_width: usize) -> usize {
+        let visual_lines = self.component.wrap_lines(content_width.max(1));
+        visual_lines.len()
     }
 
     /// Set the history entries
@@ -539,18 +794,34 @@ impl InputComponent {
                 self.component.move_right();
                 None
             }
+            // Home or Ctrl+A: move to start of line
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Home,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                self.component.move_to_start();
+code: Key::Home, modifiers: KeyModifiers::NONE } | KeyEvent {
+code: Key::Char('a'), modifiers: KeyModifiers::CONTROL }) => {
+                self.component.move_to_start_of_line();
                 None
             }
+            // End or Ctrl+E: move to end of line
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::End,
-                modifiers: KeyModifiers::NONE,
+code: Key::End, modifiers: KeyModifiers::NONE } | KeyEvent {
+code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
+                self.component.move_to_end_of_line();
+                None
+            }
+            // Alt+B: move backward one word
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('b'),
+                modifiers: KeyModifiers::ALT,
             }) => {
-                self.component.move_to_end();
+                self.component.move_word_left();
+                None
+            }
+            // Alt+F: move forward one word
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('f'),
+                modifiers: KeyModifiers::ALT,
+            }) => {
+                self.component.move_word_right();
                 None
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -607,8 +878,35 @@ impl InputComponent {
                     ))
                 }
             }
+            // Up arrow: move up in text, or browse history if on first line
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Up | Key::PageUp,
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.component.is_on_first_line() {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_up();
+                    None
+                }
+            }
+            // Down arrow: move down in text, or browse history if on last line
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.component.is_on_last_line() {
+                    self.history_next();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_down();
+                    None
+                }
+            }
+            // PageUp/PageDown always scroll chat view
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::PageUp,
                 modifiers: KeyModifiers::NONE,
             })
             | tuirealm::Event::Mouse(MouseEvent {
@@ -616,7 +914,7 @@ impl InputComponent {
                 ..
             }) => Some(Msg::ScrollUp),
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Down | Key::PageDown,
+                code: Key::PageDown,
                 modifiers: KeyModifiers::NONE,
             })
             | tuirealm::Event::Mouse(MouseEvent {

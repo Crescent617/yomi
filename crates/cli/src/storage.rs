@@ -186,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_index() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = AppStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
 
         let working_dir = PathBuf::from("/path/to/project");
 
@@ -220,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn test_input_history() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = AppStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
 
         let working_dir = PathBuf::from("/path/to/project");
 
@@ -259,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn test_different_working_dirs() {
         let temp_dir = TempDir::new().unwrap();
-        let storage = AppStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
 
         let dir1 = PathBuf::from("/path/to/project1");
         let dir2 = PathBuf::from("/path/to/project2");

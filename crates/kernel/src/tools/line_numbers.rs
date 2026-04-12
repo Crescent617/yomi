@@ -105,13 +105,11 @@ mod tests {
         // Line numbers should be aligned
         assert!(
             result.contains(" 1\tline 1"),
-            "Expected ' 1' padding, got: {}",
-            result
+            "Expected ' 1' padding, got: {result}"
         );
         assert!(
             result.contains("10\tline 10"),
-            "Expected '10' no padding, got: {}",
-            result
+            "Expected '10' no padding, got: {result}"
         );
     }
 

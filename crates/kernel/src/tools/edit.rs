@@ -184,9 +184,9 @@ impl Tool for EditTool {
 
         // Perform the replacement
         let new_content = if replace_all {
-            content.replace(&actual_old_str, &new_str)
+            content.replace(&actual_old_str, new_str)
         } else {
-            content.replacen(&actual_old_str, &new_str, 1)
+            content.replacen(&actual_old_str, new_str, 1)
         };
 
         // Write the new content
