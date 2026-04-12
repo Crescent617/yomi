@@ -78,6 +78,8 @@ pub enum ModelEvent {
         prompt_tokens: u32,
         completion_tokens: u32,
         total_tokens: u32,
+        /// Context window size (max tokens)
+        context_window: u32,
     },
     /// Context compaction in progress
     Compacting {

@@ -35,13 +35,15 @@ impl AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center message] [right reserved]
+/// Layout: [mode] [center message] [right: ctx win usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
     mode: AppMode,
     center_message: Option<String>,
     message_timeout: Option<std::time::Instant>,
+    /// Current token usage and context window size (tokens, context_window)
+    ctx_usage: Option<(u32, u32)>,
 }
 
 impl StatusBar {
@@ -73,6 +75,11 @@ impl StatusBar {
     /// Tick handler for timeout checking
     pub fn tick(&mut self) {
         self.check_timeout();
+    }
+
+    /// Update context window usage (current tokens, max tokens)
+    pub fn set_ctx_usage(&mut self, tokens: u32, context_window: u32) {
+        self.ctx_usage = Some((tokens, context_window));
     }
 
     fn render_mode_section(&self) -> Span<'static> {
@@ -107,9 +114,26 @@ impl StatusBar {
         )
     }
 
-    fn render_right_section() -> Span<'static> {
-        // Reserved for future use (e.g., file info, cursor position)
-        Span::styled("", Style::default())
+    fn render_right_section(&self) -> Span<'static> {
+        // Display context window usage: "Context: 0.5%"
+        if let Some((tokens, context_window)) = self.ctx_usage {
+            let percentage = tokens as f32 / context_window as f32;
+            let cw_k = context_window / 1000;
+            let text = format!("{:>4.1}% ({}K)", percentage * 100.0, cw_k);
+
+            // Color based on usage level
+            let fg = if percentage >= 0.9 {
+                colors::accent_error() // Red for high usage
+            } else if percentage >= 0.7 {
+                colors::accent_warning() // Yellow for medium-high usage
+            } else {
+                colors::text_secondary() // Default for normal usage
+            };
+
+            Span::styled(text, Style::default().fg(fg))
+        } else {
+            Span::styled("", Style::default())
+        }
     }
 }
 
@@ -124,7 +148,7 @@ impl MockComponent for StatusBar {
             .constraints([
                 Constraint::Length(10), // Mode section (" NORMAL ")
                 Constraint::Min(10),    // Center message section
-                Constraint::Length(10), // Right reserved section
+                Constraint::Length(12),
             ])
             .split(area);
 
@@ -140,7 +164,7 @@ impl MockComponent for StatusBar {
         frame.render_widget(Paragraph::new(center_line), chunks[1]);
 
         // Render right section
-        let right_span = Self::render_right_section();
+        let right_span = self.render_right_section();
         let right_line = Line::from(vec![right_span]);
         frame.render_widget(Paragraph::new(right_line), chunks[2]);
     }
@@ -184,6 +208,19 @@ impl MockComponent for StatusBar {
             Attribute::Custom("clear_message") => {
                 self.center_message = None;
                 self.message_timeout = None;
+            }
+            Attribute::Custom("set_ctx_usage") => {
+                // Parse "tokens/context_window" format
+                if let AttrValue::String(value_str) = value {
+                    let parts: Vec<&str> = value_str.split('/').collect();
+                    if parts.len() == 2 {
+                        if let (Ok(tokens), Ok(context_window)) =
+                            (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                        {
+                            self.set_ctx_usage(tokens, context_window);
+                        }
+                    }
+                }
             }
             _ => {
                 self.props.set(attr, value);

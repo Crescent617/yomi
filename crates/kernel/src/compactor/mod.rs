@@ -16,9 +16,9 @@ use anyhow::Result;
 use futures::TryStreamExt;
 
 /// Default token threshold to trigger compaction (80% of context window)
-const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
+pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
 /// Default context window size
-const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
 /// Number of recent messages to keep during compaction
 const KEEP_RECENT_MESSAGES: usize = 6;
 /// Max tokens for summary generation

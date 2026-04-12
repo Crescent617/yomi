@@ -116,11 +116,32 @@ impl Model {
         Ok(())
     }
 
-    /// Display session messages in ChatView (for resumed sessions)
-    fn init_session_messages(&mut self) -> Result<()> {
+    /// Display session messages in ChatView and calculate initial token usage for StatusBar
+    fn init_session_messages(&mut self, context_window: u32) -> Result<()> {
         if self.session_messages.is_empty() {
+            // Still initialize StatusBar with 0 tokens
+            self.init_ctx_usage(0, context_window)?;
             return Ok(());
         }
+
+        // Calculate initial token usage from messages
+        let initial_tokens: u32 = self
+            .session_messages
+            .iter()
+            .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
+            .last()
+            .unwrap_or_else(|| {
+                // Estimate tokens from all messages if no usage data
+                use kernel::utils::tokens;
+                self.session_messages
+                    .iter()
+                    .map(|m| tokens::estimate_tokens(&m.text_content()))
+                    .sum::<usize>() as u32
+            });
+
+        // Initialize StatusBar with calculated tokens
+        self.init_ctx_usage(initial_tokens, context_window)?;
+
         // Pass messages via Payload to avoid serialization
         let messages: Vec<kernel::types::Message> = std::mem::take(&mut self.session_messages);
         self.app.attr(
@@ -134,6 +155,17 @@ impl Model {
     /// Initialize banner with real data (called once at startup)
     pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
         self.update_banner(working_dir, skills)
+    }
+
+    /// Initialize context window display in status bar
+    pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
+        let usage_str = format!("{}/{}", tokens, context_window);
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_ctx_usage"),
+            AttrValue::String(usage_str),
+        )?;
+        Ok(())
     }
 
     /// Update banner data in `ChatView`
@@ -422,6 +454,20 @@ impl Model {
                         Attribute::Custom("stop_compacting")
                     };
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
+                    self.redraw = true;
+                }
+                AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
+                    total_tokens,
+                    context_window,
+                    ..
+                }) => {
+                    // Update context window usage in status bar
+                    let usage_str = format!("{}/{}", total_tokens, context_window);
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("set_ctx_usage"),
+                        AttrValue::String(usage_str),
+                    )?;
                     self.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
@@ -800,6 +846,7 @@ pub async fn run_tui(
     skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
+    context_window: u32,
 ) -> Result<Vec<String>> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -813,8 +860,8 @@ pub async fn run_tui(
     model.init_banner(working_dir, skills)?;
     // Set input history after banner init
     model.init_input_history()?;
-    // Display session messages (for resumed sessions)
-    model.init_session_messages()?;
+    // Display session messages and init ctx usage (for resumed sessions)
+    model.init_session_messages(context_window)?;
     // run() consumes model and returns the new history entries
     model.run().await
 }

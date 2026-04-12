@@ -150,6 +150,9 @@ async fn main() -> Result<()> {
         ..Default::default()
     };
 
+    // Extract context_window before agent_config is moved
+    let context_window = agent_config.compactor.context_window;
+
     // Create or restore session
     let session_id = if args.resume {
         // Try to restore last session
@@ -271,6 +274,7 @@ async fn main() -> Result<()> {
         skill_names,
         input_history,
         session_messages,
+        context_window,
     )
     .await?;
 

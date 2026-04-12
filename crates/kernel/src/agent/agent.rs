@@ -1,6 +1,6 @@
 use super::message_buffer::MessageBuffer;
 use super::{AgentExecutionContext, AgentHandle, AgentShared, AgentState, CancelToken};
-use crate::compactor::Compactor;
+use crate::compactor::{self, Compactor};
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
 use crate::prompt::SystemPromptBuilder;
 use crate::providers::ModelStreamItem;
@@ -452,17 +452,23 @@ impl Agent {
                             })).await;
                         }
                         ModelStreamItem::TokenUsage { prompt_tokens, completion_tokens } => {
+                            // NOTE: this is right because each response's prompt_tokens will contain whole history
                             let total = prompt_tokens + completion_tokens;
                             self.pending_token_usage = Some(MessageTokenUsage {
                                 prompt_tokens,
                                 completion_tokens,
                                 total_tokens: total,
                             });
+                            // Get context window from compactor or use default
+                            let context_window = self.compactor.as_ref()
+                                .map(|c| c.context_window)
+                                .unwrap_or(compactor::DEFAULT_CONTEXT_WINDOW);
                             let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 prompt_tokens,
                                 completion_tokens,
                                 total_tokens: total,
+                                context_window,
                             })).await;
                         }
                     },
