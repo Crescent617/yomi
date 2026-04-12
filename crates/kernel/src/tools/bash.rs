@@ -1,9 +1,10 @@
 use crate::agent::AgentInput;
 use crate::tools::Tool;
 use crate::types::{AgentId, ToolOutput};
+use crate::utils::id::gen_base56_id;
+
 use anyhow::Result;
 use async_trait::async_trait;
-use rand::Rng;
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::Duration;
@@ -12,19 +13,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-
-const BASE56_CHARS: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
-
-/// Generate a random base56 ID of specified length
-fn gen_base56_id(len: usize) -> String {
-    let mut rng = rand::thread_rng();
-    (0..len)
-        .map(|_| {
-            let idx = rng.gen_range(0..BASE56_CHARS.len());
-            BASE56_CHARS[idx] as char
-        })
-        .collect()
-}
 
 #[derive(Clone)]
 pub struct BashToolCtx {

@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use crate::task::store::TaskStore;
-    use tempfile::TempDir;
+        use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_task_storage_create_and_get() {
@@ -124,13 +123,33 @@ mod tests {
         };
         storage.create_task("session1", input2).await.unwrap();
 
-        // Set up blocking relationship using TaskStore
-        let store = TaskStore::with_storage(storage);
-        store.block_task("session1", "1", "2").await.unwrap();
+        // Set up blocking relationship using storage directly
+        storage
+            .update_task(
+                "session1",
+                "1",
+                TaskUpdates {
+                    blocks: Some(vec!["2".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        storage
+            .update_task(
+                "session1",
+                "2",
+                TaskUpdates {
+                    blocked_by: Some(vec!["1".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
 
         // Verify the relationship
-        let task1 = store.get_task("session1", "1").await.unwrap().unwrap();
-        let task2 = store.get_task("session1", "2").await.unwrap().unwrap();
+        let task1 = storage.get_task("session1", "1").await.unwrap().unwrap();
+        let task2 = storage.get_task("session1", "2").await.unwrap().unwrap();
 
         assert!(task1.blocks.contains(&"2".to_string()));
         assert!(task2.blocked_by.contains(&"1".to_string()));
@@ -138,6 +157,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_task_store_events() {
+        use crate::task::store::TaskStore;
+
         let temp_dir = TempDir::new().unwrap();
         let store = TaskStore::new(temp_dir.path());
         let mut rx = store.subscribe();

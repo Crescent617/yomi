@@ -35,7 +35,7 @@ impl Tool for TaskCreateTool {
         TASK_CREATE_TOOL_NAME
     }
 
-    fn desc(&self) -> &str {
+    fn desc(&self) -> &'static str {
         "Create a new task in the task list"
     }
 
@@ -65,17 +65,22 @@ impl Tool for TaskCreateTool {
     }
 
     async fn exec(&self, args: Value) -> Result<ToolOutput> {
-        let subject = args["subject"].as_str()
+        let subject = args["subject"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("subject is required"))?
             .to_string();
 
-        let description = args["description"].as_str()
+        let description = args["description"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("description is required"))?
             .to_string();
 
         let active_form = args["activeForm"].as_str().map(|s| s.to_string());
         let metadata = args.get("metadata").and_then(|m| {
-            serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(m.clone()).ok()
+            serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(
+                m.clone(),
+            )
+            .ok()
         });
 
         let input = CreateTaskInput {
@@ -95,9 +100,6 @@ impl Tool for TaskCreateTool {
             },
         };
 
-        Ok(ToolOutput::new(
-            serde_json::to_string(&output)?,
-            "",
-        ))
+        Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
     }
 }

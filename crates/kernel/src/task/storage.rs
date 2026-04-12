@@ -1,4 +1,4 @@
-use crate::task::types::*;
+use crate::task::types::{CreateTaskInput, Task, TaskStatus};
 use anyhow::Result;
 use fs4::tokio::AsyncFileExt;
 use serde_json;
@@ -26,7 +26,8 @@ impl TaskStorage {
     }
 
     fn task_path(&self, task_list_id: &str, task_id: &str) -> PathBuf {
-        self.tasks_dir(task_list_id).join(format!("{}.json", sanitize_id(task_id)))
+        self.tasks_dir(task_list_id)
+            .join(format!("{}.json", sanitize_id(task_id)))
     }
 
     fn lock_path(&self, task_list_id: &str) -> PathBuf {
@@ -61,10 +62,9 @@ impl TaskStorage {
 
     async fn read_high_water_mark(&self, task_list_id: &str) -> u64 {
         let path = self.high_water_mark_path(task_list_id);
-        match fs::read_to_string(&path).await {
-            Ok(content) => content.trim().parse().unwrap_or(0),
-            Err(_) => 0,
-        }
+        fs::read_to_string(&path)
+            .await
+            .map_or(0, |content| content.trim().parse().unwrap_or(0))
     }
 
     async fn write_high_water_mark(&self, task_list_id: &str, value: u64) -> Result<()> {
@@ -132,26 +132,37 @@ impl TaskStorage {
         let path = self.task_path(task_list_id, task_id);
 
         match fs::read_to_string(&path).await {
-            Ok(content) => {
-                match serde_json::from_str::<Task>(&content) {
-                    Ok(task) => Ok(Some(task)),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse task {}: {}", task_id, e);
-                        Ok(None)
-                    }
+            Ok(content) => match serde_json::from_str::<Task>(&content) {
+                Ok(task) => Ok(Some(task)),
+                Err(e) => {
+                    tracing::warn!("Failed to parse task {}: {}", task_id, e);
+                    Ok(None)
                 }
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
 
-    pub async fn update_task(&self, task_list_id: &str, task_id: &str, updates: TaskUpdates) -> Result<Option<Task>> {
+    pub async fn update_task(
+        &self,
+        task_list_id: &str,
+        task_id: &str,
+        updates: TaskUpdates,
+    ) -> Result<Option<Task>> {
         let _lock = self.acquire_lock(task_list_id).await?;
+        self.update_task_inner(task_list_id, task_id, updates).await
+    }
 
-        let existing = match self.get_task(task_list_id, task_id).await? {
-            Some(task) => task,
-            None => return Ok(None),
+    /// Internal update logic without lock
+    async fn update_task_inner(
+        &self,
+        task_list_id: &str,
+        task_id: &str,
+        updates: TaskUpdates,
+    ) -> Result<Option<Task>> {
+        let Some(existing) = self.get_task(task_list_id, task_id).await? else {
+            return Ok(None);
         };
 
         let mut updated = existing;
@@ -208,24 +219,38 @@ impl TaskStorage {
         let path = self.task_path(task_list_id, task_id);
 
         match fs::remove_file(&path).await {
-            Ok(_) => {
+            Ok(()) => {
+                // Clean up references without acquiring lock again
+                // Note: list_tasks doesn't acquire lock, so it's safe to call here
                 let all_tasks = self.list_tasks(task_list_id).await?;
                 for task in all_tasks {
-                    let new_blocks: Vec<_> = task.blocks.iter()
+                    let new_blocks: Vec<_> = task
+                        .blocks
+                        .iter()
                         .filter(|id| *id != task_id)
                         .cloned()
                         .collect();
-                    let new_blocked_by: Vec<_> = task.blocked_by.iter()
+                    let new_blocked_by: Vec<_> = task
+                        .blocked_by
+                        .iter()
                         .filter(|id| *id != task_id)
                         .cloned()
                         .collect();
 
-                    if new_blocks.len() != task.blocks.len() || new_blocked_by.len() != task.blocked_by.len() {
-                        let _ = self.update_task(task_list_id, &task.id, TaskUpdates {
-                            blocks: Some(new_blocks),
-                            blocked_by: Some(new_blocked_by),
-                            ..Default::default()
-                        }).await;
+                    if new_blocks.len() != task.blocks.len()
+                        || new_blocked_by.len() != task.blocked_by.len()
+                    {
+                        let _ = self
+                            .update_task_inner(
+                                task_list_id,
+                                &task.id,
+                                TaskUpdates {
+                                    blocks: Some(new_blocks),
+                                    blocked_by: Some(new_blocked_by),
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
                     }
                 }
                 Ok(true)
@@ -239,9 +264,8 @@ impl TaskStorage {
         let dir = self.tasks_dir(task_list_id);
         let mut tasks = Vec::new();
 
-        let mut entries = match fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(_) => return Ok(tasks),
+        let Ok(mut entries) = fs::read_dir(&dir).await else {
+            return Ok(tasks);
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -272,14 +296,14 @@ impl TaskStorage {
         if current_highest > 0 {
             let existing_mark = self.read_high_water_mark(task_list_id).await;
             if current_highest > existing_mark {
-                self.write_high_water_mark(task_list_id, current_highest).await?;
+                self.write_high_water_mark(task_list_id, current_highest)
+                    .await?;
             }
         }
 
         let dir = self.tasks_dir(task_list_id);
-        let mut entries = match fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(_) => return Ok(()),
+        let Ok(mut entries) = fs::read_dir(&dir).await else {
+            return Ok(());
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -313,13 +337,18 @@ struct LockGuard {
 }
 
 impl Drop for LockGuard {
-    fn drop(&mut self) {
-    }
+    fn drop(&mut self) {}
 }
 
 fn sanitize_id(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

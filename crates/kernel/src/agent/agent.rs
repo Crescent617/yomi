@@ -115,7 +115,6 @@ impl Agent {
                         input_tx_for_subagent,
                         skills,
                         storage.clone(),
-                        &working_dir,
                     )));
             }
 
@@ -463,8 +462,7 @@ impl Agent {
                             });
                             // Get context window from compactor or use default
                             let context_window = self.compactor.as_ref()
-                                .map(|c| c.context_window)
-                                .unwrap_or(compactor::DEFAULT_CONTEXT_WINDOW);
+                                .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
                             let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 prompt_tokens,

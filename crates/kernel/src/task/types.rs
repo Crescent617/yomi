@@ -4,29 +4,25 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TaskStatus {
+    #[default]
     Pending,
     InProgress,
     Completed,
 }
 
-impl Default for TaskStatus {
-    fn default() -> Self {
-        TaskStatus::Pending
-    }
-}
-
 impl std::fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskStatus::Pending => write!(f, "pending"),
-            TaskStatus::InProgress => write!(f, "in_progress"),
-            TaskStatus::Completed => write!(f, "completed"),
+            Self::Pending => write!(f, "pending"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Completed => write!(f, "completed"),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
     pub subject: String,
@@ -49,7 +45,11 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(id: impl Into<String>, subject: impl Into<String>, description: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        subject: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: id.into(),

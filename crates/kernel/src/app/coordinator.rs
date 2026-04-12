@@ -36,7 +36,7 @@ impl Coordinator {
     }
 
     pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
-        let id = self.storage.create_session(&config.project_path).await?;
+        let id = self.storage.create_session().await?;
         let mut session = Session::new(
             id.clone(),
             config,

@@ -7,14 +7,12 @@ use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 #[async_trait]
 pub trait Storage: Send + Sync {
-    async fn create_session(&self, project_path: &Path) -> Result<SessionId>;
+    async fn create_session(&self) -> Result<SessionId>;
     async fn fork_session(&self, parent_id: &SessionId) -> Result<SessionId>;
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>>;
-    async fn list_sessions(&self, project_path: &Path) -> Result<Vec<SessionRecord>>;
     async fn delete_session(&self, id: &SessionId) -> Result<()>;
     async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
     async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;

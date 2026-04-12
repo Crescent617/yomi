@@ -42,7 +42,7 @@ pub struct StatusBar {
     mode: AppMode,
     center_message: Option<String>,
     message_timeout: Option<std::time::Instant>,
-    /// Current token usage and context window size (tokens, context_window)
+    /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
 }
 
@@ -78,7 +78,7 @@ impl StatusBar {
     }
 
     /// Update context window usage (current tokens, max tokens)
-    pub fn set_ctx_usage(&mut self, tokens: u32, context_window: u32) {
+    pub const fn set_ctx_usage(&mut self, tokens: u32, context_window: u32) {
         self.ctx_usage = Some((tokens, context_window));
     }
 

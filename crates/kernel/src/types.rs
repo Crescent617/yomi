@@ -401,9 +401,6 @@ pub struct SessionRecord {
     pub id: SessionId,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub project_path: std::path::PathBuf,
-    pub message_count: usize,
-    pub parent_session_id: Option<SessionId>,
 }
 
 /// Token usage tracking
@@ -428,7 +425,6 @@ impl TokenUsage {
 pub enum SessionEvent {
     Created {
         session_id: SessionId,
-        project_path: std::path::PathBuf,
         created_at: DateTime<Utc>,
     },
     MessageAdded {
@@ -446,10 +442,9 @@ pub enum SessionEvent {
 }
 
 impl SessionEvent {
-    pub fn created(session_id: SessionId, project_path: std::path::PathBuf) -> Self {
+    pub fn created(session_id: SessionId) -> Self {
         Self::Created {
             session_id,
-            project_path,
             created_at: Utc::now(),
         }
     }

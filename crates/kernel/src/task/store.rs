@@ -1,5 +1,5 @@
 use crate::task::storage::{TaskStorage, TaskUpdates};
-use crate::task::types::*;
+use crate::task::types::{CreateTaskInput, Task};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,10 +8,22 @@ use tokio::sync::{broadcast, RwLock};
 
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
-    Created { task_list_id: String, task: Task },
-    Updated { task_list_id: String, task: Task, updated_fields: Vec<String> },
-    Deleted { task_list_id: String, task_id: String },
-    Reset { task_list_id: String },
+    Created {
+        task_list_id: String,
+        task: Task,
+    },
+    Updated {
+        task_list_id: String,
+        task: Task,
+        updated_fields: Vec<String>,
+    },
+    Deleted {
+        task_list_id: String,
+        task_id: String,
+    },
+    Reset {
+        task_list_id: String,
+    },
 }
 
 pub struct TaskStore {
@@ -42,9 +54,12 @@ impl TaskStore {
     pub async fn create_task(&self, task_list_id: &str, input: CreateTaskInput) -> Result<Task> {
         let task = self.storage.create_task(task_list_id, input).await?;
 
-        let mut cache = self.cache.write().await;
-        let tasks = cache.entry(task_list_id.to_string()).or_default();
-        tasks.push(task.clone());
+        self.cache
+            .write()
+            .await
+            .entry(task_list_id.to_string())
+            .or_default()
+            .push(task.clone());
 
         let _ = self.event_tx.send(TaskEvent::Created {
             task_list_id: task_list_id.to_string(),
@@ -66,21 +81,28 @@ impl TaskStore {
         self.storage.get_task(task_list_id, task_id).await
     }
 
-    pub async fn update_task(&self, task_list_id: &str, task_id: &str, updates: TaskUpdates) -> Result<Option<(Task, Vec<String>)>> {
-        let existing = self.storage.get_task(task_list_id, task_id).await?;
-        let existing = match existing {
-            Some(t) => t,
-            None => return Ok(None),
+    pub async fn update_task(
+        &self,
+        task_list_id: &str,
+        task_id: &str,
+        updates: TaskUpdates,
+    ) -> Result<Option<(Task, Vec<String>)>> {
+        let Some(existing) = self.storage.get_task(task_list_id, task_id).await? else {
+            return Ok(None);
         };
 
         let mut updated_fields = Vec::new();
         if updates.subject.is_some() && updates.subject.as_ref() != Some(&existing.subject) {
             updated_fields.push("subject".to_string());
         }
-        if updates.description.is_some() && updates.description.as_ref() != Some(&existing.description) {
+        if updates.description.is_some()
+            && updates.description.as_ref() != Some(&existing.description)
+        {
             updated_fields.push("description".to_string());
         }
-        if updates.active_form.is_some() && updates.active_form.as_ref() != existing.active_form.as_ref() {
+        if updates.active_form.is_some()
+            && updates.active_form.as_ref() != existing.active_form.as_ref()
+        {
             updated_fields.push("active_form".to_string());
         }
         if updates.status.is_some() && updates.status.as_ref() != Some(&existing.status) {
@@ -92,7 +114,8 @@ impl TaskStore {
         if updates.blocks.is_some() && updates.blocks.as_ref() != Some(&existing.blocks) {
             updated_fields.push("blocks".to_string());
         }
-        if updates.blocked_by.is_some() && updates.blocked_by.as_ref() != Some(&existing.blocked_by) {
+        if updates.blocked_by.is_some() && updates.blocked_by.as_ref() != Some(&existing.blocked_by)
+        {
             updated_fields.push("blocked_by".to_string());
         }
         if updates.metadata.is_some() {
@@ -103,13 +126,18 @@ impl TaskStore {
             return Ok(Some((existing, Vec::new())));
         }
 
-        let task = self.storage.update_task(task_list_id, task_id, updates).await?;
+        let task = self
+            .storage
+            .update_task(task_list_id, task_id, updates)
+            .await?;
 
         if let Some(ref task) = task {
-            let mut cache = self.cache.write().await;
-            if let Some(tasks) = cache.get_mut(task_list_id) {
-                if let Some(idx) = tasks.iter().position(|t| t.id == task_id) {
-                    tasks[idx] = task.clone();
+            {
+                let mut cache = self.cache.write().await;
+                if let Some(tasks) = cache.get_mut(task_list_id) {
+                    if let Some(idx) = tasks.iter().position(|t| t.id == task_id) {
+                        tasks[idx] = task.clone();
+                    }
                 }
             }
 
@@ -127,9 +155,11 @@ impl TaskStore {
         let deleted = self.storage.delete_task(task_list_id, task_id).await?;
 
         if deleted {
-            let mut cache = self.cache.write().await;
-            if let Some(tasks) = cache.get_mut(task_list_id) {
-                tasks.retain(|t| t.id != task_id);
+            {
+                let mut cache = self.cache.write().await;
+                if let Some(tasks) = cache.get_mut(task_list_id) {
+                    tasks.retain(|t| t.id != task_id);
+                }
             }
 
             let _ = self.event_tx.send(TaskEvent::Deleted {
@@ -150,45 +180,14 @@ impl TaskStore {
 
         let tasks = self.storage.list_tasks(task_list_id).await?;
 
-        let mut cache = self.cache.write().await;
-        cache.insert(task_list_id.to_string(), tasks.clone());
+        {
+            let mut cache = self.cache.write().await;
+            cache.insert(task_list_id.to_string(), tasks.clone());
+        }
 
         Ok(tasks)
     }
 
-    pub async fn block_task(&self, task_list_id: &str, from_task_id: &str, to_task_id: &str) -> Result<bool> {
-        let (from_task, to_task) = tokio::try_join!(
-            self.storage.get_task(task_list_id, from_task_id),
-            self.storage.get_task(task_list_id, to_task_id),
-        )?;
-
-        if from_task.is_none() || to_task.is_none() {
-            return Ok(false);
-        }
-
-        let from_task = from_task.unwrap();
-        let to_task = to_task.unwrap();
-
-        if !from_task.blocks.contains(&to_task_id.to_string()) {
-            let mut blocks = from_task.blocks.clone();
-            blocks.push(to_task_id.to_string());
-            self.storage.update_task(task_list_id, from_task_id, TaskUpdates {
-                blocks: Some(blocks),
-                ..Default::default()
-            }).await?;
-        }
-
-        if !to_task.blocked_by.contains(&from_task_id.to_string()) {
-            let mut blocked_by = to_task.blocked_by.clone();
-            blocked_by.push(from_task_id.to_string());
-            self.storage.update_task(task_list_id, to_task_id, TaskUpdates {
-                blocked_by: Some(blocked_by),
-                ..Default::default()
-            }).await?;
-        }
-
-        Ok(true)
-    }
 }
 
 pub type SharedTaskStore = Arc<TaskStore>;

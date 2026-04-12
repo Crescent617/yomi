@@ -2,7 +2,7 @@ use crate::storage::Storage;
 use crate::types::{Message, SessionEvent, SessionEventRecord, SessionId, SessionRecord};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -86,53 +86,38 @@ impl FsStorage {
     /// Rebuild session record from events
     fn rebuild_session(events: &[SessionEventRecord]) -> Option<SessionRecord> {
         let mut session: Option<SessionRecord> = None;
-        let mut message_count = 0;
 
         for record in events {
             match &record.event {
                 SessionEvent::Created {
                     session_id,
-                    project_path,
                     created_at,
                 } => {
                     session = Some(SessionRecord {
                         id: session_id.clone(),
-                        project_path: project_path.clone(),
                         created_at: *created_at,
                         updated_at: *created_at,
-                        message_count: 0,
-                        parent_session_id: None,
                     });
                 }
-                SessionEvent::MessageAdded { .. } => {
-                    message_count += 1;
-                }
-                SessionEvent::Forked {
-                    new_session_id,
-                    timestamp,
-                    ..
-                } => {
+                SessionEvent::MessageAdded { timestamp, .. }
+                | SessionEvent::Forked { timestamp, .. }
+                | SessionEvent::Completed { completed_at: timestamp } => {
                     if let Some(ref mut s) = session {
-                        s.parent_session_id = Some(new_session_id.clone());
                         s.updated_at = *timestamp;
                     }
                 }
-                SessionEvent::Completed { .. } => {}
             }
         }
 
-        session.map(|mut s| {
-            s.message_count = message_count;
-            s
-        })
+        session
     }
 }
 
 #[async_trait]
 impl Storage for FsStorage {
-    async fn create_session(&self, project_path: &Path) -> Result<SessionId> {
+    async fn create_session(&self) -> Result<SessionId> {
         let session_id = SessionId::new();
-        let event = SessionEvent::created(session_id.clone(), project_path.to_path_buf());
+        let event = SessionEvent::created(session_id.clone());
         self.append_event(&session_id, event).await?;
         Ok(session_id)
     }
@@ -170,35 +155,6 @@ impl Storage for FsStorage {
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>> {
         let events = self.read_events(id).await?;
         Ok(Self::rebuild_session(&events))
-    }
-
-    async fn list_sessions(&self, project_path: &Path) -> Result<Vec<SessionRecord>> {
-        let mut sessions = Vec::new();
-        let mut entries = fs::read_dir(&self.base_dir).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-
-            // Parse session_id from filename
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                let session_id = SessionId(stem.to_string());
-                let events = self.read_events(&session_id).await?;
-
-                if let Some(session) = Self::rebuild_session(&events) {
-                    // Only return sessions matching project path
-                    if session.project_path == project_path {
-                        sessions.push(session);
-                    }
-                }
-            }
-        }
-
-        // Sort by created time (newest first)
-        sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(sessions)
     }
 
     async fn delete_session(&self, id: &SessionId) -> Result<()> {

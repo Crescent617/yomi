@@ -7,7 +7,6 @@ use crate::types::{AgentId, ContentBlock, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -21,8 +20,6 @@ pub struct SubAgentTool {
     skills: Vec<Arc<Skill>>,
     /// Storage for transcript recording (optional)
     storage: Option<Arc<dyn Storage>>,
-    /// Working directory for creating session
-    working_dir: std::path::PathBuf,
 }
 
 impl SubAgentTool {
@@ -32,7 +29,6 @@ impl SubAgentTool {
         parent_input_tx: mpsc::Sender<AgentInput>,
         skills: Vec<Arc<Skill>>,
         storage: Option<Arc<dyn Storage>>,
-        working_dir: &Path,
     ) -> Self {
         Self {
             parent_id,
@@ -40,7 +36,6 @@ impl SubAgentTool {
             parent_input_tx,
             skills,
             storage,
-            working_dir: working_dir.to_path_buf(),
         }
     }
 
@@ -48,7 +43,7 @@ impl SubAgentTool {
     /// Based on Claude Code's approach: system prompt defines role, user message provides task
     fn build_system_prompt(&self) -> String {
         format!(
-            r#"You are a sub-agent spawned by parent agent {parent_id}.
+            r"You are a sub-agent spawned by parent agent {parent_id}.
 
 ## Your Role
 You are a specialist agent handling a specific task delegated by the parent agent. You have zero context about the parent conversation - rely on the user message for complete task information.
@@ -66,7 +61,7 @@ Provide your response in a structured format:
 1. **Summary**: Brief overview of what you did
 2. **Details**: Specific findings, changes, or results
 3. **Recommendations**: Any follow-up actions needed (if applicable)
-"#,
+",
             parent_id = self.parent_id,
         )
     }
@@ -81,11 +76,12 @@ Provide your response in a structured format:
 
         while let Some(event) = event_rx.recv().await {
             match event {
-                Event::Model(ModelEvent::Chunk { content, .. }) => {
+                Event::Model(ModelEvent::Chunk {
+                    content: ContentChunk::Text(text),
+                    ..
+                }) => {
                     // Only capture text output to avoid bloating parent context
-                    if let ContentChunk::Text(text) = content {
-                        output.push_str(&text);
-                    }
+                    output.push_str(&text);
                 }
                 Event::Agent(AgentEvent::Completed { .. }) => {
                     return SubAgentStatus::Completed;
@@ -196,9 +192,13 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
 
         // Create session for transcript recording if storage is available
         let session_id = if let Some(storage) = &self.storage {
-            match storage.create_session(&self.working_dir).await {
+            match storage.create_session().await {
                 Ok(sid) => {
-                    tracing::debug!("Created sub-agent session: {} for agent {}", sid.0, self.parent_id);
+                    tracing::debug!(
+                        "Created sub-agent session: {} for agent {}",
+                        sid.0,
+                        self.parent_id
+                    );
                     Some(sid.0)
                 }
                 Err(e) => {
@@ -238,12 +238,13 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 let desc = description.to_string();
                 tokio::spawn(async move {
                     let mut output = String::new();
-                    let status = SubAgentTool::collect_subagent_output(&mut event_rx, &mut output).await;
+                    let status = Self::collect_subagent_output(&mut event_rx, &mut output).await;
 
                     // Append error/cancelled markers to output
                     match &status {
                         SubAgentStatus::Failed(error) => {
-                            output.push_str(&format!("\n\n[Sub-agent failed: {error}]"));
+                            use std::fmt::Write;
+                            let _ = write!(output, "\n\n[Sub-agent failed: {error}]");
                         }
                         SubAgentStatus::Cancelled => {
                             output.push_str("\n\n[Sub-agent was cancelled]");
@@ -284,7 +285,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             SubAgentMode::Sync => {
                 // Collect output from sub-agent
                 let mut output = String::new();
-                let status = SubAgentTool::collect_subagent_output(&mut event_rx, &mut output).await;
+                let status = Self::collect_subagent_output(&mut event_rx, &mut output).await;
 
                 match status {
                     SubAgentStatus::Completed => Ok(ToolOutput {

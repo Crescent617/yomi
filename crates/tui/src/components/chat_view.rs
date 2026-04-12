@@ -1138,17 +1138,15 @@ impl ChatViewComponent {
                 kernel::types::Role::Assistant => {
                     let content = msg.text_content();
                     let thinking = msg.thinking_content();
-                    self.component.add_assistant_message(content, thinking, None);
+                    self.component
+                        .add_assistant_message(content, thinking, None);
 
                     // Handle tool calls
                     if let Some(ref tool_calls) = msg.tool_calls {
                         for call in tool_calls {
                             let args = serde_json::to_string(&call.arguments).ok();
-                            self.component.start_tool(
-                                call.id.clone(),
-                                call.name.clone(),
-                                args,
-                            );
+                            self.component
+                                .start_tool(call.id.clone(), call.name.clone(), args);
                         }
                     }
                 }
@@ -1157,7 +1155,8 @@ impl ChatViewComponent {
                         let output = msg.text_content();
                         // For tool messages, we need to find the corresponding tool in history
                         // and mark it as completed. Since we don't have elapsed_ms, use 0.
-                        self.component.complete_tool(tool_call_id.clone(), output, 0);
+                        self.component
+                            .complete_tool(tool_call_id.clone(), output, 0);
                     }
                 }
                 _ => {}

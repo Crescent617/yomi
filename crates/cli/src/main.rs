@@ -13,8 +13,8 @@ use kernel::{
 };
 use kernel::{AnthropicProvider, EditTool, OpenAIProvider};
 use kernel::{Coordinator, SessionConfig};
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tui::run_tui;
 
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
                 {
                     Ok(_) => session_id,
                     Err(e) => {
-                        println!("Failed to restore session: {}", e);
+                        println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
                         let session_config = SessionConfig {
                             agent: agent_config,

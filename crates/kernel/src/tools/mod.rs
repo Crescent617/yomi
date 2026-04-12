@@ -103,11 +103,7 @@ pub fn is_yolo_mode() -> bool {
 use crate::task::{SharedTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool};
 
 impl ToolRegistry {
-    pub fn register_task_tools<F>(
-        &self,
-        store: SharedTaskStore,
-        get_session_id: F,
-    )
+    pub fn register_task_tools<F>(&self, store: SharedTaskStore, get_session_id: F)
     where
         F: Fn() -> String + Send + Sync + Clone + 'static,
     {
@@ -123,9 +119,6 @@ impl ToolRegistry {
             store.clone(),
             get_session_id.clone(),
         )));
-        self.register(Arc::new(TaskGetTool::new(
-            store,
-            get_session_id,
-        )));
+        self.register(Arc::new(TaskGetTool::new(store, get_session_id)));
     }
 }

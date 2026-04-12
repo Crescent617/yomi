@@ -1,6 +1,6 @@
 use crate::task::storage::TaskUpdates;
 use crate::task::store::SharedTaskStore;
-use crate::task::types::{TaskStatus, UpdateTaskOutput, StatusChange};
+use crate::task::types::{StatusChange, TaskStatus, UpdateTaskOutput};
 use crate::tools::Tool;
 use crate::types::ToolOutput;
 use anyhow::Result;
@@ -28,6 +28,60 @@ impl TaskUpdateTool {
     fn get_task_list_id(&self) -> String {
         (self.get_session_id)()
     }
+
+    /// Add a dependency relationship: this_task blocks target_task
+    async fn add_reverse_blocked_by(
+        &self,
+        task_list_id: &str,
+        this_task_id: &str,
+        target_task_id: &str,
+    ) -> Result<()> {
+        let target = self.store.get_task(task_list_id, target_task_id).await?;
+        if let Some(target) = target {
+            if !target.blocked_by.contains(&this_task_id.to_string()) {
+                let mut new_blocked_by = target.blocked_by.clone();
+                new_blocked_by.push(this_task_id.to_string());
+                self.store
+                    .update_task(
+                        task_list_id,
+                        target_task_id,
+                        TaskUpdates {
+                            blocked_by: Some(new_blocked_by),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Add a dependency relationship: blocker_task blocks this_task
+    async fn add_reverse_blocks(
+        &self,
+        task_list_id: &str,
+        this_task_id: &str,
+        blocker_task_id: &str,
+    ) -> Result<()> {
+        let blocker = self.store.get_task(task_list_id, blocker_task_id).await?;
+        if let Some(blocker) = blocker {
+            if !blocker.blocks.contains(&this_task_id.to_string()) {
+                let mut new_blocks = blocker.blocks.clone();
+                new_blocks.push(this_task_id.to_string());
+                self.store
+                    .update_task(
+                        task_list_id,
+                        blocker_task_id,
+                        TaskUpdates {
+                            blocks: Some(new_blocks),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -36,7 +90,7 @@ impl Tool for TaskUpdateTool {
         TASK_UPDATE_TOOL_NAME
     }
 
-    fn desc(&self) -> &str {
+    fn desc(&self) -> &'static str {
         "Update a task in the task list"
     }
 
@@ -89,7 +143,8 @@ impl Tool for TaskUpdateTool {
     }
 
     async fn exec(&self, args: Value) -> Result<ToolOutput> {
-        let task_id = args["taskId"].as_str()
+        let task_id = args["taskId"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?
             .to_string();
 
@@ -104,100 +159,155 @@ impl Tool for TaskUpdateTool {
                 error: Some("Task not found".to_string()),
                 status_change: None,
             };
-            return Ok(ToolOutput::new(
-                serde_json::to_string(&output)?,
-                "",
-            ));
+            return Ok(ToolOutput::new(serde_json::to_string(&output)?, ""));
         }
         let existing = existing.unwrap();
 
-        if let Some("deleted") = args["status"].as_str() {
+        if args["status"].as_str() == Some("deleted") {
             let deleted = self.store.delete_task(&task_list_id, &task_id).await?;
             let output = UpdateTaskOutput {
                 success: deleted,
                 task_id,
-                updated_fields: if deleted { vec!["deleted".to_string()] } else { Vec::new() },
-                error: if deleted { None } else { Some("Failed to delete task".to_string()) },
+                updated_fields: if deleted {
+                    vec!["deleted".to_string()]
+                } else {
+                    Vec::new()
+                },
+                error: if deleted {
+                    None
+                } else {
+                    Some("Failed to delete task".to_string())
+                },
                 status_change: if deleted {
-                    Some(StatusChange { from: existing.status.to_string(), to: "deleted".to_string() })
+                    Some(StatusChange {
+                        from: existing.status.to_string(),
+                        to: "deleted".to_string(),
+                    })
                 } else {
                     None
                 },
             };
-            return Ok(ToolOutput::new(
-                serde_json::to_string(&output)?,
-                "",
-            ));
+            return Ok(ToolOutput::new(serde_json::to_string(&output)?, ""));
         }
 
+        // Build updates - including blocks/blocked_by changes
         let mut updates = TaskUpdates::default();
+        let mut updated_fields = Vec::new();
 
         if let Some(subject) = args["subject"].as_str() {
-            updates.subject = Some(subject.to_string());
+            if subject != existing.subject {
+                updates.subject = Some(subject.to_string());
+                updated_fields.push("subject");
+            }
         }
         if let Some(description) = args["description"].as_str() {
-            updates.description = Some(description.to_string());
+            if description != existing.description {
+                updates.description = Some(description.to_string());
+                updated_fields.push("description");
+            }
         }
         if let Some(active_form) = args["activeForm"].as_str() {
-            updates.active_form = Some(active_form.to_string());
+            if Some(active_form.to_string()) != existing.active_form {
+                updates.active_form = Some(active_form.to_string());
+                updated_fields.push("active_form");
+            }
         }
         if let Some(owner) = args["owner"].as_str() {
-            updates.owner = Some(owner.to_string());
+            if Some(owner.to_string()) != existing.owner {
+                updates.owner = Some(owner.to_string());
+                updated_fields.push("owner");
+            }
         }
         if let Some(status_str) = args["status"].as_str() {
             let status = match status_str {
                 "pending" => TaskStatus::Pending,
                 "in_progress" => TaskStatus::InProgress,
                 "completed" => TaskStatus::Completed,
-                _ => return Err(anyhow::anyhow!("Invalid status: {}", status_str)),
+                _ => return Err(anyhow::anyhow!("Invalid status: {status_str}")),
             };
-            updates.status = Some(status);
+            if status != existing.status {
+                updates.status = Some(status);
+                updated_fields.push("status");
+            }
         }
         if let Some(metadata) = args.get("metadata").and_then(|m| {
-            serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(m.clone()).ok()
+            serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(
+                m.clone(),
+            )
+            .ok()
         }) {
             updates.metadata = Some(metadata);
+            updated_fields.push("metadata");
         }
 
-        let result = self.store.update_task(&task_list_id, &task_id, updates).await?;
+        // Handle addBlocks - merge into existing blocks
+        if let Some(add_blocks) = args["addBlocks"].as_array() {
+            let mut new_blocks = existing.blocks.clone();
+            let block_ids: Vec<String> = add_blocks
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
 
-        if let Some((task, mut fields)) = result {
-            if let Some(add_blocks) = args["addBlocks"].as_array() {
-                let block_ids: Vec<String> = add_blocks.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-
-                for block_id in &block_ids {
-                    if !existing.blocks.contains(block_id) {
-                        self.store.block_task(&task_list_id, &task_id, block_id).await?;
-                    }
+            for block_id in block_ids {
+                if !new_blocks.contains(&block_id) {
+                    new_blocks.push(block_id);
                 }
-                if !block_ids.is_empty() && !fields.contains(&"blocks".to_string()) {
-                    fields.push("blocks".to_string());
+            }
+
+            if new_blocks.len() != existing.blocks.len() {
+                updates.blocks = Some(new_blocks);
+                updated_fields.push("blocks");
+            }
+        }
+
+        // Handle addBlockedBy - merge into existing blocked_by
+        if let Some(add_blocked_by) = args["addBlockedBy"].as_array() {
+            let mut new_blocked_by = existing.blocked_by.clone();
+            let blocker_ids: Vec<String> = add_blocked_by
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            for blocker_id in blocker_ids {
+                if !new_blocked_by.contains(&blocker_id) {
+                    new_blocked_by.push(blocker_id);
+                }
+            }
+
+            if new_blocked_by.len() != existing.blocked_by.len() {
+                updates.blocked_by = Some(new_blocked_by);
+                updated_fields.push("blocked_by");
+            }
+        }
+
+        // Perform single atomic update
+        let result = self
+            .store
+            .update_task(&task_list_id, &task_id, updates)
+            .await?;
+
+        if let Some((task, _)) = result {
+            // Update reverse relationships (the other side of the dependency)
+            if let Some(add_blocks) = args["addBlocks"].as_array() {
+                for block_id in add_blocks.iter().filter_map(|v| v.as_str()) {
+                    self.add_reverse_blocked_by(&task_list_id, &task_id, block_id)
+                        .await?;
                 }
             }
 
             if let Some(add_blocked_by) = args["addBlockedBy"].as_array() {
-                let blocker_ids: Vec<String> = add_blocked_by.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-
-                for blocker_id in &blocker_ids {
-                    if !existing.blocked_by.contains(blocker_id) {
-                        self.store.block_task(&task_list_id, blocker_id, &task_id).await?;
-                    }
-                }
-                if !blocker_ids.is_empty() && !fields.contains(&"blockedBy".to_string()) {
-                    fields.push("blockedBy".to_string());
+                for blocker_id in add_blocked_by.iter().filter_map(|v| v.as_str()) {
+                    self.add_reverse_blocks(&task_list_id, &task_id, blocker_id)
+                        .await?;
                 }
             }
 
             let output = UpdateTaskOutput {
                 success: true,
                 task_id,
-                updated_fields: fields.clone(),
+                updated_fields: updated_fields.into_iter().map(|s| s.to_string()).collect(),
                 error: None,
-                status_change: if fields.contains(&"status".to_string()) {
+                status_change: if args["status"].as_str().is_some() {
                     Some(StatusChange {
                         from: existing.status.to_string(),
                         to: task.status.to_string(),
@@ -207,10 +317,7 @@ impl Tool for TaskUpdateTool {
                 },
             };
 
-            Ok(ToolOutput::new(
-                serde_json::to_string(&output)?,
-                "",
-            ))
+            Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
         } else {
             let output = UpdateTaskOutput {
                 success: false,
@@ -219,10 +326,7 @@ impl Tool for TaskUpdateTool {
                 error: Some("Task not found".to_string()),
                 status_change: None,
             };
-            Ok(ToolOutput::new(
-                serde_json::to_string(&output)?,
-                "",
-            ))
+            Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
         }
     }
 }

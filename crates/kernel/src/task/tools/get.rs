@@ -35,7 +35,7 @@ impl Tool for TaskGetTool {
         TASK_GET_TOOL_NAME
     }
 
-    fn desc(&self) -> &str {
+    fn desc(&self) -> &'static str {
         "Retrieve a task by ID"
     }
 
@@ -53,7 +53,8 @@ impl Tool for TaskGetTool {
     }
 
     async fn exec(&self, args: Value) -> Result<ToolOutput> {
-        let task_id = args["taskId"].as_str()
+        let task_id = args["taskId"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?
             .to_string();
 
@@ -62,9 +63,6 @@ impl Tool for TaskGetTool {
 
         let output = GetTaskOutput { task };
 
-        Ok(ToolOutput::new(
-            serde_json::to_string(&output)?,
-            "",
-        ))
+        Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
     }
 }

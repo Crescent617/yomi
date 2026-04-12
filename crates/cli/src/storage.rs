@@ -14,8 +14,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 const APP_DATA_DIR: &str = "app_data";
-const SESSION_INDEX_DIR: &str = "sessions";
-const INPUT_HISTORY_DIR: &str = "history";
+const PROJ_INDEX_DIR: &str = "projects";
 const DEFAULT_MAX_HISTORY: usize = 1000;
 
 /// Session metadata for a working directory
@@ -23,6 +22,7 @@ const DEFAULT_MAX_HISTORY: usize = 1000;
 pub struct SessionEntry {
     pub session_id: String,
     pub last_accessed: chrono::DateTime<chrono::Utc>,
+    pub working_dir: String,
 }
 
 /// CLI-specific storage for session index and input history
@@ -32,7 +32,7 @@ pub struct AppStorage {
 }
 
 impl AppStorage {
-    /// Create new AppStorage at the given base directory
+    /// Create new `AppStorage` at the given base directory
     ///
     /// The base directory is typically `~/.yomi/`, data will be stored in `~/.yomi/appdata/`
     pub fn new(base_dir: PathBuf) -> Result<Self> {
@@ -45,16 +45,10 @@ impl AppStorage {
                 app_data_dir.display()
             )
         })?;
-        std::fs::create_dir_all(app_data_dir.join(SESSION_INDEX_DIR)).with_context(|| {
+        std::fs::create_dir_all(app_data_dir.join(PROJ_INDEX_DIR)).with_context(|| {
             format!(
                 "Failed to create sessions directory: {}",
-                app_data_dir.join(SESSION_INDEX_DIR).display()
-            )
-        })?;
-        std::fs::create_dir_all(app_data_dir.join(INPUT_HISTORY_DIR)).with_context(|| {
-            format!(
-                "Failed to create history directory: {}",
-                app_data_dir.join(INPUT_HISTORY_DIR).display()
+                app_data_dir.join(PROJ_INDEX_DIR).display()
             )
         })?;
 
@@ -63,28 +57,25 @@ impl AppStorage {
         })
     }
 
-    /// Hash a working directory path to a filename
+    /// Hash a working directory path to a filename using MD5
     fn hash_path(working_dir: &Path) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        working_dir.to_string_lossy().hash(&mut hasher);
-        let hash = hasher.finish();
-        format!("{:016x}", hash)
+        let path_str = working_dir.to_string_lossy();
+        let hash = md5::compute(path_str.as_bytes());
+        format!("{:x}", hash)
     }
 
-    fn session_path(&self, working_dir: &Path) -> PathBuf {
+    fn proj_meta_path(&self, working_dir: &Path) -> PathBuf {
         let hash = Self::hash_path(working_dir);
         self.base_dir
-            .join(SESSION_INDEX_DIR)
-            .join(format!("{}.json", hash))
+            .join(PROJ_INDEX_DIR)
+            .join(format!("{hash}.json"))
     }
 
-    fn history_path(&self, working_dir: &Path) -> PathBuf {
+    fn input_hist_path(&self, working_dir: &Path) -> PathBuf {
         let hash = Self::hash_path(working_dir);
         self.base_dir
-            .join(INPUT_HISTORY_DIR)
-            .join(format!("{}.jsonl", hash))
+            .join(PROJ_INDEX_DIR)
+            .join(format!("{hash}.input_hist.jsonl"))
     }
 
     /// Record a session for a working directory
@@ -92,10 +83,11 @@ impl AppStorage {
     /// Each working directory gets its own file to avoid concurrent access issues.
     /// File: `~/.yomi/appdata/sessions/{hash}.json`
     pub async fn record_session(&self, working_dir: &Path, session_id: &str) -> Result<()> {
-        let path = self.session_path(working_dir);
+        let path = self.proj_meta_path(working_dir);
         let entry = SessionEntry {
             session_id: session_id.to_string(),
             last_accessed: chrono::Utc::now(),
+            working_dir: working_dir.to_string_lossy().to_string(),
         };
 
         // Atomic write
@@ -114,7 +106,7 @@ impl AppStorage {
     ///
     /// Returns `None` if no session has been recorded for this directory
     pub async fn get_last_session(&self, working_dir: &Path) -> Result<Option<String>> {
-        let path = self.session_path(working_dir);
+        let path = self.proj_meta_path(working_dir);
         if !path.exists() {
             return Ok(None);
         }
@@ -129,7 +121,7 @@ impl AppStorage {
     /// Returns a vector of input strings, oldest first
     /// File: `~/.yomi/appdata/history/{hash}.jsonl`
     pub async fn load_input_history(&self, working_dir: &Path) -> Result<Vec<String>> {
-        let path = self.history_path(working_dir);
+        let path = self.input_hist_path(working_dir);
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -149,13 +141,13 @@ impl AppStorage {
     /// Add an entry to input history
     ///
     /// Empty inputs are ignored. Duplicate consecutive entries are not added.
-    /// History is trimmed to DEFAULT_MAX_HISTORY entries.
+    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries.
     pub async fn add_input_entry(&self, working_dir: &Path, input: &str) -> Result<()> {
         if input.trim().is_empty() {
             return Ok(());
         }
 
-        let path = self.history_path(working_dir);
+        let path = self.input_hist_path(working_dir);
         let mut entries = self.load_input_history(working_dir).await?;
 
         // Avoid duplicates at the end

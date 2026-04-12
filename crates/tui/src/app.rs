@@ -104,7 +104,7 @@ impl Model {
         self.input_history[self.initial_history_len..].to_vec()
     }
 
-    /// Initialize input history in the InputBox component
+    /// Initialize input history in the `InputBox` component
     pub fn init_input_history(&mut self) -> Result<()> {
         // Serialize history to JSON string
         let history_json = serde_json::to_string(&self.input_history)?;
@@ -116,7 +116,7 @@ impl Model {
         Ok(())
     }
 
-    /// Display session messages in ChatView and calculate initial token usage for StatusBar
+    /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
     fn init_session_messages(&mut self, context_window: u32) -> Result<()> {
         if self.session_messages.is_empty() {
             // Still initialize StatusBar with 0 tokens
@@ -129,7 +129,7 @@ impl Model {
             .session_messages
             .iter()
             .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
-            .last()
+            .next_back()
             .unwrap_or_else(|| {
                 // Estimate tokens from all messages if no usage data
                 use kernel::utils::tokens;
@@ -159,7 +159,7 @@ impl Model {
 
     /// Initialize context window display in status bar
     pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
-        let usage_str = format!("{}/{}", tokens, context_window);
+        let usage_str = format!("{tokens}/{context_window}");
         self.app.attr(
             &Id::StatusBar,
             Attribute::Custom("set_ctx_usage"),
@@ -462,7 +462,7 @@ impl Model {
                     ..
                 }) => {
                     // Update context window usage in status bar
-                    let usage_str = format!("{}/{}", total_tokens, context_window);
+                    let usage_str = format!("{total_tokens}/{context_window}");
                     self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("set_ctx_usage"),
