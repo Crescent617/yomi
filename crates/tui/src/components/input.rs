@@ -476,6 +476,15 @@ impl InputComponent {
                 code: Key::Char('q'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ToggleBrowseMode),
+            // Go to top/bottom (vim-style)
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('g'),
+                modifiers: KeyModifiers::NONE,
+            }) => Some(Msg::GoToTop),
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('G'),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => Some(Msg::GoToBottom),
             // Pass through to normal input handler for other keys
             _ => self.handle_normal_input(ev),
         }

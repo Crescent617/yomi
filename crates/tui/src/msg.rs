@@ -50,6 +50,8 @@ pub enum Msg {
     ToggleBrowseMode,
     PageUp,
     PageDown,
+    GoToTop,    // 'g' - go to first line
+    GoToBottom, // 'G' - go to last line
 }
 
 impl From<AppEvent> for Msg {

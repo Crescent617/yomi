@@ -121,12 +121,12 @@ impl Model {
         if self.session_messages.is_empty() {
             return Ok(());
         }
-        // Serialize messages to JSON and pass to ChatView
-        let messages_json = serde_json::to_string(&self.session_messages)?;
+        // Pass messages via Payload to avoid serialization
+        let messages: Vec<kernel::types::Message> = std::mem::take(&mut self.session_messages);
         self.app.attr(
             &Id::ChatView,
             Attribute::Custom("init_history"),
-            AttrValue::String(messages_json),
+            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(messages))),
         )?;
         Ok(())
     }
@@ -657,22 +657,6 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
-                Msg::ToggleThinking => {
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("toggle_thinking"),
-                        AttrValue::Flag(true),
-                    );
-                    None
-                }
-                Msg::ToggleExpandAll => {
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("toggle_expand_all"),
-                        AttrValue::Flag(true),
-                    );
-                    None
-                }
                 Msg::InputChanged(_) => {
                     // Ignore input changes in Browse mode
                     if self.mode == AppMode::Browse {
@@ -729,7 +713,7 @@ impl Update<Msg> for Model {
                                 &Id::StatusBar,
                                 Attribute::Custom("show_message"),
                                 AttrValue::String(
-                                    "0|C-o toggle, j/k scroll, q exit browse".to_string(),
+                                    "0|C-o toggle, j/k/g/G scroll, q exit".to_string(),
                                 ),
                             );
                         }
@@ -779,6 +763,22 @@ impl Update<Msg> for Model {
                         &Id::ChatView,
                         Attribute::Custom("page_down"),
                         AttrValue::Number(height as isize),
+                    );
+                    None
+                }
+                Msg::GoToTop => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_top"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::GoToBottom => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
+                        AttrValue::Flag(true),
                     );
                     None
                 }

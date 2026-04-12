@@ -336,6 +336,15 @@ impl ChatView {
         self.user_scrolled = false;
     }
 
+    pub fn scroll_to_top(&mut self) {
+        // Go to the very top by setting scroll_offset to max
+        // This is a simplified approach - we'll calculate based on total lines
+        let total_lines = self.calculate_total_lines();
+        self.scroll_offset = total_lines;
+        // User manually scrolled, pause auto-scroll
+        self.user_scrolled = true;
+    }
+
     pub fn toggle_last_thinking(&mut self) {
         for msg in self.messages.iter_mut().rev() {
             if let HistoryMessage::Assistant {
@@ -1013,6 +1022,9 @@ impl MockComponent for ChatView {
             Attribute::Custom("scroll_to_bottom") => {
                 self.scroll_to_bottom();
             }
+            Attribute::Custom("scroll_to_top") => {
+                self.scroll_to_top();
+            }
             Attribute::Custom("toggle_thinking") => {
                 self.toggle_last_thinking();
             }
@@ -1164,12 +1176,14 @@ impl MockComponent for ChatViewComponent {
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
+        use tuirealm::props::PropPayload;
         match attr {
             Attribute::Custom("init_history") => {
-                if let AttrValue::String(json) = value {
-                    if let Ok(messages) = serde_json::from_str::<Vec<kernel::types::Message>>(&json)
-                    {
-                        self.init_history(&messages);
+                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
+                    use tuirealm::props::PropBoundExt;
+                    let any = payload.as_any();
+                    if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {
+                        self.init_history(messages);
                     }
                 }
             }
