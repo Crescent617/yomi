@@ -43,7 +43,7 @@ pub struct Agent {
     // Store the last error message for display
     last_error: Option<String>,
     // Context compactor for managing long conversations
-    compactor: Compactor,
+    compactor: Option<Compactor>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
 }
@@ -61,6 +61,7 @@ impl Agent {
         max_iterations: usize,
         enable_sub_agents: bool,
         project_memory: &crate::project_memory::MemoryFiles,
+        compactor: Option<Compactor>, // None for sub-agents
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
         let (event_tx, event_rx) = mpsc::channel(100);
@@ -131,7 +132,7 @@ impl Agent {
             session_id,
             max_iterations,
             last_error: None,
-            compactor: Compactor::default(),
+            compactor: compactor,
             pending_token_usage: None,
         };
 
@@ -486,9 +487,11 @@ impl Agent {
 
     /// Check and run compaction if needed
     async fn maybe_compact_messages(&mut self) {
-        let should_compact = self
-            .compactor
-            .should_compact(self.message_buffer.messages());
+        let compactor = match &self.compactor {
+            Some(c) => c,
+            None => return, // No compactor configured, skip
+        };
+        let should_compact = compactor.should_compact(self.message_buffer.messages());
         if !should_compact {
             return;
         }
@@ -504,8 +507,7 @@ impl Agent {
             .await;
 
         let messages = self.message_buffer.messages_mut();
-        let result = self
-            .compactor
+        let result = compactor
             .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
             .await;
 

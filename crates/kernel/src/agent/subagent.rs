@@ -61,6 +61,7 @@ impl SubAgentManager {
             10,                                            // Sub-agents get fewer iterations
             false,                                         // Sub-agents don't spawn more sub-agents
             &crate::project_memory::MemoryFiles::default(),
+            None, // Sub-agents don't use compactor
         );
 
         let id = handle.id.clone();

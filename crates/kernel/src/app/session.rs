@@ -67,6 +67,7 @@ impl Session {
             self.config.agent.max_iterations,
             self.config.agent.enable_sub_agents,
             &project_memory,
+            Some(self.config.agent.compactor.clone()),
         );
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);

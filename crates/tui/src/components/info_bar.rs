@@ -54,8 +54,8 @@ impl InfoBarState {
                 )
             }
             Self::Compacting => {
-                const FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
-                let frame = FRAMES[tick_frame % FRAMES.len()];
+                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
+                let frame = FRAMES[(tick_frame / 3) % FRAMES.len()];
                 (
                     frame.to_string(),
                     Style::default()

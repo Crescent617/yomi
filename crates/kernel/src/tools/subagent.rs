@@ -97,6 +97,7 @@ impl Tool for SubAgentTool {
             10,
             false,
             &crate::project_memory::MemoryFiles::default(),
+            None, // Sub-agents don't use compactor
         );
 
         let sub_agent_id = handle.id.clone();

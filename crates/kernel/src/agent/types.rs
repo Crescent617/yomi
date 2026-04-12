@@ -1,3 +1,4 @@
+use crate::compactor::Compactor;
 use crate::providers::ModelConfig;
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
@@ -15,6 +16,9 @@ pub struct AgentConfig {
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
+    /// Compactor configuration for context management
+    #[serde(skip)]
+    pub compactor: Compactor,
 }
 
 impl Default for AgentConfig {
@@ -26,6 +30,7 @@ impl Default for AgentConfig {
             enable_sub_agents: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
+            compactor: Compactor::default(),
         }
     }
 }
