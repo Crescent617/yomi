@@ -3,9 +3,9 @@ use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::fmt::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::fmt::Write;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -76,23 +76,22 @@ impl GrepTool {
         }
 
         // Context lines (only for content mode)
-        if output_mode == "content"
-            && (context_before > 0 || context_after > 0) {
-                // Use -C if both are same, otherwise use -B and -A
-                if context_before == context_after {
-                    args.push("-C".to_string());
+        if output_mode == "content" && (context_before > 0 || context_after > 0) {
+            // Use -C if both are same, otherwise use -B and -A
+            if context_before == context_after {
+                args.push("-C".to_string());
+                args.push(context_before.to_string());
+            } else {
+                if context_before > 0 {
+                    args.push("-B".to_string());
                     args.push(context_before.to_string());
-                } else {
-                    if context_before > 0 {
-                        args.push("-B".to_string());
-                        args.push(context_before.to_string());
-                    }
-                    if context_after > 0 {
-                        args.push("-A".to_string());
-                        args.push(context_after.to_string());
-                    }
+                }
+                if context_after > 0 {
+                    args.push("-A".to_string());
+                    args.push(context_after.to_string());
                 }
             }
+        }
 
         // Note: We don't use -m/--max-count here because it limits matches per file,
         // not total files. For files_with_matches mode, this could cause us to miss
@@ -270,7 +269,10 @@ impl GrepTool {
         let sorted_paths: Vec<String> = files_with_mtime
             .into_iter()
             .map(|(path, _)| {
-                path.strip_prefix(&self.base_dir).map_or_else(|_| path.to_string_lossy().to_string(), |p| p.to_string_lossy().to_string())
+                path.strip_prefix(&self.base_dir).map_or_else(
+                    |_| path.to_string_lossy().to_string(),
+                    |p| p.to_string_lossy().to_string(),
+                )
             })
             .collect();
 
@@ -334,7 +336,8 @@ impl GrepTool {
             },
             file_count,
             if file_count == 1 { "file" } else { "files" }
-        ).unwrap();
+        )
+        .unwrap();
 
         if was_truncated {
             result.push_str("\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)");

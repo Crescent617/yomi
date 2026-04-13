@@ -220,7 +220,10 @@ impl Tool for GlobTool {
         let filenames: Vec<String> = files
             .into_iter()
             .map(|path| {
-                path.strip_prefix(&self.base_dir).map_or_else(|_| path.to_string_lossy().to_string(), |p| p.to_string_lossy().to_string())
+                path.strip_prefix(&self.base_dir).map_or_else(
+                    |_| path.to_string_lossy().to_string(),
+                    |p| p.to_string_lossy().to_string(),
+                )
             })
             .collect();
 

@@ -207,7 +207,7 @@ impl PluginLoader {
         None
     }
 
-    fn load_plugin( path: &Path) -> Result<Plugin> {
+    fn load_plugin(path: &Path) -> Result<Plugin> {
         // Try to find manifest first
         let manifest_path = Self::find_manifest_path(path);
 
@@ -310,9 +310,7 @@ impl PluginLoader {
         Ok((name, skills_path, skills_paths))
     }
 
-    fn load_plugin_without_manifest(
-        plugin_path: &Path,
-    ) -> (Option<PathBuf>, Vec<PathBuf>) {
+    fn load_plugin_without_manifest(plugin_path: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
         let skills_path = plugin_path.join("skills");
         if skills_path.exists() {
             (Some(skills_path), Vec::new())

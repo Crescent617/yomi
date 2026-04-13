@@ -19,7 +19,11 @@ impl ToolLevelResolver {
             READ_TOOL_NAME | GLOB_TOOL_NAME | GREP_TOOL_NAME | TASK_LIST_TOOL_NAME
             | TASK_GET_TOOL_NAME => Level::Safe,
             // 修改工具, SubAgent, 任务创建/更新 - Caution
-            EDIT_TOOL_NAME | WRITE_TOOL_NAME | SUBAGENT_TOOL_NAME | TASK_CREATE_TOOL_NAME | TASK_UPDATE_TOOL_NAME => Level::Caution,
+            EDIT_TOOL_NAME
+            | WRITE_TOOL_NAME
+            | SUBAGENT_TOOL_NAME
+            | TASK_CREATE_TOOL_NAME
+            | TASK_UPDATE_TOOL_NAME => Level::Caution,
             // Bash 根据命令内容判断
             BASH_TOOL_NAME => Self::resolve_bash_level(args),
             // 未知工具默认为 Dangerous（安全起见）

@@ -31,6 +31,7 @@ impl Coordinator {
             Arc::new(project_memory),
             compactor,
             Some(storage.clone()),
+            None, // permission_state is created per-session
         ));
         Self {
             storage,

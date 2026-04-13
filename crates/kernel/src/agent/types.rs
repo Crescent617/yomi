@@ -1,5 +1,4 @@
 use crate::compactor::Compactor;
-use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
@@ -33,8 +32,6 @@ pub struct AgentSpawnArgs {
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
     pub working_dir: std::path::PathBuf,
-    /// Auto-approve level for tool permissions
-    pub auto_approve_level: Level,
 }
 
 impl AgentSpawnArgs {
@@ -49,7 +46,6 @@ impl AgentSpawnArgs {
             max_iterations: 50,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            auto_approve_level: Level::default(),
         }
     }
 
@@ -92,13 +88,6 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = dir.into();
-        self
-    }
-
-    /// Set auto-approve level for tool permissions
-    #[must_use]
-    pub const fn with_auto_approve_level(mut self, level: Level) -> Self {
-        self.auto_approve_level = level;
         self
     }
 }
@@ -272,6 +261,8 @@ pub struct AgentShared {
     pub compactor: Option<crate::compactor::Compactor>,
     /// Storage for message persistence
     pub storage: Option<Arc<dyn crate::storage::Storage>>,
+    /// Shared permission state for all agents in a session
+    pub permission_state: Option<crate::permissions::PermissionState>,
 }
 
 impl AgentShared {
@@ -282,6 +273,7 @@ impl AgentShared {
         project_memory: Arc<crate::project_memory::MemoryFiles>,
         compactor: Option<crate::compactor::Compactor>,
         storage: Option<Arc<dyn crate::storage::Storage>>,
+        permission_state: Option<crate::permissions::PermissionState>,
     ) -> Self {
         Self {
             provider,
@@ -290,6 +282,7 @@ impl AgentShared {
             project_memory,
             compactor,
             storage,
+            permission_state,
         }
     }
 }

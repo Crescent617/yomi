@@ -43,6 +43,45 @@ impl Response {
     }
 }
 
+/// Shared permission state across agents in a session
+///
+/// This is shared between all agents (main agent and subagents) so that:
+/// - Permission responses can be routed to any agent
+/// - "Remember this approval" works across all agents
+/// - Auto-approve level is consistent across the session
+#[derive(Clone)]
+pub struct PermissionState {
+    // 使用 RwLock 允许运行时动态更新（用户选择 "always approve"）
+    auto_approve_level: Arc<tokio::sync::RwLock<Level>>,
+    /// Per-tool approval levels - tools that have been remembered as approved
+    /// Key: tool name, Value: max approved level for this tool
+    tool_approvals: Arc<tokio::sync::RwLock<HashMap<String, Level>>>,
+    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
+}
+
+impl PermissionState {
+    /// Create new shared permission state
+    pub fn new(auto_approve_level: Level) -> (Self, Responder) {
+        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
+        let responder = Responder {
+            pending_reqs: Arc::clone(&pending_permissions),
+        };
+        let state = Self {
+            auto_approve_level: Arc::new(tokio::sync::RwLock::new(auto_approve_level)),
+            tool_approvals: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_permissions,
+        };
+        (state, responder)
+    }
+
+    /// Create a responder for this permission state
+    pub fn create_responder(&self) -> Responder {
+        Responder {
+            pending_reqs: Arc::clone(&self.pending_permissions),
+        }
+    }
+}
+
 /// 权限检查器
 ///
 /// 职责：
@@ -53,40 +92,27 @@ impl Response {
 /// 对于 `Subagent` 场景，上层可以直接发送 PermissionResponse(false) 来拒绝
 /// 不需要在 kernel 层区分 `SubAgent` 和主 Agent
 pub struct Checker {
-    // 使用 RwLock 允许运行时动态更新（用户选择 "always approve"）
-    auto_approve_level: tokio::sync::RwLock<Level>,
-    /// Per-tool approval levels - tools that have been remembered as approved
-    /// Key: tool name, Value: max approved level for this tool
-    tool_approvals: tokio::sync::RwLock<HashMap<String, Level>>,
+    state: PermissionState,
     agent_id: AgentId,
     event_tx: mpsc::Sender<Event>,
-    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
 }
 
 impl Checker {
     /// 创建新的权限检查器
-    pub fn new(
-        auto_approve_level: Level,
-        agent_id: AgentId,
-        event_tx: mpsc::Sender<Event>,
-    ) -> (Self, Responder) {
-        let pending_permissions = Arc::new(Mutex::new(HashMap::new()));
-        let responder = Responder {
-            pending_reqs: Arc::clone(&pending_permissions),
-        };
-        let checker = Self {
-            auto_approve_level: tokio::sync::RwLock::new(auto_approve_level),
-            tool_approvals: tokio::sync::RwLock::new(HashMap::new()),
+    ///
+    /// Uses shared `PermissionState` so all agents in a session share
+    /// the same permission configuration and pending requests.
+    pub fn new(state: PermissionState, agent_id: AgentId, event_tx: mpsc::Sender<Event>) -> Self {
+        Self {
+            state,
             agent_id,
             event_tx,
-            pending_permissions,
-        };
-        (checker, responder)
+        }
     }
 
     /// 获取当前自动批准级别
     pub async fn auto_approve_level(&self) -> Level {
-        *self.auto_approve_level.read().await
+        *self.state.auto_approve_level.read().await
     }
 
     /// 检查工具是否需要权限确认
@@ -97,17 +123,17 @@ impl Checker {
     /// - Err: 检查过程中发生错误
     pub async fn check_permission(&self, tool_call: &ToolCall, level: Level) -> Result<bool> {
         // 检查是否超过全局阈值
-        let current_level = *self.auto_approve_level.read().await;
+        let current_level = *self.state.auto_approve_level.read().await;
         if !exceeds_threshold(level, current_level) {
             return Ok(true);
         }
 
         // 检查该工具是否已被记住批准（per-tool approval）
-        let tool_approvals = self.tool_approvals.read().await;
+        let tool_approvals = self.state.tool_approvals.read().await;
         if let Some(&approved_level) = tool_approvals.get(&tool_call.name) {
             if level <= approved_level {
                 tracing::info!(
-                    "Tool {} auto-approved (remembered approval up to {:?})",
+                    "Tool {} auto-approved (remembered approval up to {})",
                     tool_call.name,
                     approved_level
                 );
@@ -122,7 +148,7 @@ impl Checker {
 
         // 存储 oneshot sender 到 pending_permissions map
         {
-            let mut pending = self.pending_permissions.lock().await;
+            let mut pending = self.state.pending_permissions.lock().await;
             pending.insert(req_id.clone(), tx);
         }
 
@@ -151,7 +177,7 @@ impl Checker {
                 tool_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
                 tool_args,
-                tool_level: format!("{level:?}"),
+                tool_level: format!("{level}"),
                 reason: format!(
                     "{} tool exceeds {:?} auto-approve threshold",
                     tool_call.name, current_level
@@ -171,7 +197,7 @@ impl Checker {
 
                 // 如果用户选择 "remember"，记录该工具的批准级别（per-tool approval）
                 if response.approved && response.remember {
-                    let mut approvals = self.tool_approvals.write().await;
+                    let mut approvals = self.state.tool_approvals.write().await;
                     let tool_name = tool_call.name.clone();
                     // 只升级（不降级）该工具的批准级别
                     match approvals.get(&tool_name) {
@@ -193,12 +219,12 @@ impl Checker {
             }
             Ok(Err(_)) => {
                 // oneshot sender dropped，清理并默认拒绝
-                self.pending_permissions.lock().await.remove(&req_id);
+                self.state.pending_permissions.lock().await.remove(&req_id);
                 Ok(false)
             }
             Err(_) => {
                 // 超时，清理并默认拒绝
-                self.pending_permissions.lock().await.remove(&req_id);
+                self.state.pending_permissions.lock().await.remove(&req_id);
                 tracing::warn!("Permission request timeout for tool {}", tool_call.name);
                 Ok(false)
             }
@@ -254,7 +280,8 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::channel(100);
 
         // Caution 阈值 - Safe 工具应该自动通过
-        let (checker, _responder) = Checker::new(Level::Caution, AgentId::new(), event_tx.clone());
+        let (state, _responder) = PermissionState::new(Level::Caution);
+        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
 
         let safe_tool = ToolCall {
             id: "test1".to_string(),
@@ -273,11 +300,8 @@ mod tests {
     async fn test_permission_responder() {
         let (event_tx, mut event_rx) = mpsc::channel(100);
 
-        let (checker, responder) = Checker::new(
-            Level::Safe, // Safe 级别，Caution 工具需要确认
-            AgentId::new(),
-            event_tx.clone(),
-        );
+        let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 工具需要确认
+        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
 
         // 创建一个 Caution 级别的工具调用
         let caution_tool = ToolCall {
@@ -313,11 +337,8 @@ mod tests {
     async fn test_permission_remember_per_tool() {
         let (event_tx, mut event_rx) = mpsc::channel(100);
 
-        let (checker, responder) = Checker::new(
-            Level::Safe, // Safe 级别，Caution 和 Dangerous 需要确认
-            AgentId::new(),
-            event_tx.clone(),
-        );
+        let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 和 Dangerous 需要确认
+        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
 
         // Wrap checker in Arc so we can use it after spawning
         let checker = Arc::new(checker);

@@ -35,7 +35,7 @@ struct Args {
     config: Option<PathBuf>,
 
     /// Skip all confirmations (YOLO mode)
-    #[arg(long)]
+    #[arg(short, long)]
     yolo: bool,
 
     /// Auto-approve level for tool permissions (safe | caution | dangerous)

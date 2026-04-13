@@ -30,6 +30,17 @@ impl std::str::FromStr for Level {
     }
 }
 
+impl std::fmt::Display for Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Safe => "safe",
+            Self::Caution => "caution",
+            Self::Dangerous => "dangerous",
+        };
+        write!(f, "{s}")
+    }
+}
+
 /// 检查工具级别是否超过阈值
 /// 返回 true 表示需要用户确认
 pub const fn exceeds_threshold(tool_level: Level, threshold: Level) -> bool {

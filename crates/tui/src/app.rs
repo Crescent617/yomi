@@ -360,7 +360,7 @@ impl Model {
         // Mount select dialog component (hidden by default, for permission confirmation)
         app.mount(
             Id::Dialog,
-            Box::new(SelectDialogComponent::new("Permission Required")),
+            Box::new(SelectDialogComponent::new("Dialog")),
             vec![Sub::new(SubEventClause::Any, SubClause::Always)],
         )?;
 
@@ -638,16 +638,12 @@ impl Model {
                     self.pending_permission = Some(req_id.clone());
 
                     // Show confirmation dialog with "Always approve" option
-                    let message = format!(
-                        "Tool: {tool_name}\nLevel: {tool_level}\nArgs: {tool_args}"
-                    );
+                    let message =
+                        format!("Tool: {tool_name}\nLevel: {tool_level}\nArgs: {tool_args}");
                     let dialog_data = format!(
-                        "Permission Required\x00Approve\x00Always approve this tool\x00Deny\x00{message}"
+                       "Can I run this tool?\x00Sure\x00Always allow this tool with level {tool_level}\x00Not now\x00{message}" 
                     );
-                    tracing::info!(
-                        "Showing dialog with data: {}",
-                        dialog_data.replace('\x00', "|")
-                    );
+                    tracing::info!("Showing dialog with data: {dialog_data}",);
                     let _ = self.app.attr(
                         &Id::Dialog,
                         Attribute::Custom("show"),

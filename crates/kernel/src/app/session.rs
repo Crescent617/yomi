@@ -1,4 +1,4 @@
-use crate::permissions::Level;
+use crate::permissions::{Level, PermissionState};
 use crate::types::{AgentId, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
@@ -55,6 +55,14 @@ impl Session {
             .await
             .unwrap_or_default();
 
+        // Create shared permission state for all agents in this session
+        // In YOLO mode (Dangerous), no permission state is created (all tools auto-approve)
+        let permission_state = if self.config.auto_approve_level == Level::Dangerous {
+            None
+        } else {
+            Some(PermissionState::new(self.config.auto_approve_level).0)
+        };
+
         let config =
             AgentSpawnArgs::new(self.config.agent.system_prompt.clone(), self.id.0.clone())
                 .with_skills(self.config.agent.skills.clone())
@@ -68,10 +76,18 @@ impl Session {
             config.without_sub_agents()
         };
 
-        // Add auto-approve level from app config
-        let config = config.with_auto_approve_level(self.config.auto_approve_level);
+        // Create AgentShared with permission state
+        let shared = Arc::new(AgentShared::new(
+            self.agent_shared.provider.clone(),
+            self.agent_shared.model_config.clone(),
+            self.agent_shared.task_store.clone(),
+            self.agent_shared.project_memory.clone(),
+            self.agent_shared.compactor.clone(),
+            self.agent_shared.storage.clone(),
+            permission_state,
+        ));
 
-        let (handle, event_rx) = Agent::spawn(AgentId::new(), &self.agent_shared, config);
+        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, config);
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
         self.main_agent = Some(handle);

@@ -198,7 +198,7 @@ impl SkillLoader {
     }
 
     /// Load skills from a plugin
-    pub fn load_from_plugin( plugin: &Plugin) -> Result<Vec<Arc<Skill>>> {
+    pub fn load_from_plugin(plugin: &Plugin) -> Result<Vec<Arc<Skill>>> {
         let mut skills = Vec::new();
 
         // Load from default skills path
@@ -394,8 +394,8 @@ Content here.";
         let mut file = std::fs::File::create(skill_dir.join("SKILL.md")).unwrap();
         file.write_all(skill_content.as_bytes()).unwrap();
 
-        let skill = SkillLoader::load_plugin_skill(&skill_dir.join("SKILL.md"), "my-plugin")
-            .unwrap();
+        let skill =
+            SkillLoader::load_plugin_skill(&skill_dir.join("SKILL.md"), "my-plugin").unwrap();
 
         assert_eq!(skill.name, "my-plugin:debugging");
         assert_eq!(skill.description, "A debugging skill");

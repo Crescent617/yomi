@@ -104,16 +104,16 @@ impl Agent {
             args.enable_sub_agents,
         );
 
-        // Create permission checker and responder
-        // In YOLO mode (Dangerous), no checker is needed - all tools auto-approve
-        let (permission_checker, permission_responder) =
-            if args.auto_approve_level == crate::permissions::Level::Dangerous {
-                (None, None)
-            } else {
-                let (checker, responder) =
-                    Checker::new(args.auto_approve_level, id.clone(), event_tx.clone());
+        // Create permission checker and responder from shared state
+        // If no permission_state in shared (YOLO mode), all tools auto-approve
+        let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
+            Some(state) => {
+                let checker = Checker::new(state.clone(), id.clone(), event_tx.clone());
+                let responder = state.create_responder();
                 (Some(Arc::new(checker)), Some(responder))
-            };
+            }
+            None => (None, None),
+        };
 
         let agent = Self {
             id: id.clone(),
