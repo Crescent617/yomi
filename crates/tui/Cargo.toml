@@ -9,13 +9,13 @@ license.workspace = true
 kernel = { workspace = true }
 
 crossterm = { workspace = true }
-unicode-width = "0.2"
+unicode-width = { workspace = true }
 pulldown-cmark = { workspace = true }
 # tiktoken-rust = "0.2"  # Requires OpenSSL, disabled for now
 
 # TUI Realm - declarative component framework
-tuirealm = "3.3"
-tui-realm-stdlib = "3.1"
+tuirealm = { workspace = true }
+tui-realm-stdlib = { workspace = true }
 
 tokio = { workspace = true }
 anyhow = { workspace = true }
