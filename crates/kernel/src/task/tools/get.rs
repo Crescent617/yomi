@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_GET_TOOL_NAME: &str = "TaskGet";
+pub const TASK_GET_TOOL_NAME: &str = "taskGet";
 
 pub struct TaskGetTool {
     store: SharedTaskStore,

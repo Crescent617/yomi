@@ -53,8 +53,7 @@ mod tests {
     #[test]
     fn test_gen_base56_id_uniqueness() {
         // Generate many IDs and verify they're not all the same (probabilistic test)
-        let ids: std::collections::HashSet<String> =
-            (0..100).map(|_| gen_base56_id(8)).collect();
+        let ids: std::collections::HashSet<String> = (0..100).map(|_| gen_base56_id(8)).collect();
         // With 56^8 possible combinations, collisions should be extremely rare
         assert_eq!(ids.len(), 100, "Expected 100 unique IDs");
     }

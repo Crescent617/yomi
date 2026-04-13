@@ -14,6 +14,8 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+pub const BASH_TOOL_NAME: &str = "bash";
+
 #[derive(Clone)]
 pub struct BashToolCtx {
     input_tx: mpsc::Sender<AgentInput>,
@@ -60,7 +62,7 @@ impl BashTool {
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &'static str {
-        "bash"
+        BASH_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {

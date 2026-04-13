@@ -356,10 +356,7 @@ impl StreamingMarkdownRenderer {
                                     format!("{} ", chars::CODE_VERTICAL),
                                     Style::default().fg(colors::code_border()),
                                 ),
-                                Span::styled(
-                                    expanded_line,
-                                    Style::default().fg(colors::code_fg()),
-                                ),
+                                Span::styled(expanded_line, Style::default().fg(colors::code_fg())),
                             ]));
                         }
                     } else {

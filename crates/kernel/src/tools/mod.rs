@@ -6,20 +6,29 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod base;
 pub mod bash;
 pub mod edit;
 pub mod edit_utils;
 pub mod file_state;
+pub mod glob;
+pub mod grep;
 pub mod line_numbers;
 pub mod parallel;
 pub mod read;
 pub mod subagent;
+pub mod write;
 
-pub use bash::{BashTool, BashToolCtx};
-pub use edit::EditTool;
+pub use base::{FileTool, MAX_FILE_SIZE};
+
+pub use bash::{BashTool, BashToolCtx, BASH_TOOL_NAME};
+pub use edit::{EditTool, EDIT_TOOL_NAME};
+pub use glob::{GlobTool, GLOB_TOOL_NAME};
+pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use parallel::execute_tools_parallel;
-pub use read::ReadTool;
-pub use subagent::SubAgentTool;
+pub use read::{ReadTool, READ_TOOL_NAME};
+pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
+pub use write::{WriteTool, WRITE_TOOL_NAME};
 
 /// Core trait for tools
 #[async_trait]
@@ -35,7 +44,6 @@ pub trait Tool: Send + Sync {
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
 }
-
 
 impl Clone for ToolRegistry {
     fn clone(&self) -> Self {
@@ -87,17 +95,6 @@ impl ToolRegistry {
     pub fn has(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }
-}
-
-/// Global YOLO mode flag
-static YOLO_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn enable_yolo_mode() {
-    YOLO_MODE.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-pub fn is_yolo_mode() -> bool {
-    YOLO_MODE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 impl ToolRegistry {

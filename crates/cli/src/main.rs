@@ -4,15 +4,17 @@ use kernel::{
     agent::AgentConfig,
     config::{env_names, Config, ModelProvider},
     expand_tilde,
+    misc::plugin::PluginLoader,
+    permissions::Level,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
-    tools::enable_yolo_mode,
     types::SessionId,
     utils::strs,
 };
 use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
 use kernel::{Coordinator, SessionConfig};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tui::run_tui;
@@ -36,6 +38,10 @@ struct Args {
     #[arg(long)]
     yolo: bool,
 
+    /// Auto-approve level for tool permissions (safe | caution | dangerous)
+    #[arg(long, value_name = "LEVEL")]
+    auto_approve: Option<String>,
+
     /// Resume the last session for this working directory
     #[arg(short, long)]
     resume: bool,
@@ -45,18 +51,13 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    if args.yolo {
-        enable_yolo_mode();
-        tracing::warn!("YOLO mode enabled - all confirmations skipped!");
-    }
-
     let working_dir = args
         .directory
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let working_dir = working_dir.canonicalize()?;
 
     // Load configuration with priority: env vars > config file > defaults
-    let config = if let Some(config_path) = args.config {
+    let mut config = if let Some(config_path) = args.config {
         Config::from_file(&config_path)?
     } else {
         // Try default config locations, fallback to env-only config
@@ -75,6 +76,21 @@ async fn main() -> Result<()> {
         }
         loaded.unwrap_or_else(Config::from_env)
     };
+
+    // Apply CLI overrides to config (after loading, before using)
+    if let Some(level_str) = args.auto_approve {
+        if let Ok(level) = Level::from_str(&level_str) {
+            config.auto_approve = level;
+            tracing::info!("Auto-approve level set to: {:?}", level);
+        } else {
+            tracing::warn!("Invalid auto-approve level: {}", level_str);
+        }
+    }
+
+    if args.yolo {
+        config.auto_approve = Level::Dangerous;
+        tracing::warn!("YOLO mode enabled - all confirmations skipped!");
+    }
 
     // Create data directory
     tokio::fs::create_dir_all(&config.data_dir).await?;
@@ -95,13 +111,69 @@ async fn main() -> Result<()> {
 
     tracing::debug!("Loading skills from folders: {:?}", skill_folders);
 
-    let skills: Vec<Arc<kernel::skill::Skill>> = {
+    let mut skills: Vec<Arc<kernel::skill::Skill>> = {
         let loader = SkillLoader::new(skill_folders.iter().map(expand_tilde).collect());
         loader.load_all().unwrap_or_else(|e| {
             eprintln!("Warning: Failed to load skills: {e}");
             Vec::new()
         })
     };
+
+    // Load plugins and their skills (if enabled)
+    if config.load_claude_plugins {
+        let plugin_dirs = if config.plugin_dirs.is_empty() {
+            vec![expand_tilde("~/.claude/plugins/cache")]
+        } else {
+            config.plugin_dirs.clone()
+        };
+
+        tracing::debug!("Loading plugins from directories: {:?}", plugin_dirs);
+
+        let plugins = {
+            let loader = PluginLoader::new(plugin_dirs);
+            loader.load_all().unwrap_or_else(|e| {
+                tracing::warn!("Failed to load plugins: {e}");
+                Vec::new()
+            })
+        };
+
+        // Log loaded plugins and load their skills
+        if !plugins.is_empty() {
+            tracing::info!("Loaded {} plugin(s)", plugins.len());
+            for plugin in &plugins {
+                tracing::info!("  - {} (from {})", plugin.name, plugin.path.display());
+                match SkillLoader::load_from_plugin(plugin) {
+                    Ok(plugin_skills) => {
+                        for skill in plugin_skills {
+                            tracing::info!("    - skill: {}", skill.name);
+                            skills.push(skill);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to load skills from plugin {}: {e}", plugin.name);
+                    }
+                }
+            }
+        }
+    } else {
+        tracing::info!("Claude plugins loading is disabled");
+    }
+
+    // Deduplicate skills by name (regular skills take precedence over plugin skills)
+    // We keep the first occurrence since regular skills are loaded before plugin skills
+    let mut seen_names = std::collections::HashSet::new();
+    skills.retain(|skill| {
+        if seen_names.contains(&skill.name) {
+            tracing::debug!(
+                "Duplicate skill name '{}' found, keeping first instance.",
+                skill.name
+            );
+            false
+        } else {
+            seen_names.insert(skill.name.clone());
+            true
+        }
+    });
 
     // Log loaded skills
     if !skills.is_empty() {
@@ -159,6 +231,7 @@ async fn main() -> Result<()> {
     let mk_config = |agent: AgentConfig| SessionConfig {
         agent,
         project_path: working_dir.clone(),
+        auto_approve_level: config.auto_approve,
     };
 
     // Create or restore session
@@ -215,6 +288,8 @@ async fn main() -> Result<()> {
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
     // Create channel for cancel requests
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
+    // Create channel for permission responses
+    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<(String, bool, bool)>(10);
 
     // Spawn task to forward input to coordinator
     let coord_for_input = coordinator.clone();
@@ -241,6 +316,26 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn task to handle permission responses
+    let coord_for_permission = coordinator.clone();
+    let session_id_for_permission = session_id.clone();
+    tokio::spawn(async move {
+        while let Some((req_id, approved, remember)) = permission_rx.recv().await {
+            tracing::info!(
+                "CLI received permission response: req_id={} approved={} remember={}",
+                req_id,
+                approved,
+                remember
+            );
+            if let Err(e) = coord_for_permission
+                .send_permission_response(&session_id_for_permission, &req_id, approved, remember)
+                .await
+            {
+                tracing::error!("Failed to send permission response: {}", e);
+            }
+        }
+    });
+
     // Get event receiver from coordinator for the session
     let event_rx = coordinator
         .take_session_event_receiver(&session_id)
@@ -258,6 +353,7 @@ async fn main() -> Result<()> {
         event_rx,
         input_tx,
         cancel_tx,
+        permission_tx,
         working_dir_str,
         skill_names,
         input_history,

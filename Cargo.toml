@@ -11,6 +11,7 @@ repository = "https://github.com/Crescent617/yomi"
 
 [workspace.lints.clippy]
 needless_raw_string_hashes = "allow"
+option_if_let_else = "allow"
 
 [workspace.dependencies]
 # Core deps

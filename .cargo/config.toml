@@ -2,7 +2,7 @@
 rustflags = [
     "-W", "clippy::all",
     "-W", "clippy::pedantic",
-    "-W", "clippy::nursery",
+    # "-W", "clippy::nursery",
     # 允许的 lint (不太重要或会产生太多误报)
     "-A", "clippy::module_name_repetitions",
     "-A", "clippy::too_many_lines",

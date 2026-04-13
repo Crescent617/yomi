@@ -604,14 +604,10 @@ impl ChatView {
                 };
 
                 // Build header line
-                // Capitalize first letter of tool_name
-                let mut chars = tool_name.chars();
-                let tool_name_capitalized = chars
-                    .next()
-                    .map(|c| c.to_uppercase().to_string() + chars.as_str())
-                    .unwrap_or_default();
+                // Convert tool name to CamelCase for display
+                let tool_name_display = to_camel_case(tool_name);
                 let mut header_spans = vec![Span::styled(
-                    format!("{icon} {tool_name_capitalized}{time_str}"),
+                    format!("{icon} {tool_name_display}{time_str}"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )];
                 if let Some(peek) = peek_args {
@@ -1194,4 +1190,24 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
             None
         }
     }
+}
+
+/// Convert tool name to CamelCase for display
+/// e.g., "subagent" -> "Subagent", "read" -> "Read", "`TaskCreate`" -> "`TaskCreate`"
+fn to_camel_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    // If already starts with uppercase, assume it's already CamelCase
+    if s.chars().next().unwrap().is_uppercase() {
+        return s.to_string();
+    }
+
+    // Convert first char to uppercase, keep rest as-is
+    let mut chars = s.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().to_string() + chars.as_str())
+        .unwrap_or_default()
 }

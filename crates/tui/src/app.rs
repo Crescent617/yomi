@@ -6,19 +6,22 @@ use anyhow::Result;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::SubEventClause;
-use unicode_width::UnicodeWidthStr;
 use tuirealm::{
     application::PollStrategy,
     ratatui::layout::{Constraint, Direction, Layout},
     terminal::{CrosstermTerminalAdapter, TerminalBridge},
     Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, Update,
 };
+use unicode_width::UnicodeWidthStr;
 
 use kernel::event::Event as AppEvent;
 use kernel::types::Message;
 
 use crate::{
-    components::{ChatViewComponent, InfoBarComponent, InputComponent, StatusBarComponent},
+    components::{
+        ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
+        StatusBarComponent,
+    },
     id::Id,
     msg::{Msg, UserEvent},
 };
@@ -47,6 +50,8 @@ pub struct Model {
     pub input_tx: mpsc::Sender<String>,
     /// Channel to send cancel requests
     pub cancel_tx: mpsc::Sender<()>,
+    /// Channel to send permission responses (`req_id`, approved, remember)
+    pub permission_tx: mpsc::Sender<(String, bool, bool)>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -57,6 +62,8 @@ pub struct Model {
     is_streaming: bool,
     /// Application mode - single source of truth
     mode: AppMode,
+    /// Pending permission request (`req_id`) waiting for user confirmation
+    pending_permission: Option<String>,
     /// Input history for the current working directory (loaded + new)
     input_history: Vec<String>,
     /// Initial history length (to identify new entries on exit)
@@ -73,6 +80,7 @@ impl Model {
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<String>,
         cancel_tx: mpsc::Sender<()>,
+        permission_tx: mpsc::Sender<(String, bool, bool)>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
@@ -88,11 +96,13 @@ impl Model {
             event_rx,
             input_tx,
             cancel_tx,
+            permission_tx,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
             is_streaming: false,
             mode: AppMode::Normal,
+            pending_permission: None,
             initial_history_len: input_history.len(),
             input_history,
             working_dir,
@@ -202,7 +212,8 @@ impl Model {
                 // Each line needs at least 1 visual line
                 // Calculate how many lines it wraps to based on content width
                 let line_width = line.width();
-                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1) / content_width.max(1);
+                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1)
+                    / content_width.max(1);
                 total_visual_lines += wrapped_lines.max(1);
             }
 
@@ -262,7 +273,8 @@ impl Model {
 
         let _ = self.terminal.draw(|f| {
             // Calculate input height inside draw closure to access terminal area
-            let input_height = Self::calculate_input_height_for_content(&input_content, f.area().width);
+            let input_height =
+                Self::calculate_input_height_for_content(&input_content, f.area().width);
 
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
@@ -304,6 +316,9 @@ impl Model {
                 // Status bar shows current mode (vim-style)
                 self.app.view(&Id::StatusBar, f, chunks[3]);
             }
+
+            // Render dialog on top if active (uses full screen for centering)
+            self.app.view(&Id::Dialog, f, f.area());
         });
     }
 
@@ -340,6 +355,13 @@ impl Model {
             Id::StatusBar,
             Box::new(StatusBarComponent::new()),
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
+        )?;
+
+        // Mount select dialog component (hidden by default, for permission confirmation)
+        app.mount(
+            Id::Dialog,
+            Box::new(SelectDialogComponent::new("Permission Required")),
+            vec![Sub::new(SubEventClause::Any, SubClause::Always)],
         )?;
 
         // Set focus to input box
@@ -600,6 +622,42 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
+                AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
+                    req_id,
+                    tool_name,
+                    tool_args,
+                    tool_level,
+                    ..
+                }) => {
+                    tracing::info!(
+                        "TUI received PermissionRequest: {} for {}",
+                        req_id,
+                        tool_name
+                    );
+                    // Store the pending permission request
+                    self.pending_permission = Some(req_id.clone());
+
+                    // Show confirmation dialog with "Always approve" option
+                    let message = format!(
+                        "Tool: {tool_name}\nLevel: {tool_level}\nArgs: {tool_args}"
+                    );
+                    let dialog_data = format!(
+                        "Permission Required\x00Approve\x00Always approve this tool\x00Deny\x00{message}"
+                    );
+                    tracing::info!(
+                        "Showing dialog with data: {}",
+                        dialog_data.replace('\x00', "|")
+                    );
+                    let _ = self.app.attr(
+                        &Id::Dialog,
+                        Attribute::Custom("show"),
+                        AttrValue::String(dialog_data),
+                    );
+                    // Give focus to dialog so it receives keyboard events
+                    let result = self.app.active(&Id::Dialog);
+                    tracing::info!("Dialog focus result: {:?}", result);
+                    self.redraw = true;
+                }
                 _ => {}
             }
         }
@@ -852,6 +910,30 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::DialogSelected(idx) => {
+                    // Send permission response based on selection
+                    // idx: 0 = Approve, 1 = Always approve, 2 = Deny
+                    if let Some(req_id) = self.pending_permission.take() {
+                        let (approved, remember) = match idx {
+                            0 => (true, false),  // Approve once
+                            1 => (true, true),   // Always approve this tool
+                            _ => (false, false), // Deny
+                        };
+                        let _ = self.permission_tx.try_send((req_id, approved, remember));
+                    }
+                    // Return focus to input box
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
+                Msg::DialogCancelled => {
+                    // Deny the permission request if dialog is cancelled
+                    if let Some(req_id) = self.pending_permission.take() {
+                        let _ = self.permission_tx.try_send((req_id, false, false));
+                    }
+                    // Return focus to input box
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
                 _ => None,
             }
         } else {
@@ -867,6 +949,7 @@ pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,
     cancel_tx: mpsc::Sender<()>,
+    permission_tx: mpsc::Sender<(String, bool, bool)>,
     working_dir: String,
     skills: Vec<String>,
     input_history: Vec<String>,
@@ -878,6 +961,7 @@ pub async fn run_tui(
         event_rx,
         input_tx,
         cancel_tx,
+        permission_tx,
         input_history,
         working_dir_path,
         session_messages,

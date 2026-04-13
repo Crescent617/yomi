@@ -52,6 +52,10 @@ pub enum Msg {
     PageDown,
     GoToTop,    // 'g' - go to first line
     GoToBottom, // 'G' - go to last line
+
+    // Dialog results
+    DialogSelected(usize), // Selected option index
+    DialogCancelled,       // Dialog was cancelled
 }
 
 impl From<AppEvent> for Msg {

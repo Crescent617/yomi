@@ -1,4 +1,5 @@
 use crate::agent::{AgentInput, AgentState, CancelToken};
+use crate::permissions::Responder;
 use crate::types::{AgentId, ContentBlock};
 use tokio::sync::mpsc;
 
@@ -9,6 +10,7 @@ pub struct AgentHandle {
     pub(super) input_tx: mpsc::Sender<AgentInput>,
     pub(super) state_rx: tokio::sync::watch::Receiver<AgentState>,
     cancel_token: CancelToken,
+    pub(super) permission_responder: Option<Responder>,
 }
 
 impl AgentHandle {
@@ -17,12 +19,14 @@ impl AgentHandle {
         input_tx: mpsc::Sender<AgentInput>,
         state_rx: tokio::sync::watch::Receiver<AgentState>,
         cancel_token: CancelToken,
+        permission_responder: Option<Responder>,
     ) -> Self {
         Self {
             id,
             input_tx,
             state_rx,
             cancel_token,
+            permission_responder,
         }
     }
 
@@ -45,6 +49,24 @@ impl AgentHandle {
             .send(AgentInput::Cancel)
             .await
             .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
+    }
+
+    /// 发送权限响应给 Agent
+    pub async fn send_permission_response(
+        &self,
+        req_id: &str,
+        approved: bool,
+        remember: bool,
+    ) -> anyhow::Result<()> {
+        if let Some(ref responder) = self.permission_responder {
+            responder.respond(req_id, approved, remember).await;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Agent {} does not have permission checker",
+                self.id
+            ))
+        }
     }
 
     /// 获取当前状态

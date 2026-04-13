@@ -423,12 +423,11 @@ impl SqliteTaskStorage {
     pub async fn delete_task(&self, task_list_id: &str, task_index_str: &str) -> Result<bool> {
         let task_index: i64 = task_index_str.parse()?;
 
-        let result =
-            sqlx::query(r"DELETE FROM tasks WHERE task_index = ?1 AND task_list_id = ?2")
-                .bind(task_index)
-                .bind(task_list_id)
-                .execute(&self.pool)
-                .await?;
+        let result = sqlx::query(r"DELETE FROM tasks WHERE task_index = ?1 AND task_list_id = ?2")
+            .bind(task_index)
+            .bind(task_list_id)
+            .execute(&self.pool)
+            .await?;
 
         // Dependencies are deleted automatically via CASCADE
         Ok(result.rows_affected() > 0)

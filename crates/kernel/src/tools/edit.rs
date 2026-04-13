@@ -1,14 +1,16 @@
+use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::edit_utils::{find_actual_string, generate_diff};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
-use crate::tools::read::MAX_FILE_SIZE;
 use crate::tools::Tool;
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+pub const EDIT_TOOL_NAME: &str = "edit";
 
 pub struct EditTool {
     base_dir: PathBuf,
@@ -30,27 +32,12 @@ impl EditTool {
         self
     }
 
-    fn resolve_path(&self, relative: &str) -> PathBuf {
-        let path = self.base_dir.join(relative);
-        path.canonicalize().unwrap_or(path)
-    }
-
-    /// Get file modification time in milliseconds since epoch
-    async fn get_mtime(&self, path: &PathBuf) -> Result<u64> {
-        let metadata = tokio::fs::metadata(path).await?;
-        let mtime = metadata.modified()?;
-        let duration = mtime
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        Ok(duration.as_millis() as u64)
-    }
-
     /// Check if the file has been modified since it was last read
     async fn check_staleness(&self, path: &PathBuf) -> Option<String> {
         let store = self.file_state_store.as_ref()?;
 
         // Check if file has been modified (mtime changed)
-        let current_mtime = self.get_mtime(path).await.ok()?;
+        let current_mtime = self.get_mtime(path).await;
         if store.is_stale(path, current_mtime) {
             return Some(
                 "File has been modified since it was read. Read the file again before editing."
@@ -61,11 +48,15 @@ impl EditTool {
         None
     }
 }
-
+impl FileTool for EditTool {
+    fn base_dir(&self) -> &Path {
+        &self.base_dir
+    }
+}
 #[async_trait]
 impl Tool for EditTool {
     fn name(&self) -> &'static str {
-        "edit"
+        EDIT_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {
@@ -194,8 +185,8 @@ impl Tool for EditTool {
 
         // Update file mtime in store
         if let Some(ref store) = self.file_state_store {
-            let mtime = self.get_mtime(&path).await.unwrap_or(0);
-            store.record(path.clone(), mtime);
+            let mtime = self.get_mtime(&path);
+            store.record(path.clone(), mtime.await);
         }
 
         // Generate diff
@@ -231,7 +222,8 @@ mod tests {
         writeln!(temp_file, "hello world").unwrap();
         let path = temp_file.path().parent().unwrap();
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
-        let full_path = path.join(file_name);
+        // Use canonicalized path to match what EditTool.resolve_path() returns
+        let full_path = path.join(file_name).canonicalize().unwrap();
 
         let tool = EditTool::new(path);
 

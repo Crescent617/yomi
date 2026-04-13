@@ -10,8 +10,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+
 /// Tool for spawning sub-agents to handle specific tasks
-pub struct SubAgentTool {
+pub struct SubagentTool {
     parent_id: AgentId,
     shared: Arc<AgentShared>,
     /// Parent's `input_tx` for forwarding async sub-agent results
@@ -26,7 +28,7 @@ pub struct SubAgentTool {
     parent_session_id: String,
 }
 
-impl SubAgentTool {
+impl SubagentTool {
     pub fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
@@ -115,9 +117,9 @@ enum SubAgentStatus {
 }
 
 #[async_trait]
-impl Tool for SubAgentTool {
+impl Tool for SubagentTool {
     fn name(&self) -> &'static str {
-        "spawn_subagent"
+        SUBAGENT_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {

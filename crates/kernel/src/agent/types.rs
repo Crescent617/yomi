@@ -1,4 +1,5 @@
 use crate::compactor::Compactor;
+use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
@@ -32,6 +33,8 @@ pub struct AgentSpawnArgs {
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
     pub working_dir: std::path::PathBuf,
+    /// Auto-approve level for tool permissions
+    pub auto_approve_level: Level,
 }
 
 impl AgentSpawnArgs {
@@ -46,6 +49,7 @@ impl AgentSpawnArgs {
             max_iterations: 50,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            auto_approve_level: Level::default(),
         }
     }
 
@@ -88,6 +92,13 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = dir.into();
+        self
+    }
+
+    /// Set auto-approve level for tool permissions
+    #[must_use]
+    pub const fn with_auto_approve_level(mut self, level: Level) -> Self {
+        self.auto_approve_level = level;
         self
     }
 }
@@ -239,8 +250,8 @@ impl AgentExecutionContext {
         *self.inner.state_tx.borrow()
     }
 
-    pub fn increment_iteration(&self) -> usize {
-        self.inner.iteration_count.fetch_add(1, Ordering::SeqCst)
+    pub fn increment_iteration(&self) {
+        self.inner.iteration_count.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn iteration_count(&self) -> usize {

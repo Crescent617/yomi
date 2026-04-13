@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_LIST_TOOL_NAME: &str = "TaskList";
+pub const TASK_LIST_TOOL_NAME: &str = "taskList";
 
 pub struct TaskListTool {
     store: SharedTaskStore,

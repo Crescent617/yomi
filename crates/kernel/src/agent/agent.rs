@@ -4,9 +4,11 @@ use super::{
 };
 use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
+use crate::permissions::{Checker, ToolLevelResolver};
 use crate::prompt::SystemPromptBuilder;
 use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
+use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
 use anyhow::Result;
 use futures::TryStreamExt;
@@ -27,6 +29,8 @@ pub enum AgentInput {
     },
     /// Cancel current operation
     Cancel,
+    /// Permission response from user/TUI
+    PermissionResponse { req_id: String, approved: bool },
 }
 
 pub struct Agent {
@@ -41,6 +45,8 @@ pub struct Agent {
     max_iterations: usize,
     // Tool registry - each agent has its own set of tools
     tool_registry: crate::tools::ToolRegistry,
+    // Permission checker for tool execution
+    permission_checker: Option<Arc<Checker>>,
     // Store the last error message for display
     last_error: Option<String>,
     // Pending token usage for the current message
@@ -92,11 +98,22 @@ impl Agent {
             &shared,
             &args.working_dir,
             &input_tx,
-            args.skills,
+            args.skills.clone(),
             &args.session_id,
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
         );
+
+        // Create permission checker and responder
+        // In YOLO mode (Dangerous), no checker is needed - all tools auto-approve
+        let (permission_checker, permission_responder) =
+            if args.auto_approve_level == crate::permissions::Level::Dangerous {
+                (None, None)
+            } else {
+                let (checker, responder) =
+                    Checker::new(args.auto_approve_level, id.clone(), event_tx.clone());
+                (Some(Arc::new(checker)), Some(responder))
+            };
 
         let agent = Self {
             id: id.clone(),
@@ -109,6 +126,7 @@ impl Agent {
             session_id: args.session_id,
             max_iterations: args.max_iterations,
             tool_registry,
+            permission_checker,
             last_error: None,
             pending_token_usage: None,
         };
@@ -120,7 +138,7 @@ impl Agent {
             }
         });
 
-        let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token);
+        let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token, permission_responder);
         (handle, event_rx)
     }
 
@@ -136,7 +154,9 @@ impl Agent {
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
     ) -> crate::tools::ToolRegistry {
-        use crate::tools::{BashTool, BashToolCtx, EditTool, ReadTool, SubAgentTool};
+        use crate::tools::{
+            BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
+        };
 
         let mut registry = crate::tools::ToolRegistry::new();
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
@@ -152,12 +172,26 @@ impl Agent {
         registry.register(read_tool);
 
         // Register Edit tool with file state store
-        let edit_tool = EditTool::new(working_dir).with_file_state_store(file_state_store);
+        let edit_tool =
+            EditTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
         registry.register(edit_tool);
+
+        // Register Write tool with file state store
+        let write_tool =
+            WriteTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        registry.register(write_tool);
+
+        // Register Glob tool
+        let glob_tool = GlobTool::new(working_dir);
+        registry.register(glob_tool);
+
+        // Register Grep tool
+        let grep_tool = GrepTool::new(working_dir);
+        registry.register(grep_tool);
 
         // Register SubAgent tool if enabled
         if enable_sub_agents {
-            let subagent_tool = SubAgentTool::new(
+            let subagent_tool = SubagentTool::new(
                 agent_id.clone(),
                 Arc::clone(shared),
                 input_tx.clone(),
@@ -288,6 +322,7 @@ impl Agent {
                     .await;
             }
         }
+
         Ok(())
     }
 
@@ -360,6 +395,15 @@ impl Agent {
             Some(AgentInput::Cancel) => {
                 self.cancel_token.cancel();
                 self.context.transition_to(AgentState::Cancelled);
+                Ok(())
+            }
+            Some(AgentInput::PermissionResponse {
+                req_id,
+                approved: _,
+            }) => {
+                // PermissionResponse 现在通过 PermissionResponder 处理
+                // 保留此方法以防需要特殊处理
+                tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
                 Ok(())
             }
             None => {
@@ -630,6 +674,8 @@ impl Agent {
             .and_then(|m| m.tool_calls.as_deref())
             .unwrap_or(&[]);
 
+        // First: Send Started event for ALL tool calls (before permission check)
+        // This ensures the UI shows all tools that are being attempted
         for call in tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
@@ -643,10 +689,82 @@ impl Agent {
                 .await;
         }
 
-        let results =
-            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.tool_registry).await;
+        // Second: Check permissions for each tool call
+        let mut approved_calls = Vec::new();
+        let mut denied_results = Vec::new();
 
-        for result in results {
+        for call in tool_calls {
+            let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
+
+            // Check if permission is needed
+            if let Some(ref checker) = self.permission_checker {
+                match checker.check_permission(call, level).await {
+                    Ok(true) => {
+                        // Approved, add to approved calls
+                        approved_calls.push(call.clone());
+                    }
+                    Ok(false) => {
+                        // Denied, create error result
+                        tracing::warn!(
+                            "Agent {} tool call {} denied: {} exceeds threshold",
+                            self.id,
+                            call.id,
+                            call.name
+                        );
+                        let error_msg = format!(
+                            "Permission denied: {} tool (level: {:?}) was not approved by user",
+                            call.name, level
+                        );
+                        denied_results.push(ToolExecutionResult {
+                            tool_call_id: call.id.clone(),
+                            event: ToolEvent::Error {
+                                agent_id: self.id.clone(),
+                                tool_id: call.id.clone(),
+                                error: error_msg.clone(),
+                                elapsed_ms: 0,
+                            },
+                            message: Message::tool_result(call.id.clone(), error_msg),
+                        });
+                    }
+                    Err(e) => {
+                        // Error checking permission, treat as denied
+                        tracing::error!(
+                            "Agent {} permission check failed for {}: {}",
+                            self.id,
+                            call.name,
+                            e
+                        );
+                        let error_msg = format!("Permission check failed: {e}");
+                        denied_results.push(ToolExecutionResult {
+                            tool_call_id: call.id.clone(),
+                            event: ToolEvent::Error {
+                                agent_id: self.id.clone(),
+                                tool_id: call.id.clone(),
+                                error: error_msg.clone(),
+                                elapsed_ms: 0,
+                            },
+                            message: Message::tool_result(call.id.clone(), error_msg),
+                        });
+                    }
+                }
+            } else {
+                // No permission checker (YOLO mode), approve all
+                approved_calls.push(call.clone());
+            }
+        }
+
+        // Execute only approved calls
+        let results = if approved_calls.is_empty() {
+            Vec::new()
+        } else {
+            crate::tools::execute_tools_parallel(&self.id, &approved_calls, &self.tool_registry)
+                .await
+        };
+
+        // Combine denied and executed results
+        let all_results: Vec<_> = denied_results.into_iter().chain(results).collect();
+
+        for result in all_results {
             if self.cancel_token.is_cancelled() {
                 return self.handle_cancel("tool execution").await;
             }

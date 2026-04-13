@@ -34,6 +34,11 @@ reqwest = { workspace = true, optional = true }
 eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 
+# Tool dependencies
+regex = "1"
+ignore = "0.4"
+globset = "0.4"
+
 # Task system dependencies
 # Note: fs4 removed - using SQLite instead of file-based storage
 

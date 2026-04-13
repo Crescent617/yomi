@@ -130,4 +130,23 @@ impl Coordinator {
         session.read().await.cancel();
         Ok(())
     }
+
+    pub async fn send_permission_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        approved: bool,
+        remember: bool,
+    ) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        let result = session
+            .read()
+            .await
+            .send_permission_response(req_id, approved, remember)
+            .await;
+        result
+    }
 }

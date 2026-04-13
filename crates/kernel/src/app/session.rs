@@ -1,3 +1,4 @@
+use crate::permissions::Level;
 use crate::types::{AgentId, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
@@ -21,6 +22,7 @@ pub struct Session {
 pub struct SessionConfig {
     pub agent: AgentConfig,
     pub project_path: std::path::PathBuf,
+    pub auto_approve_level: Level,
 }
 
 impl Session {
@@ -66,6 +68,9 @@ impl Session {
             config.without_sub_agents()
         };
 
+        // Add auto-approve level from app config
+        let config = config.with_auto_approve_level(self.config.auto_approve_level);
+
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &self.agent_shared, config);
         let agent_id = handle.id.clone();
         tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
@@ -96,6 +101,22 @@ impl Session {
         if let Some(handle) = &self.main_agent {
             tracing::info!("Cancelling session {}", self.id.0);
             handle.cancel();
+        }
+    }
+
+    /// Send permission response to the main agent
+    pub async fn send_permission_response(
+        &self,
+        req_id: &str,
+        approved: bool,
+        remember: bool,
+    ) -> Result<()> {
+        match &self.main_agent {
+            Some(handle) => handle
+                .send_permission_response(req_id, approved, remember)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send permission response: {e}")),
+            None => Err(anyhow::anyhow!("Session not initialized")),
         }
     }
 

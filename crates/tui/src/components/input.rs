@@ -104,7 +104,7 @@ impl InputMock {
             .map_or(0, |i| i + 1);
         // Calculate column position
         let col = self.cursor_pos - line_start;
-        
+
         if line_start > 0 {
             // Find the start of previous line
             let prev_line_start = self.content[..line_start - 1]
@@ -129,7 +129,7 @@ impl InputMock {
             .rfind('\n')
             .map_or(0, |i| i + 1);
         let col = self.cursor_pos - line_start;
-        
+
         if line_end < self.content.len() {
             // Find the end of next line
             let next_line_end = self.content[line_end + 1..]
@@ -408,7 +408,10 @@ impl InputMock {
     }
 
     /// Find which visual line contains the cursor position
-    fn find_cursor_visual_line(&self, visual_lines: &[VisualLine]) -> Option<(usize, usize, usize)> {
+    fn find_cursor_visual_line(
+        &self,
+        visual_lines: &[VisualLine],
+    ) -> Option<(usize, usize, usize)> {
         // Returns (line_index, column_in_visual_line, visual_line_start_in_content)
         for (i, line) in visual_lines.iter().enumerate() {
             if self.cursor_pos >= line.content_start && self.cursor_pos <= line.content_end {
@@ -465,10 +468,7 @@ impl MockComponent for InputMock {
                             .fg(colors::accent_user())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        vl.text.clone(),
-                        Style::default().fg(colors::text_primary()),
-                    ),
+                    Span::styled(vl.text.clone(), Style::default().fg(colors::text_primary())),
                 ])
             })
             .collect();
@@ -795,16 +795,30 @@ impl InputComponent {
                 None
             }
             // Home or Ctrl+A: move to start of line
-            tuirealm::Event::Keyboard(KeyEvent {
-code: Key::Home, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('a'), modifiers: KeyModifiers::CONTROL }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Home,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('a'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.move_to_start_of_line();
                 None
             }
             // End or Ctrl+E: move to end of line
-            tuirealm::Event::Keyboard(KeyEvent {
-code: Key::End, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::End,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('e'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.move_to_end_of_line();
                 None
             }

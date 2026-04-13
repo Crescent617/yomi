@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_UPDATE_TOOL_NAME: &str = "TaskUpdate";
+pub const TASK_UPDATE_TOOL_NAME: &str = "taskUpdate";
 
 pub struct TaskUpdateTool {
     store: SharedTaskStore,

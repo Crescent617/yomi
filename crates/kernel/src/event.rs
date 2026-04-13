@@ -13,9 +13,21 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
-    Message { content: String },
-    Confirm { tool_id: String, approved: bool },
+    Message {
+        content: String,
+    },
+    Confirm {
+        tool_id: String,
+        approved: bool,
+    },
     Interrupt,
+    /// Permission response from user/TUI
+    PermissionResponse {
+        req_id: String, // 对应 PermissionRequest 的 req_id
+        approved: bool,
+        /// If true, auto-approve this tool level for the rest of the session
+        remember: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +58,16 @@ pub enum AgentEvent {
     Progress {
         agent_id: AgentId,
         update: ProgressUpdate,
+    },
+    /// Permission request for tool execution approval
+    PermissionRequest {
+        agent_id: AgentId,
+        req_id: String, // 独立请求ID（非tool_call_id，保证唯一）
+        tool_id: String,
+        tool_name: String,
+        tool_args: String, // 工具参数（用于显示，如 Bash 命令）
+        tool_level: String,
+        reason: String,
     },
 }
 
