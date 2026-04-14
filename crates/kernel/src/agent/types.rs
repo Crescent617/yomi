@@ -1,11 +1,12 @@
 use crate::compactor::Compactor;
-use crate::providers::ModelConfig;
+use crate::providers::{HttpError, ModelConfig};
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
 use crate::types::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -332,6 +333,67 @@ impl AgentShared {
             storage,
             permission_state,
         }
+    }
+}
+
+/// Agent error type using thiserror
+#[derive(Error, Debug)]
+pub enum AgentError {
+    /// Agent reached maximum iterations
+    #[error("Agent reached maximum iterations: {count}")]
+    MaxIterationsExceeded { count: usize },
+
+    /// Cancelled is a terminal error - agent was cancelled by user or parent
+    #[error("Agent was cancelled")]
+    Cancelled,
+
+    /// Input channel closed unexpectedly
+    #[error("Input channel closed")]
+    ChannelClosed,
+
+    /// Stream task panicked
+    #[error("Stream task panicked: {0}")]
+    StreamTaskPanicked(String),
+
+    /// Streaming operation failed
+    #[error("Streaming failed: {0}")]
+    StreamingFailed(String),
+
+    /// Permission check failed
+    #[error("Permission check failed: {0}")]
+    PermissionCheckFailed(String),
+
+    /// Agent does not have permission checker configured
+    #[error("Agent does not have permission checker")]
+    NoPermissionChecker,
+
+    /// HTTP error from provider (retryable)
+    #[error("Provider HTTP error: {0}")]
+    Http(#[from] HttpError),
+
+    /// General provider error
+    #[error("Provider error: {0}")]
+    Provider(String),
+
+    /// Serialization error
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+}
+
+impl AgentError {
+    pub fn is_retryable(&self) -> bool {
+        use AgentError::*;
+        match self {
+            // HTTP errors: check status code
+            Http(e) => e.is_retryable(),
+            StreamingFailed(_) | StreamTaskPanicked(_) => true,
+            _ => true,
+        }
+    }
+
+    /// Check if this is a cancellation error (terminal, not a failure)
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, AgentError::Cancelled)
     }
 }
 

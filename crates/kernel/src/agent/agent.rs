@@ -1,6 +1,7 @@
 use super::message_buffer::MessageBuffer;
 use super::{
-    AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
+    AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
+    CancelToken,
 };
 use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
@@ -10,11 +11,9 @@ use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
-use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::Duration;
 use tracing::{info, warn};
 
 /// Input messages that can be sent to an Agent
@@ -27,8 +26,6 @@ pub enum AgentInput {
         task_id: String,
         content: Vec<ContentBlock>,
     },
-    /// Cancel current operation
-    Cancel,
     /// Permission response from user/TUI
     PermissionResponse { req_id: String, approved: bool },
     /// Close the agent gracefully (for subagent/resource management)
@@ -237,7 +234,7 @@ impl Agent {
         }
     }
 
-    async fn run(mut self) -> Result<()> {
+    async fn run(mut self) -> Result<(), AgentError> {
         tracing::info!(
             "Agent {} started with {} messages",
             self.id,
@@ -341,7 +338,7 @@ impl Agent {
     }
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
-    async fn handle_cancel(&self, context: &str) -> Result<()> {
+    async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("Agent {} {} cancelled", self.id, context);
         let _ = self
             .event_tx
@@ -354,14 +351,14 @@ impl Agent {
     }
 
     /// Record an error and store it for later display
-    fn record_error(&mut self, context: &str, error: &anyhow::Error) {
+    fn record_error(&mut self, context: &str, error: &AgentError) {
         let msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, msg);
         self.last_error = Some(msg);
     }
 
     /// Helper to emit `AgentEvent::Failed` and return error
-    async fn fail_agent(&self, context: &str, error: anyhow::Error) -> Result<()> {
+    async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, error_msg);
         let _n = self
@@ -374,7 +371,7 @@ impl Agent {
         Err(error)
     }
 
-    async fn handle_wait_for_input(&mut self) -> Result<()> {
+    async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
                 self.cancel_token.reset();
@@ -400,15 +397,11 @@ impl Agent {
             }
             Some(AgentInput::TaskResult { task_id, content }) => {
                 tracing::debug!("Task result received: {}", task_id);
+                self.cancel_token.reset();
                 let msg = Message::with_blocks(Role::User, content);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
-                Ok(())
-            }
-            Some(AgentInput::Cancel) => {
-                self.cancel_token.cancel();
-                self.context.transition_to(AgentState::Cancelled);
                 Ok(())
             }
             Some(AgentInput::PermissionResponse {
@@ -432,7 +425,7 @@ impl Agent {
         }
     }
 
-    async fn handle_streaming(&mut self) -> Result<()> {
+    async fn handle_streaming(&mut self) -> Result<(), AgentError> {
         let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
@@ -472,11 +465,11 @@ impl Agent {
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => return Err(AgentError::StreamingFailed(e.to_string())),
                 Err(e) if e.is_cancelled() => {
-                    return Err(anyhow::anyhow!("Stream task was cancelled"));
+                    return Err(AgentError::Cancelled);
                 }
-                Err(e) => return Err(anyhow::anyhow!("Stream task panicked: {e}")),
+                Err(e) => return Err(AgentError::StreamTaskPanicked(e.to_string())),
             }
         };
 
@@ -505,17 +498,22 @@ impl Agent {
     async fn collect_stream_output(
         &mut self,
         stream: &mut crate::providers::ModelStream,
-    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>)> {
+    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>), AgentError> {
         let mut current_text = String::new();
         let mut current_thinking = String::new();
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
 
         loop {
+            if self.cancel_token.is_cancelled() {
+                return self
+                    .handle_cancel("streaming")
+                    .await
+                    .map(|()| (vec![], vec![]));
+            }
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
-                    let _ = stream;
                     return self.handle_cancel("streaming").await.map(|()| (vec![], vec![]));
                 }
                 item = stream.try_next() => match item {
@@ -575,7 +573,7 @@ impl Agent {
                         }
                     },
                     Ok(None) => break,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(AgentError::Provider(e.to_string())),
                 }
             }
         }
@@ -668,7 +666,7 @@ impl Agent {
     }
 
     /// Transition to appropriate state after streaming completes
-    async fn transition_after_streaming(&self) -> Result<()> {
+    async fn transition_after_streaming(&self) -> Result<(), AgentError> {
         let has_tool_calls = self
             .message_buffer
             .messages()
@@ -707,7 +705,7 @@ impl Agent {
         Ok(())
     }
 
-    async fn handle_execute_tool(&mut self) -> Result<()> {
+    async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
         let tool_calls = self
             .message_buffer
             .messages()
@@ -836,7 +834,7 @@ impl Agent {
         self.message_buffer.messages()
     }
 
-    async fn handle_streaming_with_retry(&mut self) -> Result<()> {
+    async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
         let max_retries = 10;
         let mut attempt = 0;
 
@@ -856,19 +854,15 @@ impl Agent {
                 Err(e) => {
                     attempt += 1;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1 * attempt)).await;
                 }
             }
         }
     }
 
     /// Check if an error is retryable.
-    fn is_retryable_error(error: &anyhow::Error) -> bool {
+    fn is_retryable_error(error: &AgentError) -> bool {
         warn!("Streaming error: {}", error);
-        if let Some(http_err) = error.downcast_ref::<crate::providers::HttpError>() {
-            return http_err.is_retryable();
-        }
-        true // Unknown errors default to retryable
+        error.is_retryable()
     }
 }

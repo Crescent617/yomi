@@ -1,4 +1,4 @@
-use crate::agent::{AgentInput, AgentState, CancelToken};
+use crate::agent::{AgentError, AgentInput, AgentState, CancelToken};
 use crate::permissions::Responder;
 use crate::types::{AgentId, ContentBlock};
 use tokio::sync::mpsc;
@@ -31,24 +31,16 @@ impl AgentHandle {
     }
 
     /// 发送用户消息给 Agent（支持多模态内容）
-    pub async fn send_message(&self, content: Vec<ContentBlock>) -> anyhow::Result<()> {
+    pub async fn send_message(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
         self.input_tx
             .send(AgentInput::User(content))
             .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
+            .map_err(|_| AgentError::ChannelClosed)
     }
 
     /// 发送用户文本消息给 Agent（便捷方法）
-    pub async fn send_text(&self, text: String) -> anyhow::Result<()> {
+    pub async fn send_text(&self, text: String) -> Result<(), AgentError> {
         self.send_message(vec![ContentBlock::Text { text }]).await
-    }
-
-    /// 发送取消信号给 Agent
-    pub async fn send_cancel(&self) -> anyhow::Result<()> {
-        self.input_tx
-            .send(AgentInput::Cancel)
-            .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
     }
 
     /// 发送权限响应给 Agent
@@ -57,15 +49,12 @@ impl AgentHandle {
         req_id: &str,
         approved: bool,
         remember: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), AgentError> {
         if let Some(ref responder) = self.permission_responder {
             responder.respond(req_id, approved, remember).await;
             Ok(())
         } else {
-            Err(anyhow::anyhow!(
-                "Agent {} does not have permission checker",
-                self.id
-            ))
+            Err(AgentError::NoPermissionChecker)
         }
     }
 
@@ -91,10 +80,10 @@ impl AgentHandle {
     }
 
     /// 优雅地关闭 Agent（发送 Close 信号，区别于 Cancel）
-    pub async fn close(&self) -> anyhow::Result<()> {
+    pub async fn close(&self) -> Result<(), AgentError> {
         self.input_tx
             .send(super::AgentInput::Close)
             .await
-            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
+            .map_err(|_| AgentError::ChannelClosed)
     }
 }

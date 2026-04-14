@@ -107,11 +107,8 @@ impl Session {
         );
         match &self.main_agent {
             Some(handle) => {
-                let result = handle.send_text(content).await;
-                if let Err(ref e) = result {
-                    tracing::error!("Session {} failed to send message: {}", self.id.0, e);
-                }
-                result
+                handle.send_text(content).await?;
+                Ok(())
             }
             None => Err(anyhow::anyhow!("Session not initialized")),
         }
