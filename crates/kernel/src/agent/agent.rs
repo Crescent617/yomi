@@ -452,25 +452,35 @@ impl Agent {
         // Validate and clean message buffer before sending to provider
         self.message_buffer.validate_and_clean();
 
-        let messages = self.message_buffer.messages();
-        let stream_future = tokio::time::timeout(
-            Duration::from_secs(10),
-            self.shared
-                .provider
-                .stream(messages, &tools, &self.shared.model_config),
-        );
+        // Clone messages and tools for the spawned task (needs 'static)
+        let messages: Vec<Message> = self.message_buffer.messages().to_vec();
+
+        // Spawn provider request in a separate task to allow cancellation
+        let provider = self.shared.provider.clone();
+        let model_config = self.shared.model_config.clone();
+        let stream_task =
+            tokio::spawn(async move { provider.stream(&messages, &tools, &model_config).await });
+        let abort_handle = stream_task.abort_handle();
 
         info!("Agent {} waiting for model stream to start", self.id);
 
         let mut stream = tokio::select! {
             biased;
             () = self.cancel_token.cancelled() => {
+                abort_handle.abort();
                 return self.handle_cancel("stream creation").await;
             }
-            result = stream_future => match result {
+            () = tokio::time::sleep(Duration::from_secs(10)) => {
+                abort_handle.abort();
+                return Err(anyhow::anyhow!("Stream creation timeout"));
+            }
+            result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(e.into()),
+                Err(e) if e.is_cancelled() => {
+                    return Err(anyhow::anyhow!("Stream task was cancelled"));
+                }
+                Err(e) => return Err(anyhow::anyhow!("Stream task panicked: {e}")),
             }
         };
 
@@ -787,7 +797,7 @@ impl Agent {
                 &self.tool_registry,
                 Some(&self.cancel_token),
             )
-                .await
+            .await
         };
 
         // Combine denied and executed results
