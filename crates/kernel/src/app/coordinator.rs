@@ -1,6 +1,7 @@
 use crate::agent::AgentShared;
 use crate::app::session::{Session, SessionConfig};
 use crate::event::Event;
+use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::Storage;
 use crate::types::SessionId;
@@ -149,5 +150,19 @@ impl Coordinator {
             .send_permission_response(req_id, approved, remember)
             .await;
         result
+    }
+
+    pub async fn set_permission_level(
+        &self,
+        session_id: &SessionId,
+        level: Level,
+    ) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        session.read().await.set_permission_level(level).await;
+        tracing::info!("Permission level set to {:?} for session {}", level, session_id.0);
+        Ok(())
     }
 }

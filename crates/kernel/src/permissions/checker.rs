@@ -80,6 +80,17 @@ impl PermissionState {
             pending_reqs: Arc::clone(&self.pending_permissions),
         }
     }
+
+    /// Update the auto-approve level at runtime
+    pub async fn set_auto_approve_level(&self, level: Level) {
+        let mut current = self.auto_approve_level.write().await;
+        *current = level;
+    }
+
+    /// Get the current auto-approve level
+    pub async fn get_auto_approve_level(&self) -> Level {
+        *self.auto_approve_level.read().await
+    }
 }
 
 /// 权限检查器
@@ -184,7 +195,10 @@ impl Checker {
                 ),
             }))
             .await?;
-        tracing::info!("Permission request sent with req_id={}", req_id);
+        tracing::info!(
+            "Permission request sent with req_id={req_id} for tool {}",
+            tool_call.name
+        );
 
         // 等待响应（使用 timeout 防止无限等待）
         match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {

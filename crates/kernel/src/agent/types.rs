@@ -22,7 +22,7 @@ pub struct AgentConfig {
 }
 
 /// Configuration for spawning a new agent
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentSpawnArgs {
     pub base_prompt: String,
     pub skills: Vec<Arc<Skill>>,
@@ -32,6 +32,25 @@ pub struct AgentSpawnArgs {
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
     pub working_dir: std::path::PathBuf,
+    /// Parent agent's `event_tx` for forwarding permission requests
+    /// Subagent's permission requests will be sent here so TUI can show dialogs
+    pub parent_event_tx: Option<tokio::sync::mpsc::Sender<crate::event::Event>>,
+}
+
+impl std::fmt::Debug for AgentSpawnArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentSpawnArgs")
+            .field("base_prompt", &self.base_prompt)
+            .field("skills", &self.skills)
+            .field("history", &self.history)
+            .field("session_id", &self.session_id)
+            .field("parent_session_id", &self.parent_session_id)
+            .field("max_iterations", &self.max_iterations)
+            .field("enable_sub_agents", &self.enable_sub_agents)
+            .field("working_dir", &self.working_dir)
+            .field("parent_event_tx", &self.parent_event_tx.is_some())
+            .finish()
+    }
 }
 
 impl AgentSpawnArgs {
@@ -46,6 +65,7 @@ impl AgentSpawnArgs {
             max_iterations: 50,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            parent_event_tx: None,
         }
     }
 
@@ -88,6 +108,16 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = dir.into();
+        self
+    }
+
+    /// Set parent `event_tx` for forwarding permission requests
+    #[must_use]
+    pub fn with_parent_event_tx(
+        mut self,
+        event_tx: tokio::sync::mpsc::Sender<crate::event::Event>,
+    ) -> Self {
+        self.parent_event_tx = Some(event_tx);
         self
     }
 }

@@ -394,8 +394,6 @@ mod tests {
 
     #[test]
     fn test_derive_plugin_name_from_cache_structure() {
-        let loader = PluginLoader::new(vec![]);
-
         // Test claude-code cache structure - should only use plugin name, not marketplace
         let path = Path::new(
             "/home/user/.claude/plugins/cache/everything-claude-code/my-plugin/660e0d3badd3",

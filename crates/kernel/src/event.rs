@@ -1,3 +1,4 @@
+use crate::permissions::Level;
 use crate::types::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,19 @@ pub enum Event {
     System(SystemEvent),
 }
 
+/// Permission control command from TUI to kernel
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionCommand {
+    /// Response to a permission request
+    Response {
+        req_id: String,
+        approved: bool,
+        remember: bool,
+    },
+    /// Set permission level (for YOLO mode toggle)
+    SetLevel(Level),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
     Message {
@@ -21,13 +35,6 @@ pub enum UserEvent {
         approved: bool,
     },
     Interrupt,
-    /// Permission response from user/TUI
-    PermissionResponse {
-        req_id: String, // 对应 PermissionRequest 的 req_id
-        approved: bool,
-        /// If true, auto-approve this tool level for the rest of the session
-        remember: bool,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

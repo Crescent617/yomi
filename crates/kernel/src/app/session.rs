@@ -16,6 +16,8 @@ pub struct Session {
     agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     event_rx: Option<mpsc::Receiver<Event>>,
+    /// Shared permission state for runtime level updates
+    permission_state: Option<PermissionState>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ impl Session {
             agent_shared,
             main_agent: None,
             event_rx: None,
+            permission_state: None,
         }
     }
 
@@ -57,11 +60,12 @@ impl Session {
 
         // Create shared permission state for all agents in this session
         // In YOLO mode (Dangerous), no permission state is created (all tools auto-approve)
-        let permission_state = if self.config.auto_approve_level == Level::Dangerous {
-            None
-        } else {
-            Some(PermissionState::new(self.config.auto_approve_level).0)
-        };
+        // Create or reuse permission state
+        if self.permission_state.is_none() && self.config.auto_approve_level != Level::Dangerous {
+            let ps = PermissionState::new(self.config.auto_approve_level).0;
+            self.permission_state = Some(ps);
+        }
+        let permission_state = self.permission_state.clone();
 
         let config =
             AgentSpawnArgs::new(self.config.agent.system_prompt.clone(), self.id.0.clone())
@@ -150,5 +154,15 @@ impl Session {
 
     pub const fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<Event>> {
         self.event_rx.take()
+    }
+
+    /// Update permission level at runtime
+    pub async fn set_permission_level(&self, level: Level) {
+        if let Some(ref ps) = self.permission_state {
+            ps.set_auto_approve_level(level).await;
+            tracing::info!("Session {} permission level updated to {:?}", self.id.0, level);
+        } else {
+            tracing::warn!("Session {} has no permission state to update", self.id.0);
+        }
     }
 }

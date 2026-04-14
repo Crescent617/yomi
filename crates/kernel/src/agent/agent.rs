@@ -98,6 +98,7 @@ impl Agent {
             &shared,
             &args.working_dir,
             &input_tx,
+            &event_tx,
             args.skills.clone(),
             &args.session_id,
             args.parent_session_id.as_deref(),
@@ -106,9 +107,14 @@ impl Agent {
 
         // Create permission checker and responder from shared state
         // If no permission_state in shared (YOLO mode), all tools auto-approve
+        // For subagents: use parent's event_tx so permission requests go to parent TUI
+        let permission_event_tx = args
+            .parent_event_tx
+            .clone()
+            .unwrap_or_else(|| event_tx.clone());
         let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
             Some(state) => {
-                let checker = Checker::new(state.clone(), id.clone(), event_tx.clone());
+                let checker = Checker::new(state.clone(), id.clone(), permission_event_tx);
                 let responder = state.create_responder();
                 (Some(Arc::new(checker)), Some(responder))
             }
@@ -149,6 +155,7 @@ impl Agent {
         shared: &Arc<AgentShared>,
         working_dir: &std::path::PathBuf,
         input_tx: &mpsc::Sender<AgentInput>,
+        event_tx: &mpsc::Sender<Event>,
         skills: Vec<Arc<Skill>>,
         session_id: &str,
         parent_session_id: Option<&str>,
@@ -199,6 +206,7 @@ impl Agent {
                 shared.storage.clone(),
                 working_dir.clone(),
                 session_id.to_owned(),
+                event_tx.clone(),
             );
             registry.register(subagent_tool);
         }

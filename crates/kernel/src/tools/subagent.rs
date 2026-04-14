@@ -26,9 +26,13 @@ pub struct SubagentTool {
     working_dir: std::path::PathBuf,
     /// Parent session ID for task store sharing
     parent_session_id: String,
+    /// Parent's `event_tx` for forwarding permission requests
+    /// Subagent's permission requests will be sent here so TUI can show dialogs
+    parent_event_tx: mpsc::Sender<crate::event::Event>,
 }
 
 impl SubagentTool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
@@ -37,6 +41,7 @@ impl SubagentTool {
         storage: Option<Arc<dyn Storage>>,
         working_dir: impl Into<std::path::PathBuf>,
         parent_session_id: String,
+        parent_event_tx: mpsc::Sender<crate::event::Event>,
     ) -> Self {
         Self {
             parent_id,
@@ -46,6 +51,7 @@ impl SubagentTool {
             storage,
             working_dir: working_dir.into(),
             parent_session_id,
+            parent_event_tx,
         }
     }
 
@@ -228,7 +234,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             .with_parent_session(&self.parent_session_id)
             .with_max_iterations(20)
             .without_sub_agents()
-            .with_working_dir(self.working_dir.clone());
+            .with_working_dir(self.working_dir.clone())
+            .with_parent_event_tx(self.parent_event_tx.clone());
 
         let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 

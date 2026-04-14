@@ -14,7 +14,8 @@ use tuirealm::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use kernel::event::Event as AppEvent;
+use kernel::event::{Event as AppEvent, PermissionCommand};
+use kernel::permissions::Level;
 use kernel::types::Message;
 
 use crate::{
@@ -50,8 +51,8 @@ pub struct Model {
     pub input_tx: mpsc::Sender<String>,
     /// Channel to send cancel requests
     pub cancel_tx: mpsc::Sender<()>,
-    /// Channel to send permission responses (`req_id`, approved, remember)
-    pub permission_tx: mpsc::Sender<(String, bool, bool)>,
+    /// Channel to send permission commands (responses and level changes)
+    pub permission_tx: mpsc::Sender<PermissionCommand>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -73,17 +74,21 @@ pub struct Model {
     working_dir: std::path::PathBuf,
     /// Session messages to display on startup (for resumed sessions)
     session_messages: Vec<Message>,
+    /// Permission level for displaying YOLO mode indicator
+    permission_level: Level,
 }
 
 impl Model {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<String>,
         cancel_tx: mpsc::Sender<()>,
-        permission_tx: mpsc::Sender<(String, bool, bool)>,
+        permission_tx: mpsc::Sender<PermissionCommand>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
+        permission_level: Level,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
@@ -107,6 +112,7 @@ impl Model {
             input_history,
             working_dir,
             session_messages,
+            permission_level,
         })
     }
 
@@ -166,6 +172,21 @@ impl Model {
     /// Initialize banner with real data (called once at startup)
     pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
         self.update_banner(working_dir, skills)
+    }
+
+    /// Initialize status bar with permission level for YOLO mode display
+    pub fn init_status_bar(&mut self) -> Result<()> {
+        let level_val = match self.permission_level {
+            Level::Safe => 0,
+            Level::Caution => 1,
+            Level::Dangerous => 2,
+        };
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_permission_level"),
+            AttrValue::Number(level_val),
+        )?;
+        Ok(())
     }
 
     /// Initialize context window display in status bar
@@ -637,11 +658,11 @@ impl Model {
                     // Store the pending permission request
                     self.pending_permission = Some(req_id.clone());
 
-                    // Show confirmation dialog with "Always approve" option
+                    // Show confirmation dialog with "Always approve" and "YOLO" options
                     let message =
                         format!("Tool: {tool_name}\nLevel: {tool_level}\nArgs: {tool_args}");
                     let dialog_data = format!(
-                       "Can I run this tool?\x00Sure\x00Always allow this tool with level {tool_level}\x00Not now\x00{message}" 
+                       "Can I run this tool?\x00Sure\x00Always allow this tool with level {tool_level}\x00Not now\x00YOLO - allow all dangerous tools\x00{message}"
                     );
                     tracing::info!("Showing dialog with data: {dialog_data}",);
                     let _ = self.app.attr(
@@ -908,14 +929,41 @@ impl Update<Msg> for Model {
                 }
                 Msg::DialogSelected(idx) => {
                     // Send permission response based on selection
-                    // idx: 0 = Approve, 1 = Always approve, 2 = Deny
+                    // idx: 0 = Approve, 1 = Always approve, 2 = Deny, 3 = YOLO
                     if let Some(req_id) = self.pending_permission.take() {
                         let (approved, remember) = match idx {
-                            0 => (true, false),  // Approve once
-                            1 => (true, true),   // Always approve this tool
+                            0 => (true, false), // Approve once
+                            1 => (true, true),  // Always approve this tool
+                            3 => {
+                                // YOLO mode - enable Dangerous level
+                                self.permission_level = Level::Dangerous;
+                                // Update status bar to show YOLO
+                                let _ = self.app.attr(
+                                    &Id::StatusBar,
+                                    Attribute::Custom("set_permission_level"),
+                                    AttrValue::Number(2),
+                                );
+                                // Show status message
+                                let _ = self.app.attr(
+                                    &Id::StatusBar,
+                                    Attribute::Custom("show_message"),
+                                    AttrValue::String(
+                                        "5000\x00YOLO mode enabled - all tools will be auto-approved".to_string(),
+                                    ),
+                                );
+                                // Send command to kernel to update permission level
+                                let _ = self
+                                    .permission_tx
+                                    .try_send(PermissionCommand::SetLevel(Level::Dangerous));
+                                (true, false)
+                            }
                             _ => (false, false), // Deny
                         };
-                        let _ = self.permission_tx.try_send((req_id, approved, remember));
+                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                            req_id,
+                            approved,
+                            remember,
+                        });
                     }
                     // Return focus to input box
                     let _ = self.app.active(&Id::InputBox);
@@ -924,7 +972,11 @@ impl Update<Msg> for Model {
                 Msg::DialogCancelled => {
                     // Deny the permission request if dialog is cancelled
                     if let Some(req_id) = self.pending_permission.take() {
-                        let _ = self.permission_tx.try_send((req_id, false, false));
+                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                            req_id,
+                            approved: false,
+                            remember: false,
+                        });
                     }
                     // Return focus to input box
                     let _ = self.app.active(&Id::InputBox);
@@ -939,18 +991,18 @@ impl Update<Msg> for Model {
 }
 
 /// Run the TUI application
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::future_not_send)]
+#[allow(clippy::too_many_arguments, clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<String>,
     cancel_tx: mpsc::Sender<()>,
-    permission_tx: mpsc::Sender<(String, bool, bool)>,
+    permission_tx: mpsc::Sender<PermissionCommand>,
     working_dir: String,
     skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
     context_window: u32,
+    permission_level: Level,
 ) -> Result<Vec<String>> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -961,8 +1013,10 @@ pub async fn run_tui(
         input_history,
         working_dir_path,
         session_messages,
+        permission_level,
     )?;
     model.init_banner(working_dir, skills)?;
+    model.init_status_bar()?;
     // Set input history after banner init
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)

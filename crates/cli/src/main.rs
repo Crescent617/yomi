@@ -3,6 +3,7 @@ use clap::Parser;
 use kernel::{
     agent::AgentConfig,
     config::{env_names, Config, ModelProvider},
+    event::PermissionCommand,
     expand_tilde,
     misc::plugin::PluginLoader,
     permissions::Level,
@@ -69,7 +70,7 @@ async fn main() -> Result<()> {
         let mut loaded = None;
         for path in &default_paths {
             if path.exists() {
-                tracing::info!("Loading config from: {}", path.display());
+                tracing::debug!("Loading config from: {}", path.display());
                 loaded = Some(Config::from_file(path)?);
                 break;
             }
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
     if let Some(level_str) = args.auto_approve {
         if let Ok(level) = Level::from_str(&level_str) {
             config.auto_approve = level;
-            tracing::info!("Auto-approve level set to: {:?}", level);
+            tracing::info!("Auto-approve level set to: {}", level);
         } else {
             tracing::warn!("Invalid auto-approve level: {}", level_str);
         }
@@ -139,13 +140,13 @@ async fn main() -> Result<()> {
 
         // Log loaded plugins and load their skills
         if !plugins.is_empty() {
-            tracing::info!("Loaded {} plugin(s)", plugins.len());
+            tracing::debug!("Loaded {} plugin(s)", plugins.len());
             for plugin in &plugins {
-                tracing::info!("  - {} (from {})", plugin.name, plugin.path.display());
+                tracing::debug!("  - {} (from {})", plugin.name, plugin.path.display());
                 match SkillLoader::load_from_plugin(plugin) {
                     Ok(plugin_skills) => {
                         for skill in plugin_skills {
-                            tracing::info!("    - skill: {}", skill.name);
+                            tracing::debug!("    - skill: {}", skill.name);
                             skills.push(skill);
                         }
                     }
@@ -179,7 +180,7 @@ async fn main() -> Result<()> {
     if !skills.is_empty() {
         tracing::info!("Loaded {} skill(s)", skills.len());
         for skill in &skills {
-            tracing::info!("  - {} (from {})", skill.name, skill.source_path.display());
+            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
         }
     }
 
@@ -289,7 +290,7 @@ async fn main() -> Result<()> {
     // Create channel for cancel requests
     let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
     // Create channel for permission responses
-    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<(String, bool, bool)>(10);
+    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<PermissionCommand>(10);
 
     // Spawn task to forward input to coordinator
     let coord_for_input = coordinator.clone();
@@ -316,22 +317,44 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Spawn task to handle permission responses
+    // Spawn task to handle permission commands
     let coord_for_permission = coordinator.clone();
     let session_id_for_permission = session_id.clone();
     tokio::spawn(async move {
-        while let Some((req_id, approved, remember)) = permission_rx.recv().await {
-            tracing::info!(
-                "CLI received permission response: req_id={} approved={} remember={}",
-                req_id,
-                approved,
-                remember
-            );
-            if let Err(e) = coord_for_permission
-                .send_permission_response(&session_id_for_permission, &req_id, approved, remember)
-                .await
-            {
-                tracing::error!("Failed to send permission response: {}", e);
+        while let Some(cmd) = permission_rx.recv().await {
+            match cmd {
+                PermissionCommand::Response {
+                    req_id,
+                    approved,
+                    remember,
+                } => {
+                    tracing::debug!(
+                        "CLI received permission response: req_id={} approved={} remember={}",
+                        req_id,
+                        approved,
+                        remember
+                    );
+                    if let Err(e) = coord_for_permission
+                        .send_permission_response(
+                            &session_id_for_permission,
+                            &req_id,
+                            approved,
+                            remember,
+                        )
+                        .await
+                    {
+                        tracing::error!("Failed to send permission response: {}", e);
+                    }
+                }
+                PermissionCommand::SetLevel(level) => {
+                    tracing::debug!("CLI received SetLevel command: {:?}", level);
+                    if let Err(e) = coord_for_permission
+                        .set_permission_level(&session_id_for_permission, level)
+                        .await
+                    {
+                        tracing::error!("Failed to set permission level: {}", e);
+                    }
+                }
             }
         }
     });
@@ -359,6 +382,7 @@ async fn main() -> Result<()> {
         input_history,
         session_messages,
         context_window,
+        config.auto_approve,
     )
     .await?;
 

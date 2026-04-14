@@ -53,6 +53,9 @@ pub enum Msg {
     GoToTop,    // 'g' - go to first line
     GoToBottom, // 'G' - go to last line
 
+    // Toggle YOLO mode (Dangerous permission level)
+    ToggleYoloMode,
+
     // Dialog results
     DialogSelected(usize), // Selected option index
     DialogCancelled,       // Dialog was cancelled

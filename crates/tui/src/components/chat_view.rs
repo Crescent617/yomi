@@ -574,12 +574,13 @@ impl ChatView {
                 elapsed_ms,
                 ..
             } => {
-                let (icon, color) = match status {
-                    ToolStatus::Running => ("", colors::accent_warning()),
-                    ToolStatus::Completed => ("", colors::accent_success()),
-                    ToolStatus::Failed => ("", colors::accent_error()),
-                    ToolStatus::Cancelled => ("", colors::text_secondary()),
+                let color = match status {
+                    ToolStatus::Running => colors::accent_warning(),
+                    ToolStatus::Completed => colors::accent_success(),
+                    ToolStatus::Failed => colors::accent_error(),
+                    ToolStatus::Cancelled => colors::text_secondary(),
                 };
+                let icon = toolname_to_icon(tool_name);
 
                 // Build header with execution time (only show if >= 1s)
                 let time_str = elapsed_ms
@@ -1210,4 +1211,16 @@ fn to_camel_case(s: &str) -> String {
         .next()
         .map(|c| c.to_uppercase().to_string() + chars.as_str())
         .unwrap_or_default()
+}
+
+fn toolname_to_icon(tool_name: &str) -> &'static str {
+    match tool_name.to_lowercase().as_str() {
+        "subagent" => "󰚩",
+        "read" => "",
+        "write" => "",
+        "bash" => "",
+        // start with "task" -> task icon
+        name if name.starts_with("task") => "",
+        _ => "",
+    }
 }
