@@ -364,7 +364,7 @@ impl Agent {
     async fn fail_agent(&self, context: &str, error: anyhow::Error) -> Result<()> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, error_msg);
-        let _ = self
+        let _n = self
             .event_tx
             .send(Event::Agent(AgentEvent::Failed {
                 agent_id: self.id.clone(),
@@ -469,10 +469,6 @@ impl Agent {
             () = self.cancel_token.cancelled() => {
                 abort_handle.abort();
                 return self.handle_cancel("stream creation").await;
-            }
-            () = tokio::time::sleep(Duration::from_secs(10)) => {
-                abort_handle.abort();
-                return Err(anyhow::anyhow!("Stream creation timeout"));
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
@@ -646,10 +642,8 @@ impl Agent {
                 // Persist compacted state
                 if let Some(storage) = &self.shared.storage {
                     let sid = crate::types::SessionId(self.session_id.clone());
-                    let messages_for_storage: Vec<Message> = new_messages
-                        .iter()
-                        .map(|m| (**m).clone())
-                        .collect();
+                    let messages_for_storage: Vec<Message> =
+                        new_messages.iter().map(|m| (**m).clone()).collect();
                     if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
                         tracing::warn!(
                             "Agent {} failed to persist compacted messages: {}",
