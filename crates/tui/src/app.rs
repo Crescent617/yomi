@@ -435,7 +435,7 @@ impl Model {
                     }
                     self.redraw = true;
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Complete { .. }) => {
+                AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
                     self.is_streaming = false;
 
                     // Stop status bar
@@ -664,7 +664,7 @@ impl Model {
                     let dialog_data = format!(
                        "Can I run this tool?\x00Sure\x00Always allow this tool with level {tool_level}\x00Not now\x00YOLO - allow all dangerous tools\x00{message}"
                     );
-                    tracing::info!("Showing dialog with data: {dialog_data}",);
+                    tracing::debug!("Showing dialog with data: {dialog_data}",);
                     let _ = self.app.attr(
                         &Id::Dialog,
                         Attribute::Custom("show"),
@@ -672,7 +672,7 @@ impl Model {
                     );
                     // Give focus to dialog so it receives keyboard events
                     let result = self.app.active(&Id::Dialog);
-                    tracing::info!("Dialog focus result: {:?}", result);
+                    tracing::debug!("Dialog focus result: {:?}", result);
                     self.redraw = true;
                 }
                 _ => {}

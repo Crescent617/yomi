@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::info;
 
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 
@@ -98,7 +99,8 @@ Provide your response in a structured format:
                     // Only capture text output to avoid bloating parent context
                     output.push_str(&text);
                 }
-                Event::Agent(AgentEvent::Completed { .. }) => {
+                Event::Model(ModelEvent::Completed { .. }) => {
+                    info!("Sub-agent completed with output");
                     return SubAgentStatus::Completed;
                 }
                 Event::Agent(AgentEvent::Failed { error, .. }) => {
@@ -115,6 +117,7 @@ Provide your response in a structured format:
 }
 
 /// Sub-agent completion status
+#[derive(Debug)]
 enum SubAgentStatus {
     Completed,
     Failed(String),
@@ -301,6 +304,10 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 // Collect output from sub-agent
                 let mut output = String::new();
                 let status = Self::collect_subagent_output(&mut event_rx, &mut output).await;
+                info!(
+                    "Sub-agent {} completed with status: {:?}",
+                    sub_agent_id, status
+                );
 
                 match status {
                     SubAgentStatus::Completed => Ok(ToolOutput {

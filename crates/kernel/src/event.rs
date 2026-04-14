@@ -27,25 +27,13 @@ pub enum PermissionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
-    Message {
-        content: String,
-    },
-    Confirm {
-        tool_id: String,
-        approved: bool,
-    },
+    Message { content: String },
+    Confirm { tool_id: String, approved: bool },
     Interrupt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
-    Started {
-        agent_id: AgentId,
-    },
-    StateChanged {
-        agent_id: AgentId,
-        state: String,
-    },
     Completed {
         agent_id: AgentId,
         result: AgentResult,
@@ -56,15 +44,6 @@ pub enum AgentEvent {
     },
     Cancelled {
         agent_id: AgentId,
-    },
-    SubAgentSpawned {
-        parent_id: AgentId,
-        child_id: AgentId,
-        mode: String,
-    },
-    Progress {
-        agent_id: AgentId,
-        update: ProgressUpdate,
     },
     /// Permission request for tool execution approval
     PermissionRequest {
@@ -89,7 +68,7 @@ pub enum ModelEvent {
         agent_id: AgentId,
         content: ContentChunk,
     },
-    Complete {
+    Completed {
         agent_id: AgentId,
     },
     Error {

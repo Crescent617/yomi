@@ -15,7 +15,7 @@ use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
@@ -142,6 +142,7 @@ impl Agent {
             if let Err(e) = agent.run().await {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
+            info!("Agent {} done", handle_id);
         });
 
         let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token, permission_responder);
@@ -446,6 +447,8 @@ impl Agent {
                 .stream(messages, &tools, &self.shared.model_config),
         );
 
+        info!("Agent {} waiting for model stream to start", self.id);
+
         let mut stream = tokio::select! {
             biased;
             () = self.cancel_token.cancelled() => {
@@ -659,13 +662,13 @@ impl Agent {
             );
             self.context.transition_to(AgentState::ExecutingTool);
         } else {
-            tracing::debug!(
+            tracing::info!(
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
             let _ = self
                 .event_tx
-                .send(Event::Model(ModelEvent::Complete {
+                .send(Event::Model(ModelEvent::Completed {
                     agent_id: self.id.clone(),
                 }))
                 .await;
