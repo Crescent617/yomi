@@ -5,6 +5,8 @@ use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
+use crate::agent::CancelToken;
+
 const MAX_OUTPUT_LENGTH: usize = 40_000;
 const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length.]";
 
@@ -20,11 +22,12 @@ fn truncate_output(output: &str) -> String {
     strs::truncate_with_suffix(output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
-/// Execute multiple tool calls in parallel
+/// Execute multiple tool calls in parallel with optional cancellation support
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
+    cancel_token: Option<&CancelToken>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -118,25 +121,66 @@ pub async fn execute_tools_parallel(
     }
 
     let mut results = Vec::new();
-    while let Some(Ok(result)) = join_set.join_next().await {
-        if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
-            tracing::debug!(
-                "Tool {} completed successfully in {}ms",
-                result.tool_call_id,
-                elapsed_ms
-            );
-        } else if let ToolEvent::Error {
-            error, elapsed_ms, ..
-        } = &result.event
-        {
-            tracing::warn!(
-                "Tool {} failed in {}ms: {}",
-                result.tool_call_id,
-                elapsed_ms,
-                error
-            );
+
+    // If cancel_token is provided, use select! to wait for either completion or cancellation
+    if let Some(token) = cancel_token {
+        loop {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    tracing::info!("Tool execution cancelled, aborting {} remaining tasks", join_set.len());
+                    join_set.abort_all();
+                    break;
+                }
+                result = join_set.join_next() => {
+                    match result {
+                        Some(Ok(r)) => {
+                            if let ToolEvent::Output { elapsed_ms, .. } = &r.event {
+                                tracing::debug!(
+                                    "Tool {} completed successfully in {}ms",
+                                    r.tool_call_id,
+                                    elapsed_ms
+                                );
+                            } else if let ToolEvent::Error { error, elapsed_ms, .. } = &r.event {
+                                tracing::warn!(
+                                    "Tool {} failed in {}ms: {}",
+                                    r.tool_call_id,
+                                    elapsed_ms,
+                                    error
+                                );
+                            }
+                            results.push(r);
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!("Tool task panicked: {}", e);
+                        }
+                        None => break, // All tasks completed
+                    }
+                }
+            }
         }
-        results.push(result);
+    } else {
+        // Original behavior without cancellation
+        while let Some(Ok(result)) = join_set.join_next().await {
+            if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
+                tracing::debug!(
+                    "Tool {} completed successfully in {}ms",
+                    result.tool_call_id,
+                    elapsed_ms
+                );
+            } else if let ToolEvent::Error {
+                error, elapsed_ms, ..
+            } = &result.event
+            {
+                tracing::warn!(
+                    "Tool {} failed in {}ms: {}",
+                    result.tool_call_id,
+                    elapsed_ms,
+                    error
+                );
+            }
+            results.push(result);
+        }
     }
 
     let success_count = results

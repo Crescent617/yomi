@@ -1,4 +1,4 @@
-use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, SubAgentMode};
+use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, CancelToken, SubAgentMode};
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::storage::Storage;
@@ -30,6 +30,8 @@ pub struct SubagentTool {
     /// Parent's `event_tx` for forwarding permission requests
     /// Subagent's permission requests will be sent here so TUI can show dialogs
     parent_event_tx: mpsc::Sender<crate::event::Event>,
+    /// Optional cancel token to share with parent (for cascading cancellation)
+    cancel_token: Option<CancelToken>,
 }
 
 impl SubagentTool {
@@ -43,6 +45,7 @@ impl SubagentTool {
         working_dir: impl Into<std::path::PathBuf>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<crate::event::Event>,
+        cancel_token: Option<CancelToken>,
     ) -> Self {
         Self {
             parent_id,
@@ -53,6 +56,7 @@ impl SubagentTool {
             working_dir: working_dir.into(),
             parent_session_id,
             parent_event_tx,
+            cancel_token,
         }
     }
 
@@ -238,7 +242,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             .with_max_iterations(20)
             .without_sub_agents()
             .with_working_dir(self.working_dir.clone())
-            .with_parent_event_tx(self.parent_event_tx.clone());
+            .with_parent_event_tx(self.parent_event_tx.clone())
+            .with_cancel_token(self.cancel_token.clone().unwrap_or_else(CancelToken::new));
 
         let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 

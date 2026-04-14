@@ -63,7 +63,7 @@ impl Agent {
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
         let (event_tx, event_rx) = mpsc::channel(100);
-        let cancel_token = CancelToken::new();
+        let cancel_token = args.cancel_token.clone().unwrap_or_else(CancelToken::new);
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         // Build system prompt with project memory and skills
@@ -105,6 +105,7 @@ impl Agent {
             &args.session_id,
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
+            Some(cancel_token.clone()),
         );
 
         // Create permission checker and responder from shared state
@@ -163,6 +164,7 @@ impl Agent {
         session_id: &str,
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
+        cancel_token: Option<CancelToken>,
     ) -> crate::tools::ToolRegistry {
         use crate::tools::{
             BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
@@ -210,6 +212,7 @@ impl Agent {
                 working_dir.clone(),
                 session_id.to_owned(),
                 event_tx.clone(),
+                cancel_token.clone(),
             );
             registry.register(subagent_tool);
         }
@@ -445,6 +448,9 @@ impl Agent {
                 message_count: self.message_buffer.len(),
             }))
             .await;
+
+        // Validate and clean message buffer before sending to provider
+        self.message_buffer.validate_and_clean();
 
         let messages = self.message_buffer.messages();
         let stream_future = tokio::time::timeout(
@@ -775,7 +781,12 @@ impl Agent {
         let results = if approved_calls.is_empty() {
             Vec::new()
         } else {
-            crate::tools::execute_tools_parallel(&self.id, &approved_calls, &self.tool_registry)
+            crate::tools::execute_tools_parallel(
+                &self.id,
+                &approved_calls,
+                &self.tool_registry,
+                Some(&self.cancel_token),
+            )
                 .await
         };
 

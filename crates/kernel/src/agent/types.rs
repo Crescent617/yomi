@@ -35,6 +35,8 @@ pub struct AgentSpawnArgs {
     /// Parent agent's `event_tx` for forwarding permission requests
     /// Subagent's permission requests will be sent here so TUI can show dialogs
     pub parent_event_tx: Option<tokio::sync::mpsc::Sender<crate::event::Event>>,
+    /// Optional cancel token to share with parent (for cascading cancellation)
+    pub cancel_token: Option<super::CancelToken>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -66,6 +68,7 @@ impl AgentSpawnArgs {
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             parent_event_tx: None,
+            cancel_token: None,
         }
     }
 
@@ -118,6 +121,13 @@ impl AgentSpawnArgs {
         event_tx: tokio::sync::mpsc::Sender<crate::event::Event>,
     ) -> Self {
         self.parent_event_tx = Some(event_tx);
+        self
+    }
+
+    /// Set cancel token to share with parent (for cascading cancellation)
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: super::CancelToken) -> Self {
+        self.cancel_token = Some(token);
         self
     }
 }
