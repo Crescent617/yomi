@@ -31,6 +31,8 @@ pub enum AgentInput {
     Cancel,
     /// Permission response from user/TUI
     PermissionResponse { req_id: String, approved: bool },
+    /// Close the agent gracefully (for subagent/resource management)
+    Close,
 }
 
 pub struct Agent {
@@ -59,7 +61,7 @@ impl Agent {
         shared: &Arc<AgentShared>,
         args: AgentSpawnArgs,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
-        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
+        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
         let (event_tx, event_rx) = mpsc::channel(100);
         let cancel_token = CancelToken::new();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
@@ -142,7 +144,7 @@ impl Agent {
             if let Err(e) = agent.run().await {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
-            info!("Agent {} done", handle_id);
+            info!("Agent {} closed", handle_id);
         });
 
         let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token, permission_responder);
@@ -249,7 +251,7 @@ impl Agent {
 
             if self.context.iteration_count() >= self.max_iterations {
                 tracing::warn!("Max iterations reached, forcing completion");
-                self.context.transition_to(AgentState::Completed);
+                self.context.transition_to(AgentState::Closed);
                 break;
             }
 
@@ -413,6 +415,11 @@ impl Agent {
                 // PermissionResponse 现在通过 PermissionResponder 处理
                 // 保留此方法以防需要特殊处理
                 tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
+                Ok(())
+            }
+            Some(AgentInput::Close) => {
+                tracing::info!("Agent {} received close signal", self.id);
+                self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
             None => {

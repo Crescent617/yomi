@@ -89,4 +89,12 @@ impl AgentHandle {
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.is_cancelled()
     }
+
+    /// 优雅地关闭 Agent（发送 Close 信号，区别于 Cancel）
+    pub async fn close(&self) -> anyhow::Result<()> {
+        self.input_tx
+            .send(super::AgentInput::Close)
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent {} input channel closed", self.id))
+    }
 }

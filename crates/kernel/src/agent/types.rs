@@ -183,20 +183,20 @@ pub enum AgentState {
     WaitingForInput,
     Streaming,
     ExecutingTool,
-    Completed,
+    Closed,
     Failed,
     Cancelled,
 }
 
 impl AgentState {
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(self, Self::Closed | Self::Failed | Self::Cancelled)
     }
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
             Self::Idle => &[Self::WaitingForInput],
-            Self::WaitingForInput => &[Self::Streaming, Self::Cancelled],
+            Self::WaitingForInput => &[Self::Streaming, Self::Closed, Self::Cancelled],
             Self::Streaming => &[
                 Self::ExecutingTool,
                 Self::WaitingForInput,
@@ -204,7 +204,7 @@ impl AgentState {
                 Self::Cancelled,
             ],
             Self::ExecutingTool => &[Self::Streaming, Self::Failed, Self::Cancelled],
-            Self::Completed | Self::Failed | Self::Cancelled => &[],
+            Self::Closed | Self::Failed | Self::Cancelled => &[],
         }
     }
 
@@ -218,7 +218,7 @@ impl AgentState {
             Self::WaitingForInput => "waiting_for_input",
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
-            Self::Completed => "completed",
+            Self::Closed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_terminal_states_have_no_transitions() {
-        assert!(AgentState::Completed.valid_transitions().is_empty());
+        assert!(AgentState::Closed.valid_transitions().is_empty());
         assert!(AgentState::Failed.valid_transitions().is_empty());
         assert!(AgentState::Cancelled.valid_transitions().is_empty());
     }
@@ -339,7 +339,7 @@ mod tests {
         assert!(AgentState::Streaming.can_transition_to(AgentState::ExecutingTool));
         assert!(AgentState::Streaming.can_transition_to(AgentState::WaitingForInput));
         assert!(AgentState::Streaming.can_transition_to(AgentState::Failed));
-        assert!(!AgentState::Streaming.can_transition_to(AgentState::Completed));
+        assert!(!AgentState::Streaming.can_transition_to(AgentState::Closed));
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Failed));
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Cancelled));
-        assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Completed));
+        assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
     }
 
     #[test]

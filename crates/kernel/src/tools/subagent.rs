@@ -247,7 +247,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         // Send the task as the first user message
         // Pattern: system prompt defines role, user message provides task
         handle.send_text(task.to_string()).await.ok();
-
+        // Close the agent gracefully after collecting output
+        let _ = handle.close().await;
         match mode {
             SubAgentMode::Async => {
                 // Spawn background task to collect results and forward to parent
