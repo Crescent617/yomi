@@ -127,7 +127,7 @@ pub async fn execute_tools_parallel(
         loop {
             tokio::select! {
                 biased;
-                _ = token.cancelled() => {
+                () = token.cancelled() => {
                     tracing::info!("Tool execution cancelled, aborting {} remaining tasks", join_set.len());
                     join_set.abort_all();
                     break;

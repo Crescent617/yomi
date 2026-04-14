@@ -63,7 +63,7 @@ impl Agent {
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
         let (event_tx, event_rx) = mpsc::channel(100);
-        let cancel_token = args.cancel_token.clone().unwrap_or_else(CancelToken::new);
+        let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         // Build system prompt with project memory and skills
@@ -88,9 +88,9 @@ impl Agent {
             id,
             system_prompt
         );
-        let mut messages = vec![Message::system(system_prompt)];
+        let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
-        let message_buffer = MessageBuffer::from_messages(messages);
+        let message_buffer = MessageBuffer::from_arc_messages(messages);
 
         let shared = shared.clone();
 
@@ -105,7 +105,7 @@ impl Agent {
             &args.session_id,
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
-            Some(cancel_token.clone()),
+            Some(&cancel_token),
         );
 
         // Create permission checker and responder from shared state
@@ -164,7 +164,7 @@ impl Agent {
         session_id: &str,
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
-        cancel_token: Option<CancelToken>,
+        cancel_token: Option<&CancelToken>,
     ) -> crate::tools::ToolRegistry {
         use crate::tools::{
             BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
@@ -212,7 +212,7 @@ impl Agent {
                 working_dir.clone(),
                 session_id.to_owned(),
                 event_tx.clone(),
-                cancel_token.clone(),
+                cancel_token.cloned(),
             );
             registry.register(subagent_tool);
         }
@@ -453,7 +453,7 @@ impl Agent {
         self.message_buffer.validate_and_clean();
 
         // Clone messages and tools for the spawned task (needs 'static)
-        let messages: Vec<Message> = self.message_buffer.messages().to_vec();
+        let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
 
         // Spawn provider request in a separate task to allow cancellation
         let provider = self.shared.provider.clone();
@@ -617,27 +617,40 @@ impl Agent {
             }))
             .await;
 
-        let messages = self.message_buffer.messages_mut();
+        let messages = self.message_buffer.messages();
         let result = compactor
             .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
             .await;
 
-        // Handle result before emitting end event (while messages is still borrowed)
-        match &result {
-            Ok(Some(compaction_result)) => {
-                if compaction_result.is_full_compaction() {
+        // Handle result and update messages
+        match result {
+            Ok(Some(new_messages)) => {
+                let old_count = messages.len();
+                let new_count = new_messages.len();
+                let compacted_count = old_count.saturating_sub(new_count);
+                let is_full = compacted_count > 0;
+
+                if is_full {
                     tracing::info!(
                         "Agent {} performed full compaction: {} messages summarized",
                         agent_id,
-                        compaction_result.compacted_count
+                        compacted_count
                     );
                 } else {
                     tracing::info!("Agent {} performed micro-compaction", agent_id);
                 }
+
+                // Update message buffer with compacted messages
+                self.message_buffer.messages_mut().clone_from(&new_messages);
+
                 // Persist compacted state
                 if let Some(storage) = &self.shared.storage {
                     let sid = crate::types::SessionId(self.session_id.clone());
-                    if let Err(e) = storage.set_messages(&sid, messages).await {
+                    let messages_for_storage: Vec<Message> = new_messages
+                        .iter()
+                        .map(|m| (**m).clone())
+                        .collect();
+                    if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
                         tracing::warn!(
                             "Agent {} failed to persist compacted messages: {}",
                             agent_id,
@@ -825,7 +838,7 @@ impl Agent {
     }
 
     #[allow(dead_code)]
-    fn messages(&self) -> &[Message] {
+    fn messages(&self) -> &[Arc<Message>] {
         self.message_buffer.messages()
     }
 

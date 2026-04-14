@@ -43,12 +43,16 @@ pub trait Tool: Send + Sync {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
+    /// Cached tool definitions - each wrapped in Arc for cheap cloning
+    cached_definitions: Option<Vec<Arc<ToolDefinition>>>,
 }
 
 impl Clone for ToolRegistry {
     fn clone(&self) -> Self {
         Self {
             tools: self.tools.clone(),
+            // Clone the cached Arc definitions - cheap since they're wrapped in Arc
+            cached_definitions: self.cached_definitions.clone(),
         }
     }
 }
@@ -57,34 +61,56 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
+            cached_definitions: None,
         }
     }
 
     /// Register a tool (mutable because registry is built during agent initialization)
+    /// Invalidates the cached definitions since tools have changed
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
         self.tools.insert(name, Arc::new(tool));
+        // Invalidate cache since tools have changed
+        self.cached_definitions = None;
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
 
-    pub fn definitions(&self) -> Vec<ToolDefinition> {
-        let defs: Vec<ToolDefinition> = self
+    /// Returns tool definitions wrapped in Arc for cheap cloning.
+    /// Cache is computed once since tools are static after registration.
+    pub fn definitions(&mut self) -> Vec<Arc<ToolDefinition>> {
+        // Check if cache is populated
+        if let Some(cached) = &self.cached_definitions {
+            tracing::debug!(
+                "ToolRegistry.definitions() returning {} cached tools",
+                cached.len()
+            );
+            return cached.clone();
+        }
+
+        // Compute definitions, wrap each in Arc
+        let defs: Vec<Arc<ToolDefinition>> = self
             .tools
             .values()
-            .map(|tool| ToolDefinition {
-                name: tool.name().to_string(),
-                description: tool.desc().to_string(),
-                parameters: tool.params(),
+            .map(|tool| {
+                Arc::new(ToolDefinition {
+                    name: tool.name().to_string(),
+                    description: tool.desc().to_string(),
+                    parameters: tool.params(),
+                })
             })
             .collect();
+
         tracing::debug!(
-            "ToolRegistry.definitions() returning {} tools: {:?}",
+            "ToolRegistry.definitions() computed and cached {} tools: {:?}",
             defs.len(),
             defs.iter().map(|d| &d.name).collect::<Vec<_>>()
         );
+
+        // Cache for future calls
+        self.cached_definitions = Some(defs.clone());
         defs
     }
 

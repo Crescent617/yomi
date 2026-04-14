@@ -1,6 +1,7 @@
 use crate::permissions::Level;
 use crate::types::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Top-level event wrapper - modular design prevents enum explosion
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,7 +140,7 @@ pub enum SystemEvent {
 /// Agent execution result
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentResult {
-    pub messages: Vec<Message>,
+    pub messages: Vec<Arc<Message>>,
     pub tool_calls: usize,
 }
 

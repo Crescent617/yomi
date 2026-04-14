@@ -1,26 +1,46 @@
 use crate::types::Message;
+use std::sync::Arc;
 
 /// Simple message buffer for agent conversation history
 #[derive(Debug, Clone)]
 pub struct MessageBuffer {
-    messages: Vec<Message>,
+    messages: Vec<Arc<Message>>,
 }
 
+#[allow(dead_code)]
 impl MessageBuffer {
+    /// Create an empty buffer
+    pub fn new() -> Self {
+        Self { messages: Vec::new() }
+    }
+
     /// Create from existing messages (for recovery)
-    pub const fn from_messages(messages: Vec<Message>) -> Self {
+    pub fn from_messages(messages: Vec<Message>) -> Self {
+        Self {
+            messages: messages.into_iter().map(Arc::new).collect(),
+        }
+    }
+
+    /// Create from existing Arc messages (internal use)
+    pub fn from_arc_messages(messages: Vec<Arc<Message>>) -> Self {
         Self { messages }
     }
 
     pub fn push(&mut self, message: Message) {
+        self.messages.push(Arc::new(message));
+    }
+
+    /// Push an already-arc-wrapped message
+    pub fn push_arc(&mut self, message: Arc<Message>) {
         self.messages.push(message);
     }
 
-    pub fn messages(&self) -> &[Message] {
+    pub fn messages(&self) -> &[Arc<Message>] {
         &self.messages
     }
 
-    pub const fn messages_mut(&mut self) -> &mut Vec<Message> {
+    /// Get mutable access to the underlying vector (use with caution)
+    pub fn messages_mut(&mut self) -> &mut Vec<Arc<Message>> {
         &mut self.messages
     }
 
@@ -28,8 +48,35 @@ impl MessageBuffer {
         self.messages.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    /// Clear all messages
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+
+    /// Update a message using Copy-on-Write pattern
+    /// If the Arc is shared, it will be cloned before modification
+    pub fn update_message<F>(&mut self, idx: usize, f: F)
+    where
+        F: FnOnce(&mut Message),
+    {
+        if let Some(arc) = self.messages.get_mut(idx) {
+            // Arc::make_mut will clone the inner data if it's shared
+            let message = Arc::make_mut(arc);
+            f(message);
+        }
+    }
+
+    /// Get a clone of the messages as a new Vec<Arc<Message>>
+    pub fn clone_messages(&self) -> Vec<Arc<Message>> {
+        self.messages.clone()
+    }
+
     /// Validate and clean message history before sending to provider.
-    /// Removes assistant messages with tool_calls that don't have corresponding tool responses.
+    /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses.
     /// Time: O(n), Space: O(k) where k = number of pending tool calls
     pub fn validate_and_clean(&mut self) {
         use crate::types::Role;
@@ -72,11 +119,14 @@ impl MessageBuffer {
             if let Role::Assistant = msg.role {
                 if let Some(ref calls) = msg.tool_calls {
                     // Check if any tool_call in this message is pending
-                    let has_pending = calls.iter()
+                    let has_pending = calls
+                        .iter()
                         .any(|call| pending_tool_calls.contains(&call.id));
                     if has_pending {
-                        tracing::debug!("Removing assistant message with unmatched tool_calls: {:?}",
-                            calls.iter().map(|c| &c.id).collect::<Vec<_>>());
+                        tracing::debug!(
+                            "Removing assistant message with unmatched tool_calls: {:?}",
+                            calls.iter().map(|c| &c.id).collect::<Vec<_>>()
+                        );
                         return false; // Remove this message
                     }
                 }
@@ -130,6 +180,36 @@ mod tests {
             .messages()
             .iter()
             .any(|m| { matches!(m.role, Role::System) }));
+    }
+
+    #[test]
+    fn test_arc_sharing() {
+        let mut buffer1 = MessageBuffer::new();
+        let msg = create_message(Role::User, "Test");
+        buffer1.push(msg);
+
+        // Clone buffer - messages should be shared (Arc reference count)
+        let buffer2 = buffer1.clone();
+
+        // Both buffers should see the same message
+        assert_eq!(buffer1.messages()[0].content[0], buffer2.messages()[0].content[0]);
+
+        // Modifying buffer1 should not affect buffer2 (COW)
+        buffer1.update_message(0, |msg| {
+            if let ContentBlock::Text { ref mut text } = &mut msg.content[0] {
+                text.push_str(" modified");
+            }
+        });
+
+        // Buffer1 should have modified message
+        if let ContentBlock::Text { text } = &buffer1.messages()[0].content[0] {
+            assert_eq!(text, "Test modified");
+        }
+
+        // Buffer2 should still have original (cloned)
+        if let ContentBlock::Text { text } = &buffer2.messages()[0].content[0] {
+            assert_eq!(text, "Test");
+        }
     }
 
     // ========== validate_and_clean tests ==========

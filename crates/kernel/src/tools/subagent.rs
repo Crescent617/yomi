@@ -243,7 +243,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             .without_sub_agents()
             .with_working_dir(self.working_dir.clone())
             .with_parent_event_tx(self.parent_event_tx.clone())
-            .with_cancel_token(self.cancel_token.clone().unwrap_or_else(CancelToken::new));
+            .with_cancel_token(self.cancel_token.clone().unwrap_or_default());
 
         let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 

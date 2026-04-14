@@ -97,13 +97,15 @@ impl HttpError {
     }
 }
 
+use std::sync::Arc;
+
 /// Core trait for model providers
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
     ) -> Result<ModelStream>;
 
@@ -141,8 +143,8 @@ impl<P: Provider> RetryingProvider<P> {
 impl<P: Provider> Provider for RetryingProvider<P> {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
     ) -> Result<ModelStream> {
         let mut attempt = 0;

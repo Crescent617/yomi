@@ -26,7 +26,7 @@ pub struct AgentConfig {
 pub struct AgentSpawnArgs {
     pub base_prompt: String,
     pub skills: Vec<Arc<Skill>>,
-    pub history: Vec<Message>,
+    pub history: Vec<Arc<Message>>,
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub max_iterations: usize,
@@ -51,6 +51,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("enable_sub_agents", &self.enable_sub_agents)
             .field("working_dir", &self.working_dir)
             .field("parent_event_tx", &self.parent_event_tx.is_some())
+            .field("cancel_token", &self.cancel_token.is_some())
             .finish()
     }
 }
@@ -61,7 +62,7 @@ impl AgentSpawnArgs {
         Self {
             base_prompt: base_prompt.into(),
             skills: Vec::new(),
-            history: Vec::new(),
+            history: Vec::<Arc<Message>>::new(),
             session_id: session_id.into(),
             parent_session_id: None,
             max_iterations: 50,
@@ -82,6 +83,13 @@ impl AgentSpawnArgs {
     /// Set history messages
     #[must_use]
     pub fn with_history(mut self, history: Vec<Message>) -> Self {
+        self.history = history.into_iter().map(Arc::new).collect();
+        self
+    }
+
+    /// Set history messages from Arc (internal use)
+    #[must_use]
+    pub fn with_arc_history(mut self, history: Vec<Arc<Message>>) -> Self {
         self.history = history;
         self
     }

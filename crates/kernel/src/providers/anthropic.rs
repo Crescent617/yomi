@@ -7,6 +7,7 @@ use crate::providers::{
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use std::sync::Arc;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Client;
@@ -32,7 +33,7 @@ impl AnthropicProvider {
         })
     }
 
-    fn convert_messages(messages: &[Message]) -> Vec<AnthropicMessage> {
+    fn convert_messages(messages: &[Arc<Message>]) -> Vec<AnthropicMessage> {
         messages
             .iter()
             .filter_map(|m| {
@@ -87,7 +88,7 @@ impl AnthropicProvider {
         content
     }
 
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<AnthropicTool> {
+    fn convert_tools(tools: &[Arc<ToolDefinition>]) -> Vec<AnthropicTool> {
         tools
             .iter()
             .map(|t| AnthropicTool {
@@ -98,7 +99,7 @@ impl AnthropicProvider {
             .collect()
     }
 
-    fn extract_system_message(messages: &[Message]) -> Option<String> {
+    fn extract_system_message(messages: &[Arc<Message>]) -> Option<String> {
         messages.iter().find_map(|m| {
             if m.role == Role::System {
                 Some(m.text_content())
@@ -113,8 +114,8 @@ impl AnthropicProvider {
 impl Provider for AnthropicProvider {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
     ) -> Result<ModelStream> {
         let url = if config.endpoint.is_empty() {
@@ -540,9 +541,9 @@ mod tests {
 
     #[test]
     fn test_extract_system_message() {
-        let messages = vec![
-            Message::system("You are a helpful assistant"),
-            Message::user("Hello"),
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::system("You are a helpful assistant")),
+            Arc::new(Message::user("Hello")),
         ];
 
         let system = AnthropicProvider::extract_system_message(&messages);
@@ -551,10 +552,10 @@ mod tests {
 
     #[test]
     fn test_convert_messages_filters_system() {
-        let messages = vec![
-            Message::system("System prompt"),
-            Message::user("Hello"),
-            Message::assistant("Hi there"),
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::system("System prompt")),
+            Arc::new(Message::user("Hello")),
+            Arc::new(Message::assistant("Hi there")),
         ];
 
         let converted = AnthropicProvider::convert_messages(&messages);
@@ -642,7 +643,8 @@ mod tests {
 
     #[test]
     fn test_convert_tools() {
-        let tools = vec![ToolDefinition {
+        use std::sync::Arc;
+        let tools: Vec<Arc<ToolDefinition>> = vec![Arc::new(ToolDefinition {
             name: "bash".to_string(),
             description: "Execute bash commands".to_string(),
             parameters: serde_json::json!({
@@ -651,7 +653,7 @@ mod tests {
                     "cmd": {"type": "string"}
                 }
             }),
-        }];
+        })];
 
         let converted = AnthropicProvider::convert_tools(&tools);
         assert_eq!(converted.len(), 1);

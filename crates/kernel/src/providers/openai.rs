@@ -11,6 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -34,10 +35,11 @@ impl OpenAIProvider {
         })
     }
 
-    fn convert_messages(messages: &[Message]) -> Vec<OpenAIMessage> {
+    fn convert_messages(messages: &[Arc<Message>]) -> Vec<OpenAIMessage> {
         messages
             .iter()
             .map(|m| {
+                let m = m.as_ref();
                 // Extract text content
                 let content = if m.content.len() == 1 {
                     m.content
@@ -88,7 +90,7 @@ impl OpenAIProvider {
             .collect()
     }
 
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<OpenAITool> {
+    fn convert_tools(tools: &[Arc<ToolDefinition>]) -> Vec<OpenAITool> {
         tools
             .iter()
             .map(|t| OpenAITool {
@@ -107,8 +109,8 @@ impl OpenAIProvider {
 impl Provider for OpenAIProvider {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
     ) -> Result<ModelStream> {
         let url = if config.endpoint.is_empty() {
