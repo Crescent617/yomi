@@ -50,6 +50,7 @@ pub struct Agent {
     last_error: Option<String>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
+    is_subagent: bool,
 }
 
 impl Agent {
@@ -134,6 +135,7 @@ impl Agent {
             permission_checker,
             last_error: None,
             pending_token_usage: None,
+            is_subagent: args.parent_event_tx.is_some(),
         };
 
         let handle_id = id.clone();
@@ -246,10 +248,19 @@ impl Agent {
                 break;
             }
 
-            if self.context.iteration_count() >= self.max_iterations {
-                tracing::warn!("Max iterations reached, forcing completion");
-                self.context.transition_to(AgentState::Closed);
-                break;
+            if self.context.iteration_count() >= self.max_iterations
+                && self.context.current_state() == AgentState::Streaming
+            {
+                if self.is_subagent {
+                    tracing::warn!("Max iterations reached, forcing completion");
+                    self.context.transition_to(AgentState::Closed);
+                    break;
+                }
+                tracing::warn!(
+                    "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
+                    self.id
+                );
+                self.context.transition_to(AgentState::WaitingForInput);
             }
 
             // Note: cancel is handled during streaming via select!, not here
@@ -257,24 +268,24 @@ impl Agent {
 
             match state {
                 AgentState::WaitingForInput => {
+                    self.context.reset_iteration();
                     tracing::debug!("Agent {} waiting for input", self.id);
                     if let Err(e) = self.handle_wait_for_input().await {
                         self.record_error("Wait for input failed", &e);
-                        self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id);
                     if let Err(e) = self.handle_streaming_with_retry().await {
                         self.record_error("Streaming failed", &e);
-                        self.context.transition_to(AgentState::Failed);
+                        self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
                 AgentState::ExecutingTool => {
                     tracing::info!("Agent {} executing tools", self.id);
                     if let Err(e) = self.handle_execute_tool().await {
                         self.record_error("Tool execution failed", &e);
-                        self.context.transition_to(AgentState::Failed);
+                        self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
                 _ => tokio::task::yield_now().await,
@@ -293,43 +304,17 @@ impl Agent {
             tool_calls
         );
 
-        // Send appropriate event based on final state
-        match final_state {
-            AgentState::Cancelled => {
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Cancelled {
-                        agent_id: self.id.clone(),
-                    }))
-                    .await;
-            }
-            AgentState::Failed => {
-                let error_msg = self
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "Agent failed".to_string());
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Failed {
-                        agent_id: self.id.clone(),
-                        error: error_msg,
-                    }))
-                    .await;
-            }
-            _ => {
-                let result = AgentResult {
-                    messages: self.message_buffer.messages().to_vec(),
-                    tool_calls,
-                };
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Completed {
-                        agent_id: self.id.clone(),
-                        result,
-                    }))
-                    .await;
-            }
-        }
+        let result = AgentResult {
+            messages: self.message_buffer.messages().to_vec(),
+            tool_calls,
+        };
+        let _ = self
+            .event_tx
+            .send(Event::Agent(AgentEvent::Completed {
+                agent_id: self.id.clone(),
+                result,
+            }))
+            .await;
 
         Ok(())
     }
@@ -416,7 +401,7 @@ impl Agent {
                 Ok(())
             }
             None => {
-                self.context.transition_to(AgentState::Cancelled);
+                self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
         }

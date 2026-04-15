@@ -633,13 +633,13 @@ impl ChatView {
                 // Convert tool name to CamelCase for display
                 let tool_name_display = to_camel_case(tool_name);
                 let mut header_spans = vec![Span::styled(
-                    format!("{icon} {tool_name_display}{time_str}"),
+                    format!("{icon}{tool_name_display}{time_str}"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )];
                 if let Some(peek) = peek_args {
                     header_spans.push(Span::styled(
                         format!(" {peek}"),
-                        Style::default().fg(colors::text_secondary()),
+                        Style::default().fg(colors::text_primary()),
                     ));
                 }
                 lines.push(Line::from(header_spans));
@@ -651,7 +651,7 @@ impl ChatView {
                         if let Some(ref prog) = progress {
                             let prog_text = prog.clone();
                             lines.push(Line::from(vec![
-                                Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
                                     prog_text,
                                     Style::default().fg(colors::text_secondary()),
@@ -662,7 +662,7 @@ impl ChatView {
 
                     // Show tokens if available
                     if let Some(total) = tokens {
-                        let token_text = format!("⎿ {} tokens", tokens::format_tokens(*total));
+                        let token_text = format!(" ⎿ {} tokens", tokens::format_tokens(*total));
                         lines.push(Line::from(vec![Span::styled(
                             token_text,
                             Style::default().fg(colors::text_secondary()),
@@ -680,7 +680,7 @@ impl ChatView {
                     });
                     if let Some(peek) = peek_output {
                         lines.push(Line::from(vec![
-                            Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(peek, Style::default().fg(colors::text_secondary())),
                         ]));
                     }
@@ -1280,12 +1280,12 @@ fn to_camel_case(s: &str) -> String {
 
 fn toolname_to_icon(tool_name: &str) -> &'static str {
     match tool_name.to_lowercase().as_str() {
-        "subagent" => "󰚩",
-        "read" => "",
-        "write" => "",
-        "bash" => "",
+        "subagent" => "󰚩 ",
+        "read" => " ",
+        "write" | "edit" => " ",
+        "bash" => " ",
         // start with "task" -> task icon
-        name if name.starts_with("task") => "",
-        _ => "",
+        name if name.starts_with("task") => " ",
+        _ => " ",
     }
 }

@@ -66,9 +66,11 @@ pub async fn execute_tools_parallel(
             let start = std::time::Instant::now();
             let result = match tool_opt {
                 Some(tool) => {
-                    let ctx = ToolExecCtx::new(&call_id)
-                        .with_parent_messages(parent_messages_for_task.as_deref().unwrap_or(&[]))
-                        .with_cancel_token(cancel_token_for_task);
+                    let ctx = ToolExecCtx::with_parent_ctx(
+                        &call_id,
+                        parent_messages_for_task.as_deref(),
+                        cancel_token_for_task,
+                    );
                     execute_single_tool_with_ctx(tool, arguments, ctx).await
                 }
                 None => ToolOutput {

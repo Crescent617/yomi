@@ -43,11 +43,27 @@ pub struct ToolExecCtx<'a> {
 use crate::agent::CancelToken;
 
 impl<'a> ToolExecCtx<'a> {
+    /// Create a new context with just the tool call ID
     pub fn new(tool_call_id: &'a str) -> Self {
         Self {
             tool_call_id,
             parent_messages: None,
             cancel_token: None,
+        }
+    }
+
+    /// Create a context with tool call ID, parent messages, and cancel token
+    /// This is a convenience constructor for the common case where both
+    /// parent_messages and cancel_token are available
+    pub fn with_parent_ctx(
+        tool_call_id: &'a str,
+        parent_messages: Option<&'a [Arc<crate::types::Message>]>,
+        cancel_token: Option<CancelToken>,
+    ) -> Self {
+        Self {
+            tool_call_id,
+            parent_messages,
+            cancel_token,
         }
     }
 

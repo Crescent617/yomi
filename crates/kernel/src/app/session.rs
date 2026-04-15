@@ -72,13 +72,8 @@ impl Session {
                 .with_skills(self.config.agent.skills.clone())
                 .with_history(history)
                 .with_max_iterations(self.config.agent.max_iterations)
-                .with_working_dir(self.config.project_path.clone());
-
-        let config = if self.config.agent.enable_sub_agents {
-            config
-        } else {
-            config.without_sub_agents()
-        };
+                .with_working_dir(self.config.project_path.clone())
+                .with_subagent(self.config.agent.enable_subagent);
 
         // Create AgentShared with permission state
         let shared = Arc::new(AgentShared::new(

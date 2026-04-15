@@ -7,6 +7,7 @@ pub mod components;
 pub mod id;
 pub mod markdown_stream;
 pub mod msg;
+pub mod table;
 pub mod theme;
 pub mod utils;
 

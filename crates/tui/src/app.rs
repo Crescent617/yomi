@@ -51,7 +51,7 @@ pub struct AppState {
     /// Indicates that the application must quit
     pub quit: bool,
     /// Tells whether to redraw interface
-    pub redraw: bool,
+    pub should_redraw: bool,
     /// Whether we're currently streaming (showing streaming component)
     pub is_streaming: bool,
     /// Flag to indicate if a new session should be created on exit
@@ -115,7 +115,7 @@ impl Model {
             app,
             state: AppState {
                 quit: false,
-                redraw: true,
+                should_redraw: true,
                 is_streaming: false,
                 should_create_new_session: false,
             },
@@ -461,7 +461,7 @@ impl Model {
                         }
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
                     self.state.is_streaming = false;
@@ -524,7 +524,7 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
                     // Clear previous streaming content
@@ -539,7 +539,7 @@ impl Model {
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
@@ -549,7 +549,7 @@ impl Model {
                         Attribute::Custom("stop_compacting")
                     };
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
                     total_tokens,
@@ -563,7 +563,7 @@ impl Model {
                         Attribute::Custom("set_ctx_usage"),
                         AttrValue::String(usage_str),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
@@ -579,7 +579,7 @@ impl Model {
                         Attribute::Custom("start_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
                     tool_id,
@@ -594,7 +594,7 @@ impl Model {
                         Attribute::Custom("complete_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Error {
                     tool_id,
@@ -609,7 +609,7 @@ impl Model {
                         Attribute::Custom("fail_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Progress {
                     tool_id,
@@ -626,7 +626,7 @@ impl Model {
                         Attribute::Custom("update_tool_progress"),
                         AttrValue::String(combined),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
                     self.state.is_streaming = false;
@@ -646,7 +646,7 @@ impl Model {
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
                     self.state.is_streaming = false;
@@ -686,7 +686,7 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
@@ -718,7 +718,7 @@ impl Model {
                     // Give focus to dialog so it receives keyboard events
                     let result = self.app.active(&Id::Dialog);
                     tracing::debug!("Dialog focus result: {:?}", result);
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 _ => {}
             }
@@ -761,7 +761,7 @@ impl Model {
             // Tick the application
             match self.app.tick(PollStrategy::Once) {
                 Ok(messages) if !messages.is_empty() => {
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                     for msg in messages {
                         let mut msg = Some(msg);
                         while msg.is_some() {
@@ -773,9 +773,9 @@ impl Model {
             }
 
             // Redraw if needed
-            if self.state.redraw {
+            if self.state.should_redraw {
                 self.view();
-                self.state.redraw = false;
+                self.state.should_redraw = false;
             }
 
             // Small yield to allow tokio to process other tasks
@@ -792,7 +792,7 @@ impl Model {
 impl Update<Msg> for Model {
     fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
-            self.state.redraw = true;
+            self.state.should_redraw = true;
 
             match msg {
                 Msg::Quit => {
@@ -864,7 +864,7 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::Redraw => {
-                    self.state.redraw = true;
+                    self.state.should_redraw = true;
                     None
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {

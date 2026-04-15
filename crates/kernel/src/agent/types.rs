@@ -14,7 +14,7 @@ pub struct AgentConfig {
     pub model: ModelConfig,
     pub storage: StorageConfig,
     pub max_iterations: usize,
-    pub enable_sub_agents: bool,
+    pub enable_subagent: bool,
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
@@ -38,6 +38,7 @@ pub struct AgentSpawnArgs {
     pub parent_event_tx: Option<tokio::sync::mpsc::Sender<crate::event::Event>>,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
+    pub is_subagent: bool,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -71,7 +72,14 @@ impl AgentSpawnArgs {
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             parent_event_tx: None,
             cancel_token: None,
+            is_subagent: false,
         }
+    }
+
+    pub fn new_for_subagent(base_prompt: impl Into<String>, session_id: impl Into<String>) -> Self {
+        let mut ret = Self::new(base_prompt, session_id).with_subagent(false);
+        ret.is_subagent = true;
+        ret
     }
 
     /// Set skills to include
@@ -109,10 +117,9 @@ impl AgentSpawnArgs {
         self
     }
 
-    /// Disable sub-agents
     #[must_use]
-    pub const fn without_sub_agents(mut self) -> Self {
-        self.enable_sub_agents = false;
+    pub const fn with_subagent(mut self, enabled: bool) -> Self {
+        self.enable_sub_agents = enabled;
         self
     }
 
@@ -147,7 +154,7 @@ impl Default for AgentConfig {
             model: ModelConfig::default(),
             storage: StorageConfig::default(),
             max_iterations: 50,
-            enable_sub_agents: true,
+            enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
             compactor: Compactor::default(),
@@ -203,27 +210,20 @@ pub enum AgentState {
     Streaming,
     ExecutingTool,
     Closed,
-    Failed,
-    Cancelled,
 }
 
 impl AgentState {
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Closed | Self::Failed | Self::Cancelled)
+        matches!(self, Self::Closed)
     }
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
             Self::Idle => &[Self::WaitingForInput],
-            Self::WaitingForInput => &[Self::Streaming, Self::Closed, Self::Cancelled],
-            Self::Streaming => &[
-                Self::ExecutingTool,
-                Self::WaitingForInput,
-                Self::Failed,
-                Self::Cancelled,
-            ],
-            Self::ExecutingTool => &[Self::Streaming, Self::Failed, Self::Cancelled],
-            Self::Closed | Self::Failed | Self::Cancelled => &[],
+            Self::WaitingForInput => &[Self::Streaming, Self::Closed],
+            Self::Streaming => &[Self::ExecutingTool, Self::WaitingForInput],
+            Self::ExecutingTool => &[Self::Streaming],
+            Self::Closed => &[],
         }
     }
 
@@ -238,8 +238,6 @@ impl AgentState {
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
             Self::Closed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -290,6 +288,10 @@ impl AgentExecutionContext {
 
     pub fn increment_iteration(&self) {
         self.inner.iteration_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn reset_iteration(&self) {
+        self.inner.iteration_count.store(0, Ordering::SeqCst);
     }
 
     pub fn iteration_count(&self) -> usize {
@@ -412,30 +414,24 @@ mod tests {
     #[test]
     fn test_terminal_states_have_no_transitions() {
         assert!(AgentState::Closed.valid_transitions().is_empty());
-        assert!(AgentState::Failed.valid_transitions().is_empty());
-        assert!(AgentState::Cancelled.valid_transitions().is_empty());
     }
 
     #[test]
     fn test_streaming_can_execute_tool_or_finish() {
         assert!(AgentState::Streaming.can_transition_to(AgentState::ExecutingTool));
         assert!(AgentState::Streaming.can_transition_to(AgentState::WaitingForInput));
-        assert!(AgentState::Streaming.can_transition_to(AgentState::Failed));
         assert!(!AgentState::Streaming.can_transition_to(AgentState::Closed));
     }
 
     #[test]
     fn test_executing_tool_transitions() {
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Failed));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Cancelled));
         assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
     }
 
     #[test]
     fn test_waiting_for_input_transitions() {
         assert!(AgentState::WaitingForInput.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::WaitingForInput.can_transition_to(AgentState::Cancelled));
         assert!(!AgentState::WaitingForInput.can_transition_to(AgentState::ExecutingTool));
     }
 }

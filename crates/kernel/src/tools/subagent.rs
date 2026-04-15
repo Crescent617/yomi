@@ -343,11 +343,10 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             ));
         };
 
-        let mut config = AgentSpawnArgs::new(system_prompt, subagent_session_id)
+        let mut config = AgentSpawnArgs::new_for_subagent(system_prompt, subagent_session_id)
             .with_skills(self.skills.clone())
             .with_parent_session(&self.parent_session_id)
             .with_max_iterations(20)
-            .without_sub_agents()
             .with_working_dir(self.working_dir.clone())
             .with_parent_event_tx(self.parent_event_tx.clone())
             .with_cancel_token(ctx.cancel_token.clone().unwrap_or_default());

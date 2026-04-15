@@ -23,7 +23,6 @@ pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
-    
 
     /// Provider selection
     pub const PROVIDER: &str = env_name!("PROVIDER");
@@ -256,7 +255,7 @@ impl Config {
 
         // Enable sub-agents (default true unless explicitly set to "false")
         if let Some(val) = env_var(env_names::ENABLE_SUB_AGENTS) {
-            self.agent.enable_sub_agents = val != "false";
+            self.agent.enable_subagent = val != "false";
         }
 
         // Data directory (expands ~ to home)

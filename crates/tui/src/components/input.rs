@@ -14,7 +14,7 @@ use tuirealm::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{components::input_edit::TextInput, msg::Msg, theme::colors};
+use crate::{components::input_edit::TextInput, components::CompletionList, components::FileCompletion, msg::Msg, theme::colors};
 
 #[derive(Debug, Default)]
 pub struct InputMock {
@@ -366,10 +366,6 @@ impl MockComponent for InputMock {
 /// Input component that handles keyboard events
 /// Mode is passed from Model via attr
 /// Maximum number of files to scan (prevents hanging on huge repos)
-const MAX_FILES_TO_SCAN: usize = 1000;
-/// Maximum number of files to display (performance)
-const MAX_FILES_TO_DISPLAY: usize = 50;
-
 /// Available slash command with descriptions
 const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
@@ -379,69 +375,6 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Generic completion list for command and file completions
-struct CompletionList<T> {
-    visible: bool,
-    selected: usize,
-    items: Vec<T>,
-}
-
-impl<T> CompletionList<T> {
-    fn new() -> Self {
-        Self {
-            visible: false,
-            selected: 0,
-            items: Vec::new(),
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        self.visible
-    }
-
-    fn show(&mut self, items: Vec<T>) {
-        self.items = items;
-        self.visible = !self.items.is_empty();
-        self.selected = 0;
-    }
-
-    fn hide(&mut self) {
-        self.visible = false;
-        self.items.clear();
-        self.selected = 0;
-    }
-
-    fn next(&mut self) {
-        if !self.items.is_empty() {
-            self.selected = (self.selected + 1) % self.items.len();
-        }
-    }
-
-    fn prev(&mut self) {
-        if !self.items.is_empty() {
-            self.selected = self
-                .selected
-                .checked_sub(1)
-                .unwrap_or(self.items.len() - 1);
-        }
-    }
-
-    fn selected_index(&self) -> usize {
-        self.selected
-    }
-
-    fn get_selected(&self) -> Option<&T> {
-        self.items.get(self.selected)
-    }
-
-    fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    fn items(&self) -> &[T] {
-        &self.items
-    }
-}
-
 pub struct InputComponent {
     component: InputMock,
     mode: crate::app::AppMode,
@@ -452,15 +385,7 @@ pub struct InputComponent {
     // Command completion
     command_completion: CompletionList<(String, String)>,
     // File completion (@-mention)
-    file_completion: CompletionList<String>,
-    file_query: String,
-    file_query_start_pos: usize, // Position of '@' in input
-    working_dir: std::path::PathBuf,
-    // File cache for performance
-    all_files: Vec<String>,     // Cached file list
-    file_cache_dirty: bool,     // Whether cache needs refresh
-    total_files_scanned: usize, // Total files found (may exceed cache)
-    files_truncated: bool,      // Whether scan hit MAX_FILES_TO_SCAN limit
+    file_completion: FileCompletion,
 }
 
 impl Default for InputComponent {
@@ -478,20 +403,13 @@ impl InputComponent {
             history_index: None,
             saved_input: String::new(),
             command_completion: CompletionList::new(),
-            file_completion: CompletionList::new(),
-            file_query: String::new(),
-            file_query_start_pos: 0,
-            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            all_files: Vec::new(),
-            file_cache_dirty: true,
-            total_files_scanned: 0,
-            files_truncated: false,
+            file_completion: FileCompletion::new(),
         }
     }
 
     /// Set the working directory for file completion
     pub fn set_working_dir(&mut self, path: impl Into<std::path::PathBuf>) {
-        self.working_dir = path.into();
+        self.file_completion.set_working_dir(path);
     }
 
     /// Update command completion state based on current input
@@ -531,256 +449,11 @@ impl InputComponent {
 
     /// Start file completion (@-mention)
     fn start_file_completion(&mut self) {
-        self.file_query.clear();
-        // Record cursor position as the start of query (after @)
-        self.file_query_start_pos = self.component.cursor_pos();
-        // Scan files once and cache
-        self.ensure_file_cache();
-        self.refresh_file_list();
+        let cursor_pos = self.component.cursor_pos();
+        self.file_completion.start(cursor_pos);
     }
 
     /// Refresh file list from cache based on current query
-    fn refresh_file_list(&mut self) {
-        let filtered = if self.file_query.is_empty() {
-            // Show first N files from cache when no query
-            self.all_files
-                .iter()
-                .take(MAX_FILES_TO_DISPLAY)
-                .cloned()
-                .collect()
-        } else {
-            // Filter and limit results
-            let mut filtered = Self::fuzzy_filter_files(&self.all_files, &self.file_query);
-            filtered.truncate(MAX_FILES_TO_DISPLAY);
-            filtered
-        };
-        self.file_completion.show(filtered);
-    }
-
-    /// Ensure file cache is populated (lazy loading)
-    fn ensure_file_cache(&mut self) {
-        if self.file_cache_dirty || self.all_files.is_empty() {
-            let (files, count, truncated) = self.scan_files_limited();
-            self.all_files = files;
-            self.total_files_scanned = count;
-            self.files_truncated = truncated;
-            self.file_cache_dirty = false;
-        }
-    }
-
-    /// Scan files recursively with limits, respecting .gitignore
-    /// Returns (files, `total_count`, `was_truncated`)
-    fn scan_files_limited(&self) -> (Vec<String>, usize, bool) {
-        let gitignore = self.load_gitignore();
-        let mut files = Vec::with_capacity(MAX_FILES_TO_SCAN);
-        let mut count = 0usize;
-        Self::scan_recursive_limited(&self.working_dir, "", &gitignore, &mut files, &mut count);
-        let truncated = count >= MAX_FILES_TO_SCAN;
-        // Sort: shorter paths first, then alphabetically
-        files.sort_by(|a, b| {
-            let a_parts = a.matches('/').count();
-            let b_parts = b.matches('/').count();
-            match a_parts.cmp(&b_parts) {
-                std::cmp::Ordering::Equal => a.cmp(b),
-                other => other,
-            }
-        });
-        (files, count, truncated)
-    }
-
-    /// Load .gitignore patterns
-    fn load_gitignore(&self) -> Vec<String> {
-        let gitignore_path = self.working_dir.join(".gitignore");
-        let mut patterns = vec![
-            ".git".to_string(),
-            ".gitignore".to_string(),
-            "target/".to_string(),
-            "node_modules/".to_string(),
-        ];
-        if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
-            for line in content.lines() {
-                let line = line.trim();
-                if !line.is_empty() && !line.starts_with('#') {
-                    patterns.push(line.to_string());
-                }
-            }
-        }
-        patterns
-    }
-
-    /// Check if path matches gitignore pattern
-    /// Check if path matches gitignore pattern
-    fn matches_gitignore(path: &str, patterns: &[String]) -> bool {
-        let path = path.trim_end_matches('/');
-        for pattern in patterns {
-            let pattern = pattern.trim();
-            if pattern.is_empty() {
-                continue;
-            }
-            // Handle directory patterns (ending with /)
-            let is_dir_pattern = pattern.ends_with('/');
-            let clean_pattern = pattern.trim_end_matches('/');
-            // Exact match
-            if path == clean_pattern {
-                return true;
-            }
-            // Check if any component matches
-            if path.split('/').any(|part| {
-                if is_dir_pattern {
-                    part == clean_pattern
-                } else {
-                    part == clean_pattern || path.ends_with(&format!("/{clean_pattern}"))
-                }
-            }) {
-                return true;
-            }
-            // Simple glob-like matching for *
-            if clean_pattern.contains('*') {
-                let parts: Vec<&str> = clean_pattern.split('*').collect();
-                if parts.len() == 2 {
-                    let prefix = parts[0];
-                    let suffix = parts[1];
-                    if (prefix.is_empty() || path.contains(prefix))
-                        && (suffix.is_empty() || path.contains(suffix))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-
-    /// Recursively scan directory with limit
-    fn scan_recursive_limited(
-        base_dir: &std::path::Path,
-        prefix: &str,
-        gitignore: &[String],
-        files: &mut Vec<String>,
-        count: &mut usize,
-    ) {
-        if *count >= MAX_FILES_TO_SCAN {
-            return;
-        }
-        let current_dir = if prefix.is_empty() {
-            base_dir.to_path_buf()
-        } else {
-            base_dir.join(prefix)
-        };
-        if let Ok(entries) = std::fs::read_dir(&current_dir) {
-            for entry in entries.flatten() {
-                if *count >= MAX_FILES_TO_SCAN {
-                    break;
-                }
-                let name = entry.file_name().to_string_lossy().to_string();
-                let relative_path = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                // Check gitignore
-                if Self::matches_gitignore(&relative_path, gitignore) {
-                    continue;
-                }
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_dir() {
-                        files.push(format!("{relative_path}/"));
-                        *count += 1;
-                        // Recurse into subdirectory
-                        Self::scan_recursive_limited(
-                            base_dir,
-                            &relative_path,
-                            gitignore,
-                            files,
-                            count,
-                        );
-                    } else if metadata.is_file() {
-                        files.push(relative_path);
-                        *count += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Fuzzy filter files based on query (similar to fzf)
-    /// Optimized: uses references to avoid cloning during filtering
-    fn fuzzy_filter_files( files: &[String], query: &str) -> Vec<String> {
-        if query.is_empty() {
-            return files.iter().take(MAX_FILES_TO_DISPLAY).cloned().collect();
-        }
-        let query_lower = query.to_lowercase();
-        let mut scored: Vec<(usize, i32, usize)> = files
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, file)| {
-                // Case-insensitive match without allocating
-                Self::fuzzy_match_case_insensitive(file, &query_lower).map(|score| (idx, score, file.len()))
-            })
-            .collect();
-        // Sort by score (descending), then by length (ascending - shorter first)
-        scored.sort_by(|a, b| match b.1.cmp(&a.1) {
-            std::cmp::Ordering::Equal => a.2.cmp(&b.2),
-            other => other,
-        });
-        scored
-            .into_iter()
-            .map(|(idx, _, _)| files[idx].clone())
-            .collect()
-    }
-
-    /// Case-insensitive fuzzy matching (optimized: avoids lowercase allocation)
-    fn fuzzy_match_case_insensitive(text: &str, pattern_lower: &str) -> Option<i32> {
-        if pattern_lower.is_empty() {
-            return Some(0);
-        }
-        let pattern_chars: Vec<char> = pattern_lower.chars().collect();
-        let mut pattern_idx = 0;
-        let mut score = 0i32;
-        let mut consecutive_bonus = 0;
-        let mut prev_match_idx: Option<usize> = None;
-
-        for (text_idx, c) in text.chars().enumerate() {
-            if pattern_idx < pattern_chars.len() {
-                let pc = pattern_chars[pattern_idx];
-                // Case-insensitive comparison
-                let c_lower = c.to_lowercase().next()?;
-                if c_lower == pc {
-                    // Bonus for consecutive matches
-                    if let Some(prev) = prev_match_idx {
-                        if text_idx == prev + 1 {
-                            consecutive_bonus += 1;
-                            score += consecutive_bonus;
-                        }
-                    }
-                    // Bonus for match at word boundary
-                    if let Some(prev) = prev_match_idx {
-                        if text_idx > 0 {
-                            let prev_char = text.chars().nth(prev)?;
-                            if prev_char == '/'
-                                || prev_char == '-'
-                                || prev_char == '_'
-                                || prev_char == '.'
-                            {
-                                score += 3;
-                            }
-                        }
-                    }
-                    // Base score
-                    score += 1;
-                    prev_match_idx = Some(text_idx);
-                    pattern_idx += 1;
-                }
-            }
-        }
-
-        if pattern_idx == pattern_chars.len() {
-            score -= (text.len().saturating_sub(pattern_lower.len())) as i32;
-            Some(score)
-        } else {
-            None
-        }
-    }
 
     /// Select next file completion item
     fn file_completion_next(&mut self) {
@@ -794,23 +467,22 @@ impl InputComponent {
 
     /// Accept the selected file completion
     fn accept_file_completion(&mut self) {
-        if let Some(selected) = self.file_completion.get_selected() {
-            let current_pos = self.component.cursor_pos();
+        if let Some((selected, start, end)) = self.file_completion.accept() {
+            let _current_pos = self.component.cursor_pos();
             // Delete the query part (from @ to current position)
-            let query_len = current_pos.saturating_sub(self.file_query_start_pos);
-            for _ in 0..query_len {
+            // The range is returned by accept()
+            for _ in 0..(end - start) {
                 self.component.backspace();
             }
             // Insert the selected file path
-            self.component.insert_str(selected);
-            self.file_completion.hide();
+            self.component.insert_str(&selected);
+            // accept() already hides the completion
         }
     }
 
     /// Cancel file completion
     fn cancel_file_completion(&mut self) {
-        self.file_completion.hide();
-        self.file_query.clear();
+        self.file_completion.cancel();
     }
 
     /// Handle input when file completion is active
@@ -818,19 +490,34 @@ impl InputComponent {
         &mut self,
         ev: &tuirealm::Event<crate::msg::UserEvent>,
     ) -> Msg {
-        match *ev {
-            // Enter or Tab: accept selected file
+        use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+
+        match ev {
+            // Enter: accept completion
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
-            } | KeyEvent {
-                code: Key::Tab,
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
                 self.accept_file_completion();
                 Msg::InputChanged(self.component.content().to_string())
             }
-            // Esc: cancel file completion
+            // Tab: also accept completion
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.accept_file_completion();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Shift+Tab: navigate up
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::BackTab,
+                modifiers: KeyModifiers::SHIFT,
+            }) => {
+                self.file_completion_prev();
+                Msg::Redraw
+            }
+            // Escape: cancel completion
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
@@ -840,15 +527,25 @@ impl InputComponent {
             }
             // Up arrow or Ctrl+P: navigate up
             tuirealm::Event::Keyboard(KeyEvent {
-code: Key::Up, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('p'), modifiers: KeyModifiers::CONTROL }) => {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            })
+            | tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
                 self.file_completion_prev();
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
             tuirealm::Event::Keyboard(KeyEvent {
-code: Key::Down, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('n'), modifiers: KeyModifiers::CONTROL }) => {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            })
+            | tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
                 self.file_completion_next();
                 Msg::Redraw
             }
@@ -861,35 +558,31 @@ code: Key::Char('n'), modifiers: KeyModifiers::CONTROL }) => {
                 self.component.insert_char(' ');
                 Msg::InputChanged(self.component.content().to_string())
             }
-            // Regular character: add to query and filter
+            // Regular character: let FileCompletion handle it
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
-                self.component.insert_char(c);
-                self.file_query.push(c);
-                self.refresh_file_list();
+                self.component.insert_char(*c);
+                let cursor_pos = self.component.cursor_pos();
+                let _ = self.file_completion.handle_input(*c, cursor_pos);
                 Msg::InputChanged(self.component.content().to_string())
             }
-            // Backspace: remove from query
+            // Backspace: let FileCompletion handle it
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Backspace,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.backspace();
-                self.file_query.pop();
-                if self.file_query.is_empty() && self.component.content().ends_with('@') {
-                    // Cancel if query is empty and only @ remains
+                let cursor_pos = self.component.cursor_pos();
+                if !self.file_completion.handle_input('\x08', cursor_pos) {
                     self.cancel_file_completion();
-                } else {
-                    self.refresh_file_list();
                 }
                 Msg::InputChanged(self.component.content().to_string())
             }
             _ => Msg::Redraw,
         }
     }
-
     /// Set the current mode
     pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
@@ -1014,17 +707,17 @@ impl MockComponent for InputComponent {
         // Render file completion dropdown if visible
         if self.file_completion.is_visible() && !self.file_completion.items().is_empty() {
             // Status line at bottom
-            let status_text = if self.files_truncated {
+            let status_text = if self.file_completion.was_truncated() {
                 format!(
                     " {} / {}+ files",
                     self.file_completion.len(),
-                    self.total_files_scanned
+                    self.file_completion.total_scanned()
                 )
             } else {
                 format!(
                     " {} / {} files",
                     self.file_completion.len(),
-                    self.total_files_scanned
+                    self.file_completion.total_scanned()
                 )
             };
             let display_count = self.file_completion.len().min(8);
