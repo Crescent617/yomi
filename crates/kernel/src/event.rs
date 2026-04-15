@@ -128,6 +128,15 @@ pub enum ToolEvent {
         error: String,
         elapsed_ms: u64,
     },
+    /// Progress update for long-running tools (e.g., sub-agent)
+    Progress {
+        agent_id: AgentId,
+        tool_id: String,
+        /// Progress message (e.g., "iteration 3/20", "streaming...")
+        message: String,
+        /// Optional total token count
+        tokens: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

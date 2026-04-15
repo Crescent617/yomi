@@ -60,7 +60,7 @@ pub async fn execute_tools_parallel(
         join_set.spawn(async move {
             let start = std::time::Instant::now();
             let result = match tool_opt {
-                Some(tool) => execute_single_tool(tool, arguments).await,
+                Some(tool) => execute_single_tool(tool, arguments, &call_id).await,
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
@@ -196,8 +196,12 @@ pub async fn execute_tools_parallel(
     results
 }
 
-async fn execute_single_tool(tool: Arc<dyn Tool>, arguments: serde_json::Value) -> ToolOutput {
-    match tool.exec(arguments).await {
+async fn execute_single_tool(
+    tool: Arc<dyn Tool>,
+    arguments: serde_json::Value,
+    tool_call_id: &str,
+) -> ToolOutput {
+    match tool.exec_with_id(arguments, tool_call_id).await {
         Ok(output) => output,
         Err(e) => ToolOutput {
             exit_code: 1,

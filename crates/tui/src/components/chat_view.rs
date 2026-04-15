@@ -52,6 +52,8 @@ pub enum HistoryMessage {
         folded: bool,
         arguments: Option<String>,
         elapsed_ms: Option<u64>,
+        tokens: Option<u32>,
+        progress: Option<String>,
     },
     Error(String),
 }
@@ -153,6 +155,8 @@ impl ChatView {
             folded: !self.expand_all,
             arguments,
             elapsed_ms: None,
+            tokens: None,
+            progress: None,
         });
         if !self.user_scrolled {
             self.scroll_offset = 0;
@@ -214,6 +218,25 @@ impl ChatView {
         }
         if !self.user_scrolled {
             self.scroll_offset = 0;
+        }
+    }
+
+    /// Update tool progress (for long-running tools like subagent)
+    pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, tokens: Option<u32>) {
+        for msg in self.messages.iter_mut().rev() {
+            if let HistoryMessage::Tool {
+                tool_id: id,
+                progress,
+                tokens: tok,
+                ..
+            } = msg
+            {
+                if id == tool_id {
+                    *progress = Some(message.to_string());
+                    *tok = tokens;
+                    break;
+                }
+            }
         }
     }
 
@@ -572,6 +595,8 @@ impl ChatView {
                 folded,
                 arguments,
                 elapsed_ms,
+                ref tokens,
+                ref progress,
                 ..
             } => {
                 let color = match status {
@@ -621,6 +646,25 @@ impl ChatView {
 
                 // Output peek in folded mode (max 50 chars, indented)
                 if *folded {
+                    // Show progress for running tools
+                    if *status == ToolStatus::Running {
+                        if let Some(ref prog) = progress {
+                            let prog_text = prog.clone();
+                            lines.push(Line::from(vec![
+                                Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(prog_text, Style::default().fg(colors::text_secondary())),
+                            ]));
+                        }
+                    }
+
+                    // Show tokens if available
+                    if let Some(total) = tokens {
+                        let token_text = format!("⎿ {} tokens", tokens::format_tokens(*total));
+                        lines.push(Line::from(vec![
+                            Span::styled(token_text, Style::default().fg(colors::text_secondary())),
+                        ]));
+                    }
+
                     let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
                         let trimmed = out.trim();
                         if trimmed.is_empty() {
@@ -696,10 +740,14 @@ impl ChatView {
                             ]));
                         }
                     } else if *status == ToolStatus::Running {
+                        let running_text = progress.as_ref().map_or_else(
+                            || "Running...".to_string(),
+                            |p| format!("Running: {p}"),
+                        );
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
-                                "Running...",
+                                running_text,
                                 Style::default()
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
@@ -1047,6 +1095,15 @@ impl MockComponent for ChatView {
                         "fail_tool" => self.fail_tool(tool_id, second, elapsed_ms),
                         _ => {}
                     }
+                }
+            }
+            "update_tool_progress" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let message = parts.get(1).map_or(String::new(), |s| (*s).to_string());
+                    let tokens = parts.get(2).and_then(|s| s.parse().ok());
+                    self.update_tool_progress(&tool_id, &message, tokens);
                 }
             }
             "page_up" | "page_down" => {

@@ -50,6 +50,16 @@ pub fn format_token_count(count: usize) -> String {
     }
 }
 
+/// Format token count for display (actual count from API, no ~ prefix)
+#[allow(clippy::cast_precision_loss)]
+pub fn format_tokens(count: u32) -> String {
+    if count >= 1000 {
+        format!("{:.1}k", f64::from(count) / 1000.0)
+    } else {
+        count.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

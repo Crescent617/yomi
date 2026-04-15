@@ -7,7 +7,7 @@ use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
 use crate::permissions::{Checker, ToolLevelResolver};
 use crate::prompt::SystemPromptBuilder;
-use crate::providers::ModelStreamItem;
+use crate::providers::{HttpError, ModelStreamItem};
 use crate::skill::Skill;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
@@ -505,12 +505,6 @@ impl Agent {
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
 
         loop {
-            if self.cancel_token.is_cancelled() {
-                return self
-                    .handle_cancel("streaming")
-                    .await
-                    .map(|()| (vec![], vec![]));
-            }
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
@@ -573,7 +567,13 @@ impl Agent {
                         }
                     },
                     Ok(None) => break,
-                    Err(e) => return Err(AgentError::Provider(e.to_string())),
+                    Err(e) => {
+                        // Check if this is an HTTP error that should be handled specially
+                        if let Some(http_err) = e.downcast_ref::<HttpError>() {
+                            return Err(AgentError::Http(http_err.clone()));
+                        }
+                        return Err(AgentError::Provider(e.to_string()));
+                    }
                 }
             }
         }
@@ -854,7 +854,7 @@ impl Agent {
                 Err(e) => {
                     attempt += 1;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1 * attempt)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(attempt)).await;
                 }
             }
         }

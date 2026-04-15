@@ -37,6 +37,12 @@ pub trait Tool: Send + Sync {
     fn desc(&self) -> &str;
     fn params(&self) -> Value;
     async fn exec(&self, args: Value) -> Result<ToolOutput>;
+
+    /// Execute with tool call ID (for tools that need to track progress/events)
+    /// Default implementation ignores `tool_call_id` and calls exec
+    async fn exec_with_id(&self, args: Value, _tool_call_id: &str) -> Result<ToolOutput> {
+        self.exec(args).await
+    }
 }
 
 /// Tool registry - manages available tools for an agent

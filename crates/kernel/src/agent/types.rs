@@ -382,12 +382,22 @@ pub enum AgentError {
 
 impl AgentError {
     pub fn is_retryable(&self) -> bool {
-        use AgentError::*;
+        use AgentError::{
+            Cancelled, ChannelClosed, Http, MaxIterationsExceeded, NoPermissionChecker,
+            PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked, StreamingFailed,
+        };
         match self {
             // HTTP errors: check status code
             Http(e) => e.is_retryable(),
-            StreamingFailed(_) | StreamTaskPanicked(_) => true,
-            _ => true,
+            // These errors should NOT be retried
+            MaxIterationsExceeded { .. }
+            | Cancelled
+            | ChannelClosed
+            | PermissionCheckFailed(_)
+            | NoPermissionChecker
+            | Serialization(_) => false,
+            // Provider errors and stream errors might be transient
+            Provider(_) | StreamingFailed(_) | StreamTaskPanicked(_) => true,
         }
     }
 

@@ -583,6 +583,23 @@ impl Model {
                     )?;
                     self.redraw = true;
                 }
+                AppEvent::Tool(kernel::event::ToolEvent::Progress {
+                    tool_id,
+                    message,
+                    tokens,
+                    ..
+                }) => {
+                    // Update tool progress in chat view
+                    // Format: tool_id\x00message\x00tokens (tokens is optional)
+                    let tokens_str = tokens.map(|t| t.to_string()).unwrap_or_default();
+                    let combined = format!("{tool_id}\x00{message}\x00{tokens_str}");
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("update_tool_progress"),
+                        AttrValue::String(combined),
+                    )?;
+                    self.redraw = true;
+                }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
                     self.is_streaming = false;
 
