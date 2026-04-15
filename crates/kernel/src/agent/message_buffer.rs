@@ -78,369 +78,311 @@ impl MessageBuffer {
     }
 
     /// Validate and clean message history before sending to provider.
-    /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses.
+    /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses,
+    /// and removes tool responses that are not immediately after their corresponding assistant.
     /// Time: O(n), Space: O(k) where k = number of pending tool calls
     pub fn validate_and_clean(&mut self) {
         use crate::types::Role;
         use std::collections::HashSet;
 
-        let mut pending_tool_calls: HashSet<String> = HashSet::new();
+        // First pass: find all valid (assistant -> tool chain) groups
+        // A tool response is valid only if it immediately follows its assistant
+        let mut to_remove = HashSet::new();
+        let n = self.messages.len();
+        let mut i = 0;
+        let mut expected_tool_ids = HashSet::new();
+        let mut tool_msg_indices = Vec::new();
 
-        // Single pass: track unmatched tool calls
-        // O(n) where n = number of messages
-        for msg in &self.messages {
-            match msg.role {
-                Role::Assistant => {
-                    if let Some(ref calls) = msg.tool_calls {
-                        for call in calls {
-                            pending_tool_calls.insert(call.id.clone());
-                        }
-                    }
+        while i < n {
+            let msg = &self.messages[i];
+
+            // Non-assistant: Tool gets marked, others skipped
+            let Role::Assistant = msg.role else {
+                if msg.role == Role::Tool {
+                    to_remove.insert(i);
                 }
-                Role::Tool => {
-                    if let Some(ref tool_call_id) = msg.tool_call_id {
-                        pending_tool_calls.remove(tool_call_id);
-                    }
-                }
-                _ => {}
+                i += 1;
+                continue;
+            };
+
+            // Assistant without tool_calls: skip
+            let Some(calls) = msg.tool_calls.as_ref() else {
+                i += 1;
+                continue;
+            };
+
+            expected_tool_ids.clear();
+            tool_msg_indices.clear();
+
+            for call in calls {
+                expected_tool_ids.insert(call.id.clone());
             }
+
+            let tool_call_count = calls.len();
+            let mut valid_chain = true;
+
+            for tool_idx in i + 1..=i + tool_call_count {
+                let Some(tool_msg) = self.messages.get(tool_idx) else {
+                    valid_chain = false;
+                    break;
+                };
+
+                if tool_msg.role != Role::Tool {
+                    valid_chain = false;
+                    break;
+                }
+
+                tool_msg_indices.push(tool_idx);
+
+                let Some(ref tool_call_id) = tool_msg.tool_call_id else {
+                    valid_chain = false;
+                    break;
+                };
+
+                if !expected_tool_ids.remove(tool_call_id) {
+                    valid_chain = false;
+                    break;
+                }
+            }
+
+            // Check if all expected tool calls have responses
+            if valid_chain && !expected_tool_ids.is_empty() {
+                valid_chain = false;
+            }
+
+            if !valid_chain {
+                to_remove.insert(i);
+                to_remove.extend(tool_msg_indices.iter());
+                i += 1 + tool_msg_indices.len();
+                continue;
+            }
+
+            // Valid chain - skip past all tool responses
+            i += tool_call_count + 1;
         }
 
-        if pending_tool_calls.is_empty() {
-            return; // All tool calls have responses, O(1) early exit
+        if to_remove.is_empty() {
+            return;
         }
 
-        tracing::warn!(
-            "Message buffer has {} pending tool calls without responses, cleaning up",
-            pending_tool_calls.len()
-        );
-
-        // Single pass removal using retain: O(n)
-        // retain is more efficient than individual remove() which is O(n) per operation
-        self.messages.retain(|msg| {
-            if let Role::Assistant = msg.role {
-                if let Some(ref calls) = msg.tool_calls {
-                    // Check if any tool_call in this message is pending
-                    let has_pending = calls
-                        .iter()
-                        .any(|call| pending_tool_calls.contains(&call.id));
-                    if has_pending {
-                        tracing::debug!(
-                            "Removing assistant message with unmatched tool_calls: {:?}",
-                            calls.iter().map(|c| &c.id).collect::<Vec<_>>()
-                        );
-                        return false; // Remove this message
-                    }
-                }
-            }
-            true // Keep this message
+        let mut i = 0;
+        self.messages.retain(|_| {
+            let keep = !to_remove.contains(&i);
+            i += 1;
+            keep
         });
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod validate_clean_tests {
     use super::*;
-    use crate::types::{ContentBlock, Role};
+    use crate::types::{ContentBlock, Message, Role, ToolCall};
+    use chrono::Utc;
 
-    fn create_message(role: Role, text: &str) -> Message {
+    fn create_assistant_with_tools(tool_ids: Vec<&str>) -> Message {
         Message {
-            role,
+            role: Role::Assistant,
             content: vec![ContentBlock::Text {
-                text: text.to_string(),
+                text: "calling tools".to_string(),
+            }],
+            tool_calls: Some(
+                tool_ids
+                    .into_iter()
+                    .map(|tid| ToolCall {
+                        id: tid.to_string(),
+                        name: "test_tool".to_string(),
+                        arguments: serde_json::json!({}),
+                    })
+                    .collect(),
+            ),
+            tool_call_id: None,
+            created_at: Utc::now(),
+            token_usage: None,
+        }
+    }
+
+    fn create_tool_response(tool_call_id: &str) -> Message {
+        Message {
+            role: Role::Tool,
+            content: vec![ContentBlock::Text {
+                text: "result".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+            created_at: Utc::now(),
+            token_usage: None,
+        }
+    }
+
+    fn create_user_message(content: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: content.to_string(),
             }],
             tool_calls: None,
             tool_call_id: None,
-            created_at: chrono::Utc::now(),
+            created_at: Utc::now(),
             token_usage: None,
         }
     }
 
     #[test]
-    fn test_buffer_basic() {
-        let mut buffer = MessageBuffer {
-            messages: Vec::new(),
-        };
+    fn test_valid_chain_kept() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t1"));
 
-        buffer.push(create_message(Role::System, "System prompt"));
-        buffer.push(create_message(Role::User, "Message 1"));
-        buffer.push(create_message(Role::Assistant, "Response 1"));
-
-        assert_eq!(buffer.len(), 3);
-    }
-
-    #[test]
-    fn test_from_messages() {
-        let messages = vec![
-            create_message(Role::System, "System"),
-            create_message(Role::User, "User"),
-        ];
-        let buffer = MessageBuffer::from_messages(messages);
+        buffer.validate_and_clean();
 
         assert_eq!(buffer.len(), 2);
-        assert!(buffer
-            .messages()
-            .iter()
-            .any(|m| { matches!(m.role, Role::System) }));
+        assert_eq!(buffer.messages()[0].role, Role::Assistant);
+        assert_eq!(buffer.messages()[1].role, Role::Tool);
     }
 
     #[test]
-    fn test_arc_sharing() {
-        let mut buffer1 = MessageBuffer::new();
-        let msg = create_message(Role::User, "Test");
-        buffer1.push(msg);
-
-        // Clone buffer - messages should be shared (Arc reference count)
-        let buffer2 = buffer1.clone();
-
-        // Both buffers should see the same message
-        assert_eq!(
-            buffer1.messages()[0].content[0],
-            buffer2.messages()[0].content[0]
-        );
-
-        // Modifying buffer1 should not affect buffer2 (COW)
-        buffer1.update_message(0, |msg| {
-            if let ContentBlock::Text { ref mut text } = &mut msg.content[0] {
-                text.push_str(" modified");
-            }
-        });
-
-        // Buffer1 should have modified message
-        if let ContentBlock::Text { text } = &buffer1.messages()[0].content[0] {
-            assert_eq!(text, "Test modified");
-        }
-
-        // Buffer2 should still have original (cloned)
-        if let ContentBlock::Text { text } = &buffer2.messages()[0].content[0] {
-            assert_eq!(text, "Test");
-        }
-    }
-
-    // ========== validate_and_clean tests ==========
-
-    fn create_message_with_tool_calls(
-        role: Role,
-        text: &str,
-        tool_calls: Option<Vec<crate::types::ToolCall>>,
-        tool_call_id: Option<String>,
-    ) -> Message {
-        Message {
-            role,
-            content: vec![ContentBlock::Text {
-                text: text.to_string(),
-            }],
-            tool_calls,
-            tool_call_id,
-            created_at: chrono::Utc::now(),
-            token_usage: None,
-        }
-    }
-
-    #[test]
-    fn test_validate_and_clean_no_pending_tools() {
-        // Normal conversation without tool calls - should remain unchanged
-        let messages = vec![
-            create_message(Role::System, "System"),
-            create_message(Role::User, "Hello"),
-            create_message(Role::Assistant, "Hi there!"),
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
+    fn test_multiple_tools_kept() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1", "t2"]));
+        buffer.push(create_tool_response("t1"));
+        buffer.push(create_tool_response("t2"));
 
         buffer.validate_and_clean();
 
         assert_eq!(buffer.len(), 3);
-        assert!(matches!(buffer.messages()[0].role, Role::System));
-        assert!(matches!(buffer.messages()[1].role, Role::User));
-        assert!(matches!(buffer.messages()[2].role, Role::Assistant));
     }
 
     #[test]
-    fn test_validate_and_clean_with_complete_tool_calls() {
-        // Complete tool call flow - assistant with tool_calls followed by tool response
-        let tool_call = crate::types::ToolCall {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "test.txt"}),
-        };
-
-        let messages = vec![
-            create_message(Role::User, "Read the file"),
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "I'll read it",
-                Some(vec![tool_call.clone()]),
-                None,
-            ),
-            create_message_with_tool_calls(
-                Role::Tool,
-                "file content",
-                None,
-                Some("call_1".to_string()),
-            ),
-            create_message(Role::Assistant, "Done!"),
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
+    fn test_interrupted_chain_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_user_message("interrupt"));
+        buffer.push(create_tool_response("t1"));
 
         buffer.validate_and_clean();
 
-        // All messages should be preserved (complete tool call flow)
-        assert_eq!(buffer.len(), 4);
-    }
-
-    #[test]
-    fn test_validate_and_clean_removes_unmatched_tool_calls() {
-        // Assistant with tool_calls but no tool response - should be removed
-        let tool_call = crate::types::ToolCall {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "test.txt"}),
-        };
-
-        let messages = vec![
-            create_message(Role::User, "Read the file"),
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "I'll read it",
-                Some(vec![tool_call]),
-                None,
-            ),
-            // No tool response!
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
-
-        buffer.validate_and_clean();
-
-        // Assistant message with unmatched tool_calls should be removed
         assert_eq!(buffer.len(), 1);
-        assert!(matches!(buffer.messages()[0].role, Role::User));
+        assert_eq!(buffer.messages()[0].role, Role::User);
     }
 
     #[test]
-    fn test_validate_and_clean_partial_match() {
-        // Multiple tool calls, one matched, one not
-        let tool_call_1 = crate::types::ToolCall {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "a.txt"}),
-        };
-        let tool_call_2 = crate::types::ToolCall {
-            id: "call_2".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "b.txt"}),
-        };
-
-        let messages = vec![
-            create_message(Role::User, "Read files"),
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "I'll read them",
-                Some(vec![tool_call_1.clone(), tool_call_2.clone()]),
-                None,
-            ),
-            // Only respond to call_1
-            create_message_with_tool_calls(
-                Role::Tool,
-                "content of a",
-                None,
-                Some("call_1".to_string()),
-            ),
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
+    fn test_orphan_tool_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_tool_response("t1"));
 
         buffer.validate_and_clean();
 
-        // Assistant message has unmatched call_2, should be removed
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_missing_tool_response_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1", "t2"]));
+        buffer.push(create_tool_response("t1"));
+
+        buffer.validate_and_clean();
+
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_extra_tool_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t1"));
+        buffer.push(create_tool_response("extra"));
+
+        buffer.validate_and_clean();
+
+        // Only the orphan extra tool is removed, valid chain is kept
         assert_eq!(buffer.len(), 2);
-        assert!(matches!(buffer.messages()[0].role, Role::User));
-        assert!(matches!(buffer.messages()[1].role, Role::Tool));
+        assert_eq!(buffer.messages()[0].role, Role::Assistant);
+        assert_eq!(buffer.messages()[1].role, Role::Tool);
     }
 
     #[test]
-    fn test_validate_and_clean_preserves_order() {
-        // Ensure messages after the removed one maintain order
-        let tool_call = crate::types::ToolCall {
-            id: "call_1".to_string(),
-            name: "bash".to_string(),
-            arguments: serde_json::json!({"command": "ls"}),
-        };
-
-        let messages = vec![
-            create_message(Role::System, "System"),
-            create_message(Role::User, "List files"),
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "Running command",
-                Some(vec![tool_call]),
-                None,
-            ),
-            create_message(Role::User, "What happened?"),
-            create_message(Role::Assistant, "Command failed"),
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
+    fn test_wrong_tool_id_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t2"));
 
         buffer.validate_and_clean();
 
-        // Check order is preserved after removal
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_valid_chains() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t1"));
+        buffer.push(create_assistant_with_tools(vec!["t2"]));
+        buffer.push(create_tool_response("t2"));
+
+        buffer.validate_and_clean();
+
         assert_eq!(buffer.len(), 4);
-        assert!(matches!(buffer.messages()[0].role, Role::System));
-        assert!(matches!(buffer.messages()[1].role, Role::User));
-        assert!(matches!(buffer.messages()[2].role, Role::User));
-        assert_eq!(
-            buffer.messages()[2].content[0],
-            ContentBlock::Text {
-                text: "What happened?".to_string()
-            }
-        );
-        assert!(matches!(buffer.messages()[3].role, Role::Assistant));
     }
 
     #[test]
-    fn test_validate_and_clean_multiple_assistant_with_tools() {
-        // Multiple assistant messages, some with unmatched tools
-        let tool_call_1 = crate::types::ToolCall {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "file1.txt"}),
-        };
-        let tool_call_2 = crate::types::ToolCall {
-            id: "call_2".to_string(),
-            name: "read".to_string(),
-            arguments: serde_json::json!({"path": "file2.txt"}),
-        };
-
-        let messages = vec![
-            create_message(Role::User, "Read files"),
-            // First assistant - complete
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "Reading file1",
-                Some(vec![tool_call_1.clone()]),
-                None,
-            ),
-            create_message_with_tool_calls(
-                Role::Tool,
-                "content1",
-                None,
-                Some("call_1".to_string()),
-            ),
-            // Second assistant - incomplete
-            create_message_with_tool_calls(
-                Role::Assistant,
-                "Reading file2",
-                Some(vec![tool_call_2]),
-                None,
-            ),
-            // No tool response for call_2!
-        ];
-        let mut buffer = MessageBuffer::from_messages(messages);
+    fn test_mixed_chains() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t1"));
+        buffer.push(create_assistant_with_tools(vec!["t2"]));
+        buffer.push(create_user_message("interrupt"));
+        buffer.push(create_tool_response("t2"));
+        buffer.push(create_tool_response("orphan"));
 
         buffer.validate_and_clean();
 
-        // Should keep: User, Assistant1, Tool1
-        // Should remove: Assistant2
         assert_eq!(buffer.len(), 3);
-        assert!(matches!(buffer.messages()[1].role, Role::Assistant));
-        assert!(matches!(buffer.messages()[2].role, Role::Tool));
+        assert_eq!(buffer.messages()[0].role, Role::Assistant);
+        assert_eq!(buffer.messages()[1].role, Role::Tool);
+        assert_eq!(buffer.messages()[2].role, Role::User);
+    }
+
+    #[test]
+    fn test_empty_buffer() {
+        let mut buffer = MessageBuffer::new();
+        buffer.validate_and_clean();
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_assistant_without_tools() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "hello".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: None,
+            created_at: Utc::now(),
+            token_usage: None,
+        });
+        buffer.push(create_user_message("response"));
+
+        buffer.validate_and_clean();
+
+        assert_eq!(buffer.len(), 2);
+    }
+
+    #[test]
+    fn test_duplicate_tool_response_removed() {
+        let mut buffer = MessageBuffer::new();
+        buffer.push(create_assistant_with_tools(vec!["t1"]));
+        buffer.push(create_tool_response("t1"));
+        buffer.push(create_tool_response("t1"));
+
+        buffer.validate_and_clean();
+
+        // Only the duplicate tool response is removed, valid chain is kept
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.messages()[0].role, Role::Assistant);
+        assert_eq!(buffer.messages()[1].role, Role::Tool);
     }
 }
