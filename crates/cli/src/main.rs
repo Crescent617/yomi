@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tui::run_tui;
+use tui::{run_tui, TuiResult};
 
 mod storage;
 use storage::AppStorage;
@@ -218,177 +218,194 @@ async fn main() -> Result<()> {
     let working_dir_str = working_dir.to_string_lossy().to_string();
     let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
 
-    // Build agent config
-    let agent_config = AgentConfig {
+    // Build agent config (cloneable for session creation)
+    let mk_agent_config = || AgentConfig {
         model: config.model.clone(),
-        skills,
+        skills: skills.clone(),
         ..Default::default()
     };
 
-    // Extract context_window before agent_config is moved
-    let context_window = agent_config.compactor.context_window;
+    // Extract context_window from default config
+    let context_window = mk_agent_config().compactor.context_window;
 
     // Helper to create session config
-    let mk_config = |agent: AgentConfig| SessionConfig {
-        agent,
+    let mk_config = || SessionConfig {
+        agent: mk_agent_config(),
         project_path: working_dir.clone(),
         auto_approve_level: config.auto_approve,
     };
 
-    // Create or restore session
-    let session_id = if args.resume {
-        match app_storage.get_last_session(&working_dir).await? {
-            Some(id) => {
-                let session_id = SessionId(id);
-                println!("Restoring previous session: {}", session_id.0);
-
-                match coordinator
-                    .restore_session(&session_id, mk_config(agent_config.clone()))
-                    .await
-                {
-                    Ok(_) => session_id,
-                    Err(e) => {
-                        println!("Failed to restore session: {e}");
-                        println!("Starting new session instead");
-                        coordinator.create_session(mk_config(agent_config)).await?
-                    }
-                }
-            }
-            None => {
-                println!("No previous session found, starting new session");
-                coordinator.create_session(mk_config(agent_config)).await?
-            }
-        }
-    } else {
-        coordinator.create_session(mk_config(agent_config)).await?
-    };
-
-    // Record this session for future --continue
-    app_storage
-        .record_session(&working_dir, &session_id.0)
-        .await?;
-
-    println!("yomi session started: {}", session_id.0);
-    println!("Working directory: {}", working_dir.display());
-    println!("Provider: {}", config.provider);
-    println!("Model: {}", config.model.model_id);
-    println!("Endpoint: {}", config.model.endpoint);
-    let api_key = config.api_key();
-    let key_preview = if api_key.len() > 8 {
-        strs::truncate_with_suffix(api_key, 11, "...")
-    } else {
-        "not set".to_string()
-    };
-    println!("API Key: {key_preview}");
-    println!("Starting TUI...\n");
-
-    // Load session messages for displaying in chat view
-    let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
-
-    // Create channel for input forwarding
-    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
-    // Create channel for cancel requests
-    let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
-    // Create channel for permission responses
-    let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<PermissionCommand>(10);
-
-    // Spawn task to forward input to coordinator
-    let coord_for_input = coordinator.clone();
-    let session_id_for_input = session_id.clone();
-    tokio::spawn(async move {
-        while let Some(content) = input_rx.recv().await {
-            if let Err(e) = coord_for_input
-                .send_message(&session_id_for_input, content)
-                .await
-            {
-                tracing::error!("Failed to send message: {}", e);
-            }
-        }
-    });
-
-    // Spawn task to handle cancel requests
-    let coord_for_cancel = coordinator.clone();
-    let session_id_for_cancel = session_id.clone();
-    tokio::spawn(async move {
-        while cancel_rx.recv().await == Some(()) {
-            if let Err(e) = coord_for_cancel.cancel(&session_id_for_cancel).await {
-                tracing::error!("Failed to cancel request: {}", e);
-            }
-        }
-    });
-
-    // Spawn task to handle permission commands
-    let coord_for_permission = coordinator.clone();
-    let session_id_for_permission = session_id.clone();
-    tokio::spawn(async move {
-        while let Some(cmd) = permission_rx.recv().await {
-            match cmd {
-                PermissionCommand::Response {
-                    req_id,
-                    approved,
-                    remember,
-                } => {
-                    tracing::debug!(
-                        "CLI received permission response: req_id={} approved={} remember={}",
-                        req_id,
-                        approved,
-                        remember
-                    );
-                    if let Err(e) = coord_for_permission
-                        .send_permission_response(
-                            &session_id_for_permission,
-                            &req_id,
-                            approved,
-                            remember,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to send permission response: {}", e);
-                    }
-                }
-                PermissionCommand::SetLevel(level) => {
-                    tracing::debug!("CLI received SetLevel command: {:?}", level);
-                    if let Err(e) = coord_for_permission
-                        .set_permission_level(&session_id_for_permission, level)
-                        .await
-                    {
-                        tracing::error!("Failed to set permission level: {}", e);
-                    }
-                }
-            }
-        }
-    });
-
-    // Get event receiver from coordinator for the session
-    let event_rx = coordinator
-        .take_session_event_receiver(&session_id)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
-
-    // Load input history for this working directory
-    let input_history = app_storage
+    // Main loop: create session, run TUI, optionally create new session
+    let mut is_first_session = true;
+    let mut input_history = app_storage
         .load_input_history(&working_dir)
         .await
         .unwrap_or_default();
 
-    // Run TUI with banner data, input history and session messages
-    let new_history_entries = run_tui(
-        event_rx,
-        input_tx,
-        cancel_tx,
-        permission_tx,
-        working_dir_str,
-        skill_names,
-        input_history,
-        session_messages,
-        config.auto_approve,
-        context_window,
-    )
-    .await?;
+    loop {
+        // Create or restore session
+        let session_id = if is_first_session && args.resume {
+            match app_storage.get_last_session(&working_dir).await? {
+                Some(id) => {
+                    let session_id = SessionId(id);
+                    println!("Restoring previous session: {}", session_id.0);
 
-    // Save new history entries
-    for entry in &new_history_entries {
-        app_storage.add_input_entry(&working_dir, entry).await?;
+                    match coordinator
+                        .restore_session(&session_id, mk_config())
+                        .await
+                    {
+                        Ok(_) => session_id,
+                        Err(e) => {
+                            println!("Failed to restore session: {e}");
+                            println!("Starting new session instead");
+                            coordinator.create_session(mk_config()).await?
+                        }
+                    }
+                }
+                None => {
+                    println!("No previous session found, starting new session");
+                    coordinator.create_session(mk_config()).await?
+                }
+            }
+        } else {
+            coordinator.create_session(mk_config()).await?
+        };
+
+        // Record this session for future --continue
+        app_storage
+            .record_session(&working_dir, &session_id.0)
+            .await?;
+
+        if is_first_session {
+            println!("yomi session started: {}", session_id.0);
+            println!("Working directory: {}", working_dir.display());
+            println!("Provider: {}", config.provider);
+            println!("Model: {}", config.model.model_id);
+            println!("Endpoint: {}", config.model.endpoint);
+            let api_key = config.api_key();
+            let key_preview = if api_key.len() > 8 {
+                strs::truncate_with_suffix(api_key, 11, "...")
+            } else {
+                "not set".to_string()
+            };
+            println!("API Key: {key_preview}");
+        } else {
+            println!("yomi new session started: {}", session_id.0);
+        }
+        println!("Starting TUI...\n");
+
+        // Load session messages for displaying in chat view
+        let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
+
+        // Create channel for input forwarding
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
+        // Create channel for cancel requests
+        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
+        // Create channel for permission responses
+        let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<PermissionCommand>(10);
+
+        // Spawn task to forward input to coordinator
+        let coord_for_input = coordinator.clone();
+        let session_id_for_input = session_id.clone();
+        tokio::spawn(async move {
+            while let Some(content) = input_rx.recv().await {
+                if let Err(e) = coord_for_input
+                    .send_message(&session_id_for_input, content)
+                    .await
+                {
+                    tracing::error!("Failed to send message: {}", e);
+                }
+            }
+        });
+
+        // Spawn task to handle cancel requests
+        let coord_for_cancel = coordinator.clone();
+        let session_id_for_cancel = session_id.clone();
+        tokio::spawn(async move {
+            while cancel_rx.recv().await == Some(()) {
+                if let Err(e) = coord_for_cancel.cancel(&session_id_for_cancel).await {
+                    tracing::error!("Failed to cancel request: {}", e);
+                }
+            }
+        });
+
+        // Spawn task to handle permission commands
+        let coord_for_permission = coordinator.clone();
+        let session_id_for_permission = session_id.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = permission_rx.recv().await {
+                match cmd {
+                    PermissionCommand::Response {
+                        req_id,
+                        approved,
+                        remember,
+                    } => {
+                        tracing::debug!(
+                            "CLI received permission response: req_id={} approved={} remember={}",
+                            req_id,
+                            approved,
+                            remember
+                        );
+                        if let Err(e) = coord_for_permission
+                            .send_permission_response(
+                                &session_id_for_permission,
+                                &req_id,
+                                approved,
+                                remember,
+                            )
+                            .await
+                        {
+                            tracing::error!("Failed to send permission response: {}", e);
+                        }
+                    }
+                    PermissionCommand::SetLevel(level) => {
+                        tracing::debug!("CLI received SetLevel command: {:?}", level);
+                        if let Err(e) = coord_for_permission
+                            .set_permission_level(&session_id_for_permission, level)
+                            .await
+                        {
+                            tracing::error!("Failed to set permission level: {}", e);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Get event receiver from coordinator for the session
+        let event_rx = coordinator
+            .take_session_event_receiver(&session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
+
+        // Run TUI with banner data, input history and session messages
+        let tui_result = run_tui(
+            event_rx,
+            input_tx,
+            cancel_tx,
+            permission_tx,
+            working_dir_str.clone(),
+            skill_names.clone(),
+            input_history.clone(),
+            session_messages,
+            config.auto_approve,
+            context_window,
+        )
+        .await?;
+
+        // Save new history entries
+        input_history.extend(tui_result.input_history.clone());
+        for entry in &tui_result.input_history {
+            app_storage.add_input_entry(&working_dir, entry).await?;
+        }
+
+        // Check if we should create a new session
+        if tui_result.should_create_new_session {
+            is_first_session = false;
+            continue;
+        }
+
+        // Otherwise, exit the loop
+        break;
     }
 
     println!("Goodbye!");

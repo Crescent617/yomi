@@ -1,6 +1,6 @@
 use crate::event::ContentChunk;
 use crate::providers::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
@@ -112,7 +112,7 @@ impl Provider for OpenAIProvider {
         messages: &[Arc<Message>],
         tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream> {
+    ) -> Result<ModelStream, ProviderError> {
         let url = if config.endpoint.is_empty() {
             "https://api.openai.com/v1/chat/completions".to_string()
         } else {
@@ -152,7 +152,7 @@ impl Provider for OpenAIProvider {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("OpenAI API error: {} - {}", status, text);
-            return Err(anyhow!(HttpError(status.as_u16())));
+            return Err(ProviderError::Http(HttpError(status.as_u16())));
         }
 
         tracing::debug!("OpenAI API response received, starting stream processing");
@@ -183,24 +183,24 @@ impl Provider for OpenAIProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI SSE error: {}", e);
-                            return Err(anyhow!("SSE error: {e}"));
+                            return Err(ProviderError::Sse(format!("SSE error: {e}")));
                         }
                         Err(_) => {
                             tracing::error!(
                                 "OpenAI SSE idle timeout after {}s",
                                 IDLE_TIMEOUT.as_secs()
                             );
-                            return Err(anyhow!(
+                            return Err(ProviderError::Timeout(format!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ));
+                            )));
                         }
                     }
                 }
             },
         )
-        .flat_map(|result: Result<Vec<ModelStreamItem>>| {
-            let items: Vec<Result<ModelStreamItem>> = match result {
+        .flat_map(|result: Result<Vec<ModelStreamItem>, ProviderError>| {
+            let items: Vec<Result<ModelStreamItem, ProviderError>> = match result {
                 Ok(items) => items.into_iter().map(Ok).collect(),
                 Err(e) => vec![Err(e)],
             };
@@ -251,9 +251,9 @@ impl ToolCallAssembler {
     ///
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
-    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>> {
+    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
         let response: OpenAIStreamResponse = serde_json::from_str(data)
-            .map_err(|e| anyhow!("Failed to parse SSE chunk: {e} - data: {data}"))?;
+            .map_err(|e| ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}")))?;
 
         // Handle usage information (sent in final chunk when stream_options.include_usage=true)
         if let Some(usage) = response.usage {

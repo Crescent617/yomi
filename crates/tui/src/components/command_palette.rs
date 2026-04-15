@@ -1,7 +1,7 @@
 //! Command palette component for TUI
 //!
 //! Provides a VS Code-style command palette for quick access to actions.
-//! Triggered by Ctrl+P or / when input box is empty.
+//! Triggered by / when input box is empty.
 
 use tuirealm::{
     command::{Cmd, CmdResult},
@@ -15,7 +15,7 @@ use tuirealm::{
 };
 
 use unicode_width::UnicodeWidthStr;
-use crate::{msg::Msg, theme::colors};
+use crate::{components::input_edit::{TextBuffer, TextInput}, msg::Msg, theme::colors};
 
 /// A command that can be executed from the palette
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub struct CommandPalette {
     commands: Vec<Command>,
     filtered: Vec<usize>,
     selected: usize,
-    search: String,
+    input: TextBuffer,
     visible: bool,
 }
 
@@ -64,14 +64,14 @@ impl CommandPalette {
             commands: Vec::new(),
             filtered: Vec::new(),
             selected: 0,
-            search: String::new(),
+            input: TextBuffer::new(),
             visible: false,
         }
     }
 
     pub fn show(&mut self, commands: Vec<Command>) {
         self.commands = commands;
-        self.search.clear();
+        self.input.clear();
         self.selected = 0;
         self.visible = true;
         self.update_filtered();
@@ -79,7 +79,7 @@ impl CommandPalette {
 
     pub fn hide(&mut self) {
         self.visible = false;
-        self.search.clear();
+        self.input.clear();
     }
 
     pub const fn is_visible(&self) -> bool {
@@ -87,13 +87,18 @@ impl CommandPalette {
     }
 
     pub fn set_search(&mut self, search: String) {
-        self.search = search;
+        self.input = TextBuffer::with_content(search);
         self.selected = 0;
         self.update_filtered();
     }
 
     pub fn search(&self) -> &str {
-        &self.search
+        self.input.content()
+    }
+
+    /// Get mutable access to the input buffer for advanced editing
+    pub fn input_mut(&mut self) -> &mut crate::components::input_edit::TextBuffer {
+        &mut self.input
     }
 
     fn select_up(&mut self) {
@@ -121,7 +126,7 @@ impl CommandPalette {
     }
 
     fn update_filtered(&mut self) {
-        let search_lower = self.search.to_lowercase();
+        let search_lower = self.input.content().to_lowercase();
         self.filtered = self
             .commands
             .iter()
@@ -143,12 +148,12 @@ impl CommandPalette {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.search.push(c);
+        self.input.insert_char(c);
         self.update_filtered();
     }
 
     pub fn backspace(&mut self) {
-        self.search.pop();
+        self.input.backspace();
         self.update_filtered();
     }
 
@@ -189,7 +194,7 @@ impl CommandPalette {
             .split(inner);
 
         let search_prefix = "> ";
-        let search_text = format!("{}{}", search_prefix, self.search);
+        let search_text = format!("{}{}", search_prefix, self.input.content());
         let search_para = Paragraph::new(search_text).style(
             Style::default()
                 .fg(colors::text_primary())
@@ -231,7 +236,7 @@ impl CommandPalette {
 
             let list = List::new(items).block(Block::default());
             frame.render_widget(list, chunks[1]);
-        } else if !self.search.is_empty() {
+        } else if !self.input.is_empty() {
             let no_results = Paragraph::new("No matching commands")
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(colors::text_muted()));
@@ -242,7 +247,7 @@ impl CommandPalette {
 
         // Cursor position: after the "> " prefix in the search box
         // Use display width for proper handling of CJK/multi-byte characters
-        let search_width = self.search.width() as u16;
+        let search_width = self.input.content().width() as u16;
         let cursor_x = chunks[0].x + 2 + search_width;
         let cursor_y = chunks[0].y;
         frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
@@ -270,7 +275,7 @@ impl MockComponent for CommandPalette {
         match attr {
             Attribute::Custom("show") => {
                 self.visible = true;
-                self.search.clear();
+                self.input.clear();
                 self.selected = 0;
                 self.update_filtered();
             }
@@ -324,11 +329,11 @@ impl MockComponent for CommandPalette {
             }
             Cmd::Type(c) => {
                 self.insert_char(c);
-                CmdResult::Changed(State::One(StateValue::String(self.search.clone())))
+                CmdResult::Changed(State::One(StateValue::String(self.input.content().to_string())))
             }
             Cmd::Delete => {
                 self.backspace();
-                CmdResult::Changed(State::One(StateValue::String(self.search.clone())))
+                CmdResult::Changed(State::One(StateValue::String(self.input.content().to_string())))
             }
             _ => CmdResult::None,
         }
@@ -456,6 +461,106 @@ impl Component<Msg, crate::msg::UserEvent> for CommandPaletteComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.backspace();
+                Some(Msg::Redraw)
+            }
+            // Ctrl+A: move to start of line
+            Keyboard(KeyEvent {
+                code: Key::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.input_mut().move_to_start_of_line();
+                Some(Msg::Redraw)
+            }
+            // Ctrl+E: move to end of line
+            Keyboard(KeyEvent {
+                code: Key::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.input_mut().move_to_end_of_line();
+                Some(Msg::Redraw)
+            }
+            // Ctrl+U: delete to start of line
+            Keyboard(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.input_mut().kill_to_start_of_line();
+                self.component.update_filtered();
+                Some(Msg::Redraw)
+            }
+            // Ctrl+K: delete to end of line
+            Keyboard(KeyEvent {
+                code: Key::Char('k'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.input_mut().kill_to_end_of_line();
+                self.component.update_filtered();
+                Some(Msg::Redraw)
+            }
+            // Ctrl+W: delete word backward
+            Keyboard(KeyEvent {
+                code: Key::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.input_mut().delete_word_backward();
+                self.component.update_filtered();
+                Some(Msg::Redraw)
+            }
+            // Alt+D: delete word forward
+            Keyboard(KeyEvent {
+                code: Key::Char('d'),
+                modifiers: KeyModifiers::ALT,
+            }) => {
+                self.component.input_mut().delete_word_forward();
+                self.component.update_filtered();
+                Some(Msg::Redraw)
+            }
+            // Alt+B: move word backward
+            Keyboard(KeyEvent {
+                code: Key::Char('b'),
+                modifiers: KeyModifiers::ALT,
+            }) => {
+                self.component.input_mut().move_word_left();
+                Some(Msg::Redraw)
+            }
+            // Alt+F: move word forward
+            Keyboard(KeyEvent {
+                code: Key::Char('f'),
+                modifiers: KeyModifiers::ALT,
+            }) => {
+                self.component.input_mut().move_word_right();
+                Some(Msg::Redraw)
+            }
+            // Left arrow: move left
+            Keyboard(KeyEvent {
+                code: Key::Left,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.input_mut().move_left();
+                Some(Msg::Redraw)
+            }
+            // Right arrow: move right
+            Keyboard(KeyEvent {
+                code: Key::Right,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.input_mut().move_right();
+                Some(Msg::Redraw)
+            }
+            // Home: move to start of line
+            Keyboard(KeyEvent {
+                code: Key::Home,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.input_mut().move_to_start_of_line();
+                Some(Msg::Redraw)
+            }
+            // End: move to end of line
+            Keyboard(KeyEvent {
+                code: Key::End,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.input_mut().move_to_end_of_line();
                 Some(Msg::Redraw)
             }
             _ => None,

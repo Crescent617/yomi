@@ -3,6 +3,14 @@
 //! Main application using tuirealm framework for component-based TUI.
 
 use anyhow::Result;
+
+/// Result type returned by TUI
+pub struct TuiResult {
+    /// Input history entries collected during this session
+    pub input_history: Vec<String>,
+    /// Whether to create a new session after exiting
+    pub should_create_new_session: bool,
+}
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::SubEventClause;
@@ -78,6 +86,8 @@ pub struct Model {
     /// Permission level for displaying YOLO mode indicator
     permission_level: Level,
     commands: Vec<Command>,
+    /// Flag to indicate if a new session should be created on exit
+    should_create_new_session: bool,
 }
 
 
@@ -117,6 +127,7 @@ impl Model {
             session_messages,
             commands: Self::init_commands(),
             permission_level,
+            should_create_new_session: false,
         })
     }
 
@@ -142,12 +153,9 @@ impl Model {
     fn execute_command(&mut self, cmd_id: &str) {
         match cmd_id {
             "new_chat" => {
-                // Clear chat history
-                let _ = self.app.attr(
-                    &Id::ChatView,
-                    Attribute::Custom("clear_history"),
-                    AttrValue::Flag(true),
-                );
+                // Signal that a new session should be created
+                self.should_create_new_session = true;
+                self.quit = true;
             }
             "clear" => {
                 // Clear chat history (same as new_chat)
@@ -159,7 +167,7 @@ impl Model {
             }
             "toggle_browse" => {
                 // Toggle browse mode
-                return;
+                let _ = self.update(Some(Msg::ToggleBrowseMode));
             }
             "toggle_yolo" => {
                 // Toggle YOLO mode
@@ -764,7 +772,7 @@ impl Model {
 
     /// Run the main loop
     #[allow(clippy::future_not_send)]
-    pub async fn run(mut self) -> Result<Vec<String>> {
+    pub async fn run(mut self) -> Result<TuiResult> {
         // Enter alternate screen
         self.terminal.enter_alternate_screen()?;
         self.terminal.enable_raw_mode()?;
@@ -778,8 +786,11 @@ impl Model {
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
 
-        // Return new history entries
-        Ok(self.get_new_history_entries())
+        // Return result with new history entries and session flag
+        Ok(TuiResult {
+            input_history: self.get_new_history_entries(),
+            should_create_new_session: self.should_create_new_session,
+        })
     }
 
     #[allow(clippy::future_not_send)]
@@ -1124,7 +1135,7 @@ pub async fn run_tui(
     session_messages: Vec<Message>,
     permission_level: Level,
     context_window: u32,
-) -> Result<Vec<String>> {
+) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
         event_rx,

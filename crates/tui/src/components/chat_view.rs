@@ -1115,6 +1115,11 @@ impl MockComponent for ChatView {
                     }
                 }
             }
+            "clear_history" => {
+                self.messages.clear();
+                self.scroll_offset = 0;
+                self.banner = None;
+            }
             _ => {}
         }
     }

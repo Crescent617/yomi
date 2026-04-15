@@ -11,7 +11,7 @@ pub mod theme;
 pub mod utils;
 
 // Re-export main entry point
-pub use app::run_tui;
+pub use app::{run_tui, TuiResult};
 
 // Re-export theme utilities
 pub use theme::{

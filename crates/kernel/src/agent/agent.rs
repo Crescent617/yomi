@@ -7,7 +7,7 @@ use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
 use crate::permissions::{Checker, ToolLevelResolver};
 use crate::prompt::SystemPromptBuilder;
-use crate::providers::{HttpError, ModelStreamItem};
+use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
@@ -465,7 +465,7 @@ impl Agent {
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(AgentError::StreamingFailed(e.to_string())),
+                Ok(Err(e)) => return Err(AgentError::Provider(e)),
                 Err(e) if e.is_cancelled() => {
                     return Err(AgentError::Cancelled);
                 }
@@ -568,11 +568,7 @@ impl Agent {
                     },
                     Ok(None) => break,
                     Err(e) => {
-                        // Check if this is an HTTP error that should be handled specially
-                        if let Some(http_err) = e.downcast_ref::<HttpError>() {
-                            return Err(AgentError::Http(http_err.clone()));
-                        }
-                        return Err(AgentError::Provider(e.to_string()));
+                        return Err(AgentError::Provider(e));
                     }
                 }
             }

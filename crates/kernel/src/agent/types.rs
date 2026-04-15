@@ -1,5 +1,5 @@
 use crate::compactor::Compactor;
-use crate::providers::{HttpError, ModelConfig};
+use crate::providers::{ModelConfig, ProviderError};
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
 use crate::types::Message;
@@ -355,10 +355,6 @@ pub enum AgentError {
     #[error("Stream task panicked: {0}")]
     StreamTaskPanicked(String),
 
-    /// Streaming operation failed
-    #[error("Streaming failed: {0}")]
-    StreamingFailed(String),
-
     /// Permission check failed
     #[error("Permission check failed: {0}")]
     PermissionCheckFailed(String),
@@ -367,13 +363,9 @@ pub enum AgentError {
     #[error("Agent does not have permission checker")]
     NoPermissionChecker,
 
-    /// HTTP error from provider (retryable)
-    #[error("Provider HTTP error: {0}")]
-    Http(#[from] HttpError),
-
-    /// General provider error
-    #[error("Provider error: {0}")]
-    Provider(String),
+    /// Provider error (includes HTTP, timeout, parse errors, etc.)
+    #[error("{0}")]
+    Provider(#[from] ProviderError),
 
     /// Serialization error
     #[error("Serialization error: {0}")]
@@ -383,12 +375,12 @@ pub enum AgentError {
 impl AgentError {
     pub fn is_retryable(&self) -> bool {
         use AgentError::{
-            Cancelled, ChannelClosed, Http, MaxIterationsExceeded, NoPermissionChecker,
-            PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked, StreamingFailed,
+            Cancelled, ChannelClosed, MaxIterationsExceeded, NoPermissionChecker,
+            PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked,
         };
         match self {
-            // HTTP errors: check status code
-            Http(e) => e.is_retryable(),
+            // Delegate to ProviderError's retry logic
+            Provider(e) => e.is_retryable(),
             // These errors should NOT be retried
             MaxIterationsExceeded { .. }
             | Cancelled
@@ -396,8 +388,8 @@ impl AgentError {
             | PermissionCheckFailed(_)
             | NoPermissionChecker
             | Serialization(_) => false,
-            // Provider errors and stream errors might be transient
-            Provider(_) | StreamingFailed(_) | StreamTaskPanicked(_) => true,
+            // Stream task panics might be transient
+            StreamTaskPanicked(_) => true,
         }
     }
 

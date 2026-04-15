@@ -2,7 +2,7 @@
 //! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
 use crate::event::ContentChunk;
 use crate::providers::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
 use anyhow::{anyhow, Result};
@@ -117,7 +117,7 @@ impl Provider for AnthropicProvider {
         messages: &[Arc<Message>],
         tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream> {
+    ) -> Result<ModelStream, ProviderError> {
         let url = if config.endpoint.is_empty() {
             "https://api.anthropic.com/v1/messages".to_string()
         } else {
@@ -176,7 +176,7 @@ impl Provider for AnthropicProvider {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("Anthropic API error: {} - {}", status, text);
-            return Err(anyhow!(HttpError(status.as_u16())));
+            return Err(ProviderError::Http(HttpError(status.as_u16())));
         }
 
         tracing::debug!("Anthropic API response received, starting stream processing");
@@ -206,24 +206,24 @@ impl Provider for AnthropicProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("Anthropic SSE error: {}", e);
-                            return Err(anyhow!("SSE error: {e}"));
+                            return Err(ProviderError::Sse(format!("SSE error: {e}")));
                         }
                         Err(_) => {
                             tracing::error!(
                                 "Anthropic SSE idle timeout after {}s",
                                 IDLE_TIMEOUT.as_secs()
                             );
-                            return Err(anyhow!(
+                            return Err(ProviderError::Timeout(format!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ));
+                            )));
                         }
                     }
                 }
             },
         )
-        .flat_map(|result: Result<Vec<ModelStreamItem>>| {
-            let items: Vec<Result<ModelStreamItem>> = match result {
+        .flat_map(|result: Result<Vec<ModelStreamItem>, ProviderError>| {
+            let items: Vec<Result<ModelStreamItem, ProviderError>> = match result {
                 Ok(items) => items.into_iter().map(Ok).collect(),
                 Err(e) => vec![Err(e)],
             };
@@ -261,9 +261,9 @@ impl AnthropicStreamState {
         }
     }
 
-    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>> {
+    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
         let event: AnthropicStreamEvent = serde_json::from_str(data)
-            .map_err(|e| anyhow!("Failed to parse SSE chunk: {e} - data: {data}"))?;
+            .map_err(|e| ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}")))?;
 
         let mut items = Vec::new();
 
@@ -336,7 +336,10 @@ impl AnthropicStreamState {
                 items.push(ModelStreamItem::Complete);
             }
             AnthropicStreamEvent::Error { error } => {
-                return Err(anyhow!("Anthropic API error: {}", error.message));
+                return Err(ProviderError::Request(format!(
+                    "Anthropic API error: {}",
+                    error.message
+                )));
             }
         }
 

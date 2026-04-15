@@ -6,6 +6,7 @@ pub mod command_palette;
 pub mod dialog;
 pub mod info_bar;
 pub mod input;
+pub mod input_edit;
 pub mod status_bar;
 
 pub use banner::{BannerComponent, BannerData};
@@ -14,4 +15,5 @@ pub use command_palette::{Command, CommandPaletteComponent};
 pub use dialog::{SelectDialog, SelectDialogComponent};
 pub use info_bar::InfoBarComponent;
 pub use input::InputComponent;
+pub use input_edit::{TextBuffer, TextInput};
 pub use status_bar::StatusBarComponent;

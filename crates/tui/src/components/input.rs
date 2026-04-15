@@ -14,7 +14,7 @@ use tuirealm::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{msg::Msg, theme::colors};
+use crate::{components::input_edit::TextInput, msg::Msg, theme::colors};
 
 #[derive(Debug, Default)]
 pub struct InputMock {
@@ -28,73 +28,29 @@ impl InputMock {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
-    pub fn insert_char(&mut self, c: char) {
-        self.content.insert(self.cursor_pos, c);
-        self.cursor_pos += c.len_utf8();
+// Implement TextInput trait for InputMock
+impl TextInput for InputMock {
+    fn text(&self) -> &str {
+        &self.content
     }
 
-    pub fn insert_str(&mut self, s: &str) {
-        self.content.insert_str(self.cursor_pos, s);
-        self.cursor_pos += s.len();
+    fn text_mut(&mut self) -> &mut String {
+        &mut self.content
     }
 
-    pub fn backspace(&mut self) {
-        if self.cursor_pos > 0 {
-            let mut idx = self.cursor_pos - 1;
-            while idx > 0 && !self.content.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            self.content.drain(idx..self.cursor_pos);
-            self.cursor_pos = idx;
-        }
+    fn cursor_pos(&self) -> usize {
+        self.cursor_pos
     }
 
-    pub fn delete_char(&mut self) {
-        if self.cursor_pos < self.content.len() {
-            let mut idx = self.cursor_pos + 1;
-            while idx < self.content.len() && !self.content.is_char_boundary(idx) {
-                idx += 1;
-            }
-            self.content.drain(self.cursor_pos..idx);
-        }
+    fn set_cursor_pos(&mut self, pos: usize) {
+        self.cursor_pos = pos.min(self.content.len());
     }
+}
 
-    pub fn move_left(&mut self) {
-        if self.cursor_pos > 0 {
-            let mut idx = self.cursor_pos - 1;
-            while idx > 0 && !self.content.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            self.cursor_pos = idx;
-        }
-    }
-
-    pub fn move_right(&mut self) {
-        if self.cursor_pos < self.content.len() {
-            let mut idx = self.cursor_pos + 1;
-            while idx < self.content.len() && !self.content.is_char_boundary(idx) {
-                idx += 1;
-            }
-            self.cursor_pos = idx.min(self.content.len());
-        }
-    }
-
-    /// Move cursor to start of current line (like Ctrl-a in readline)
-    pub fn move_to_start_of_line(&mut self) {
-        let line_start = self.content[..self.cursor_pos]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        self.cursor_pos = line_start;
-    }
-
-    /// Move cursor to end of current line (like Ctrl-e in readline)
-    pub fn move_to_end_of_line(&mut self) {
-        let line_end = self.content[self.cursor_pos..]
-            .find('\n')
-            .map_or(self.content.len(), |i| self.cursor_pos + i);
-        self.cursor_pos = line_end;
-    }
+impl InputMock {
+    // InputMock-specific methods that extend TextInput trait functionality
 
     /// Move cursor to previous line, keeping column position if possible
     pub fn move_up(&mut self) {
@@ -152,154 +108,9 @@ impl InputMock {
         !self.content[self.cursor_pos..].contains('\n')
     }
 
-    /// Move cursor to previous word boundary (like Alt-b in readline)
-    pub fn move_word_left(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Skip trailing whitespace
-        let mut pos = self.cursor_pos;
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = prev;
-            } else {
-                break;
-            }
-        }
-        // Now find the start of the word
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = prev;
-        }
-        self.cursor_pos = pos;
-    }
-
-    /// Move cursor to next word boundary (like Alt-f in readline)
-    pub fn move_word_right(&mut self) {
-        if self.cursor_pos >= self.content.len() {
-            return;
-        }
-        // Skip current word
-        let mut pos = self.cursor_pos;
-        while pos < self.content.len() {
-            let mut next = pos + 1;
-            while next < self.content.len() && !self.content.is_char_boundary(next) {
-                next += 1;
-            }
-            if self.content[pos..next]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = next;
-        }
-        // Now skip whitespace to get to next word
-        while pos < self.content.len() {
-            let mut next = pos + 1;
-            while next < self.content.len() && !self.content.is_char_boundary(next) {
-                next += 1;
-            }
-            if self.content[pos..next]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = next;
-            } else {
-                break;
-            }
-        }
-        self.cursor_pos = pos;
-    }
-
-    pub fn clear(&mut self) {
-        self.content.clear();
-        self.cursor_pos = 0;
-    }
-
     pub fn insert_newline(&mut self) {
         self.content.insert(self.cursor_pos, '\n');
         self.cursor_pos += 1;
-    }
-
-    /// Delete from cursor to start of line (like ctrl-u in bash)
-    pub fn kill_to_start_of_line(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Find the start of current line
-        let line_start = self.content[..self.cursor_pos]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        self.content.drain(line_start..self.cursor_pos);
-        self.cursor_pos = line_start;
-    }
-
-    /// Delete word backward (like ctrl-w in bash)
-    pub fn delete_word(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Skip trailing whitespace
-        let mut pos = self.cursor_pos;
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = prev;
-            } else {
-                break;
-            }
-        }
-        // Now find the start of the word
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = prev;
-        }
-        self.content.drain(pos..self.cursor_pos);
-        self.cursor_pos = pos;
     }
 
     /// Handle ctrl-c: clear input, or quit if pressed twice within 1 second
@@ -861,20 +672,16 @@ impl InputComponent {
                 code: Key::Char('w'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.component.delete_word();
+                self.component.delete_word_backward();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // History navigation: Ctrl+P = previous (or open command palette if input is empty)
+            // History navigation: Ctrl+P = previous
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                if self.component.content().is_empty() {
-                    Some(Msg::ToggleCommandPalette)
-                } else {
-                    self.history_prev();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
-                }
+                self.history_prev();
+                Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('n'),
