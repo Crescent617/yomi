@@ -5,7 +5,7 @@ use kernel::{
     config::{env_names, Config, ModelProvider},
     event::PermissionCommand,
     expand_tilde,
-    misc::plugin::PluginLoader,
+    misc::plugin::{EnabledPlugins, PluginLoader},
     permissions::Level,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
@@ -14,14 +14,43 @@ use kernel::{
 };
 use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
 use kernel::{Coordinator, SessionConfig};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tui::{run_tui, TuiResult};
+use tui::run_tui;
 
 mod storage;
 use storage::AppStorage;
+
+/// Claude Code settings.json structure (partial)
+#[derive(Debug, Deserialize, Default)]
+struct ClaudeSettings {
+    #[serde(default, rename = "enabledPlugins")]
+    enabled_plugins: EnabledPlugins,
+}
+
+impl ClaudeSettings {
+    /// Load settings from ~/.claude/settings.json if it exists
+    fn load() -> Self {
+        let settings_path = expand_tilde("~/.claude/settings.json");
+        if !settings_path.exists() {
+            return Self::default();
+        }
+
+        match std::fs::read_to_string(&settings_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Failed to parse {}: {}", settings_path.display(), e);
+                Self::default()
+            }),
+            Err(e) => {
+                tracing::debug!("Failed to read {}: {}", settings_path.display(), e);
+                Self::default()
+            }
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "yomi")]
@@ -103,9 +132,13 @@ async fn main() -> Result<()> {
     init_logging(&config)?;
 
     // Load skills from configured folders
-    // Default to ./.claude/skills if no folders configured via env
+    // Default skill folders if no folders configured via env
     let skill_folders = if config.skill_folders.is_empty() {
-        &vec!["~/.yomi/skills".into(), "~/.claude/skills".into()]
+        &vec![
+            "~/.yomi/skills".into(),
+            "~/.claude/skills".into(),
+            "~/.agents/skills".into(),
+        ]
     } else {
         &config.skill_folders
     };
@@ -130,13 +163,22 @@ async fn main() -> Result<()> {
 
         tracing::debug!("Loading plugins from directories: {:?}", plugin_dirs);
 
+        // Load Claude settings to get enabled plugins filter
+        let claude_settings = ClaudeSettings::load();
+        let has_enabled_filter = !claude_settings.enabled_plugins.is_empty();
+
         let plugins = {
-            let loader = PluginLoader::new(plugin_dirs);
+            let loader = PluginLoader::new(plugin_dirs)
+                .with_enabled_plugins(claude_settings.enabled_plugins);
             loader.load_all().unwrap_or_else(|e| {
                 tracing::warn!("Failed to load plugins: {e}");
                 Vec::new()
             })
         };
+
+        if has_enabled_filter {
+            tracing::debug!("Applied enabledPlugins filter from ~/.claude/settings.json");
+        }
 
         // Log loaded plugins and load their skills
         if !plugins.is_empty() {
@@ -250,10 +292,7 @@ async fn main() -> Result<()> {
                     let session_id = SessionId(id);
                     println!("Restoring previous session: {}", session_id.0);
 
-                    match coordinator
-                        .restore_session(&session_id, mk_config())
-                        .await
-                    {
+                    match coordinator.restore_session(&session_id, mk_config()).await {
                         Ok(_) => session_id,
                         Err(e) => {
                             println!("Failed to restore session: {e}");
@@ -302,7 +341,8 @@ async fn main() -> Result<()> {
         // Create channel for cancel requests
         let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
         // Create channel for permission responses
-        let (permission_tx, mut permission_rx) = tokio::sync::mpsc::channel::<PermissionCommand>(10);
+        let (permission_tx, mut permission_rx) =
+            tokio::sync::mpsc::channel::<PermissionCommand>(10);
 
         // Spawn task to forward input to coordinator
         let coord_for_input = coordinator.clone();

@@ -130,8 +130,7 @@ impl ProviderError {
     pub const fn is_retryable(&self) -> bool {
         match self {
             ProviderError::Http(e) => e.is_retryable(),
-            ProviderError::Timeout(_) => true,
-            ProviderError::Request(_) | ProviderError::Sse(_) => true,
+            ProviderError::Timeout(_) | ProviderError::Request(_) | ProviderError::Sse(_) => true,
             ProviderError::Parse(_) | ProviderError::Config(_) => false,
         }
     }

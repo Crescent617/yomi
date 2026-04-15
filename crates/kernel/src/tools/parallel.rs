@@ -1,5 +1,5 @@
 use crate::event::ToolEvent;
-use crate::tools::{Tool, ToolRegistry};
+use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use crate::utils::strs;
 use std::sync::Arc;
@@ -28,6 +28,7 @@ pub async fn execute_tools_parallel(
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
     cancel_token: Option<&CancelToken>,
+    parent_messages: Option<&[Arc<Message>]>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -57,10 +58,19 @@ pub async fn execute_tools_parallel(
             );
         }
 
+        // Clone parent_messages and cancel_token for the async block
+        let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
+        let cancel_token_for_task = cancel_token.cloned();
+
         join_set.spawn(async move {
             let start = std::time::Instant::now();
             let result = match tool_opt {
-                Some(tool) => execute_single_tool(tool, arguments, &call_id).await,
+                Some(tool) => {
+                    let ctx = ToolExecCtx::new(&call_id)
+                        .with_parent_messages(parent_messages_for_task.as_deref().unwrap_or(&[]))
+                        .with_cancel_token(cancel_token_for_task);
+                    execute_single_tool_with_ctx(tool, arguments, ctx).await
+                }
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
@@ -196,12 +206,12 @@ pub async fn execute_tools_parallel(
     results
 }
 
-async fn execute_single_tool(
+async fn execute_single_tool_with_ctx(
     tool: Arc<dyn Tool>,
     arguments: serde_json::Value,
-    tool_call_id: &str,
+    ctx: ToolExecCtx<'_>,
 ) -> ToolOutput {
-    match tool.exec_with_id(arguments, tool_call_id).await {
+    match tool.exec(arguments, ctx).await {
         Ok(output) => output,
         Err(e) => ToolOutput {
             exit_code: 1,

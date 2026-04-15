@@ -102,7 +102,6 @@ impl Agent {
             &args.session_id,
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
-            Some(&cancel_token),
         );
 
         // Create permission checker and responder from shared state
@@ -161,7 +160,6 @@ impl Agent {
         session_id: &str,
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
-        cancel_token: Option<&CancelToken>,
     ) -> crate::tools::ToolRegistry {
         use crate::tools::{
             BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
@@ -209,7 +207,6 @@ impl Agent {
                 working_dir.clone(),
                 session_id.to_owned(),
                 event_tx.clone(),
-                cancel_token.cloned(),
             );
             registry.register(subagent_tool);
         }
@@ -797,6 +794,7 @@ impl Agent {
                 &approved_calls,
                 &self.tool_registry,
                 Some(&self.cancel_token),
+                Some(self.message_buffer.messages()),
             )
             .await
         };

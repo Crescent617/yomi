@@ -2,7 +2,7 @@ use crate::tools::base::FileTool;
 use crate::tools::edit_utils::generate_diff;
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -81,7 +81,7 @@ impl Tool for WriteTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let file_path_str = args["file_path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'file_path' argument"))?;
@@ -177,7 +177,8 @@ mod tests {
             "content": "Hello, World!"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("created successfully"));
         assert!(result.stdout.contains("Hello, World!"));
@@ -200,7 +201,8 @@ mod tests {
             "content": "fn main() {}"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
         // Verify file was created
@@ -229,7 +231,8 @@ mod tests {
         });
 
         // Should fail because file hasn't been read
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(!result.success());
         assert!(result.stderr.contains("not been read"));
     }
@@ -266,7 +269,8 @@ mod tests {
         });
 
         // Should succeed because file was recorded as read
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("updated"));
         assert!(result.stdout.contains("Diff:"));
@@ -288,7 +292,8 @@ mod tests {
             "content": "absolute path content"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
         let content = tokio::fs::read_to_string(absolute_path).await.unwrap();

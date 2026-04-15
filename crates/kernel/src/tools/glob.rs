@@ -1,4 +1,4 @@
-use crate::tools::{FileTool, Tool};
+use crate::tools::{FileTool, Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -167,7 +167,7 @@ impl Tool for GlobTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
@@ -278,7 +278,8 @@ mod tests {
             "pattern": "*.rs"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("test1.rs"));
         assert!(result.stdout.contains("test2.rs"));
@@ -301,7 +302,8 @@ mod tests {
             "pattern": "**/*.rs"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("src/main.rs"));
     }
@@ -334,7 +336,8 @@ mod tests {
             "pattern": "**/*.rs"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("tracked.rs"));
         assert!(!result.stdout.contains("target/ignored.rs"));
@@ -350,7 +353,8 @@ mod tests {
             "pattern": "*.nonexistent"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("No files found"));
     }
@@ -372,7 +376,8 @@ mod tests {
             "path": "src"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("main.rs"));
     }
@@ -388,7 +393,8 @@ mod tests {
             "path": "nonexistent"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(!result.success());
         assert!(result.stderr.contains("does not exist"));
     }
@@ -412,7 +418,8 @@ mod tests {
         let args = serde_json::json!({
             "pattern": "*.rs"
         });
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(!result.stdout.contains(".hidden.rs"));
         assert!(result.stdout.contains("normal.rs"));
@@ -422,7 +429,8 @@ mod tests {
             "pattern": "*.rs",
             "hidden": true
         });
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains(".hidden.rs"));
     }

@@ -1,7 +1,7 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -70,7 +70,7 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;

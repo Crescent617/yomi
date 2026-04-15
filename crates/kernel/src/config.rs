@@ -1,5 +1,4 @@
 use crate::agent::AgentConfig;
-use crate::env_name;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::storage::StorageConfig;
@@ -24,7 +23,7 @@ pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
-    use super::env_name;
+    
 
     /// Provider selection
     pub const PROVIDER: &str = env_name!("PROVIDER");

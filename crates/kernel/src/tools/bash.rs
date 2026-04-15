@@ -1,5 +1,5 @@
 use crate::agent::AgentInput;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, ToolOutput};
 use crate::utils::id::gen_base56_id;
 
@@ -92,7 +92,7 @@ impl Tool for BashTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;

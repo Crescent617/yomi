@@ -17,7 +17,10 @@ use std::sync::Arc;
 
 /// Helper to estimate tokens for Arc-wrapped messages
 fn estimate_tokens_for_arc_messages(messages: &[Arc<Message>]) -> u32 {
-    messages.iter().map(|m| estimate_tokens_for_message(m)).sum()
+    messages
+        .iter()
+        .map(|m| estimate_tokens_for_message(m))
+        .sum()
 }
 
 /// Estimate tokens for a single message
@@ -137,16 +140,13 @@ impl Compactor {
         for (idx, msg) in messages.iter().enumerate() {
             if idx < keep_start
                 && msg.role == Role::Tool
-                && msg
-                    .content
-                    .first()
-                    .is_some_and(|c| {
-                        if let ContentBlock::Text { text } = c {
-                            text != CLEARED_MARKER
-                        } else {
-                            false
-                        }
-                    })
+                && msg.content.first().is_some_and(|c| {
+                    if let ContentBlock::Text { text } = c {
+                        text != CLEARED_MARKER
+                    } else {
+                        false
+                    }
+                })
             {
                 // Need to clear this message
                 let mut new_msg = (**msg).clone();
@@ -185,7 +185,10 @@ impl Compactor {
 
         let split_point = messages.len() - self.keep_recent;
         let to_summarize = &messages[..split_point];
-        let recent: Vec<Message> = messages[split_point..].iter().map(|m| (**m).clone()).collect();
+        let recent: Vec<Message> = messages[split_point..]
+            .iter()
+            .map(|m| (**m).clone())
+            .collect();
 
         // Generate summary using API
         let summary_text = generate_summary_with_api(
@@ -227,7 +230,9 @@ impl Compactor {
             }
 
             // Micro-compaction wasn't enough, do full compaction
-            let result = self.full_compact(&compacted, provider, model_config).await?;
+            let result = self
+                .full_compact(&compacted, provider, model_config)
+                .await?;
 
             // Build new message list
             let new_messages = if let Some(ref summary) = result.summary {
@@ -235,7 +240,11 @@ impl Compactor {
                 msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
                 msgs
             } else {
-                result.keep_messages.iter().map(|m| Arc::new(m.clone())).collect()
+                result
+                    .keep_messages
+                    .iter()
+                    .map(|m| Arc::new(m.clone()))
+                    .collect()
             };
 
             return Ok(Some(new_messages));
@@ -250,7 +259,11 @@ impl Compactor {
             msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
             msgs
         } else {
-            result.keep_messages.iter().map(|m| Arc::new(m.clone())).collect()
+            result
+                .keep_messages
+                .iter()
+                .map(|m| Arc::new(m.clone()))
+                .collect()
         };
 
         Ok(Some(new_messages))

@@ -157,7 +157,11 @@ impl Session {
     pub async fn set_permission_level(&self, level: Level) {
         if let Some(ref ps) = self.permission_state {
             ps.set_auto_approve_level(level).await;
-            tracing::info!("Session {} permission level updated to {:?}", self.id.0, level);
+            tracing::info!(
+                "Session {} permission level updated to {:?}",
+                self.id.0,
+                level
+            );
         } else {
             tracing::warn!("Session {} has no permission state to update", self.id.0);
         }

@@ -1,6 +1,6 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::{CreateTaskInput, CreateTaskOutput, TaskSummary};
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -57,7 +57,7 @@ impl Tool for TaskCreateTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let subject = args["subject"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("subject is required"))?

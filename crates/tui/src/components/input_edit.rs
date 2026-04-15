@@ -1,7 +1,7 @@
 //! Input editing utilities for text components
 //!
 //! Provides readline-style editing operations that can be shared between
-//! InputMock, CommandPalette, and any other text input component.
+//! `InputMock`, `CommandPalette`, and any other text input component.
 
 /// A trait for components that have editable text content with a cursor position
 pub trait TextInput {
@@ -100,7 +100,12 @@ pub trait TextInput {
             while prev > 0 && !text.is_char_boundary(prev) {
                 prev -= 1;
             }
-            if text[prev..new_pos].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[prev..new_pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 new_pos = prev;
             } else {
                 break;
@@ -113,7 +118,12 @@ pub trait TextInput {
             while prev > 0 && !text.is_char_boundary(prev) {
                 prev -= 1;
             }
-            if text[prev..new_pos].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[prev..new_pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 break;
             }
             new_pos = prev;
@@ -137,7 +147,12 @@ pub trait TextInput {
             while next < text.len() && !text.is_char_boundary(next) {
                 next += 1;
             }
-            if text[new_pos..next].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[new_pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 break;
             }
             new_pos = next;
@@ -149,7 +164,12 @@ pub trait TextInput {
             while next < text.len() && !text.is_char_boundary(next) {
                 next += 1;
             }
-            if text[new_pos..next].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[new_pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 new_pos = next;
             } else {
                 break;
@@ -226,7 +246,12 @@ pub trait TextInput {
             while prev > 0 && !text.is_char_boundary(prev) {
                 prev -= 1;
             }
-            if text[prev..new_pos].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[prev..new_pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 new_pos = prev;
             } else {
                 break;
@@ -239,7 +264,12 @@ pub trait TextInput {
             while prev > 0 && !text.is_char_boundary(prev) {
                 prev -= 1;
             }
-            if text[prev..new_pos].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[prev..new_pos]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 break;
             }
             new_pos = prev;
@@ -264,7 +294,12 @@ pub trait TextInput {
             while next < text.len() && !text.is_char_boundary(next) {
                 next += 1;
             }
-            if text[end_pos..next].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[end_pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 break;
             }
             end_pos = next;
@@ -276,7 +311,12 @@ pub trait TextInput {
             while next < text.len() && !text.is_char_boundary(next) {
                 next += 1;
             }
-            if text[end_pos..next].chars().next().unwrap_or(' ').is_whitespace() {
+            if text[end_pos..next]
+                .chars()
+                .next()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
                 end_pos = next;
             } else {
                 break;

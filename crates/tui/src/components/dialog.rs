@@ -330,7 +330,7 @@ impl Component<Msg, crate::msg::UserEvent> for SelectDialogComponent {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
         use tuirealm::Event::Keyboard;
 
-        tracing::debug!(
+        tracing::trace!(
             "Dialog received event: {:?}, active={}",
             ev,
             self.component.is_active()

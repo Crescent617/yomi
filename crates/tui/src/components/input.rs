@@ -365,6 +365,83 @@ impl MockComponent for InputMock {
 
 /// Input component that handles keyboard events
 /// Mode is passed from Model via attr
+/// Maximum number of files to scan (prevents hanging on huge repos)
+const MAX_FILES_TO_SCAN: usize = 1000;
+/// Maximum number of files to display (performance)
+const MAX_FILES_TO_DISPLAY: usize = 50;
+
+/// Available slash command with descriptions
+const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/new", "Create new session"),
+    ("/clear", "Clear chat history"),
+    ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
+    ("/browse", "Toggle browse mode"),
+];
+
+/// Generic completion list for command and file completions
+struct CompletionList<T> {
+    visible: bool,
+    selected: usize,
+    items: Vec<T>,
+}
+
+impl<T> CompletionList<T> {
+    fn new() -> Self {
+        Self {
+            visible: false,
+            selected: 0,
+            items: Vec::new(),
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    fn show(&mut self, items: Vec<T>) {
+        self.items = items;
+        self.visible = !self.items.is_empty();
+        self.selected = 0;
+    }
+
+    fn hide(&mut self) {
+        self.visible = false;
+        self.items.clear();
+        self.selected = 0;
+    }
+
+    fn next(&mut self) {
+        if !self.items.is_empty() {
+            self.selected = (self.selected + 1) % self.items.len();
+        }
+    }
+
+    fn prev(&mut self) {
+        if !self.items.is_empty() {
+            self.selected = self
+                .selected
+                .checked_sub(1)
+                .unwrap_or(self.items.len() - 1);
+        }
+    }
+
+    fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    fn get_selected(&self) -> Option<&T> {
+        self.items.get(self.selected)
+    }
+
+    fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    fn items(&self) -> &[T] {
+        &self.items
+    }
+}
+
 pub struct InputComponent {
     component: InputMock,
     mode: crate::app::AppMode,
@@ -372,6 +449,18 @@ pub struct InputComponent {
     history: Vec<String>,
     history_index: Option<usize>, // None = new input, Some(i) = editing history[i]
     saved_input: String,          // Buffer for current input when browsing history
+    // Command completion
+    command_completion: CompletionList<(String, String)>,
+    // File completion (@-mention)
+    file_completion: CompletionList<String>,
+    file_query: String,
+    file_query_start_pos: usize, // Position of '@' in input
+    working_dir: std::path::PathBuf,
+    // File cache for performance
+    all_files: Vec<String>,     // Cached file list
+    file_cache_dirty: bool,     // Whether cache needs refresh
+    total_files_scanned: usize, // Total files found (may exceed cache)
+    files_truncated: bool,      // Whether scan hit MAX_FILES_TO_SCAN limit
 }
 
 impl Default for InputComponent {
@@ -388,6 +477,416 @@ impl InputComponent {
             history: Vec::new(),
             history_index: None,
             saved_input: String::new(),
+            command_completion: CompletionList::new(),
+            file_completion: CompletionList::new(),
+            file_query: String::new(),
+            file_query_start_pos: 0,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            all_files: Vec::new(),
+            file_cache_dirty: true,
+            total_files_scanned: 0,
+            files_truncated: false,
+        }
+    }
+
+    /// Set the working directory for file completion
+    pub fn set_working_dir(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.working_dir = path.into();
+    }
+
+    /// Update command completion state based on current input
+    fn update_completion(&mut self) {
+        let content = self.component.content();
+        if content.starts_with('/') {
+            let filtered: Vec<(String, String)> = SLASH_COMMANDS
+                .iter()
+                .filter(|(cmd, _)| cmd.starts_with(content))
+                .map(|(cmd, desc)| ((*cmd).to_string(), (*desc).to_string()))
+                .collect();
+            self.command_completion.show(filtered);
+        } else {
+            self.command_completion.hide();
+        }
+    }
+
+    /// Select next completion item
+    fn completion_next(&mut self) {
+        self.command_completion.next();
+    }
+
+    /// Select previous completion item
+    fn completion_prev(&mut self) {
+        self.command_completion.prev();
+    }
+
+    /// Accept the selected completion
+    fn accept_completion(&mut self) {
+        if let Some((cmd, _)) = self.command_completion.get_selected() {
+            self.component.clear();
+            self.component.insert_str(cmd);
+            self.component.insert_char(' ');
+            self.command_completion.hide();
+        }
+    }
+
+    /// Start file completion (@-mention)
+    fn start_file_completion(&mut self) {
+        self.file_query.clear();
+        // Record cursor position as the start of query (after @)
+        self.file_query_start_pos = self.component.cursor_pos();
+        // Scan files once and cache
+        self.ensure_file_cache();
+        self.refresh_file_list();
+    }
+
+    /// Refresh file list from cache based on current query
+    fn refresh_file_list(&mut self) {
+        let filtered = if self.file_query.is_empty() {
+            // Show first N files from cache when no query
+            self.all_files
+                .iter()
+                .take(MAX_FILES_TO_DISPLAY)
+                .cloned()
+                .collect()
+        } else {
+            // Filter and limit results
+            let mut filtered = Self::fuzzy_filter_files(&self.all_files, &self.file_query);
+            filtered.truncate(MAX_FILES_TO_DISPLAY);
+            filtered
+        };
+        self.file_completion.show(filtered);
+    }
+
+    /// Ensure file cache is populated (lazy loading)
+    fn ensure_file_cache(&mut self) {
+        if self.file_cache_dirty || self.all_files.is_empty() {
+            let (files, count, truncated) = self.scan_files_limited();
+            self.all_files = files;
+            self.total_files_scanned = count;
+            self.files_truncated = truncated;
+            self.file_cache_dirty = false;
+        }
+    }
+
+    /// Scan files recursively with limits, respecting .gitignore
+    /// Returns (files, `total_count`, `was_truncated`)
+    fn scan_files_limited(&self) -> (Vec<String>, usize, bool) {
+        let gitignore = self.load_gitignore();
+        let mut files = Vec::with_capacity(MAX_FILES_TO_SCAN);
+        let mut count = 0usize;
+        Self::scan_recursive_limited(&self.working_dir, "", &gitignore, &mut files, &mut count);
+        let truncated = count >= MAX_FILES_TO_SCAN;
+        // Sort: shorter paths first, then alphabetically
+        files.sort_by(|a, b| {
+            let a_parts = a.matches('/').count();
+            let b_parts = b.matches('/').count();
+            match a_parts.cmp(&b_parts) {
+                std::cmp::Ordering::Equal => a.cmp(b),
+                other => other,
+            }
+        });
+        (files, count, truncated)
+    }
+
+    /// Load .gitignore patterns
+    fn load_gitignore(&self) -> Vec<String> {
+        let gitignore_path = self.working_dir.join(".gitignore");
+        let mut patterns = vec![
+            ".git".to_string(),
+            ".gitignore".to_string(),
+            "target/".to_string(),
+            "node_modules/".to_string(),
+        ];
+        if let Ok(content) = std::fs::read_to_string(&gitignore_path) {
+            for line in content.lines() {
+                let line = line.trim();
+                if !line.is_empty() && !line.starts_with('#') {
+                    patterns.push(line.to_string());
+                }
+            }
+        }
+        patterns
+    }
+
+    /// Check if path matches gitignore pattern
+    /// Check if path matches gitignore pattern
+    fn matches_gitignore(path: &str, patterns: &[String]) -> bool {
+        let path = path.trim_end_matches('/');
+        for pattern in patterns {
+            let pattern = pattern.trim();
+            if pattern.is_empty() {
+                continue;
+            }
+            // Handle directory patterns (ending with /)
+            let is_dir_pattern = pattern.ends_with('/');
+            let clean_pattern = pattern.trim_end_matches('/');
+            // Exact match
+            if path == clean_pattern {
+                return true;
+            }
+            // Check if any component matches
+            if path.split('/').any(|part| {
+                if is_dir_pattern {
+                    part == clean_pattern
+                } else {
+                    part == clean_pattern || path.ends_with(&format!("/{clean_pattern}"))
+                }
+            }) {
+                return true;
+            }
+            // Simple glob-like matching for *
+            if clean_pattern.contains('*') {
+                let parts: Vec<&str> = clean_pattern.split('*').collect();
+                if parts.len() == 2 {
+                    let prefix = parts[0];
+                    let suffix = parts[1];
+                    if (prefix.is_empty() || path.contains(prefix))
+                        && (suffix.is_empty() || path.contains(suffix))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Recursively scan directory with limit
+    fn scan_recursive_limited(
+        base_dir: &std::path::Path,
+        prefix: &str,
+        gitignore: &[String],
+        files: &mut Vec<String>,
+        count: &mut usize,
+    ) {
+        if *count >= MAX_FILES_TO_SCAN {
+            return;
+        }
+        let current_dir = if prefix.is_empty() {
+            base_dir.to_path_buf()
+        } else {
+            base_dir.join(prefix)
+        };
+        if let Ok(entries) = std::fs::read_dir(&current_dir) {
+            for entry in entries.flatten() {
+                if *count >= MAX_FILES_TO_SCAN {
+                    break;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                let relative_path = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                // Check gitignore
+                if Self::matches_gitignore(&relative_path, gitignore) {
+                    continue;
+                }
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.is_dir() {
+                        files.push(format!("{relative_path}/"));
+                        *count += 1;
+                        // Recurse into subdirectory
+                        Self::scan_recursive_limited(
+                            base_dir,
+                            &relative_path,
+                            gitignore,
+                            files,
+                            count,
+                        );
+                    } else if metadata.is_file() {
+                        files.push(relative_path);
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fuzzy filter files based on query (similar to fzf)
+    /// Optimized: uses references to avoid cloning during filtering
+    fn fuzzy_filter_files( files: &[String], query: &str) -> Vec<String> {
+        if query.is_empty() {
+            return files.iter().take(MAX_FILES_TO_DISPLAY).cloned().collect();
+        }
+        let query_lower = query.to_lowercase();
+        let mut scored: Vec<(usize, i32, usize)> = files
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, file)| {
+                // Case-insensitive match without allocating
+                Self::fuzzy_match_case_insensitive(file, &query_lower).map(|score| (idx, score, file.len()))
+            })
+            .collect();
+        // Sort by score (descending), then by length (ascending - shorter first)
+        scored.sort_by(|a, b| match b.1.cmp(&a.1) {
+            std::cmp::Ordering::Equal => a.2.cmp(&b.2),
+            other => other,
+        });
+        scored
+            .into_iter()
+            .map(|(idx, _, _)| files[idx].clone())
+            .collect()
+    }
+
+    /// Case-insensitive fuzzy matching (optimized: avoids lowercase allocation)
+    fn fuzzy_match_case_insensitive(text: &str, pattern_lower: &str) -> Option<i32> {
+        if pattern_lower.is_empty() {
+            return Some(0);
+        }
+        let pattern_chars: Vec<char> = pattern_lower.chars().collect();
+        let mut pattern_idx = 0;
+        let mut score = 0i32;
+        let mut consecutive_bonus = 0;
+        let mut prev_match_idx: Option<usize> = None;
+
+        for (text_idx, c) in text.chars().enumerate() {
+            if pattern_idx < pattern_chars.len() {
+                let pc = pattern_chars[pattern_idx];
+                // Case-insensitive comparison
+                let c_lower = c.to_lowercase().next()?;
+                if c_lower == pc {
+                    // Bonus for consecutive matches
+                    if let Some(prev) = prev_match_idx {
+                        if text_idx == prev + 1 {
+                            consecutive_bonus += 1;
+                            score += consecutive_bonus;
+                        }
+                    }
+                    // Bonus for match at word boundary
+                    if let Some(prev) = prev_match_idx {
+                        if text_idx > 0 {
+                            let prev_char = text.chars().nth(prev)?;
+                            if prev_char == '/'
+                                || prev_char == '-'
+                                || prev_char == '_'
+                                || prev_char == '.'
+                            {
+                                score += 3;
+                            }
+                        }
+                    }
+                    // Base score
+                    score += 1;
+                    prev_match_idx = Some(text_idx);
+                    pattern_idx += 1;
+                }
+            }
+        }
+
+        if pattern_idx == pattern_chars.len() {
+            score -= (text.len().saturating_sub(pattern_lower.len())) as i32;
+            Some(score)
+        } else {
+            None
+        }
+    }
+
+    /// Select next file completion item
+    fn file_completion_next(&mut self) {
+        self.file_completion.next();
+    }
+
+    /// Select previous file completion item
+    fn file_completion_prev(&mut self) {
+        self.file_completion.prev();
+    }
+
+    /// Accept the selected file completion
+    fn accept_file_completion(&mut self) {
+        if let Some(selected) = self.file_completion.get_selected() {
+            let current_pos = self.component.cursor_pos();
+            // Delete the query part (from @ to current position)
+            let query_len = current_pos.saturating_sub(self.file_query_start_pos);
+            for _ in 0..query_len {
+                self.component.backspace();
+            }
+            // Insert the selected file path
+            self.component.insert_str(selected);
+            self.file_completion.hide();
+        }
+    }
+
+    /// Cancel file completion
+    fn cancel_file_completion(&mut self) {
+        self.file_completion.hide();
+        self.file_query.clear();
+    }
+
+    /// Handle input when file completion is active
+    fn handle_file_completion_input(
+        &mut self,
+        ev: &tuirealm::Event<crate::msg::UserEvent>,
+    ) -> Msg {
+        match *ev {
+            // Enter or Tab: accept selected file
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Enter,
+                modifiers: KeyModifiers::NONE,
+            } | KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                self.accept_file_completion();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Esc: cancel file completion
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Esc,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_file_completion();
+                Msg::Redraw
+            }
+            // Up arrow or Ctrl+P: navigate up
+            tuirealm::Event::Keyboard(KeyEvent {
+code: Key::Up, modifiers: KeyModifiers::NONE } | KeyEvent {
+code: Key::Char('p'), modifiers: KeyModifiers::CONTROL }) => {
+                self.file_completion_prev();
+                Msg::Redraw
+            }
+            // Down arrow or Ctrl+N: navigate down
+            tuirealm::Event::Keyboard(KeyEvent {
+code: Key::Down, modifiers: KeyModifiers::NONE } | KeyEvent {
+code: Key::Char('n'), modifiers: KeyModifiers::CONTROL }) => {
+                self.file_completion_next();
+                Msg::Redraw
+            }
+            // Space: cancel completion and insert space
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(' '),
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_file_completion();
+                self.component.insert_char(' ');
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Regular character: add to query and filter
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_char(c);
+                self.file_query.push(c);
+                self.refresh_file_list();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Backspace: remove from query
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Backspace,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.backspace();
+                self.file_query.pop();
+                if self.file_query.is_empty() && self.component.content().ends_with('@') {
+                    // Cancel if query is empty and only @ remains
+                    self.cancel_file_completion();
+                } else {
+                    self.refresh_file_list();
+                }
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            _ => Msg::Redraw,
         }
     }
 
@@ -463,6 +962,127 @@ impl InputComponent {
 
 impl MockComponent for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        // Render completion dropdown above input if visible
+        if self.command_completion.is_visible() && !self.command_completion.items().is_empty() {
+            let completion_height = self.command_completion.len().min(4) as u16;
+            let completion_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(completion_height),
+                width: area.width,
+                height: completion_height,
+            };
+
+            // Clear the area first
+            frame.render_widget(tuirealm::ratatui::widgets::Clear, completion_area);
+
+            // Render completion items with command and description
+            let items: Vec<tuirealm::ratatui::text::Line> = self
+                .command_completion
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(i, (cmd, desc))| {
+                    let is_selected = i == self.command_completion.selected_index();
+                    let cmd_style = if is_selected {
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::accent_system())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                    };
+                    let desc_style = if is_selected {
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::text_muted())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        tuirealm::ratatui::style::Style::default().fg(colors::text_muted())
+                    };
+                    tuirealm::ratatui::text::Line::from(vec![
+                        tuirealm::ratatui::text::Span::styled(cmd.as_str(), cmd_style),
+                        tuirealm::ratatui::text::Span::styled("  ", desc_style),
+                        tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
+                    ])
+                })
+                .collect();
+
+            let completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
+                tuirealm::ratatui::text::Text::from(items),
+            );
+            frame.render_widget(completion_widget, completion_area);
+        }
+
+        // Render file completion dropdown if visible
+        if self.file_completion.is_visible() && !self.file_completion.items().is_empty() {
+            // Status line at bottom
+            let status_text = if self.files_truncated {
+                format!(
+                    " {} / {}+ files",
+                    self.file_completion.len(),
+                    self.total_files_scanned
+                )
+            } else {
+                format!(
+                    " {} / {} files",
+                    self.file_completion.len(),
+                    self.total_files_scanned
+                )
+            };
+            let display_count = self.file_completion.len().min(8);
+            let file_completion_height = (display_count + 1) as u16; // +1 for status line
+            let file_completion_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(file_completion_height),
+                width: area.width,
+                height: file_completion_height,
+            };
+
+            // Clear the area first
+            frame.render_widget(tuirealm::ratatui::widgets::Clear, file_completion_area);
+
+            // Build file items
+            let mut items: Vec<tuirealm::ratatui::text::Line> = self
+                .file_completion
+                .items()
+                .iter()
+                .take(8)
+                .enumerate()
+                .map(|(i, file)| {
+                    let is_selected = i == self.file_completion.selected_index();
+                    let is_dir = file.ends_with('/');
+                    let file_style = if is_selected {
+                        // Selected: accent_system fg with bold (same as command completion)
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::accent_system())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        // Not selected
+                        if is_dir {
+                            tuirealm::ratatui::style::Style::default().fg(colors::accent_system())
+                        } else {
+                            tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                        }
+                    };
+                    tuirealm::ratatui::text::Line::from(tuirealm::ratatui::text::Span::styled(
+                        file.as_str(),
+                        file_style,
+                    ))
+                })
+                .collect();
+
+            // Add status line at the bottom
+            let status_style = tuirealm::ratatui::style::Style::default()
+                .fg(colors::text_muted())
+                .add_modifier(tuirealm::ratatui::style::Modifier::DIM);
+            items.push(tuirealm::ratatui::text::Line::from(
+                tuirealm::ratatui::text::Span::styled(status_text, status_style),
+            ));
+
+            let file_completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
+                tuirealm::ratatui::text::Text::from(items),
+            );
+            frame.render_widget(file_completion_widget, file_completion_area);
+        }
+
         self.component.view(frame, area);
     }
 
@@ -485,6 +1105,11 @@ impl MockComponent for InputComponent {
                     if let Ok(history) = serde_json::from_str::<Vec<String>>(&data) {
                         self.set_history(history);
                     }
+                }
+            }
+            Attribute::Custom("working_dir") => {
+                if let AttrValue::String(path) = value {
+                    self.set_working_dir(path);
                 }
             }
             _ => self.component.attr(attr, value),
@@ -556,29 +1181,69 @@ impl InputComponent {
         }
     }
 
+    /// Parse slash command from input
+    fn parse_command(content: &str) -> Option<Msg> {
+        if !content.starts_with('/') {
+            return None;
+        }
+
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        match parts[0] {
+            "/new" => Some(Msg::CommandNew),
+            "/clear" => Some(Msg::CommandClear),
+            "/yolo" => Some(Msg::CommandYolo),
+            "/browse" => Some(Msg::CommandBrowse),
+            cmd => Some(Msg::CommandUnknown(cmd.to_string())),
+        }
+    }
+
     /// Handle input in normal mode - text editing
     fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        // File completion mode - handle special keys first
+        if self.file_completion.is_visible() {
+            return Some(self.handle_file_completion_input(ev));
+        }
+
         match *ev {
-            // '/' when input is empty: open command palette
+            // @: start file completion (must be before generic Char handler)
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('/'),
+                code: Key::Char('@'),
                 modifiers: KeyModifiers::NONE,
-            }) if self.component.content().is_empty() => Some(Msg::ToggleCommandPalette),
+            }) => {
+                self.component.insert_char('@');
+                self.start_file_completion();
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
                 self.component.insert_char(c);
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
+                // If completion is visible, accept it (same as Tab)
+                if self.command_completion.is_visible() {
+                    self.accept_completion();
+                    self.update_completion();
+                    return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
                 let content = self.component.submit();
                 if content.is_empty() {
                     None
+                } else if let Some(cmd_msg) = Self::parse_command(&content) {
+                    // It's a command, return the command message
+                    Some(cmd_msg)
                 } else {
+                    // Regular input
                     Some(Msg::InputSubmit(content))
                 }
             }
@@ -587,6 +1252,7 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.backspace();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -594,6 +1260,7 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.delete_char();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -673,22 +1340,81 @@ impl InputComponent {
                 modifiers: KeyModifiers::CONTROL,
             }) => {
                 self.component.delete_word_backward();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // History navigation: Ctrl+P = previous
+            // Tab: accept completion or insert spaces
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.accept_completion();
+                    self.update_completion();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    // Insert tab/indent when no completion
+                    self.component.insert_str("    ");
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
+            }
+            // Up arrow: navigate completion or history
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.completion_prev();
+                    Some(Msg::Redraw)
+                } else if self.component.is_on_first_line() {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_up();
+                    None
+                }
+            }
+            // Down arrow: navigate completion or history
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.completion_next();
+                    Some(Msg::Redraw)
+                } else if self.component.is_on_last_line() {
+                    self.history_next();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_down();
+                    None
+                }
+            }
+            // Ctrl+P: navigate completion or history
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.history_prev();
-                Some(Msg::InputChanged(self.component.content().to_string()))
+                if self.command_completion.is_visible() {
+                    self.completion_prev();
+                    Some(Msg::Redraw)
+                } else {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
             }
+            // Ctrl+N: navigate completion or history
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.history_next();
-                Some(Msg::InputChanged(self.component.content().to_string()))
+                if self.command_completion.is_visible() {
+                    self.completion_next();
+                    Some(Msg::Redraw)
+                } else {
+                    self.history_next();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Esc,
@@ -708,32 +1434,6 @@ impl InputComponent {
                     ))
                 }
             }
-            // Up arrow: move up in text, or browse history if on first line
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Up,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                if self.component.is_on_first_line() {
-                    self.history_prev();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
-                } else {
-                    self.component.move_up();
-                    None
-                }
-            }
-            // Down arrow: move down in text, or browse history if on last line
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Down,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                if self.component.is_on_last_line() {
-                    self.history_next();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
-                } else {
-                    self.component.move_down();
-                    None
-                }
-            }
             // PageUp/PageDown always scroll chat view
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::PageUp,
@@ -751,10 +1451,6 @@ impl InputComponent {
                 kind: MouseEventKind::ScrollDown,
                 ..
             }) => Some(Msg::ScrollDown),
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Tab,
-                modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::ToggleThinking),
             // Toggle browse mode with Ctrl+O
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('o'),

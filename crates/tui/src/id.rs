@@ -9,5 +9,4 @@ pub enum Id {
     Mascot,    // Cat mascot
     Banner,    // Banner with mascot and system info (empty state)
     Dialog,    // Select dialog for permission confirmation
-    CommandPalette, // Command palette for quick actions
 }

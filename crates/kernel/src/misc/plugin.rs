@@ -40,6 +40,7 @@ pub struct InstalledPluginsIndex {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct InstalledPluginInfo {
     pub scope: String,
+    #[serde(rename = "installPath")]
     pub install_path: String,
     pub version: String,
     #[serde(rename = "installedAt")]
@@ -50,19 +51,69 @@ pub struct InstalledPluginInfo {
     pub git_commit_sha: String,
 }
 
+/// Enabled plugins configuration (from settings.json)
+pub type EnabledPlugins = HashMap<String, bool>;
+
 /// Plugin loader that scans directories for plugins
 #[derive(Debug, Clone)]
 pub struct PluginLoader {
     plugin_dirs: Vec<PathBuf>,
+    enabled_plugins: Option<EnabledPlugins>,
 }
 
 impl PluginLoader {
     pub const fn new(plugin_dirs: Vec<PathBuf>) -> Self {
-        Self { plugin_dirs }
+        Self {
+            plugin_dirs,
+            enabled_plugins: None,
+        }
+    }
+
+    /// Set enabled plugins configuration for filtering
+    #[must_use]
+    pub fn with_enabled_plugins(mut self, enabled: EnabledPlugins) -> Self {
+        self.enabled_plugins = Some(enabled);
+        self
+    }
+
+    /// Check if a plugin is enabled based on the configuration
+    /// Supports both "plugin-id" and "plugin-id@marketplace" formats
+    ///
+    /// `plugin_name` is the plugin name WITHOUT @marketplace suffix (e.g., "caveman")
+    fn is_plugin_enabled(&self, plugin_name: &str) -> bool {
+        let Some(ref enabled) = self.enabled_plugins else {
+            // No filtering configured, all plugins are enabled
+            return true;
+        };
+
+        // Try exact match first (plugin-id without @marketplace)
+        if let Some(&is_enabled) = enabled.get(plugin_name) {
+            return is_enabled;
+        }
+
+        // Try matching against keys with @marketplace suffix
+        // e.g., plugin_name="caveman" should match key="caveman@caveman"
+        for (key, &is_enabled) in enabled {
+            // Check if key starts with "plugin_name@"
+            let prefix = format!("{plugin_name}@");
+            if key.starts_with(&prefix) {
+                return is_enabled;
+            }
+
+            // Check for wildcard patterns like "@marketplace"
+            if key.starts_with('@') {
+                // This would require knowing the marketplace, skip for now
+                // Users should use full "plugin@marketplace" format
+            }
+        }
+
+        // Default to disabled when filtering is configured but plugin is not listed
+        false
     }
 
     /// Load all plugins from configured directories
     /// First tries to read `installed_plugins.json`, then falls back to directory scanning
+    /// Filters plugins based on `enabled_plugins` configuration if set
     pub fn load_all(&self) -> Result<Vec<Plugin>> {
         let mut plugins = Vec::new();
         let mut loaded_paths = std::collections::HashSet::new();
@@ -92,6 +143,11 @@ impl PluginLoader {
             // Fall back to directory scanning
             self.load_from_dir(dir, &mut plugins, &mut loaded_paths)
                 .with_context(|| format!("Failed to load plugins from {}", dir.display()))?;
+        }
+
+        // Apply enabled_plugins filter
+        if self.enabled_plugins.is_some() {
+            plugins.retain(|p| self.is_plugin_enabled(&p.name));
         }
 
         Ok(plugins)
@@ -442,5 +498,144 @@ Hello!";
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].name, "test-plugin");
         assert!(plugins[0].skills_path.is_some());
+    }
+
+    #[test]
+    fn test_filter_enabled_plugins() {
+        let temp = TempDir::new().unwrap();
+
+        // Create plugin A
+        let plugin_a = temp.path().join("plugin-a");
+        std::fs::create_dir(&plugin_a).unwrap();
+        std::fs::create_dir(plugin_a.join("skills")).unwrap();
+
+        // Create plugin B
+        let plugin_b = temp.path().join("plugin-b");
+        std::fs::create_dir(&plugin_b).unwrap();
+        std::fs::create_dir(plugin_b.join("skills")).unwrap();
+
+        // Create plugin C
+        let plugin_c = temp.path().join("plugin-c");
+        std::fs::create_dir(&plugin_c).unwrap();
+        std::fs::create_dir(plugin_c.join("skills")).unwrap();
+
+        // Only enable plugin-a and plugin-c
+        let mut enabled = EnabledPlugins::new();
+        enabled.insert("plugin-a".to_string(), true);
+        enabled.insert("plugin-c".to_string(), true);
+
+        let loader =
+            PluginLoader::new(vec![temp.path().to_path_buf()]).with_enabled_plugins(enabled);
+        let plugins = loader.load_all().unwrap();
+
+        assert_eq!(plugins.len(), 2);
+        let names: Vec<_> = plugins.iter().map(|p| p.name.clone()).collect();
+        assert!(names.contains(&"plugin-a".to_string()));
+        assert!(!names.contains(&"plugin-b".to_string()));
+        assert!(names.contains(&"plugin-c".to_string()));
+    }
+
+    #[test]
+    fn test_filter_disabled_plugin() {
+        let temp = TempDir::new().unwrap();
+
+        // Create plugin A
+        let plugin_a = temp.path().join("plugin-a");
+        std::fs::create_dir(&plugin_a).unwrap();
+        std::fs::create_dir(plugin_a.join("skills")).unwrap();
+
+        // Create plugin B
+        let plugin_b = temp.path().join("plugin-b");
+        std::fs::create_dir(&plugin_b).unwrap();
+        std::fs::create_dir(plugin_b.join("skills")).unwrap();
+
+        // Enable plugin-a, explicitly disable plugin-b
+        let mut enabled = EnabledPlugins::new();
+        enabled.insert("plugin-a".to_string(), true);
+        enabled.insert("plugin-b".to_string(), false);
+
+        let loader =
+            PluginLoader::new(vec![temp.path().to_path_buf()]).with_enabled_plugins(enabled);
+        let plugins = loader.load_all().unwrap();
+
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].name, "plugin-a");
+    }
+
+    #[test]
+    fn test_filter_by_at_marketplace() {
+        let temp = TempDir::new().unwrap();
+
+        // Create plugin A (from marketplace A)
+        let plugin_a = temp.path().join("plugin-a");
+        std::fs::create_dir(&plugin_a).unwrap();
+        std::fs::create_dir(plugin_a.join("skills")).unwrap();
+
+        // Create plugin B (from marketplace B)
+        let plugin_b = temp.path().join("plugin-b");
+        std::fs::create_dir(&plugin_b).unwrap();
+        std::fs::create_dir(plugin_b.join("skills")).unwrap();
+
+        // Enable plugin with name matching (without @marketplace)
+        let mut enabled = EnabledPlugins::new();
+        enabled.insert("plugin-a".to_string(), true);
+
+        let loader =
+            PluginLoader::new(vec![temp.path().to_path_buf()]).with_enabled_plugins(enabled);
+        let plugins = loader.load_all().unwrap();
+
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].name, "plugin-a");
+    }
+
+    #[test]
+    fn test_no_filter_loads_all_plugins() {
+        let temp = TempDir::new().unwrap();
+
+        // Create plugin A
+        let plugin_a = temp.path().join("plugin-a");
+        std::fs::create_dir(&plugin_a).unwrap();
+        std::fs::create_dir(plugin_a.join("skills")).unwrap();
+
+        // Create plugin B
+        let plugin_b = temp.path().join("plugin-b");
+        std::fs::create_dir(&plugin_b).unwrap();
+        std::fs::create_dir(plugin_b.join("skills")).unwrap();
+
+        // No enabled_plugins set, should load all
+        let loader = PluginLoader::new(vec![temp.path().to_path_buf()]);
+        let plugins = loader.load_all().unwrap();
+
+        assert_eq!(plugins.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_plugin_name_matches_at_marketplace_key() {
+        // This tests the real-world scenario:
+        // settings.json has: "caveman@caveman": true
+        // Plugin.name (from derive_plugin_name) is: "caveman"
+        let temp = TempDir::new().unwrap();
+
+        // Create plugin named "caveman"
+        let caveman_dir = temp.path().join("caveman");
+        std::fs::create_dir(&caveman_dir).unwrap();
+        std::fs::create_dir(caveman_dir.join("skills")).unwrap();
+
+        // Create another plugin
+        let other_dir = temp.path().join("other-plugin");
+        std::fs::create_dir(&other_dir).unwrap();
+        std::fs::create_dir(other_dir.join("skills")).unwrap();
+
+        // Configure enabledPlugins with @marketplace suffix (like settings.json)
+        let mut enabled = EnabledPlugins::new();
+        enabled.insert("caveman@caveman".to_string(), true);
+        // other-plugin is not listed, should be disabled
+
+        let loader =
+            PluginLoader::new(vec![temp.path().to_path_buf()]).with_enabled_plugins(enabled);
+        let plugins = loader.load_all().unwrap();
+
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].name, "caveman");
     }
 }

@@ -1,4 +1,4 @@
-use crate::tools::{FileTool, Tool};
+use crate::tools::{FileTool, Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -428,7 +428,7 @@ impl Tool for GrepTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
@@ -554,7 +554,8 @@ mod tests {
             "output_mode": "files_with_matches"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("test1.rs"));
         assert!(result.stdout.contains("test2.rs"));
@@ -579,7 +580,8 @@ mod tests {
             "output_mode": "content"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("println"));
     }
@@ -600,7 +602,8 @@ mod tests {
             "-i": true
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("MAIN"));
     }
@@ -623,7 +626,8 @@ mod tests {
             "glob": "*.rs"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("test.rs"));
         assert!(!result.stdout.contains("test.js"));
@@ -644,7 +648,8 @@ mod tests {
             "output_mode": "files_with_matches"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("No files found"));
     }
@@ -669,7 +674,8 @@ mod tests {
             "-A": 2
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains("line 1"));
         assert!(result.stdout.contains("line 2"));
@@ -696,7 +702,8 @@ mod tests {
         let args = serde_json::json!({
             "pattern": "fn secret"
         });
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains(".hidden.rs"));
     }

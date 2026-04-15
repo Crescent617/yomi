@@ -60,11 +60,12 @@ pub enum Msg {
     DialogSelected(usize), // Selected option index
     DialogCancelled,       // Dialog was cancelled
 
-    // Command palette
-    ToggleCommandPalette,
-    CommandSelected(String), // Selected command ID
-    CommandPaletteSearch(String),
-    CloseCommandPalette,
+    // Slash commands
+    CommandNew,             // /new - create new session
+    CommandClear,           // /clear - clear history
+    CommandYolo,            // /yolo - toggle yolo mode
+    CommandBrowse,          // /browse - toggle browse mode
+    CommandUnknown(String), // Unknown command
 }
 
 impl From<AppEvent> for Msg {

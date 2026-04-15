@@ -5,14 +5,14 @@ use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -262,8 +262,9 @@ impl AnthropicStreamState {
     }
 
     fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
-        let event: AnthropicStreamEvent = serde_json::from_str(data)
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}")))?;
+        let event: AnthropicStreamEvent = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
+        })?;
 
         let mut items = Vec::new();
 

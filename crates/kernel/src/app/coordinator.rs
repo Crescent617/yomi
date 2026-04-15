@@ -152,17 +152,17 @@ impl Coordinator {
         result
     }
 
-    pub async fn set_permission_level(
-        &self,
-        session_id: &SessionId,
-        level: Level,
-    ) -> Result<()> {
+    pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
         session.read().await.set_permission_level(level).await;
-        tracing::info!("Permission level set to {:?} for session {}", level, session_id.0);
+        tracing::info!(
+            "Permission level set to {:?} for session {}",
+            level,
+            session_id.0
+        );
         Ok(())
     }
 }

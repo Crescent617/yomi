@@ -2,7 +2,7 @@ use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::edit_utils::{find_actual_string, generate_diff};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -89,7 +89,7 @@ impl Tool for EditTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
@@ -250,7 +250,8 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.stdout.contains("Replaced"));
 
         let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
@@ -273,7 +274,8 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let result = tool.exec(args).await.unwrap();
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.stderr.contains("not been read"));
     }
 }

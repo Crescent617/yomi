@@ -652,7 +652,10 @@ impl ChatView {
                             let prog_text = prog.clone();
                             lines.push(Line::from(vec![
                                 Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
-                                Span::styled(prog_text, Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    prog_text,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
                             ]));
                         }
                     }
@@ -660,9 +663,10 @@ impl ChatView {
                     // Show tokens if available
                     if let Some(total) = tokens {
                         let token_text = format!("⎿ {} tokens", tokens::format_tokens(*total));
-                        lines.push(Line::from(vec![
-                            Span::styled(token_text, Style::default().fg(colors::text_secondary())),
-                        ]));
+                        lines.push(Line::from(vec![Span::styled(
+                            token_text,
+                            Style::default().fg(colors::text_secondary()),
+                        )]));
                     }
 
                     let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
@@ -740,10 +744,9 @@ impl ChatView {
                             ]));
                         }
                     } else if *status == ToolStatus::Running {
-                        let running_text = progress.as_ref().map_or_else(
-                            || "Running...".to_string(),
-                            |p| format!("Running: {p}"),
-                        );
+                        let running_text = progress
+                            .as_ref()
+                            .map_or_else(|| "Running...".to_string(), |p| format!("Running: {p}"));
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(

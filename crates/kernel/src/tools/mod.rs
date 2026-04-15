@@ -30,19 +30,48 @@ pub use read::{ReadTool, READ_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
 
+/// Context provided to tools during execution
+pub struct ToolExecCtx<'a> {
+    /// The ID of this tool call
+    pub tool_call_id: &'a str,
+    /// Parent agent's message history (for context inheritance)
+    pub parent_messages: Option<&'a [Arc<crate::types::Message>]>,
+    /// Cancel token for checking cancellation requests
+    pub cancel_token: Option<CancelToken>,
+}
+
+use crate::agent::CancelToken;
+
+impl<'a> ToolExecCtx<'a> {
+    pub fn new(tool_call_id: &'a str) -> Self {
+        Self {
+            tool_call_id,
+            parent_messages: None,
+            cancel_token: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_parent_messages(mut self, messages: &'a [Arc<crate::types::Message>]) -> Self {
+        self.parent_messages = Some(messages);
+        self
+    }
+
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: Option<CancelToken>) -> Self {
+        self.cancel_token = token;
+        self
+    }
+}
+
 /// Core trait for tools
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn desc(&self) -> &str;
     fn params(&self) -> Value;
-    async fn exec(&self, args: Value) -> Result<ToolOutput>;
 
-    /// Execute with tool call ID (for tools that need to track progress/events)
-    /// Default implementation ignores `tool_call_id` and calls exec
-    async fn exec_with_id(&self, args: Value, _tool_call_id: &str) -> Result<ToolOutput> {
-        self.exec(args).await
-    }
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput>;
 }
 
 /// Tool registry - manages available tools for an agent

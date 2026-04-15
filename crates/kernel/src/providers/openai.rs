@@ -3,7 +3,7 @@ use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{Message, Role, ToolDefinition};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -252,8 +252,9 @@ impl ToolCallAssembler {
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
     fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
-        let response: OpenAIStreamResponse = serde_json::from_str(data)
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}")))?;
+        let response: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
+        })?;
 
         // Handle usage information (sent in final chunk when stream_options.include_usage=true)
         if let Some(usage) = response.usage {

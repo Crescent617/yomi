@@ -1,6 +1,6 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::{ListTasksOutput, TaskListItem};
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ impl Tool for TaskListTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let all_tasks = self.store.list_tasks(&self.task_list_id).await?;
 
         let include_completed = args["includeCompleted"].as_bool().unwrap_or(false);

@@ -1,8 +1,8 @@
-use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, CancelToken, SubAgentMode};
+use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, SubAgentMode};
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::storage::Storage;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, ContentBlock, ToolOutput};
 use crate::utils::tokens::format_tokens;
 use anyhow::Result;
@@ -31,8 +31,6 @@ pub struct SubagentTool {
     /// Parent's `event_tx` for forwarding permission requests
     /// Subagent's permission requests will be sent here so TUI can show dialogs
     parent_event_tx: mpsc::Sender<crate::event::Event>,
-    /// Optional cancel token to share with parent (for cascading cancellation)
-    cancel_token: Option<CancelToken>,
 }
 
 impl SubagentTool {
@@ -46,7 +44,6 @@ impl SubagentTool {
         working_dir: impl Into<std::path::PathBuf>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<crate::event::Event>,
-        cancel_token: Option<CancelToken>,
     ) -> Self {
         Self {
             parent_id,
@@ -57,7 +54,6 @@ impl SubagentTool {
             working_dir: working_dir.into(),
             parent_session_id,
             parent_event_tx,
-            cancel_token,
         }
     }
 
@@ -74,6 +70,32 @@ You are a specialist agent handling a specific task delegated by the parent agen
 - If the task involves code changes, read the relevant files first
 - Report your findings concisely; avoid unnecessary verbosity
 - If you need more information, use the available tools to gather it
+- When complete, provide a clear summary of what you found or accomplished
+- Do NOT make assumptions about files or code you haven't examined
+
+## Output Format
+Provide your response in a structured format:
+1. **Summary**: Brief overview of what you did
+2. **Details**: Specific findings, changes, or results
+3. **Recommendations**: Any follow-up actions needed (if applicable)
+",
+            parent_id = self.parent_id,
+        )
+    }
+
+    /// Build the system prompt for sub-agent when inheriting parent context
+    fn build_system_prompt_with_context(&self) -> String {
+        format!(
+            r"You are a sub-agent spawned by parent agent {parent_id}.
+
+## Your Role
+You are a specialist agent handling a specific task delegated by the parent agent. You have been provided with the full conversation context from the parent agent, so you understand the ongoing discussion and can build upon previous work.
+
+## Guidelines
+- You have access to the parent's conversation history - use it to understand the full context
+- Focus on the specific task described in the user message
+- If the task involves code changes, read the relevant files first
+- Report your findings concisely; avoid unnecessary verbosity
 - When complete, provide a clear summary of what you found or accomplished
 - Do NOT make assumptions about files or code you haven't examined
 
@@ -255,18 +277,18 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                     "enum": ["async", "sync"],
                     "description": "Execution mode: 'async' returns immediately with sub-agent ID (use for parallel work), 'sync' waits for completion and returns results (use when you need the results to proceed)",
                     "default": "sync"
+                },
+                "inherit_context": {
+                    "type": "boolean",
+                    "description": "Whether to inherit the parent agent's conversation context. When true, the sub-agent will receive the parent's message history (excluding system messages). Useful when the sub-agent needs full context of the conversation.",
+                    "default": false
                 }
             },
             "required": ["description", "task"]
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
-        // Default: use a placeholder tool_id (subagent's own id will be generated)
-        self.exec_with_id(args, "").await
-    }
-
-    async fn exec_with_id(&self, args: Value, tool_call_id: &str) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let description = args["description"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?;
@@ -280,15 +302,22 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             _ => SubAgentMode::Sync,
         };
 
+        let inherit_context = args["inherit_context"].as_bool().unwrap_or(false);
+
         tracing::info!(
-            "Spawning sub-agent {} for parent {} with task: {}",
-            tool_call_id,
+            "Spawning sub-agent {} for parent {} with task: {} (inherit_context: {})",
+            ctx.tool_call_id,
             self.parent_id,
-            description
+            description,
+            inherit_context
         );
 
         // Build system prompt (role definition only, no task specifics)
-        let system_prompt = self.build_system_prompt();
+        let system_prompt = if inherit_context {
+            self.build_system_prompt_with_context()
+        } else {
+            self.build_system_prompt()
+        };
 
         // Create session for transcript recording if storage is available
         let subagent_session_id = if let Some(storage) = &self.storage {
@@ -314,14 +343,25 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             ));
         };
 
-        let config = AgentSpawnArgs::new(system_prompt, subagent_session_id)
+        let mut config = AgentSpawnArgs::new(system_prompt, subagent_session_id)
             .with_skills(self.skills.clone())
             .with_parent_session(&self.parent_session_id)
             .with_max_iterations(20)
             .without_sub_agents()
             .with_working_dir(self.working_dir.clone())
             .with_parent_event_tx(self.parent_event_tx.clone())
-            .with_cancel_token(self.cancel_token.clone().unwrap_or_default());
+            .with_cancel_token(ctx.cancel_token.clone().unwrap_or_default());
+
+        // If inherit_context is true and parent messages are available, pass them to subagent
+        if inherit_context {
+            if let Some(parent_messages) = ctx.parent_messages {
+                tracing::debug!(
+                    "Inheriting {} messages from parent agent",
+                    parent_messages.len()
+                );
+                config = config.with_arc_history(parent_messages.to_vec());
+            }
+        }
 
         let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
 
@@ -340,7 +380,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 let parent_id = self.parent_id.clone();
                 let sub_id = sub_agent_id.clone();
                 let desc = description.to_string();
-                let tool_id = tool_call_id.to_string();
+                let tool_id = ctx.tool_call_id.to_string();
                 tokio::spawn(async move {
                     let mut output = String::new();
                     let status = Self::collect_subagent_output(
@@ -402,7 +442,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                     &mut output,
                     &self.parent_event_tx,
                     &self.parent_id,
-                    tool_call_id,
+                    ctx.tool_call_id,
                 )
                 .await;
                 info!(

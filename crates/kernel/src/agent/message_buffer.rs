@@ -11,7 +11,9 @@ pub struct MessageBuffer {
 impl MessageBuffer {
     /// Create an empty buffer
     pub fn new() -> Self {
-        Self { messages: Vec::new() }
+        Self {
+            messages: Vec::new(),
+        }
     }
 
     /// Create from existing messages (for recovery)
@@ -192,7 +194,10 @@ mod tests {
         let buffer2 = buffer1.clone();
 
         // Both buffers should see the same message
-        assert_eq!(buffer1.messages()[0].content[0], buffer2.messages()[0].content[0]);
+        assert_eq!(
+            buffer1.messages()[0].content[0],
+            buffer2.messages()[0].content[0]
+        );
 
         // Modifying buffer1 should not affect buffer2 (COW)
         buffer1.update_message(0, |msg| {

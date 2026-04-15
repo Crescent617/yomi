@@ -27,9 +27,8 @@ use kernel::permissions::Level;
 use kernel::types::Message;
 
 use crate::{
-    components::command_palette::Command,
     components::{
-        ChatViewComponent, CommandPaletteComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
+        ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
         StatusBarComponent,
     },
     id::Id,
@@ -45,14 +44,25 @@ pub enum AppMode {
 }
 
 /// TUI Model holding application state
-pub struct Model {
-    /// Application
-    pub app: Application<Id, Msg, UserEvent>,
+/// Application state flags grouped to reduce struct bool count
+#[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct AppState {
     /// Indicates that the application must quit
     pub quit: bool,
     /// Tells whether to redraw interface
     pub redraw: bool,
-    /// Used to draw to terminal
+    /// Whether we're currently streaming (showing streaming component)
+    pub is_streaming: bool,
+    /// Flag to indicate if a new session should be created on exit
+    pub should_create_new_session: bool,
+}
+
+pub struct Model {
+    /// Application
+    pub app: Application<Id, Msg, UserEvent>,
+    /// Application state flags
+    pub state: AppState,
     pub terminal: TerminalBridge<CrosstermTerminalAdapter>,
     /// Channel to receive events from kernel
     pub event_rx: mpsc::Receiver<AppEvent>,
@@ -69,7 +79,6 @@ pub struct Model {
     /// When thinking started (for calculating elapsed time)
     thinking_start_time: Option<Instant>,
     /// Whether we're currently streaming (showing streaming component)
-    is_streaming: bool,
     /// Application mode - single source of truth
     mode: AppMode,
     /// Pending permission request (`req_id`) waiting for user confirmation
@@ -85,11 +94,7 @@ pub struct Model {
     session_messages: Vec<Message>,
     /// Permission level for displaying YOLO mode indicator
     permission_level: Level,
-    commands: Vec<Command>,
-    /// Flag to indicate if a new session should be created on exit
-    should_create_new_session: bool,
 }
-
 
 impl Model {
     #[allow(clippy::too_many_arguments)]
@@ -108,8 +113,12 @@ impl Model {
 
         Ok(Self {
             app,
-            quit: false,
-            redraw: true,
+            state: AppState {
+                quit: false,
+                redraw: true,
+                is_streaming: false,
+                should_create_new_session: false,
+            },
             terminal,
             event_rx,
             input_tx,
@@ -118,71 +127,19 @@ impl Model {
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
-            is_streaming: false,
             mode: AppMode::Normal,
             pending_permission: None,
             initial_history_len: input_history.len(),
             input_history,
             working_dir,
             session_messages,
-            commands: Self::init_commands(),
             permission_level,
-            should_create_new_session: false,
         })
-    }
-
-    /// Initialize available commands for command palette
-    fn init_commands() -> Vec<Command> {
-        vec![
-            Command::new("new_chat", "New Chat"),
-            Command::new("clear", "Clear History"),
-            Command::new("copy_last", "Copy Last Response"),
-            Command::new("toggle_browse", "Toggle Browse Mode"),
-            Command::new("toggle_yolo", "Toggle YOLO Mode"),
-            Command::new("scroll_top", "Scroll to Top"),
-            Command::new("scroll_bottom", "Scroll to Bottom"),
-        ]
     }
 
     /// Get new history entries collected during this session
     pub fn get_new_history_entries(&self) -> Vec<String> {
         self.input_history[self.initial_history_len..].to_vec()
-    }
-
-    /// Execute a command from the command palette
-    fn execute_command(&mut self, cmd_id: &str) {
-        match cmd_id {
-            "new_chat" => {
-                // Signal that a new session should be created
-                self.should_create_new_session = true;
-                self.quit = true;
-            }
-            "clear" => {
-                // Clear chat history (same as new_chat)
-                let _ = self.app.attr(
-                    &Id::ChatView,
-                    Attribute::Custom("clear_history"),
-                    AttrValue::Flag(true),
-                );
-            }
-            "toggle_browse" => {
-                // Toggle browse mode
-                let _ = self.update(Some(Msg::ToggleBrowseMode));
-            }
-            "toggle_yolo" => {
-                // Toggle YOLO mode
-                let _ = self.update(Some(Msg::ToggleYoloMode));
-            }
-            "scroll_top" => {
-                // Scroll to top
-                let _ = self.update(Some(Msg::GoToTop));
-            }
-            "scroll_bottom" => {
-                // Scroll to bottom
-                let _ = self.update(Some(Msg::GoToBottom));
-            }
-            _ => {}
-        }
     }
 
     /// Initialize input history in the `InputBox` component
@@ -194,6 +151,13 @@ impl Model {
             Attribute::Custom("history"),
             AttrValue::String(history_json),
         )?;
+        // Set working directory for file completion
+        let working_dir_str = self.working_dir.to_string_lossy().to_string();
+        let _ = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("working_dir"),
+            AttrValue::String(working_dir_str),
+        );
         Ok(())
     }
 
@@ -403,7 +367,6 @@ impl Model {
             }
 
             // Render dialog on top if active (uses full screen for centering)
-            self.app.view(&Id::CommandPalette, f, f.area());
             self.app.view(&Id::Dialog, f, f.area());
         });
     }
@@ -450,13 +413,6 @@ impl Model {
             vec![Sub::new(SubEventClause::Any, SubClause::Always)],
         )?;
 
-        // Mount command palette component (hidden by default)
-        app.mount(
-            Id::CommandPalette,
-            Box::new(CommandPaletteComponent::new()),
-            vec![Sub::new(SubEventClause::Any, SubClause::Always)],
-        )?;
-
         // Set focus to input box
         app.active(&Id::InputBox)?;
 
@@ -468,7 +424,7 @@ impl Model {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
-                    self.is_streaming = true;
+                    self.state.is_streaming = true;
                     match content {
                         kernel::event::ContentChunk::Text(text) => {
                             self.current_content.push_str(&text);
@@ -505,10 +461,10 @@ impl Model {
                         }
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
-                    self.is_streaming = false;
+                    self.state.is_streaming = false;
 
                     // Stop status bar
                     self.app.attr(
@@ -568,11 +524,11 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
                     // Clear previous streaming content
-                    self.is_streaming = true;
+                    self.state.is_streaming = true;
                     self.current_content.clear();
                     self.current_thinking.clear();
                     self.thinking_start_time = None;
@@ -583,7 +539,7 @@ impl Model {
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
@@ -593,7 +549,7 @@ impl Model {
                         Attribute::Custom("stop_compacting")
                     };
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
                     total_tokens,
@@ -607,7 +563,7 @@ impl Model {
                         Attribute::Custom("set_ctx_usage"),
                         AttrValue::String(usage_str),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
@@ -623,7 +579,7 @@ impl Model {
                         Attribute::Custom("start_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
                     tool_id,
@@ -638,7 +594,7 @@ impl Model {
                         Attribute::Custom("complete_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Error {
                     tool_id,
@@ -653,7 +609,7 @@ impl Model {
                         Attribute::Custom("fail_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Progress {
                     tool_id,
@@ -670,10 +626,10 @@ impl Model {
                         Attribute::Custom("update_tool_progress"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
-                    self.is_streaming = false;
+                    self.state.is_streaming = false;
 
                     // Save partial content and clear state
                     let _ = self.save_partial_content();
@@ -690,10 +646,10 @@ impl Model {
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
-                    self.is_streaming = false;
+                    self.state.is_streaming = false;
 
                     // Stop status bar
                     self.app.attr(
@@ -730,7 +686,7 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
@@ -762,7 +718,7 @@ impl Model {
                     // Give focus to dialog so it receives keyboard events
                     let result = self.app.active(&Id::Dialog);
                     tracing::debug!("Dialog focus result: {:?}", result);
-                    self.redraw = true;
+                    self.state.redraw = true;
                 }
                 _ => {}
             }
@@ -789,7 +745,7 @@ impl Model {
         // Return result with new history entries and session flag
         Ok(TuiResult {
             input_history: self.get_new_history_entries(),
-            should_create_new_session: self.should_create_new_session,
+            should_create_new_session: self.state.should_create_new_session,
         })
     }
 
@@ -798,14 +754,14 @@ impl Model {
         // Enable mouse capture
         self.terminal.enable_mouse_capture()?;
 
-        while !self.quit {
+        while !self.state.quit {
             // Process kernel events
             self.process_kernel_events()?;
 
             // Tick the application
             match self.app.tick(PollStrategy::Once) {
                 Ok(messages) if !messages.is_empty() => {
-                    self.redraw = true;
+                    self.state.redraw = true;
                     for msg in messages {
                         let mut msg = Some(msg);
                         while msg.is_some() {
@@ -817,9 +773,9 @@ impl Model {
             }
 
             // Redraw if needed
-            if self.redraw {
+            if self.state.redraw {
                 self.view();
-                self.redraw = false;
+                self.state.redraw = false;
             }
 
             // Small yield to allow tokio to process other tasks
@@ -836,11 +792,11 @@ impl Model {
 impl Update<Msg> for Model {
     fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
-            self.redraw = true;
+            self.state.redraw = true;
 
             match msg {
                 Msg::Quit => {
-                    self.quit = true;
+                    self.state.quit = true;
                     None
                 }
                 // Ignore input-related messages in Browse mode
@@ -908,7 +864,7 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::Redraw => {
-                    self.redraw = true;
+                    self.state.redraw = true;
                     None
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {
@@ -1074,44 +1030,79 @@ impl Update<Msg> for Model {
                     let _ = self.app.active(&Id::InputBox);
                     None
                 }
-                // Command palette messages
-                Msg::ToggleCommandPalette => {
-                    // Show command palette with available commands
-                    if let Ok(tuirealm::State::One(tuirealm::StateValue::String(_))) =
-                        self.app.state(&Id::CommandPalette)
-                    {
-                        // Palette is already visible, hide it and return focus to input
-                        let _ = self.app.attr(
-                            &Id::CommandPalette,
-                            Attribute::Custom("hide"),
-                            AttrValue::Flag(true),
-                        );
-                        let _ = self.app.active(&Id::InputBox);
-                    } else {
-                        // Show palette and move focus to it (prevents input from receiving events)
-                        let _ = self.app.attr(
-                            &Id::CommandPalette,
-                            Attribute::Custom("show"),
-                            AttrValue::Flag(true),
-                        );
-                        let _ = self.app.active(&Id::CommandPalette);
-                    }
+                // Slash commands
+                Msg::CommandNew => {
+                    // Signal that a new session should be created
+                    self.state.should_create_new_session = true;
+                    self.state.quit = true;
                     None
                 }
-                Msg::CommandSelected(cmd_id) => {
-                    // Execute the selected command and return focus to input
-                    self.execute_command(&cmd_id);
-                    let _ = self.app.active(&Id::InputBox);
-                    None
-                }
-                Msg::CloseCommandPalette => {
-                    // Hide palette and return focus to input
+                Msg::CommandClear => {
+                    // Clear chat history
                     let _ = self.app.attr(
-                        &Id::CommandPalette,
-                        Attribute::Custom("hide"),
+                        &Id::ChatView,
+                        Attribute::Custom("clear_history"),
                         AttrValue::Flag(true),
                     );
-                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
+                Msg::CommandYolo => {
+                    // Toggle YOLO mode via command
+                    self.update(Some(Msg::ToggleYoloMode))
+                }
+                Msg::ToggleYoloMode => {
+                    // Toggle between Safe and Dangerous permission levels
+                    let new_level = if self.permission_level == Level::Dangerous {
+                        Level::Safe
+                    } else {
+                        Level::Dangerous
+                    };
+                    self.permission_level = new_level;
+
+                    // Update status bar
+                    let level_num = match new_level {
+                        Level::Safe => 0,
+                        Level::Caution => 1,
+                        Level::Dangerous => 2,
+                    };
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("set_permission_level"),
+                        AttrValue::Number(level_num),
+                    );
+
+                    // Show status message
+                    let msg = if new_level == Level::Dangerous {
+                        "YOLO mode enabled - all tools will be auto-approved"
+                    } else {
+                        "YOLO mode disabled"
+                    };
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String(format!("5000\x00{msg}")),
+                    );
+
+                    // Send command to kernel
+                    let _ = self
+                        .permission_tx
+                        .try_send(PermissionCommand::SetLevel(new_level));
+
+                    None
+                }
+                Msg::CommandBrowse => {
+                    // Toggle browse mode
+                    self.update(Some(Msg::ToggleBrowseMode))
+                }
+                Msg::CommandUnknown(cmd) => {
+                    // Show unknown command message in status bar
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("message"),
+                        AttrValue::Payload(tuirealm::props::PropPayload::One(
+                            tuirealm::props::PropValue::Str(format!("Unknown command: {cmd}")),
+                        )),
+                    );
                     None
                 }
                 _ => None,
