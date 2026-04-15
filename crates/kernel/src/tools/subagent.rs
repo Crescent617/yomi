@@ -98,7 +98,7 @@ Provide your response in a structured format:
     ) -> SubAgentStatus {
         use crate::event::{AgentEvent, ContentChunk, ModelEvent, ToolEvent};
 
-        // Track accumulated token usage
+        // Track token usage (TokenUsage reports cumulative totals)
         let mut total_prompt_tokens: u32 = 0;
         let mut total_completion_tokens: u32 = 0;
         let mut iteration_count: usize = 0;
@@ -117,16 +117,14 @@ Provide your response in a structured format:
                     completion_tokens,
                     ..
                 }) => {
-                    if tool_id.is_empty() {
-                        continue;
-                    }
-                    // Accumulate token usage
-                    total_prompt_tokens += prompt_tokens;
-                    total_completion_tokens += completion_tokens;
+                    // TokenUsage reports cumulative totals, save latest values
+                    total_prompt_tokens = *prompt_tokens;
+                    total_completion_tokens = *completion_tokens;
                     let total = total_prompt_tokens + total_completion_tokens;
 
                     // Send progress update with token count
-                    let progress_msg = format!("iter {iteration_count} · {} tokens", format_tokens(total));
+                    let progress_msg =
+                        format!("iter {iteration_count} · {} tokens", format_tokens(total));
                     let _ = parent_event_tx
                         .send(Event::Tool(ToolEvent::Progress {
                             agent_id: parent_id.clone(),
@@ -283,7 +281,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         };
 
         tracing::info!(
-            "Spawning sub-agent for parent {} with task: {}",
+            "Spawning sub-agent {} for parent {} with task: {}",
+            tool_call_id,
             self.parent_id,
             description
         );

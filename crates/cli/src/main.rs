@@ -381,8 +381,8 @@ async fn main() -> Result<()> {
         skill_names,
         input_history,
         session_messages,
-        context_window,
         config.auto_approve,
+        context_window,
     )
     .await?;
 

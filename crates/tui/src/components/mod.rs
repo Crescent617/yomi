@@ -2,6 +2,7 @@
 
 pub mod banner;
 pub mod chat_view;
+pub mod command_palette;
 pub mod dialog;
 pub mod info_bar;
 pub mod input;
@@ -9,6 +10,7 @@ pub mod status_bar;
 
 pub use banner::{BannerComponent, BannerData};
 pub use chat_view::ChatViewComponent;
+pub use command_palette::{Command, CommandPaletteComponent};
 pub use dialog::{SelectDialog, SelectDialogComponent};
 pub use info_bar::InfoBarComponent;
 pub use input::InputComponent;

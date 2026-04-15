@@ -19,8 +19,9 @@ use kernel::permissions::Level;
 use kernel::types::Message;
 
 use crate::{
+    components::command_palette::Command,
     components::{
-        ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
+        ChatViewComponent, CommandPaletteComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
         StatusBarComponent,
     },
     id::Id,
@@ -76,7 +77,9 @@ pub struct Model {
     session_messages: Vec<Message>,
     /// Permission level for displaying YOLO mode indicator
     permission_level: Level,
+    commands: Vec<Command>,
 }
+
 
 impl Model {
     #[allow(clippy::too_many_arguments)]
@@ -112,13 +115,66 @@ impl Model {
             input_history,
             working_dir,
             session_messages,
+            commands: Self::init_commands(),
             permission_level,
         })
+    }
+
+    /// Initialize available commands for command palette
+    fn init_commands() -> Vec<Command> {
+        vec![
+            Command::new("new_chat", "New Chat"),
+            Command::new("clear", "Clear History"),
+            Command::new("copy_last", "Copy Last Response"),
+            Command::new("toggle_browse", "Toggle Browse Mode"),
+            Command::new("toggle_yolo", "Toggle YOLO Mode"),
+            Command::new("scroll_top", "Scroll to Top"),
+            Command::new("scroll_bottom", "Scroll to Bottom"),
+        ]
     }
 
     /// Get new history entries collected during this session
     pub fn get_new_history_entries(&self) -> Vec<String> {
         self.input_history[self.initial_history_len..].to_vec()
+    }
+
+    /// Execute a command from the command palette
+    fn execute_command(&mut self, cmd_id: &str) {
+        match cmd_id {
+            "new_chat" => {
+                // Clear chat history
+                let _ = self.app.attr(
+                    &Id::ChatView,
+                    Attribute::Custom("clear_history"),
+                    AttrValue::Flag(true),
+                );
+            }
+            "clear" => {
+                // Clear chat history (same as new_chat)
+                let _ = self.app.attr(
+                    &Id::ChatView,
+                    Attribute::Custom("clear_history"),
+                    AttrValue::Flag(true),
+                );
+            }
+            "toggle_browse" => {
+                // Toggle browse mode
+                return;
+            }
+            "toggle_yolo" => {
+                // Toggle YOLO mode
+                let _ = self.update(Some(Msg::ToggleYoloMode));
+            }
+            "scroll_top" => {
+                // Scroll to top
+                let _ = self.update(Some(Msg::GoToTop));
+            }
+            "scroll_bottom" => {
+                // Scroll to bottom
+                let _ = self.update(Some(Msg::GoToBottom));
+            }
+            _ => {}
+        }
     }
 
     /// Initialize input history in the `InputBox` component
@@ -339,6 +395,7 @@ impl Model {
             }
 
             // Render dialog on top if active (uses full screen for centering)
+            self.app.view(&Id::CommandPalette, f, f.area());
             self.app.view(&Id::Dialog, f, f.area());
         });
     }
@@ -382,6 +439,13 @@ impl Model {
         app.mount(
             Id::Dialog,
             Box::new(SelectDialogComponent::new("Dialog")),
+            vec![Sub::new(SubEventClause::Any, SubClause::Always)],
+        )?;
+
+        // Mount command palette component (hidden by default)
+        app.mount(
+            Id::CommandPalette,
+            Box::new(CommandPaletteComponent::new()),
             vec![Sub::new(SubEventClause::Any, SubClause::Always)],
         )?;
 
@@ -999,6 +1063,46 @@ impl Update<Msg> for Model {
                     let _ = self.app.active(&Id::InputBox);
                     None
                 }
+                // Command palette messages
+                Msg::ToggleCommandPalette => {
+                    // Show command palette with available commands
+                    if let Ok(tuirealm::State::One(tuirealm::StateValue::String(_))) =
+                        self.app.state(&Id::CommandPalette)
+                    {
+                        // Palette is already visible, hide it and return focus to input
+                        let _ = self.app.attr(
+                            &Id::CommandPalette,
+                            Attribute::Custom("hide"),
+                            AttrValue::Flag(true),
+                        );
+                        let _ = self.app.active(&Id::InputBox);
+                    } else {
+                        // Show palette and move focus to it (prevents input from receiving events)
+                        let _ = self.app.attr(
+                            &Id::CommandPalette,
+                            Attribute::Custom("show"),
+                            AttrValue::Flag(true),
+                        );
+                        let _ = self.app.active(&Id::CommandPalette);
+                    }
+                    None
+                }
+                Msg::CommandSelected(cmd_id) => {
+                    // Execute the selected command and return focus to input
+                    self.execute_command(&cmd_id);
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
+                Msg::CloseCommandPalette => {
+                    // Hide palette and return focus to input
+                    let _ = self.app.attr(
+                        &Id::CommandPalette,
+                        Attribute::Custom("hide"),
+                        AttrValue::Flag(true),
+                    );
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
                 _ => None,
             }
         } else {
@@ -1018,8 +1122,8 @@ pub async fn run_tui(
     skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
-    context_window: u32,
     permission_level: Level,
+    context_window: u32,
 ) -> Result<Vec<String>> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(

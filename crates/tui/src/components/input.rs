@@ -748,6 +748,11 @@ impl InputComponent {
     /// Handle input in normal mode - text editing
     fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         match *ev {
+            // '/' when input is empty: open command palette
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('/'),
+                modifiers: KeyModifiers::NONE,
+            }) if self.component.content().is_empty() => Some(Msg::ToggleCommandPalette),
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
@@ -859,13 +864,17 @@ impl InputComponent {
                 self.component.delete_word();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // History navigation: Ctrl+P = previous, Ctrl+N = next
+            // History navigation: Ctrl+P = previous (or open command palette if input is empty)
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.history_prev();
-                Some(Msg::InputChanged(self.component.content().to_string()))
+                if self.component.content().is_empty() {
+                    Some(Msg::ToggleCommandPalette)
+                } else {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('n'),

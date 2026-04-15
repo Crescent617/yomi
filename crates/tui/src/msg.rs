@@ -59,6 +59,12 @@ pub enum Msg {
     // Dialog results
     DialogSelected(usize), // Selected option index
     DialogCancelled,       // Dialog was cancelled
+
+    // Command palette
+    ToggleCommandPalette,
+    CommandSelected(String), // Selected command ID
+    CommandPaletteSearch(String),
+    CloseCommandPalette,
 }
 
 impl From<AppEvent> for Msg {
