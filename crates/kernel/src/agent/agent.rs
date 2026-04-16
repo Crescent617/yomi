@@ -5,9 +5,8 @@ use super::{
 };
 use crate::compactor;
 use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
-use crate::permissions::{Checker, ToolLevelResolver};
+use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::skill::Skill;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
 use futures::TryStreamExt;
@@ -92,7 +91,7 @@ impl Agent {
         let shared = shared.clone();
 
         // Create agent-specific tool registry with standard tools
-        let tool_registry = Self::create_tool_registry(
+        let tool_registry = crate::tools::ToolRegistryFactory::create(
             &id,
             &shared,
             &args.working_dir,
@@ -157,79 +156,6 @@ impl Agent {
         // 直接获取父 Agent 的 tokio CancellationToken
         // 不需要 spawn 桥接任务，因为 CancelToken 内部就是 CancellationToken
         self.cancel_token.runtime_token()
-    }
-
-    /// Create tool registry for an agent with standard tools
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn create_tool_registry(
-        agent_id: &AgentId,
-        shared: &Arc<AgentShared>,
-        working_dir: &std::path::PathBuf,
-        input_tx: Option<&mpsc::Sender<AgentInput>>,
-        event_tx: &mpsc::Sender<Event>,
-        skills: Vec<Arc<Skill>>,
-        session_id: &str,
-        parent_session_id: Option<&str>,
-        enable_sub_agents: bool,
-    ) -> crate::tools::ToolRegistry {
-        use crate::tools::{
-            BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
-        };
-
-        let mut registry = crate::tools::ToolRegistry::new();
-        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
-
-        // Register Bash tool
-        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.cloned(), working_dir.clone());
-        let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
-        registry.register(bash_tool);
-
-        // Register Read tool with file state store
-        let read_tool =
-            ReadTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
-        registry.register(read_tool);
-
-        // Register Edit tool with file state store
-        let edit_tool =
-            EditTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
-        registry.register(edit_tool);
-
-        // Register Write tool with file state store
-        let write_tool =
-            WriteTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
-        registry.register(write_tool);
-
-        // Register Glob tool
-        let glob_tool = GlobTool::new(working_dir);
-        registry.register(glob_tool);
-
-        // Register Grep tool
-        let grep_tool = GrepTool::new(working_dir);
-        registry.register(grep_tool);
-
-        // Register SubAgent tool if enabled
-        if enable_sub_agents {
-            let subagent_tool = SubagentTool::new(
-                agent_id.clone(),
-                Arc::clone(shared),
-                input_tx.cloned().unwrap(),
-                skills,
-                shared.storage.clone(),
-                working_dir.clone(),
-                session_id.to_owned(),
-                event_tx.clone(),
-            );
-            registry.register(subagent_tool);
-        }
-
-        // Register task tools if task_store is provided
-        if let Some(task_store) = &shared.task_store {
-            // Use parent_session_id for task store if available (subagents share parent's task list)
-            let task_list_id = parent_session_id.unwrap_or(session_id).to_owned();
-            registry.register_task_tools(task_store.clone(), task_list_id);
-        }
-
-        registry
     }
 
     /// Persist a single message to storage
@@ -697,69 +623,29 @@ impl Agent {
                 .await;
         }
 
-        // Second: Check permissions for each tool call
-        let mut approved_calls = Vec::new();
-        let mut denied_results = Vec::new();
+        // Check permissions for each tool call
+        let permission_result = crate::permissions::check_tool_permissions(
+            tool_calls,
+            self.permission_checker.as_deref(),
+            &self.id,
+        )
+        .await;
 
-        for call in tool_calls {
-            let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
-
-            // Check if permission is needed
-            if let Some(ref checker) = self.permission_checker {
-                match checker.check_permission(call, level).await {
-                    Ok(true) => {
-                        // Approved, add to approved calls
-                        approved_calls.push(call.clone());
-                    }
-                    Ok(false) => {
-                        // Denied, create error result
-                        tracing::warn!(
-                            "Agent {} tool call {} denied: {} exceeds threshold",
-                            self.id,
-                            call.id,
-                            call.name
-                        );
-                        let error_msg = format!(
-                            "Permission denied: {} tool (level: {:?}) was not approved by user",
-                            call.name, level
-                        );
-                        denied_results.push(ToolExecutionResult {
-                            tool_call_id: call.id.clone(),
-                            event: ToolEvent::Error {
-                                agent_id: self.id.clone(),
-                                tool_id: call.id.clone(),
-                                error: error_msg.clone(),
-                                elapsed_ms: 0,
-                            },
-                            message: Message::tool_result(call.id.clone(), error_msg),
-                        });
-                    }
-                    Err(e) => {
-                        // Error checking permission, treat as denied
-                        tracing::error!(
-                            "Agent {} permission check failed for {}: {}",
-                            self.id,
-                            call.name,
-                            e
-                        );
-                        let error_msg = format!("Permission check failed: {e}");
-                        denied_results.push(ToolExecutionResult {
-                            tool_call_id: call.id.clone(),
-                            event: ToolEvent::Error {
-                                agent_id: self.id.clone(),
-                                tool_id: call.id.clone(),
-                                error: error_msg.clone(),
-                                elapsed_ms: 0,
-                            },
-                            message: Message::tool_result(call.id.clone(), error_msg),
-                        });
-                    }
-                }
-            } else {
-                // No permission checker (YOLO mode), approve all
-                approved_calls.push(call.clone());
-            }
-        }
+        let approved_calls = permission_result.approved;
+        let denied_results: Vec<_> = permission_result
+            .denied
+            .into_iter()
+            .map(|(tool_call_id, error_msg)| ToolExecutionResult {
+                tool_call_id: tool_call_id.clone(),
+                event: ToolEvent::Error {
+                    agent_id: self.id.clone(),
+                    tool_id: tool_call_id.clone(),
+                    error: error_msg.clone(),
+                    elapsed_ms: 0,
+                },
+                message: Message::tool_result(tool_call_id, error_msg),
+            })
+            .collect();
 
         // Create runtime token for this tool execution batch
         let cancel_token = self.create_runtime_token();

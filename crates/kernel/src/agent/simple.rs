@@ -12,7 +12,7 @@
 //! the full Agent infrastructure.
 
 use crate::event::{Event, ModelEvent, ToolEvent};
-use crate::permissions::{Checker, ToolLevelResolver};
+use crate::permissions::Checker;
 use crate::providers::{ModelConfig, Provider};
 use crate::tools::{ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, Message, ToolCall};
@@ -214,58 +214,16 @@ impl SimpleAgent {
                 }));
             }
 
-            // Check permissions and separate approved/denied calls
-            let mut approved_calls = Vec::new();
-            let mut denied_results = Vec::new();
-
-            for call in &tool_calls {
-                if cancel_token.is_cancelled() {
-                    return Err(cancelled_error("execution cancelled"));
-                }
-
-                let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
-
-                // Check if permission is needed
-                if let Some(ref checker) = self.permission_checker {
-                    match checker.check_permission(call, level).await {
-                        Ok(true) => {
-                            // Approved, add to approved calls
-                            approved_calls.push(call.clone());
-                        }
-                        Ok(false) => {
-                            // Denied, create error result
-                            tracing::warn!(
-                                "SimpleAgent {} tool call {} denied: {} exceeds threshold",
-                                self.agent_id,
-                                call.id,
-                                call.name
-                            );
-                            let error_msg = format!(
-                                "Permission denied: {} tool (level: {:?}) was not approved by user",
-                                call.name, level
-                            );
-                            denied_results.push((call.id.clone(), error_msg));
-                        }
-                        Err(e) => {
-                            // Error checking permission, treat as denied
-                            tracing::error!(
-                                "SimpleAgent {} permission check failed for {}: {}",
-                                self.agent_id,
-                                call.name,
-                                e
-                            );
-                            let error_msg = format!("Permission check failed: {e}");
-                            denied_results.push((call.id.clone(), error_msg));
-                        }
-                    }
-                } else {
-                    // No permission checker (YOLO mode), approve all
-                    approved_calls.push(call.clone());
-                }
-            }
+            // Check permissions
+            let permission_result = crate::permissions::check_tool_permissions(
+                &tool_calls,
+                self.permission_checker.as_deref(),
+                &self.agent_id,
+            )
+            .await;
 
             // Execute approved calls
-            for call in approved_calls {
+            for call in permission_result.approved {
                 if cancel_token.is_cancelled() {
                     return Err(cancelled_error("execution cancelled"));
                 }
@@ -275,7 +233,7 @@ impl SimpleAgent {
             }
 
             // Add denied results as tool result messages
-            for (tool_call_id, error_msg) in denied_results {
+            for (tool_call_id, error_msg) in permission_result.denied {
                 messages.push(Arc::new(Message::tool_result(tool_call_id, error_msg)));
             }
         }
