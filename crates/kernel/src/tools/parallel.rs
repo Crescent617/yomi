@@ -1,9 +1,11 @@
 use crate::event::ToolEvent;
-use crate::tools::{Tool, ToolRegistry};
+use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
+
+use tokio_util::sync::CancellationToken;
 
 const MAX_OUTPUT_LENGTH: usize = 40_000;
 const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length.]";
@@ -20,11 +22,17 @@ fn truncate_output(output: &str) -> String {
     strs::truncate_with_suffix(output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
-/// Execute multiple tool calls in parallel
+/// Execute multiple tool calls in parallel with optional cancellation support
+///
+/// Accepts tokio native `CancellationToken` for runtime cancellation control.
+/// The `cancel_token` should be created from Agent's custom `CancelToken` at the
+/// start of each request.
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
+    cancel_token: Option<&CancellationToken>,
+    parent_messages: Option<&[Arc<Message>]>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -54,10 +62,21 @@ pub async fn execute_tools_parallel(
             );
         }
 
+        // Clone parent_messages and cancel_token for the async block
+        let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
+        let cancel_token_for_task = cancel_token.cloned();
+
         join_set.spawn(async move {
             let start = std::time::Instant::now();
             let result = match tool_opt {
-                Some(tool) => execute_single_tool(tool, arguments).await,
+                Some(tool) => {
+                    let ctx = ToolExecCtx::with_parent_ctx(
+                        &call_id,
+                        parent_messages_for_task.as_deref(),
+                        cancel_token_for_task,
+                    );
+                    execute_single_tool_with_ctx(tool, arguments, ctx).await
+                }
                 None => ToolOutput {
                     exit_code: 1,
                     stdout: String::new(),
@@ -118,25 +137,66 @@ pub async fn execute_tools_parallel(
     }
 
     let mut results = Vec::new();
-    while let Some(Ok(result)) = join_set.join_next().await {
-        if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
-            tracing::debug!(
-                "Tool {} completed successfully in {}ms",
-                result.tool_call_id,
-                elapsed_ms
-            );
-        } else if let ToolEvent::Error {
-            error, elapsed_ms, ..
-        } = &result.event
-        {
-            tracing::warn!(
-                "Tool {} failed in {}ms: {}",
-                result.tool_call_id,
-                elapsed_ms,
-                error
-            );
+
+    // If cancel_token is provided, use select! to wait for either completion or cancellation
+    if let Some(token) = cancel_token {
+        loop {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => {
+                    tracing::info!("Tool execution cancelled, aborting {} remaining tasks", join_set.len());
+                    join_set.abort_all();
+                    break;
+                }
+                result = join_set.join_next() => {
+                    match result {
+                        Some(Ok(r)) => {
+                            if let ToolEvent::Output { elapsed_ms, .. } = &r.event {
+                                tracing::debug!(
+                                    "Tool {} completed successfully in {}ms",
+                                    r.tool_call_id,
+                                    elapsed_ms
+                                );
+                            } else if let ToolEvent::Error { error, elapsed_ms, .. } = &r.event {
+                                tracing::warn!(
+                                    "Tool {} failed in {}ms: {}",
+                                    r.tool_call_id,
+                                    elapsed_ms,
+                                    error
+                                );
+                            }
+                            results.push(r);
+                        }
+                        Some(Err(e)) => {
+                            tracing::warn!("Tool task panicked: {}", e);
+                        }
+                        None => break, // All tasks completed
+                    }
+                }
+            }
         }
-        results.push(result);
+    } else {
+        // Original behavior without cancellation
+        while let Some(Ok(result)) = join_set.join_next().await {
+            if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
+                tracing::debug!(
+                    "Tool {} completed successfully in {}ms",
+                    result.tool_call_id,
+                    elapsed_ms
+                );
+            } else if let ToolEvent::Error {
+                error, elapsed_ms, ..
+            } = &result.event
+            {
+                tracing::warn!(
+                    "Tool {} failed in {}ms: {}",
+                    result.tool_call_id,
+                    elapsed_ms,
+                    error
+                );
+            }
+            results.push(result);
+        }
     }
 
     let success_count = results
@@ -152,8 +212,12 @@ pub async fn execute_tools_parallel(
     results
 }
 
-async fn execute_single_tool(tool: Arc<dyn Tool>, arguments: serde_json::Value) -> ToolOutput {
-    match tool.exec(arguments).await {
+async fn execute_single_tool_with_ctx(
+    tool: Arc<dyn Tool>,
+    arguments: serde_json::Value,
+    ctx: ToolExecCtx<'_>,
+) -> ToolOutput {
+    match tool.exec(arguments, ctx).await {
         Ok(output) => output,
         Err(e) => ToolOutput {
             exit_code: 1,

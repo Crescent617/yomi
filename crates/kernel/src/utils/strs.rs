@@ -52,7 +52,10 @@ mod tests {
     fn test_truncate_exact_fit() {
         // When string + suffix exactly fits
         assert_eq!(truncate_with_suffix("hello", 8, "..."), "hello"); // No truncation needed
-        assert_eq!(truncate_with_suffix("hello world", 11, "..."), "hello world");
+        assert_eq!(
+            truncate_with_suffix("hello world", 11, "..."),
+            "hello world"
+        );
     }
 
     #[test]
@@ -76,8 +79,8 @@ mod tests {
 
         // Emoji (4 bytes each)
         let emoji = "🎉🎊🎁"; // 12 bytes
-        // target_len = 7 - 3 = 4 bytes
-        // One emoji is 4 bytes, so "🎉" fits exactly
+                              // target_len = 7 - 3 = 4 bytes
+                              // One emoji is 4 bytes, so "🎉" fits exactly
         assert_eq!(truncate_with_suffix(emoji, 7, "..."), "🎉...");
     }
 
@@ -92,7 +95,11 @@ mod tests {
 
         // Verify result is within max_bytes
         let result = truncate_with_suffix(text, 10, "...");
-        assert!(result.len() <= 10, "Result too long: {} bytes", result.len());
+        assert!(
+            result.len() <= 10,
+            "Result too long: {} bytes",
+            result.len()
+        );
     }
 
     #[test]
@@ -110,16 +117,19 @@ mod tests {
         // With empty suffix: 8 chars for content
         assert_eq!(truncate_with_suffix("hello world", 8, ""), "hello wo");
         // With long suffix " [truncated]" (12 bytes): 8 - 12 = 0, so just suffix
-        assert_eq!(truncate_with_suffix("hello world", 8, " [truncated]"), " [truncated]");
+        assert_eq!(
+            truncate_with_suffix("hello world", 8, " [truncated]"),
+            " [truncated]"
+        );
     }
 
     #[test]
     fn test_truncate_newlines() {
         // String with newlines
         let text = "line1\nline2\nline3"; // 17 bytes total
-        // 10 bytes max with "..." (3 bytes) = 7 bytes target for content
-        // The function counts 7 chars: "line1\nl" = 7 bytes
-        // Result: "line1\nl..." = 10 bytes
+                                          // 10 bytes max with "..." (3 bytes) = 7 bytes target for content
+                                          // The function counts 7 chars: "line1\nl" = 7 bytes
+                                          // Result: "line1\nl..." = 10 bytes
         assert_eq!(truncate_with_suffix(text, 10, "..."), "line1\nl...");
     }
 
@@ -191,8 +201,8 @@ mod tests {
         // Test that we don't include partial multi-byte characters
         // "αβ" is 4 bytes, with target_len = 3 we should only get "α"
         let text = "αβγδ"; // Each is 2 bytes
-        // target_len = 6 - 3 = 3
-        // "α" = 2 bytes, "αβ" = 4 bytes > 3, so only "α"
+                           // target_len = 6 - 3 = 3
+                           // "α" = 2 bytes, "αβ" = 4 bytes > 3, so only "α"
         assert_eq!(truncate_with_suffix(text, 6, "..."), "α...");
 
         // Verify no partial character

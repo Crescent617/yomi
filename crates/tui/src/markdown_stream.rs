@@ -9,6 +9,7 @@ use tuirealm::ratatui::{
     text::{Line, Span},
 };
 
+use crate::table::StreamingTableRenderer;
 use crate::theme::{chars, colors, Styles};
 use crate::utils::text::preprocess;
 
@@ -26,11 +27,8 @@ struct ParseState {
     code_language: Option<String>,
     list_stack: Vec<ListState>,
     current_style: Style,
-    // Table state - simple raw output
     in_table: bool,
     in_table_head: bool,
-    table_columns: usize,
-    current_row_cells: usize,
 }
 
 impl Default for ParseState {
@@ -42,8 +40,6 @@ impl Default for ParseState {
             current_style: Style::default().fg(colors::text_primary()),
             in_table: false,
             in_table_head: false,
-            table_columns: 0,
-            current_row_cells: 0,
         }
     }
 }
@@ -54,6 +50,7 @@ pub struct StreamingMarkdownRenderer {
     content: String,
     lines: Vec<Line<'static>>,
     state: ParseState,
+    table_renderer: Option<StreamingTableRenderer>,
     dirty: bool,
 }
 
@@ -78,6 +75,7 @@ impl StreamingMarkdownRenderer {
         self.content = content;
         self.lines.clear();
         self.state = ParseState::default();
+        self.table_renderer = None;
         self.dirty = true;
         self.render()
     }
@@ -103,19 +101,22 @@ impl StreamingMarkdownRenderer {
             Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
 
         let parser = Parser::new_ext(&self.content, options);
+        let parser_iter = parser.peekable();
 
         let mut current_line: Vec<Span> = Vec::new();
         let mut in_code_block = self.state.in_code_block;
         let mut code_language = self.state.code_language.clone();
         let mut list_stack: Vec<ListState> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
-        // Table state
         let mut in_table = self.state.in_table;
         let mut in_table_head = self.state.in_table_head;
-        let mut table_columns = self.state.table_columns;
-        let mut current_row_cells = self.state.current_row_cells;
 
-        for event in parser {
+        // Reset table renderer if needed
+        if self.table_renderer.is_none() && in_table {
+            self.table_renderer = Some(StreamingTableRenderer::new());
+        }
+
+        for event in parser_iter {
             match event {
                 MdEvent::Start(tag) => match tag {
                     Tag::Strong => {
@@ -186,20 +187,31 @@ impl StreamingMarkdownRenderer {
                     }
                     Tag::Table(_) => {
                         in_table = true;
+                        // Flush any pending content before table
+                        if !current_line.is_empty() {
+                            self.lines.push(Line::from(current_line));
+                            current_line = Vec::new();
+                        }
+                        self.table_renderer = Some(StreamingTableRenderer::new());
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.start_table();
+                        }
                     }
                     Tag::TableHead => {
                         in_table_head = true;
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.start_head();
+                        }
                     }
                     Tag::TableRow => {
-                        current_row_cells = 0;
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.start_row();
+                        }
                     }
                     Tag::TableCell => {
-                        // Add | before each cell
-                        current_line.push(Span::styled(
-                            "| ",
-                            Style::default().fg(colors::text_secondary()),
-                        ));
-                        current_row_cells += 1;
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.start_cell();
+                        }
                     }
                     _ => {}
                 },
@@ -272,47 +284,29 @@ impl StreamingMarkdownRenderer {
                         TagEnd::Table => {
                             in_table = false;
                             in_table_head = false;
-                            table_columns = 0;
-                            current_row_cells = 0;
+                            // Render the complete table
+                            if let Some(ref tr) = self.table_renderer {
+                                let table_lines = tr.render(120); // Use a reasonable max width
+                                for line in table_lines {
+                                    self.lines.push(line);
+                                }
+                            }
+                            self.table_renderer = None;
                         }
                         TagEnd::TableHead => {
                             in_table_head = false;
-                            // Save the column count from header row
-                            table_columns = current_row_cells;
-                            // End of header row - add closing | and push line
-                            if in_table && !current_line.is_empty() {
-                                current_line.push(Span::styled(
-                                    " |",
-                                    Style::default().fg(colors::text_secondary()),
-                                ));
-                                self.lines.push(Line::from(current_line));
-                                current_line = Vec::new();
-                            }
-                            // Add separator line with correct column count
-                            if table_columns > 0 {
-                                let mut sep_parts: Vec<Span> = Vec::new();
-                                for _ in 0..table_columns {
-                                    sep_parts.push(Span::styled(
-                                        "|---",
-                                        Style::default().fg(colors::text_secondary()),
-                                    ));
-                                }
-                                sep_parts.push(Span::styled(
-                                    "|",
-                                    Style::default().fg(colors::text_secondary()),
-                                ));
-                                self.lines.push(Line::from(sep_parts));
+                            if let Some(ref mut tr) = self.table_renderer {
+                                tr.end_head();
                             }
                         }
                         TagEnd::TableRow => {
-                            if in_table && !current_line.is_empty() {
-                                // End of row - add closing |
-                                current_line.push(Span::styled(
-                                    " |",
-                                    Style::default().fg(colors::text_secondary()),
-                                ));
-                                self.lines.push(Line::from(current_line));
-                                current_line = Vec::new();
+                            if let Some(ref mut tr) = self.table_renderer {
+                                tr.end_row();
+                            }
+                        }
+                        TagEnd::TableCell => {
+                            if let Some(ref mut tr) = self.table_renderer {
+                                tr.end_cell();
                             }
                         }
                         _ => {}
@@ -356,11 +350,12 @@ impl StreamingMarkdownRenderer {
                                     format!("{} ", chars::CODE_VERTICAL),
                                     Style::default().fg(colors::code_border()),
                                 ),
-                                Span::styled(
-                                    expanded_line,
-                                    Style::default().fg(colors::code_fg()),
-                                ),
+                                Span::styled(expanded_line, Style::default().fg(colors::code_fg())),
                             ]));
+                        }
+                    } else if in_table {
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.append_text(&text);
                         }
                     } else {
                         current_line.push(Span::styled(preprocess(&text), current_style));
@@ -426,6 +421,25 @@ impl StreamingMarkdownRenderer {
             }
         }
 
+        // If we're still in a table (incomplete), render current state
+        if in_table {
+            if let Some(ref tr) = self.table_renderer {
+                // Clear previous partial table lines and re-render
+                // Find where table starts (look for last empty line or beginning)
+                let table_start = self
+                    .lines
+                    .iter()
+                    .rposition(|l| l.to_string().trim().is_empty())
+                    .map_or(0, |i| i + 1);
+
+                let table_lines = tr.render(120);
+                self.lines.truncate(table_start);
+                for line in table_lines {
+                    self.lines.push(line);
+                }
+            }
+        }
+
         // Remove trailing empty lines
         while self
             .lines
@@ -443,11 +457,48 @@ impl StreamingMarkdownRenderer {
             current_style,
             in_table,
             in_table_head,
-            table_columns,
-            current_row_cells,
         };
         self.dirty = false;
 
         &self.lines
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_table_rendering() {
+        let mut renderer = StreamingMarkdownRenderer::new();
+        let content = "| Name | Status |\n|------|--------|\n| foo  | done   |\n| bar  | pending|";
+        let lines = renderer.set_content(content.to_string());
+
+        // Should have at least header row + separator + data rows
+        assert!(!lines.is_empty(), "Table should produce output");
+
+        // Check that lines contain table borders
+        let output = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(output.contains('│'), "Table should contain vertical borders");
+        assert!(output.contains('─'), "Table should contain horizontal borders");
+    }
+
+    #[test]
+    fn test_streaming_table() {
+        let mut renderer = StreamingMarkdownRenderer::new();
+
+        // Simulate streaming a table piece by piece
+        renderer.append("| Name |");
+        renderer.append(" Status |\n");
+        renderer.append("|------|--------|\n");
+        renderer.append("| foo  |");
+        renderer.append(" done   |");
+
+        let lines = renderer.lines();
+        assert!(!lines.is_empty(), "Streaming table should produce output");
+
+        let output = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(output.contains('│'), "Streaming table should contain borders");
+    }
+}
+

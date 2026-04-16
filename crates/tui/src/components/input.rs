@@ -14,7 +14,7 @@ use tuirealm::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{msg::Msg, theme::colors};
+use crate::{components::input_edit::TextInput, components::CompletionList, components::FileCompletion, msg::Msg, theme::colors};
 
 #[derive(Debug, Default)]
 pub struct InputMock {
@@ -28,73 +28,29 @@ impl InputMock {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
-    pub fn insert_char(&mut self, c: char) {
-        self.content.insert(self.cursor_pos, c);
-        self.cursor_pos += c.len_utf8();
+// Implement TextInput trait for InputMock
+impl TextInput for InputMock {
+    fn text(&self) -> &str {
+        &self.content
     }
 
-    pub fn insert_str(&mut self, s: &str) {
-        self.content.insert_str(self.cursor_pos, s);
-        self.cursor_pos += s.len();
+    fn text_mut(&mut self) -> &mut String {
+        &mut self.content
     }
 
-    pub fn backspace(&mut self) {
-        if self.cursor_pos > 0 {
-            let mut idx = self.cursor_pos - 1;
-            while idx > 0 && !self.content.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            self.content.drain(idx..self.cursor_pos);
-            self.cursor_pos = idx;
-        }
+    fn cursor_pos(&self) -> usize {
+        self.cursor_pos
     }
 
-    pub fn delete_char(&mut self) {
-        if self.cursor_pos < self.content.len() {
-            let mut idx = self.cursor_pos + 1;
-            while idx < self.content.len() && !self.content.is_char_boundary(idx) {
-                idx += 1;
-            }
-            self.content.drain(self.cursor_pos..idx);
-        }
+    fn set_cursor_pos(&mut self, pos: usize) {
+        self.cursor_pos = pos.min(self.content.len());
     }
+}
 
-    pub fn move_left(&mut self) {
-        if self.cursor_pos > 0 {
-            let mut idx = self.cursor_pos - 1;
-            while idx > 0 && !self.content.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            self.cursor_pos = idx;
-        }
-    }
-
-    pub fn move_right(&mut self) {
-        if self.cursor_pos < self.content.len() {
-            let mut idx = self.cursor_pos + 1;
-            while idx < self.content.len() && !self.content.is_char_boundary(idx) {
-                idx += 1;
-            }
-            self.cursor_pos = idx.min(self.content.len());
-        }
-    }
-
-    /// Move cursor to start of current line (like Ctrl-a in readline)
-    pub fn move_to_start_of_line(&mut self) {
-        let line_start = self.content[..self.cursor_pos]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        self.cursor_pos = line_start;
-    }
-
-    /// Move cursor to end of current line (like Ctrl-e in readline)
-    pub fn move_to_end_of_line(&mut self) {
-        let line_end = self.content[self.cursor_pos..]
-            .find('\n')
-            .map_or(self.content.len(), |i| self.cursor_pos + i);
-        self.cursor_pos = line_end;
-    }
+impl InputMock {
+    // InputMock-specific methods that extend TextInput trait functionality
 
     /// Move cursor to previous line, keeping column position if possible
     pub fn move_up(&mut self) {
@@ -104,7 +60,7 @@ impl InputMock {
             .map_or(0, |i| i + 1);
         // Calculate column position
         let col = self.cursor_pos - line_start;
-        
+
         if line_start > 0 {
             // Find the start of previous line
             let prev_line_start = self.content[..line_start - 1]
@@ -129,7 +85,7 @@ impl InputMock {
             .rfind('\n')
             .map_or(0, |i| i + 1);
         let col = self.cursor_pos - line_start;
-        
+
         if line_end < self.content.len() {
             // Find the end of next line
             let next_line_end = self.content[line_end + 1..]
@@ -152,154 +108,9 @@ impl InputMock {
         !self.content[self.cursor_pos..].contains('\n')
     }
 
-    /// Move cursor to previous word boundary (like Alt-b in readline)
-    pub fn move_word_left(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Skip trailing whitespace
-        let mut pos = self.cursor_pos;
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = prev;
-            } else {
-                break;
-            }
-        }
-        // Now find the start of the word
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = prev;
-        }
-        self.cursor_pos = pos;
-    }
-
-    /// Move cursor to next word boundary (like Alt-f in readline)
-    pub fn move_word_right(&mut self) {
-        if self.cursor_pos >= self.content.len() {
-            return;
-        }
-        // Skip current word
-        let mut pos = self.cursor_pos;
-        while pos < self.content.len() {
-            let mut next = pos + 1;
-            while next < self.content.len() && !self.content.is_char_boundary(next) {
-                next += 1;
-            }
-            if self.content[pos..next]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = next;
-        }
-        // Now skip whitespace to get to next word
-        while pos < self.content.len() {
-            let mut next = pos + 1;
-            while next < self.content.len() && !self.content.is_char_boundary(next) {
-                next += 1;
-            }
-            if self.content[pos..next]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = next;
-            } else {
-                break;
-            }
-        }
-        self.cursor_pos = pos;
-    }
-
-    pub fn clear(&mut self) {
-        self.content.clear();
-        self.cursor_pos = 0;
-    }
-
     pub fn insert_newline(&mut self) {
         self.content.insert(self.cursor_pos, '\n');
         self.cursor_pos += 1;
-    }
-
-    /// Delete from cursor to start of line (like ctrl-u in bash)
-    pub fn kill_to_start_of_line(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Find the start of current line
-        let line_start = self.content[..self.cursor_pos]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
-        self.content.drain(line_start..self.cursor_pos);
-        self.cursor_pos = line_start;
-    }
-
-    /// Delete word backward (like ctrl-w in bash)
-    pub fn delete_word(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        // Skip trailing whitespace
-        let mut pos = self.cursor_pos;
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                pos = prev;
-            } else {
-                break;
-            }
-        }
-        // Now find the start of the word
-        while pos > 0 {
-            let mut prev = pos - 1;
-            while prev > 0 && !self.content.is_char_boundary(prev) {
-                prev -= 1;
-            }
-            if self.content[prev..pos]
-                .chars()
-                .next()
-                .unwrap_or(' ')
-                .is_whitespace()
-            {
-                break;
-            }
-            pos = prev;
-        }
-        self.content.drain(pos..self.cursor_pos);
-        self.cursor_pos = pos;
     }
 
     /// Handle ctrl-c: clear input, or quit if pressed twice within 1 second
@@ -408,7 +219,10 @@ impl InputMock {
     }
 
     /// Find which visual line contains the cursor position
-    fn find_cursor_visual_line(&self, visual_lines: &[VisualLine]) -> Option<(usize, usize, usize)> {
+    fn find_cursor_visual_line(
+        &self,
+        visual_lines: &[VisualLine],
+    ) -> Option<(usize, usize, usize)> {
         // Returns (line_index, column_in_visual_line, visual_line_start_in_content)
         for (i, line) in visual_lines.iter().enumerate() {
             if self.cursor_pos >= line.content_start && self.cursor_pos <= line.content_end {
@@ -465,10 +279,7 @@ impl MockComponent for InputMock {
                             .fg(colors::accent_user())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        vl.text.clone(),
-                        Style::default().fg(colors::text_primary()),
-                    ),
+                    Span::styled(vl.text.clone(), Style::default().fg(colors::text_primary())),
                 ])
             })
             .collect();
@@ -554,6 +365,16 @@ impl MockComponent for InputMock {
 
 /// Input component that handles keyboard events
 /// Mode is passed from Model via attr
+/// Maximum number of files to scan (prevents hanging on huge repos)
+/// Available slash command with descriptions
+const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/new", "Create new session"),
+    ("/clear", "Clear chat history"),
+    ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
+    ("/browse", "Toggle browse mode"),
+];
+
+/// Generic completion list for command and file completions
 pub struct InputComponent {
     component: InputMock,
     mode: crate::app::AppMode,
@@ -561,6 +382,13 @@ pub struct InputComponent {
     history: Vec<String>,
     history_index: Option<usize>, // None = new input, Some(i) = editing history[i]
     saved_input: String,          // Buffer for current input when browsing history
+    // Command completion
+    command_completion: CompletionList<(String, String)>,
+    // File completion (@-mention)
+    file_completion: FileCompletion,
+    // Image paste support
+    image_counter: usize,
+    image_paths: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 impl Default for InputComponent {
@@ -577,9 +405,465 @@ impl InputComponent {
             history: Vec::new(),
             history_index: None,
             saved_input: String::new(),
+            command_completion: CompletionList::new(),
+            file_completion: FileCompletion::new(),
+            image_counter: 0,
+            image_paths: std::collections::HashMap::new(),
         }
     }
 
+    /// Set the working directory for file completion
+    pub fn set_working_dir(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.file_completion.set_working_dir(path);
+    }
+
+    /// Try to read image from clipboard and save to temp file
+    /// Supports both arboard (X11) and wl-clipboard (Wayland)
+    fn try_paste_image(&mut self) -> Option<String> {
+        // Try arboard first (works on X11 and some Wayland setups)
+        if let Some(result) = self.try_paste_image_arboard() {
+            return Some(result);
+        }
+        // Fallback to wl-clipboard for Wayland
+        self.try_paste_image_wlclipboard()
+    }
+
+    /// Try to get image using arboard (X11)
+    fn try_paste_image_arboard(&mut self) -> Option<String> {
+        use arboard::Clipboard;
+
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("Failed to create arboard clipboard: {}", e);
+                return None;
+            }
+        };
+
+        // Try to get image from clipboard
+        let image = match clipboard.get_image() {
+            Ok(img) => img,
+            Err(e) => {
+                tracing::debug!("No image in arboard clipboard: {}", e);
+                return None;
+            }
+        };
+
+        tracing::debug!(
+            "Got image from arboard: {}x{}, {} bytes",
+            image.width,
+            image.height,
+            image.bytes.len()
+        );
+
+        self.save_image_to_temp(image.width, image.height, &image.bytes)
+    }
+
+    /// Try to get image using wl-clipboard (Wayland)
+    fn try_paste_image_wlclipboard(&mut self) -> Option<String> {
+        // Check if wl-paste is available
+        let wl_paste_check = std::process::Command::new("which")
+            .arg("wl-paste")
+            .output();
+
+        if wl_paste_check.is_err() || !wl_paste_check.unwrap().status.success() {
+            tracing::debug!("wl-paste not found, skipping Wayland clipboard");
+            return None;
+        }
+
+        // Try to get image from Wayland clipboard
+        let output = match std::process::Command::new("wl-paste")
+            .args(["--type", "image/png"])
+            .output()
+        {
+            Ok(out) if out.status.success() && !out.stdout.is_empty() => out.stdout,
+            Ok(out) => {
+                tracing::debug!("wl-paste returned no image data: {:?}", out.stderr);
+                return None;
+            }
+            Err(e) => {
+                tracing::debug!("Failed to run wl-paste: {}", e);
+                return None;
+            }
+        };
+
+        tracing::debug!("Got {} bytes from wl-paste", output.len());
+
+        // Load PNG and convert to RGBA
+        let img = match image::load_from_memory_with_format(&output, image::ImageFormat::Png) {
+            Ok(img) => img.to_rgba8(),
+            Err(e) => {
+                tracing::warn!("Failed to decode PNG from wl-paste: {}", e);
+                return None;
+            }
+        };
+
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let bytes = img.into_raw();
+
+        self.save_image_to_temp(width, height, &bytes)
+    }
+
+    /// Save image bytes to temp file and return placeholder
+    fn save_image_to_temp(&mut self, width: usize, height: usize, bytes: &[u8]) -> Option<String> {
+        // Create temp file
+        let temp_dir = std::env::temp_dir().join("yomi_images");
+        if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+            tracing::warn!("Failed to create temp dir: {}", e);
+            return None;
+        }
+
+        self.image_counter += 1;
+        let filename = format!("paste_{}_{}.png", std::process::id(), self.image_counter);
+        let filepath = temp_dir.join(&filename);
+
+        // Check if bytes length is valid for RGBA
+        let expected_len = width * height * 4;
+        if bytes.len() != expected_len {
+            tracing::warn!(
+                "Image bytes length mismatch: got {}, expected {} ({}x{}x4)",
+                bytes.len(),
+                expected_len,
+                width,
+                height
+            );
+            return None;
+        }
+
+        // Save image as PNG using image crate
+        let img = match image::RgbaImage::from_raw(width as u32, height as u32, bytes.to_vec()) {
+            Some(img) => img,
+            None => {
+                tracing::warn!("Failed to create RgbaImage from raw bytes");
+                return None;
+            }
+        };
+
+        if let Err(e) = img.save(&filepath) {
+            tracing::warn!("Failed to save image: {}", e);
+            return None;
+        }
+
+        tracing::info!("Saved pasted image to: {:?}", filepath);
+
+        // Create placeholder and store mapping
+        let placeholder = format!("[Img #{}]", self.image_counter);
+        self.image_paths.insert(placeholder.clone(), filepath);
+
+        Some(placeholder)
+    }
+
+    /// Get current input as content blocks (with image placeholders converted)
+    pub fn get_content_blocks(&self) -> Vec<kernel::types::ContentBlock> {
+        let text = self.component.content();
+        tracing::debug!(
+            "get_content_blocks: text='{}', image_paths={:?}",
+            text,
+            self.image_paths
+        );
+        let blocks = self.convert_to_content_blocks(text);
+        tracing::info!("Converted to {} content blocks", blocks.len());
+        for (i, block) in blocks.iter().enumerate() {
+            match block {
+                kernel::types::ContentBlock::Text { text } => {
+                    tracing::debug!("Block {}: Text ({} chars)", i, text.len());
+                }
+                kernel::types::ContentBlock::ImageUrl { image_url } => {
+                    tracing::info!("Block {}: ImageUrl {}", i, image_url.url);
+                }
+                _ => {
+                    tracing::debug!("Block {}: Other", i);
+                }
+            }
+        }
+        blocks
+    }
+
+    /// Convert input content with placeholders to content blocks
+    /// Images are converted to base64 data URLs for LLM API compatibility
+    fn convert_to_content_blocks(&self, text: &str) -> Vec<kernel::types::ContentBlock> {
+        use kernel::types::{ContentBlock, ImageUrl};
+
+        let mut blocks = Vec::new();
+        let mut remaining = text;
+
+        // Find all placeholders and split text
+        while let Some(start) = remaining.find("[Img #") {
+            // Add text before placeholder
+            if start > 0 {
+                blocks.push(ContentBlock::Text {
+                    text: remaining[..start].to_string(),
+                });
+            }
+
+            // Find placeholder end
+            if let Some(end) = remaining[start..].find(']') {
+                let placeholder = &remaining[start..=(start + end)];
+
+                // Look up image path and convert to base64
+                if let Some(path) = self.image_paths.get(placeholder) {
+                    match Self::image_to_base64_url(path) {
+                        Some(base64_url) => {
+                            blocks.push(ContentBlock::ImageUrl {
+                                image_url: ImageUrl {
+                                    url: base64_url,
+                                    detail: Some("auto".to_string()),
+                                },
+                            });
+                        }
+                        None => {
+                            // Failed to convert, show error message to user
+                            blocks.push(ContentBlock::Text {
+                                text: format!("[Error: Failed to process {placeholder} - unsupported format or read error]"),
+                            });
+                        }
+                    }
+                } else {
+                    // Unknown placeholder, treat as text
+                    blocks.push(ContentBlock::Text {
+                        text: placeholder.to_string(),
+                    });
+                }
+
+                remaining = &remaining[start + end + 1..];
+            } else {
+                break;
+            }
+        }
+
+        // Add remaining text
+        if !remaining.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: remaining.to_string(),
+            });
+        }
+
+        if blocks.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: text.to_string(),
+            });
+        }
+
+        blocks
+    }
+
+    /// Convert image file to base64 data URL
+    /// OpenAI/Anthropic expect format: `data:image/{format};base64,{base64_data`}
+    fn image_to_base64_url(path: &std::path::Path) -> Option<String> {
+        // Read image file
+        let image_data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!("Failed to read image file {:?}: {}", path, e);
+                return None;
+            }
+        };
+
+        // Detect MIME type from file magic bytes
+        let mime_type = match Self::detect_image_mime_type(&image_data) {
+            Ok(mime) => mime,
+            Err(e) => {
+                tracing::error!("Failed to detect image format: {}", e);
+                return None;
+            }
+        };
+
+        // Encode to base64
+        let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+
+        // Remove any newlines that might be in the base64 output
+        let base64_clean: String = base64_data.chars().filter(|c| !c.is_whitespace()).collect();
+
+        // Create data URL with correct MIME type
+        let data_url = format!("data:{mime_type};base64,{base64_clean}");
+
+        tracing::debug!(
+            "Converted image {:?} to {} base64 ({} bytes -> {} chars)",
+            path,
+            mime_type,
+            image_data.len(),
+            base64_clean.len()
+        );
+
+        Some(data_url)
+    }
+
+    /// Detect image MIME type from file magic bytes
+    /// Returns error for unsupported formats
+    fn detect_image_mime_type(data: &[u8]) -> Result<&'static str, String> {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Ok("image/png")
+        } else if data.starts_with(b"\xff\xd8\xff") {
+            Ok("image/jpeg")
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            Ok("image/gif")
+        } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+            Ok("image/webp")
+        } else {
+            let magic: String = data.iter().take(16).fold(String::new(), |mut acc, b| {
+                use std::fmt::Write;
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
+            Err(format!("Unsupported image format (magic bytes: {magic})"))
+        }
+    }
+
+    /// Update command completion state based on current input
+    fn update_completion(&mut self) {
+        let content = self.component.content();
+        if content.starts_with('/') {
+            let filtered: Vec<(String, String)> = SLASH_COMMANDS
+                .iter()
+                .filter(|(cmd, _)| cmd.starts_with(content))
+                .map(|(cmd, desc)| ((*cmd).to_string(), (*desc).to_string()))
+                .collect();
+            self.command_completion.show(filtered);
+        } else {
+            self.command_completion.hide();
+        }
+    }
+
+    /// Select next completion item
+    fn completion_next(&mut self) {
+        self.command_completion.next();
+    }
+
+    /// Select previous completion item
+    fn completion_prev(&mut self) {
+        self.command_completion.prev();
+    }
+
+    /// Accept the selected completion
+    fn accept_completion(&mut self) {
+        if let Some((cmd, _)) = self.command_completion.get_selected() {
+            self.component.clear();
+            self.component.insert_str(cmd);
+            self.component.insert_char(' ');
+            self.command_completion.hide();
+        }
+    }
+
+    /// Start file completion (@-mention)
+    fn start_file_completion(&mut self) {
+        let cursor_pos = self.component.cursor_pos();
+        self.file_completion.start(cursor_pos);
+    }
+
+    /// Select next file completion item
+    fn file_completion_next(&mut self) {
+        self.file_completion.next();
+    }
+
+    /// Select previous file completion item
+    fn file_completion_prev(&mut self) {
+        self.file_completion.prev();
+    }
+
+    /// Accept the selected file completion
+    fn accept_file_completion(&mut self) {
+        if let Some((selected, start, end)) = self.file_completion.accept() {
+            let _current_pos = self.component.cursor_pos();
+            // Delete the query part (from @ to current position)
+            // The range is returned by accept()
+            for _ in 0..(end - start) {
+                self.component.backspace();
+            }
+            // Insert the selected file path
+            self.component.insert_str(&selected);
+            // accept() already hides the completion
+        }
+    }
+
+    /// Cancel file completion
+    fn cancel_file_completion(&mut self) {
+        self.file_completion.cancel();
+    }
+
+    /// Handle input when file completion is active
+    fn handle_file_completion_input(
+        &mut self,
+        ev: &tuirealm::Event<crate::msg::UserEvent>,
+    ) -> Msg {
+        use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+
+        match ev {
+            // Enter or Tab: accept completion
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Enter | Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.accept_file_completion();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Shift+Tab, Up arrow or Ctrl+P: navigate up
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::BackTab,
+                modifiers: KeyModifiers::SHIFT,
+            } | KeyEvent {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            } | KeyEvent {
+                code: Key::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.file_completion_prev();
+                Msg::Redraw
+            }
+            // Escape: cancel completion
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Esc,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_file_completion();
+                Msg::Redraw
+            }
+            // Down arrow or Ctrl+N: navigate down
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            } | KeyEvent {
+                code: Key::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.file_completion_next();
+                Msg::Redraw
+            }
+            // Space: cancel completion and insert space
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(' '),
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_file_completion();
+                self.component.insert_char(' ');
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Regular character: let FileCompletion handle it
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_char(*c);
+                let cursor_pos = self.component.cursor_pos();
+                let _ = self.file_completion.handle_input(*c, cursor_pos);
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Backspace: let FileCompletion handle it
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Backspace,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.backspace();
+                let cursor_pos = self.component.cursor_pos();
+                if !self.file_completion.handle_input('\x08', cursor_pos) {
+                    self.cancel_file_completion();
+                }
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            _ => Msg::Redraw,
+        }
+    }
     /// Set the current mode
     pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
@@ -652,6 +936,127 @@ impl InputComponent {
 
 impl MockComponent for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        // Render completion dropdown above input if visible
+        if self.command_completion.is_visible() && !self.command_completion.items().is_empty() {
+            let completion_height = self.command_completion.len().min(4) as u16;
+            let completion_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(completion_height),
+                width: area.width,
+                height: completion_height,
+            };
+
+            // Clear the area first
+            frame.render_widget(tuirealm::ratatui::widgets::Clear, completion_area);
+
+            // Render completion items with command and description
+            let items: Vec<tuirealm::ratatui::text::Line> = self
+                .command_completion
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(i, (cmd, desc))| {
+                    let is_selected = i == self.command_completion.selected_index();
+                    let cmd_style = if is_selected {
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::accent_system())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                    };
+                    let desc_style = if is_selected {
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::text_muted())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        tuirealm::ratatui::style::Style::default().fg(colors::text_muted())
+                    };
+                    tuirealm::ratatui::text::Line::from(vec![
+                        tuirealm::ratatui::text::Span::styled(cmd.as_str(), cmd_style),
+                        tuirealm::ratatui::text::Span::styled("  ", desc_style),
+                        tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
+                    ])
+                })
+                .collect();
+
+            let completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
+                tuirealm::ratatui::text::Text::from(items),
+            );
+            frame.render_widget(completion_widget, completion_area);
+        }
+
+        // Render file completion dropdown if visible
+        if self.file_completion.is_visible() && !self.file_completion.items().is_empty() {
+            // Status line at bottom
+            let status_text = if self.file_completion.was_truncated() {
+                format!(
+                    " {} / {}+ files",
+                    self.file_completion.len(),
+                    self.file_completion.total_scanned()
+                )
+            } else {
+                format!(
+                    " {} / {} files",
+                    self.file_completion.len(),
+                    self.file_completion.total_scanned()
+                )
+            };
+            let display_count = self.file_completion.len().min(8);
+            let file_completion_height = (display_count + 1) as u16; // +1 for status line
+            let file_completion_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(file_completion_height),
+                width: area.width,
+                height: file_completion_height,
+            };
+
+            // Clear the area first
+            frame.render_widget(tuirealm::ratatui::widgets::Clear, file_completion_area);
+
+            // Build file items
+            let mut items: Vec<tuirealm::ratatui::text::Line> = self
+                .file_completion
+                .items()
+                .iter()
+                .take(8)
+                .enumerate()
+                .map(|(i, file)| {
+                    let is_selected = i == self.file_completion.selected_index();
+                    let is_dir = file.ends_with('/');
+                    let file_style = if is_selected {
+                        // Selected: accent_system fg with bold (same as command completion)
+                        tuirealm::ratatui::style::Style::default()
+                            .fg(colors::accent_system())
+                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                    } else {
+                        // Not selected
+                        if is_dir {
+                            tuirealm::ratatui::style::Style::default().fg(colors::accent_system())
+                        } else {
+                            tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                        }
+                    };
+                    tuirealm::ratatui::text::Line::from(tuirealm::ratatui::text::Span::styled(
+                        file.as_str(),
+                        file_style,
+                    ))
+                })
+                .collect();
+
+            // Add status line at the bottom
+            let status_style = tuirealm::ratatui::style::Style::default()
+                .fg(colors::text_muted())
+                .add_modifier(tuirealm::ratatui::style::Modifier::DIM);
+            items.push(tuirealm::ratatui::text::Line::from(
+                tuirealm::ratatui::text::Span::styled(status_text, status_style),
+            ));
+
+            let file_completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
+                tuirealm::ratatui::text::Text::from(items),
+            );
+            frame.render_widget(file_completion_widget, file_completion_area);
+        }
+
         self.component.view(frame, area);
     }
 
@@ -674,6 +1079,11 @@ impl MockComponent for InputComponent {
                     if let Ok(history) = serde_json::from_str::<Vec<String>>(&data) {
                         self.set_history(history);
                     }
+                }
+            }
+            Attribute::Custom("working_dir") => {
+                if let AttrValue::String(path) = value {
+                    self.set_working_dir(path);
                 }
             }
             _ => self.component.attr(attr, value),
@@ -745,25 +1155,115 @@ impl InputComponent {
         }
     }
 
+    /// Parse slash command from input
+    fn parse_command(content: &str) -> Option<Msg> {
+        if !content.starts_with('/') {
+            return None;
+        }
+
+        let parts: Vec<&str> = content.split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        match parts[0] {
+            "/new" => Some(Msg::CommandNew),
+            "/clear" => Some(Msg::CommandClear),
+            "/yolo" => Some(Msg::CommandYolo),
+            "/browse" => Some(Msg::CommandBrowse),
+            cmd => Some(Msg::CommandUnknown(cmd.to_string())),
+        }
+    }
+
     /// Handle input in normal mode - text editing
     fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        // File completion mode - handle special keys first
+        if self.file_completion.is_visible() {
+            return Some(self.handle_file_completion_input(ev));
+        }
+
         match *ev {
+            // Ctrl+V: paste from clipboard (image or text)
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                // Try to paste image first
+                if let Some(placeholder) = self.try_paste_image() {
+                    self.component.insert_str(&placeholder);
+                    self.update_completion();
+                    return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
+                // Fall back to reading text from clipboard
+                #[cfg(not(target_os = "macos"))]
+                {
+                    use arboard::Clipboard;
+                    match Clipboard::new() {
+                        Ok(mut clipboard) => match clipboard.get_text() {
+                            Ok(text) => {
+                                self.component.insert_str(&text);
+                                self.update_completion();
+                                return Some(Msg::InputChanged(self.component.content().to_string()));
+                            }
+                            Err(e) => tracing::debug!("No text in clipboard: {}", e),
+                        },
+                        Err(e) => tracing::debug!("Failed to create clipboard: {}", e),
+                    }
+                }
+                None
+            }
+            // @: start file completion (must be before generic Char handler)
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('@'),
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.insert_char('@');
+                self.start_file_completion();
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
                 self.component.insert_char(c);
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                let content = self.component.submit();
-                if content.is_empty() {
-                    None
+                // If completion is visible, accept it (same as Tab)
+                if self.command_completion.is_visible() {
+                    self.accept_completion();
+                    self.update_completion();
+                    return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
+                // Get content blocks (supports multi-modal: text, images, etc.)
+                let content_blocks = self.get_content_blocks();
+                // Check if content is effectively empty (no text and no images)
+                let has_content = content_blocks.iter().any(|block| match block {
+                    kernel::types::ContentBlock::Text { text } => !text.trim().is_empty(),
+                    _ => true,
+                });
+                if has_content {
+                    // Check if it's a command (only supports text-only content)
+                    let text_content = self.component.content();
+                    if let Some(cmd_msg) = Self::parse_command(text_content) {
+                        // It's a command, return the command message
+                        // Clear input after submitting command
+                        let _ = self.component.submit();
+                        Some(cmd_msg)
+                    } else {
+                        // Regular input with multi-modal support
+                        // Clear input and image mappings after submitting
+                        let _ = self.component.submit();
+                        self.image_counter = 0;
+                        self.image_paths.clear();
+                        Some(Msg::InputSubmit(content_blocks))
+                    }
                 } else {
-                    Some(Msg::InputSubmit(content))
+                    None
                 }
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -771,6 +1271,7 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.backspace();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -778,6 +1279,7 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.delete_char();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -795,16 +1297,30 @@ impl InputComponent {
                 None
             }
             // Home or Ctrl+A: move to start of line
-            tuirealm::Event::Keyboard(KeyEvent {
-code: Key::Home, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('a'), modifiers: KeyModifiers::CONTROL }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Home,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('a'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.move_to_start_of_line();
                 None
             }
             // End or Ctrl+E: move to end of line
-            tuirealm::Event::Keyboard(KeyEvent {
-code: Key::End, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::End,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('e'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.move_to_end_of_line();
                 None
             }
@@ -842,23 +1358,82 @@ code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
                 code: Key::Char('w'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.component.delete_word();
+                self.component.delete_word_backward();
+                self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // History navigation: Ctrl+P = previous, Ctrl+N = next
+            // Tab: accept completion or insert spaces
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.accept_completion();
+                    self.update_completion();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    // Insert tab/indent when no completion
+                    self.component.insert_str("    ");
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
+            }
+            // Up arrow: navigate completion or history
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.completion_prev();
+                    Some(Msg::Redraw)
+                } else if self.component.is_on_first_line() {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_up();
+                    None
+                }
+            }
+            // Down arrow: navigate completion or history
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Down,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                if self.command_completion.is_visible() {
+                    self.completion_next();
+                    Some(Msg::Redraw)
+                } else if self.component.is_on_last_line() {
+                    self.history_next();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else {
+                    self.component.move_down();
+                    None
+                }
+            }
+            // Ctrl+P: navigate completion or history
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.history_prev();
-                Some(Msg::InputChanged(self.component.content().to_string()))
+                if self.command_completion.is_visible() {
+                    self.completion_prev();
+                    Some(Msg::Redraw)
+                } else {
+                    self.history_prev();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
             }
+            // Ctrl+N: navigate completion or history
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                self.history_next();
-                Some(Msg::InputChanged(self.component.content().to_string()))
+                if self.command_completion.is_visible() {
+                    self.completion_next();
+                    Some(Msg::Redraw)
+                } else {
+                    self.history_next();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                }
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Esc,
@@ -878,32 +1453,6 @@ code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
                     ))
                 }
             }
-            // Up arrow: move up in text, or browse history if on first line
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Up,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                if self.component.is_on_first_line() {
-                    self.history_prev();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
-                } else {
-                    self.component.move_up();
-                    None
-                }
-            }
-            // Down arrow: move down in text, or browse history if on last line
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Down,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                if self.component.is_on_last_line() {
-                    self.history_next();
-                    Some(Msg::InputChanged(self.component.content().to_string()))
-                } else {
-                    self.component.move_down();
-                    None
-                }
-            }
             // PageUp/PageDown always scroll chat view
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::PageUp,
@@ -921,15 +1470,16 @@ code: Key::Char('e'), modifiers: KeyModifiers::CONTROL }) => {
                 kind: MouseEventKind::ScrollDown,
                 ..
             }) => Some(Msg::ScrollDown),
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Tab,
-                modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::ToggleThinking),
             // Toggle browse mode with Ctrl+O
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
+            // Toggle YOLO mode with Ctrl+Y
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => Some(Msg::ToggleYoloMode),
             _ => None,
         }
     }

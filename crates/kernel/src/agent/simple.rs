@@ -1,0 +1,385 @@
+//! `SimpleAgent` - Minimal agent implementation for subagents
+//!
+//! Unlike the full Agent, `SimpleAgent`:
+//! - Has no complex state machine
+//! - No persistence (no storage dependency)
+//! - Uses tokio native `CancellationToken`
+//! - Single request-response loop with tool execution
+//! - Supports streaming events via callback
+//! - Works with Arc<Message> for efficient message sharing
+//!
+//! This is designed to be used by `SubagentTool` without depending on
+//! the full Agent infrastructure.
+
+use crate::event::{Event, ModelEvent, ToolEvent};
+use crate::permissions::{Checker, ToolLevelResolver};
+use crate::providers::{ModelConfig, Provider};
+use crate::tools::{ToolExecCtx, ToolRegistry};
+use crate::types::{AgentId, Message, ToolCall};
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+/// Error message prefix for cancellation errors
+pub const CANCELLED_ERROR_PREFIX: &str = "[CANCELLED]";
+
+/// Create a cancellation error
+pub fn cancelled_error(msg: &str) -> anyhow::Error {
+    anyhow::anyhow!("{CANCELLED_ERROR_PREFIX} {msg}")
+}
+
+/// Check if an error is a cancellation error
+pub fn is_cancelled_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains(CANCELLED_ERROR_PREFIX)
+}
+
+/// Metrics collected during execution
+#[derive(Debug, Default)]
+pub struct ExecuteMetrics {
+    /// Total iterations (model requests)
+    pub iteration_count: usize,
+    /// Total prompt tokens
+    pub total_prompt_tokens: u32,
+    /// Total completion tokens
+    pub total_completion_tokens: u32,
+    /// Assistant output text (for progress reporting)
+    pub output_text: String,
+}
+
+/// Minimal agent for executing a single task
+pub struct SimpleAgent {
+    provider: Arc<dyn Provider>,
+    model_config: ModelConfig,
+    tool_registry: ToolRegistry,
+    max_iterations: usize,
+    /// Optional permission checker for tool execution
+    permission_checker: Option<Arc<Checker>>,
+    /// Event sender for tool events (permission requests, started, etc.)
+    event_tx: Option<mpsc::Sender<Event>>,
+    /// Agent ID for events
+    agent_id: AgentId,
+}
+
+impl SimpleAgent {
+    pub fn new(
+        provider: Arc<dyn Provider>,
+        model_config: ModelConfig,
+        tool_registry: ToolRegistry,
+    ) -> Self {
+        Self {
+            provider,
+            model_config,
+            tool_registry,
+            max_iterations: 20,
+            permission_checker: None,
+            event_tx: None,
+            agent_id: AgentId::new(),
+        }
+    }
+
+    /// Set permission checker for tool execution
+    #[must_use]
+    pub fn with_permission_checker(mut self, checker: Arc<Checker>) -> Self {
+        self.permission_checker = Some(checker);
+        self
+    }
+
+    /// Set optional permission checker for tool execution
+    #[must_use]
+    pub fn with_permission_checker_opt(mut self, checker: Option<Arc<Checker>>) -> Self {
+        self.permission_checker = checker;
+        self
+    }
+
+    /// Set event sender for tool events
+    #[must_use]
+    pub fn with_event_tx(mut self, event_tx: mpsc::Sender<Event>) -> Self {
+        self.event_tx = Some(event_tx);
+        self
+    }
+
+    /// Set agent ID for events
+    #[must_use]
+    pub fn with_agent_id(mut self, agent_id: AgentId) -> Self {
+        self.agent_id = agent_id;
+        self
+    }
+
+    /// Execute a single task with the given prompt and optional history
+    /// Returns the final messages (including assistant responses and tool results)
+    /// and execution metrics.
+    ///
+    /// Events are sent via the `on_event` callback for streaming output and progress tracking.
+    ///
+    /// # Arguments
+    /// * `system_prompt` - System message defining the agent's role
+    /// * `history` - Optional conversation history (for context inheritance)
+    /// * `user_prompt` - The task description
+    /// * `cancel_token` - Cancellation token for stopping execution
+    /// * `on_event` - Callback for receiving events (chunks, token usage, etc.)
+    pub async fn execute<F>(
+        &mut self,
+        system_prompt: String,
+        history: Option<Vec<Arc<Message>>>,
+        user_prompt: String,
+        cancel_token: CancellationToken,
+        mut on_event: F,
+    ) -> anyhow::Result<(Vec<Arc<Message>>, ExecuteMetrics)>
+    where
+        F: FnMut(Event),
+    {
+        let mut messages: Vec<Arc<Message>> = Vec::new();
+        messages.push(Arc::new(Message::system(system_prompt)));
+
+        // Add history if provided (for context inheritance)
+        if let Some(history) = history {
+            // Filter out system messages from history to avoid duplication
+            for msg in history {
+                if msg.role != crate::types::Role::System {
+                    messages.push(msg);
+                }
+            }
+        }
+
+        messages.push(Arc::new(Message::user(user_prompt)));
+
+        // Track metrics for progress reporting
+        let mut metrics = ExecuteMetrics::default();
+
+        // Execute iterations
+        for _iteration in 0..self.max_iterations {
+            if cancel_token.is_cancelled() {
+                return Err(cancelled_error("execution cancelled"));
+            }
+
+            metrics.iteration_count += 1;
+            on_event(Event::Model(ModelEvent::Request {
+                agent_id: self.agent_id.clone(),
+                message_count: messages.len(),
+            }));
+
+            // Get model response
+            let (assistant_msg, token_usage) = self
+                .stream_model(&messages, &cancel_token, &mut on_event)
+                .await?;
+
+            // Update token usage if available
+            if let Some((prompt, completion)) = token_usage {
+                metrics.total_prompt_tokens = prompt;
+                metrics.total_completion_tokens = completion;
+                on_event(Event::Model(ModelEvent::TokenUsage {
+                    agent_id: self.agent_id.clone(),
+                    prompt_tokens: metrics.total_prompt_tokens,
+                    completion_tokens: metrics.total_completion_tokens,
+                    total_tokens: metrics.total_prompt_tokens + metrics.total_completion_tokens,
+                    context_window: 0, // SimpleAgent doesn't track context window
+                }));
+            }
+
+            // Check if cancelled during streaming
+            if cancel_token.is_cancelled() {
+                return Err(cancelled_error("execution cancelled"));
+            }
+
+            // Collect output text from assistant message
+            for block in &assistant_msg.content {
+                if let crate::types::ContentBlock::Text { text } = block {
+                    metrics.output_text.push_str(text);
+                }
+            }
+
+            let has_tool_calls = assistant_msg.tool_calls.is_some();
+            let assistant_arc = Arc::new(assistant_msg);
+            messages.push(assistant_arc.clone());
+
+            if !has_tool_calls {
+                // Done - no tool calls
+                break;
+            }
+
+            // Get tool calls
+            let tool_calls = assistant_arc
+                .tool_calls
+                .clone()
+                .unwrap_or_default();
+
+            // Send Started event for all tool calls first
+            for call in &tool_calls {
+                let args_str = serde_json::to_string(&call.arguments).ok();
+                on_event(Event::Tool(ToolEvent::Started {
+                    agent_id: self.agent_id.clone(),
+                    tool_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    arguments: args_str,
+                }));
+            }
+
+            // Check permissions and separate approved/denied calls
+            let mut approved_calls = Vec::new();
+            let mut denied_results = Vec::new();
+
+            for call in &tool_calls {
+                if cancel_token.is_cancelled() {
+                    return Err(cancelled_error("execution cancelled"));
+                }
+
+                let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
+
+                // Check if permission is needed
+                if let Some(ref checker) = self.permission_checker {
+                    match checker.check_permission(call, level).await {
+                        Ok(true) => {
+                            // Approved, add to approved calls
+                            approved_calls.push(call.clone());
+                        }
+                        Ok(false) => {
+                            // Denied, create error result
+                            tracing::warn!(
+                                "SimpleAgent {} tool call {} denied: {} exceeds threshold",
+                                self.agent_id,
+                                call.id,
+                                call.name
+                            );
+                            let error_msg = format!(
+                                "Permission denied: {} tool (level: {:?}) was not approved by user",
+                                call.name, level
+                            );
+                            denied_results.push((call.id.clone(), error_msg));
+                        }
+                        Err(e) => {
+                            // Error checking permission, treat as denied
+                            tracing::error!(
+                                "SimpleAgent {} permission check failed for {}: {}",
+                                self.agent_id,
+                                call.name,
+                                e
+                            );
+                            let error_msg = format!("Permission check failed: {e}");
+                            denied_results.push((call.id.clone(), error_msg));
+                        }
+                    }
+                } else {
+                    // No permission checker (YOLO mode), approve all
+                    approved_calls.push(call.clone());
+                }
+            }
+
+            // Execute approved calls
+            for call in approved_calls {
+                if cancel_token.is_cancelled() {
+                    return Err(cancelled_error("execution cancelled"));
+                }
+
+                let result = self.execute_tool(&call, &cancel_token).await?;
+                messages.push(Arc::new(result));
+            }
+
+            // Add denied results as tool result messages
+            for (tool_call_id, error_msg) in denied_results {
+                messages.push(Arc::new(Message::tool_result(tool_call_id, error_msg)));
+            }
+        }
+
+        Ok((messages, metrics))
+    }
+
+    /// Stream from model, collecting the response
+    /// Returns the assistant message and optional token usage (prompt, completion)
+    async fn stream_model<F>(
+        &mut self,
+        messages: &[Arc<Message>],
+        cancel_token: &CancellationToken,
+        on_event: &mut F,
+    ) -> anyhow::Result<(Message, Option<(u32, u32)>)>
+    where
+        F: FnMut(Event),
+    {
+        use super::stream_collector::StreamCollectorState;
+        use crate::providers::ModelStreamItem;
+        use futures::TryStreamExt;
+
+        let tools = self.tool_registry.definitions();
+
+        let mut stream = self
+            .provider
+            .stream(messages, &tools, &self.model_config)
+            .await?;
+
+        let mut state = StreamCollectorState::default();
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel_token.cancelled() => {
+                    return Err(cancelled_error("during streaming"));
+                }
+                item = stream.try_next() => match item {
+                    Ok(Some(item)) => match item {
+                        ModelStreamItem::Chunk(chunk) => {
+                            state.handle_chunk(&chunk);
+                            on_event(Event::Model(ModelEvent::Chunk {
+                                agent_id: self.agent_id.clone(),
+                                content: chunk,
+                            }));
+                        }
+                        ModelStreamItem::ToolCall(request) => {
+                            state.handle_tool_call(request);
+                        }
+                        ModelStreamItem::TokenUsage {
+                            prompt_tokens,
+                            completion_tokens,
+                        } => {
+                            state.handle_token_usage(prompt_tokens, completion_tokens);
+                        }
+                        ModelStreamItem::Complete => break,
+                        ModelStreamItem::Fallback { from, to } => {
+                            on_event(Event::Model(ModelEvent::Fallback {
+                                agent_id: self.agent_id.clone(),
+                                from,
+                                to,
+                            }));
+                        }
+                    },
+                    Ok(None) => break,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+
+        let result = state.build_result();
+
+        // Build the message from collected content blocks
+        let mut msg = if result.content_blocks.is_empty() {
+            Message::assistant(String::new())
+        } else {
+            Message::with_blocks(crate::types::Role::Assistant, result.content_blocks)
+        };
+
+        if !result.tool_calls.is_empty() {
+            msg.tool_calls = Some(result.tool_calls);
+        }
+
+        Ok((msg, result.token_usage))
+    }
+
+    /// Execute a single tool call
+    async fn execute_tool(
+        &self,
+        call: &ToolCall,
+        cancel_token: &CancellationToken,
+    ) -> anyhow::Result<Message> {
+        let tool = self
+            .tool_registry
+            .get(&call.name)
+            .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
+
+        let ctx = ToolExecCtx::with_parent_ctx(&call.id, None, Some(cancel_token.clone()));
+
+        let output = tool.exec(call.arguments.clone(), ctx).await?;
+
+        Ok(Message::tool_result(
+            call.id.clone(),
+            format!("{}{}", output.stdout, output.stderr),
+        ))
+    }
+}

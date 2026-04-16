@@ -16,7 +16,6 @@ pub fn find_actual_string(file_content: &str, search_string: &str) -> Option<Str
     }
 }
 
-
 /// Split content into lines, preserving trailing newline info
 ///
 /// Returns a tuple of (lines, `has_trailing_newline`)
@@ -69,10 +68,7 @@ pub fn generate_diff(original: &str, modified: &str, context_lines: usize) -> St
     // Check if trailing newline status differs
     let newline_differs = orig_has_newline != mod_has_newline;
 
-    if first_diff == last_diff_orig
-        && first_diff == last_diff_mod
-        && !newline_differs
-    {
+    if first_diff == last_diff_orig && first_diff == last_diff_mod && !newline_differs {
         return "No changes".to_string();
     }
 
@@ -88,20 +84,12 @@ pub fn generate_diff(original: &str, modified: &str, context_lines: usize) -> St
     }
 
     // Show removed lines
-    for line in original_lines
-        .iter()
-        .take(last_diff_orig)
-        .skip(first_diff)
-    {
+    for line in original_lines.iter().take(last_diff_orig).skip(first_diff) {
         writeln!(result, "-{line}").unwrap();
     }
 
     // Show added lines
-    for line in modified_lines
-        .iter()
-        .take(last_diff_mod)
-        .skip(first_diff)
-    {
+    for line in modified_lines.iter().take(last_diff_mod).skip(first_diff) {
         writeln!(result, "+{line}").unwrap();
     }
 
@@ -116,7 +104,6 @@ pub fn generate_diff(original: &str, modified: &str, context_lines: usize) -> St
 
     result
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -184,15 +171,30 @@ mod tests {
 
         // Multi-line content
         let content = "line1\nline2\nline3";
-        assert_eq!(find_actual_string(content, "line2"), Some("line2".to_string()));
-        assert_eq!(find_actual_string(content, "line1\nline2"), Some("line1\nline2".to_string()));
+        assert_eq!(
+            find_actual_string(content, "line2"),
+            Some("line2".to_string())
+        );
+        assert_eq!(
+            find_actual_string(content, "line1\nline2"),
+            Some("line1\nline2".to_string())
+        );
 
         // Special characters
-        assert_eq!(find_actual_string("hello\tworld", "\t"), Some("\t".to_string()));
-        assert_eq!(find_actual_string("hello\n\nworld", "\n\n"), Some("\n\n".to_string()));
+        assert_eq!(
+            find_actual_string("hello\tworld", "\t"),
+            Some("\t".to_string())
+        );
+        assert_eq!(
+            find_actual_string("hello\n\nworld", "\n\n"),
+            Some("\n\n".to_string())
+        );
 
         // Unicode
-        assert_eq!(find_actual_string("你好世界", "世界"), Some("世界".to_string()));
+        assert_eq!(
+            find_actual_string("你好世界", "世界"),
+            Some("世界".to_string())
+        );
     }
 
     #[test]

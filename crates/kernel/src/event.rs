@@ -1,5 +1,7 @@
+use crate::permissions::Level;
 use crate::types::{AgentId, Message, SessionId};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Top-level event wrapper - modular design prevents enum explosion
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,6 +13,19 @@ pub enum Event {
     System(SystemEvent),
 }
 
+/// Permission control command from TUI to kernel
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionCommand {
+    /// Response to a permission request
+    Response {
+        req_id: String,
+        approved: bool,
+        remember: bool,
+    },
+    /// Set permission level (for YOLO mode toggle)
+    SetLevel(Level),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
     Message { content: String },
@@ -20,13 +35,6 @@ pub enum UserEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
-    Started {
-        agent_id: AgentId,
-    },
-    StateChanged {
-        agent_id: AgentId,
-        state: String,
-    },
     Completed {
         agent_id: AgentId,
         result: AgentResult,
@@ -38,14 +46,15 @@ pub enum AgentEvent {
     Cancelled {
         agent_id: AgentId,
     },
-    SubAgentSpawned {
-        parent_id: AgentId,
-        child_id: AgentId,
-        mode: String,
-    },
-    Progress {
+    /// Permission request for tool execution approval
+    PermissionRequest {
         agent_id: AgentId,
-        update: ProgressUpdate,
+        req_id: String, // 独立请求ID（非tool_call_id，保证唯一）
+        tool_id: String,
+        tool_name: String,
+        tool_args: String, // 工具参数（用于显示，如 Bash 命令）
+        tool_level: String,
+        reason: String,
     },
 }
 
@@ -60,7 +69,7 @@ pub enum ModelEvent {
         agent_id: AgentId,
         content: ContentChunk,
     },
-    Complete {
+    Completed {
         agent_id: AgentId,
     },
     Error {
@@ -119,6 +128,15 @@ pub enum ToolEvent {
         error: String,
         elapsed_ms: u64,
     },
+    /// Progress update for long-running tools (e.g., sub-agent)
+    Progress {
+        agent_id: AgentId,
+        tool_id: String,
+        /// Progress message (e.g., "iteration 3/20", "streaming...")
+        message: String,
+        /// Optional total token count
+        tokens: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,7 +149,7 @@ pub enum SystemEvent {
 /// Agent execution result
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentResult {
-    pub messages: Vec<Message>,
+    pub messages: Vec<Arc<Message>>,
     pub tool_calls: usize,
 }
 

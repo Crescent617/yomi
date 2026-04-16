@@ -1,6 +1,7 @@
 use crate::agent::AgentShared;
 use crate::app::session::{Session, SessionConfig};
 use crate::event::Event;
+use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::Storage;
 use crate::types::SessionId;
@@ -31,6 +32,7 @@ impl Coordinator {
             Arc::new(project_memory),
             compactor,
             Some(storage.clone()),
+            None, // permission_state is created per-session
         ));
         Self {
             storage,
@@ -113,6 +115,28 @@ impl Coordinator {
         result
     }
 
+    /// Send a multi-modal message with content blocks (supports images, text, etc.)
+    pub async fn send_blocks(
+        &self,
+        session_id: &SessionId,
+        blocks: Vec<crate::types::ContentBlock>,
+    ) -> Result<()> {
+        tracing::debug!(
+            "Sending {} content blocks to session {}",
+            blocks.len(),
+            session_id.0
+        );
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        let result = session.read().await.send_blocks(blocks).await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to send blocks to session {}: {}", session_id.0, e);
+        }
+        result
+    }
+
     pub async fn take_session_event_receiver(
         &self,
         session_id: &SessionId,
@@ -128,6 +152,39 @@ impl Coordinator {
             .await
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
         session.read().await.cancel();
+        Ok(())
+    }
+
+    pub async fn send_permission_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        approved: bool,
+        remember: bool,
+    ) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        let result = session
+            .read()
+            .await
+            .send_permission_response(req_id, approved, remember)
+            .await;
+        result
+    }
+
+    pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        session.read().await.set_permission_level(level).await;
+        tracing::info!(
+            "Permission level set to {:?} for session {}",
+            level,
+            session_id.0
+        );
         Ok(())
     }
 }

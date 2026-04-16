@@ -1,11 +1,12 @@
 use crate::compactor::Compactor;
-use crate::providers::ModelConfig;
+use crate::providers::{ModelConfig, ProviderError};
 use crate::skill::Skill;
 use crate::storage::StorageConfig;
 use crate::types::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,7 +14,7 @@ pub struct AgentConfig {
     pub model: ModelConfig,
     pub storage: StorageConfig,
     pub max_iterations: usize,
-    pub enable_sub_agents: bool,
+    pub enable_subagent: bool,
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
@@ -22,16 +23,40 @@ pub struct AgentConfig {
 }
 
 /// Configuration for spawning a new agent
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentSpawnArgs {
     pub base_prompt: String,
     pub skills: Vec<Arc<Skill>>,
-    pub history: Vec<Message>,
+    pub history: Vec<Arc<Message>>,
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
     pub working_dir: std::path::PathBuf,
+    /// Parent agent's `event_tx` for forwarding permission requests
+    /// Subagent's permission requests will be sent here so TUI can show dialogs
+    pub parent_event_tx: Option<tokio::sync::mpsc::Sender<crate::event::Event>>,
+    /// Optional cancel token to share with parent (for cascading cancellation)
+    pub cancel_token: Option<super::CancelToken>,
+    pub is_subagent: bool,
+}
+
+impl std::fmt::Debug for AgentSpawnArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentSpawnArgs")
+            .field("base_prompt", &self.base_prompt)
+            .field("skills", &self.skills)
+            .field("history", &self.history)
+            .field("session_id", &self.session_id)
+            .field("parent_session_id", &self.parent_session_id)
+            .field("max_iterations", &self.max_iterations)
+            .field("enable_sub_agents", &self.enable_sub_agents)
+            .field("working_dir", &self.working_dir)
+            .field("parent_event_tx", &self.parent_event_tx.is_some())
+            .field("cancel_token", &self.cancel_token.is_some())
+            .field("is_subagent", &self.is_subagent)
+            .finish()
+    }
 }
 
 impl AgentSpawnArgs {
@@ -40,13 +65,22 @@ impl AgentSpawnArgs {
         Self {
             base_prompt: base_prompt.into(),
             skills: Vec::new(),
-            history: Vec::new(),
+            history: Vec::<Arc<Message>>::new(),
             session_id: session_id.into(),
             parent_session_id: None,
             max_iterations: 50,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            parent_event_tx: None,
+            cancel_token: None,
+            is_subagent: false,
         }
+    }
+
+    pub fn new_for_subagent(base_prompt: impl Into<String>, session_id: impl Into<String>) -> Self {
+        let mut ret = Self::new(base_prompt, session_id).with_subagent(false);
+        ret.is_subagent = true;
+        ret
     }
 
     /// Set skills to include
@@ -59,6 +93,13 @@ impl AgentSpawnArgs {
     /// Set history messages
     #[must_use]
     pub fn with_history(mut self, history: Vec<Message>) -> Self {
+        self.history = history.into_iter().map(Arc::new).collect();
+        self
+    }
+
+    /// Set history messages from Arc (internal use)
+    #[must_use]
+    pub fn with_arc_history(mut self, history: Vec<Arc<Message>>) -> Self {
         self.history = history;
         self
     }
@@ -77,10 +118,9 @@ impl AgentSpawnArgs {
         self
     }
 
-    /// Disable sub-agents
     #[must_use]
-    pub const fn without_sub_agents(mut self) -> Self {
-        self.enable_sub_agents = false;
+    pub const fn with_subagent(mut self, enabled: bool) -> Self {
+        self.enable_sub_agents = enabled;
         self
     }
 
@@ -88,6 +128,23 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = dir.into();
+        self
+    }
+
+    /// Set parent `event_tx` for forwarding permission requests
+    #[must_use]
+    pub fn with_parent_event_tx(
+        mut self,
+        event_tx: tokio::sync::mpsc::Sender<crate::event::Event>,
+    ) -> Self {
+        self.parent_event_tx = Some(event_tx);
+        self
+    }
+
+    /// Set cancel token to share with parent (for cascading cancellation)
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: super::CancelToken) -> Self {
+        self.cancel_token = Some(token);
         self
     }
 }
@@ -98,7 +155,7 @@ impl Default for AgentConfig {
             model: ModelConfig::default(),
             storage: StorageConfig::default(),
             max_iterations: 50,
-            enable_sub_agents: true,
+            enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
             compactor: Compactor::default(),
@@ -153,28 +210,21 @@ pub enum AgentState {
     WaitingForInput,
     Streaming,
     ExecutingTool,
-    Completed,
-    Failed,
-    Cancelled,
+    Closed,
 }
 
 impl AgentState {
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(self, Self::Closed)
     }
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
             Self::Idle => &[Self::WaitingForInput],
-            Self::WaitingForInput => &[Self::Streaming, Self::Cancelled],
-            Self::Streaming => &[
-                Self::ExecutingTool,
-                Self::WaitingForInput,
-                Self::Failed,
-                Self::Cancelled,
-            ],
-            Self::ExecutingTool => &[Self::Streaming, Self::Failed, Self::Cancelled],
-            Self::Completed | Self::Failed | Self::Cancelled => &[],
+            Self::WaitingForInput => &[Self::Streaming, Self::Closed],
+            Self::Streaming => &[Self::ExecutingTool, Self::WaitingForInput],
+            Self::ExecutingTool => &[Self::Streaming],
+            Self::Closed => &[],
         }
     }
 
@@ -188,9 +238,7 @@ impl AgentState {
             Self::WaitingForInput => "waiting_for_input",
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
+            Self::Closed => "completed",
         }
     }
 }
@@ -239,8 +287,12 @@ impl AgentExecutionContext {
         *self.inner.state_tx.borrow()
     }
 
-    pub fn increment_iteration(&self) -> usize {
-        self.inner.iteration_count.fetch_add(1, Ordering::SeqCst)
+    pub fn increment_iteration(&self) {
+        self.inner.iteration_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn reset_iteration(&self) {
+        self.inner.iteration_count.store(0, Ordering::SeqCst);
     }
 
     pub fn iteration_count(&self) -> usize {
@@ -261,6 +313,8 @@ pub struct AgentShared {
     pub compactor: Option<crate::compactor::Compactor>,
     /// Storage for message persistence
     pub storage: Option<Arc<dyn crate::storage::Storage>>,
+    /// Shared permission state for all agents in a session
+    pub permission_state: Option<crate::permissions::PermissionState>,
 }
 
 impl AgentShared {
@@ -271,6 +325,7 @@ impl AgentShared {
         project_memory: Arc<crate::project_memory::MemoryFiles>,
         compactor: Option<crate::compactor::Compactor>,
         storage: Option<Arc<dyn crate::storage::Storage>>,
+        permission_state: Option<crate::permissions::PermissionState>,
     ) -> Self {
         Self {
             provider,
@@ -279,7 +334,71 @@ impl AgentShared {
             project_memory,
             compactor,
             storage,
+            permission_state,
         }
+    }
+}
+
+/// Agent error type using thiserror
+#[derive(Error, Debug)]
+pub enum AgentError {
+    /// Agent reached maximum iterations
+    #[error("Agent reached maximum iterations: {count}")]
+    MaxIterationsExceeded { count: usize },
+
+    /// Cancelled is a terminal error - agent was cancelled by user or parent
+    #[error("Agent was cancelled")]
+    Cancelled,
+
+    /// Input channel closed unexpectedly
+    #[error("Input channel closed")]
+    ChannelClosed,
+
+    /// Stream task panicked
+    #[error("Stream task panicked: {0}")]
+    StreamTaskPanicked(String),
+
+    /// Permission check failed
+    #[error("Permission check failed: {0}")]
+    PermissionCheckFailed(String),
+
+    /// Agent does not have permission checker configured
+    #[error("Agent does not have permission checker")]
+    NoPermissionChecker,
+
+    /// Provider error (includes HTTP, timeout, parse errors, etc.)
+    #[error("{0}")]
+    Provider(#[from] ProviderError),
+
+    /// Serialization error
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+}
+
+impl AgentError {
+    pub fn is_retryable(&self) -> bool {
+        use AgentError::{
+            Cancelled, ChannelClosed, MaxIterationsExceeded, NoPermissionChecker,
+            PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked,
+        };
+        match self {
+            // Delegate to ProviderError's retry logic
+            Provider(e) => e.is_retryable(),
+            // These errors should NOT be retried
+            MaxIterationsExceeded { .. }
+            | Cancelled
+            | ChannelClosed
+            | PermissionCheckFailed(_)
+            | NoPermissionChecker
+            | Serialization(_) => false,
+            // Stream task panics might be transient
+            StreamTaskPanicked(_) => true,
+        }
+    }
+
+    /// Check if this is a cancellation error (terminal, not a failure)
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, AgentError::Cancelled)
     }
 }
 
@@ -295,31 +414,25 @@ mod tests {
 
     #[test]
     fn test_terminal_states_have_no_transitions() {
-        assert!(AgentState::Completed.valid_transitions().is_empty());
-        assert!(AgentState::Failed.valid_transitions().is_empty());
-        assert!(AgentState::Cancelled.valid_transitions().is_empty());
+        assert!(AgentState::Closed.valid_transitions().is_empty());
     }
 
     #[test]
     fn test_streaming_can_execute_tool_or_finish() {
         assert!(AgentState::Streaming.can_transition_to(AgentState::ExecutingTool));
         assert!(AgentState::Streaming.can_transition_to(AgentState::WaitingForInput));
-        assert!(AgentState::Streaming.can_transition_to(AgentState::Failed));
-        assert!(!AgentState::Streaming.can_transition_to(AgentState::Completed));
+        assert!(!AgentState::Streaming.can_transition_to(AgentState::Closed));
     }
 
     #[test]
     fn test_executing_tool_transitions() {
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Failed));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Cancelled));
-        assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Completed));
+        assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
     }
 
     #[test]
     fn test_waiting_for_input_transitions() {
         assert!(AgentState::WaitingForInput.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::WaitingForInput.can_transition_to(AgentState::Cancelled));
         assert!(!AgentState::WaitingForInput.can_transition_to(AgentState::ExecutingTool));
     }
 }

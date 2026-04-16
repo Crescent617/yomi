@@ -1,9 +1,9 @@
 use crate::event::ContentChunk;
 use crate::providers::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{Message, Role, ToolDefinition};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -11,6 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -28,29 +29,66 @@ impl OpenAIProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(120))
+                .connect_timeout(std::time::Duration::from_secs(30))
                 .build()?,
             name: "openai".to_string(),
         })
     }
 
-    fn convert_messages(messages: &[Message]) -> Vec<OpenAIMessage> {
+    fn convert_messages(messages: &[Arc<Message>]) -> Vec<OpenAIMessage> {
         messages
             .iter()
             .map(|m| {
-                // Extract text content
-                let content = if m.content.len() == 1 {
-                    m.content
-                        .first()
-                        .and_then(|c| c.as_text())
-                        .map(|t| t.to_string())
-                        .unwrap_or_default()
-                } else {
-                    m.content
+                let m = m.as_ref();
+
+                // Check if message has image content
+                let has_image = m.content.iter().any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }));
+
+                // Build content (text-only or multi-modal)
+                let content = if has_image {
+                    // Multi-modal: convert to content blocks
+                    let blocks: Vec<OpenAIContentBlock> = m.content
                         .iter()
-                        .filter_map(|c| c.as_text())
-                        .collect::<Vec<_>>()
-                        .join("")
+                        .filter_map(|c| match c {
+                            crate::types::ContentBlock::Text { text } if !text.is_empty() => {
+                                Some(OpenAIContentBlock {
+                                    type_: "text".to_string(),
+                                    text: Some(text.clone()),
+                                    image_url: None,
+                                })
+                            }
+                            crate::types::ContentBlock::ImageUrl { image_url } => {
+                                Some(OpenAIContentBlock {
+                                    type_: "image_url".to_string(),
+                                    text: None,
+                                    image_url: Some(OpenAIImageUrl {
+                                        // image_url.url is already base64, wrap in data URL format
+                                        // image_url.url is already a data URL (e.g., data:image/png;base64,...)
+                                        url: image_url.url.clone(),
+                                        detail: image_url.detail.clone(),
+                                    }),
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    OpenAIContent::Blocks(blocks)
+                } else {
+                    // Text-only: use simple string format
+                    let text = if m.content.len() == 1 {
+                        m.content
+                            .first()
+                            .and_then(|c| c.as_text())
+                            .map(|t| t.to_string())
+                            .unwrap_or_default()
+                    } else {
+                        m.content
+                            .iter()
+                            .filter_map(|c| c.as_text())
+                            .collect::<Vec<_>>()
+                            .join("")
+                    };
+                    OpenAIContent::Text(text)
                 };
 
                 // Extract thinking content for reasoning models
@@ -88,7 +126,7 @@ impl OpenAIProvider {
             .collect()
     }
 
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<OpenAITool> {
+    fn convert_tools(tools: &[Arc<ToolDefinition>]) -> Vec<OpenAITool> {
         tools
             .iter()
             .map(|t| OpenAITool {
@@ -107,10 +145,10 @@ impl OpenAIProvider {
 impl Provider for OpenAIProvider {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream> {
+    ) -> Result<ModelStream, ProviderError> {
         let url = if config.endpoint.is_empty() {
             "https://api.openai.com/v1/chat/completions".to_string()
         } else {
@@ -123,6 +161,14 @@ impl Provider for OpenAIProvider {
             messages.len(),
             tools.len()
         );
+
+        // Check if any message contains an image (for debug logging)
+        let has_image = messages.iter().any(|m| {
+            m.as_ref()
+                .content
+                .iter()
+                .any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }))
+        });
 
         let request_body = OpenAIRequest {
             model: config.model_id.clone(),
@@ -138,7 +184,17 @@ impl Provider for OpenAIProvider {
             }),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
+            has_image,
         };
+
+        // Debug: log request body for vision requests
+        if request_body.has_image {
+            let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+            // Truncate base64 data for readability
+            let truncated = body_json.replace(|c: char| c.is_ascii() && c.is_control(), "");
+            tracing::debug!("OpenAI request with image: {}", &truncated[..truncated.len().min(500)]);
+        }
+
         let request = self
             .client
             .post(&url)
@@ -149,8 +205,14 @@ impl Provider for OpenAIProvider {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            tracing::error!("OpenAI API error: {} - {}", status, text);
-            return Err(anyhow!(HttpError(status.as_u16())));
+            // Truncate error message if too long
+            let truncated = if text.len() > 200 {
+                format!("{}... (truncated)", &text[..200])
+            } else {
+                text
+            };
+            tracing::error!("OpenAI API error: {} - {}", status, truncated);
+            return Err(ProviderError::Http(HttpError(status.as_u16())));
         }
 
         tracing::debug!("OpenAI API response received, starting stream processing");
@@ -181,24 +243,24 @@ impl Provider for OpenAIProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI SSE error: {}", e);
-                            return Err(anyhow!("SSE error: {e}"));
+                            return Err(ProviderError::Sse(format!("SSE error: {e}")));
                         }
                         Err(_) => {
                             tracing::error!(
                                 "OpenAI SSE idle timeout after {}s",
                                 IDLE_TIMEOUT.as_secs()
                             );
-                            return Err(anyhow!(
+                            return Err(ProviderError::Timeout(format!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ));
+                            )));
                         }
                     }
                 }
             },
         )
-        .flat_map(|result: Result<Vec<ModelStreamItem>>| {
-            let items: Vec<Result<ModelStreamItem>> = match result {
+        .flat_map(|result: Result<Vec<ModelStreamItem>, ProviderError>| {
+            let items: Vec<Result<ModelStreamItem, ProviderError>> = match result {
                 Ok(items) => items.into_iter().map(Ok).collect(),
                 Err(e) => vec![Err(e)],
             };
@@ -249,9 +311,10 @@ impl ToolCallAssembler {
     ///
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
-    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>> {
-        let response: OpenAIStreamResponse = serde_json::from_str(data)
-            .map_err(|e| anyhow!("Failed to parse SSE chunk: {e} - data: {data}"))?;
+    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
+        let response: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
+        })?;
 
         // Handle usage information (sent in final chunk when stream_options.include_usage=true)
         if let Some(usage) = response.usage {
@@ -374,6 +437,9 @@ struct OpenAIRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Track if request contains images (for debug logging, not serialized)
+    #[serde(skip)]
+    has_image: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -382,9 +448,35 @@ struct StreamOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum OpenAIContent {
+    /// Plain text content (simple mode)
+    Text(String),
+    /// Multi-modal content blocks (vision mode)
+    Blocks(Vec<OpenAIContentBlock>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIContentBlock {
+    #[serde(rename = "type")]
+    type_: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<OpenAIImageUrl>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIImageUrl {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
-    content: String,
+    content: OpenAIContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

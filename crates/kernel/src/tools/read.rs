@@ -1,14 +1,15 @@
+use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+pub const READ_TOOL_NAME: &str = "read";
 
 pub struct ReadTool {
     base_dir: PathBuf,
@@ -29,28 +30,18 @@ impl ReadTool {
         self.file_state_store = Some(store);
         self
     }
+}
 
-    fn resolve_path(&self, relative: &str) -> PathBuf {
-        let path = self.base_dir.join(relative);
-
-        path.canonicalize().unwrap_or(path)
-    }
-
-    /// Get file modification time in milliseconds since epoch
-    async fn get_mtime(&self, path: &PathBuf) -> Result<u64> {
-        let metadata = tokio::fs::metadata(path).await?;
-        let mtime = metadata.modified()?;
-        let duration = mtime
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        Ok(duration.as_millis() as u64)
+impl FileTool for ReadTool {
+    fn base_dir(&self) -> &Path {
+        &self.base_dir
     }
 }
 
 #[async_trait]
 impl Tool for ReadTool {
     fn name(&self) -> &'static str {
-        "read"
+        READ_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {
@@ -79,7 +70,7 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
@@ -128,8 +119,8 @@ impl Tool for ReadTool {
 
         // Track file mtime if store is available
         if let Some(ref store) = self.file_state_store {
-            let mtime = self.get_mtime(&path).await.unwrap_or(0);
-            store.record(path.clone(), mtime);
+            let mtime = self.get_mtime(&path);
+            store.record(path.clone(), mtime.await);
         }
 
         // Build response with file info

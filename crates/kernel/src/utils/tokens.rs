@@ -50,6 +50,16 @@ pub fn format_token_count(count: usize) -> String {
     }
 }
 
+/// Format token count for display (actual count from API, no ~ prefix)
+#[allow(clippy::cast_precision_loss)]
+pub fn format_tokens(count: u32) -> String {
+    if count >= 1000 {
+        format!("{:.1}k", f64::from(count) / 1000.0)
+    } else {
+        count.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,9 +101,9 @@ mod tests {
     #[test]
     fn test_estimate_tokens_boundary() {
         // Test boundary conditions (4 chars per token)
-        assert_eq!(estimate_tokens("a"), 0);      // 1 / 4 = 0
-        assert_eq!(estimate_tokens("abcd"), 1);   // 4 / 4 = 1
-        assert_eq!(estimate_tokens("abcde"), 1);  // 5 / 4 = 1
+        assert_eq!(estimate_tokens("a"), 0); // 1 / 4 = 0
+        assert_eq!(estimate_tokens("abcd"), 1); // 4 / 4 = 1
+        assert_eq!(estimate_tokens("abcde"), 1); // 5 / 4 = 1
         assert_eq!(estimate_tokens("abcdefgh"), 2); // 8 / 4 = 2
     }
 
@@ -101,18 +111,18 @@ mod tests {
     fn test_estimate_tokens_unicode() {
         // Unicode characters have different byte lengths
         // ASCII: 1 byte, CJK: 3 bytes, Emoji: 4 bytes
-        assert_eq!(estimate_tokens("🎉"), 1);      // 4 bytes
-        assert_eq!(estimate_tokens("🎉🎊"), 2);    // 8 bytes
-        assert_eq!(estimate_tokens("α"), 0);       // Greek 2 bytes
-        assert_eq!(estimate_tokens("αβγδ"), 2);    // Greek 8 bytes = 2 tokens
+        assert_eq!(estimate_tokens("🎉"), 1); // 4 bytes
+        assert_eq!(estimate_tokens("🎉🎊"), 2); // 8 bytes
+        assert_eq!(estimate_tokens("α"), 0); // Greek 2 bytes
+        assert_eq!(estimate_tokens("αβγδ"), 2); // Greek 8 bytes = 2 tokens
     }
 
     #[test]
     fn test_estimate_tokens_for_json_boundary() {
         // JSON uses 2 chars per token
-        assert_eq!(estimate_tokens_for_json("{}"), 1);        // 2 / 2 = 1
-        assert_eq!(estimate_tokens_for_json("[]"), 1);        // 2 / 2 = 1
-        // "{\"a\":1}" is 7 bytes: { (1) + " (1) + a (1) + " (1) + : (1) + 1 (1) + } (1)
+        assert_eq!(estimate_tokens_for_json("{}"), 1); // 2 / 2 = 1
+        assert_eq!(estimate_tokens_for_json("[]"), 1); // 2 / 2 = 1
+                                                       // "{\"a\":1}" is 7 bytes: { (1) + " (1) + a (1) + " (1) + : (1) + 1 (1) + } (1)
         assert_eq!(estimate_tokens_for_json("{\"a\":1}"), 3); // 7 / 2 = 3
     }
 
@@ -135,8 +145,8 @@ mod tests {
     #[test]
     fn test_estimate_tokens_whitespace() {
         // Whitespace counts as characters
-        assert_eq!(estimate_tokens("    "), 1);       // 4 spaces = 1 token
-        assert_eq!(estimate_tokens("\n\n\n\n"), 1);    // 4 newlines = 1 token
-        assert_eq!(estimate_tokens("\t\t\t\t"), 1);    // 4 tabs = 1 token
+        assert_eq!(estimate_tokens("    "), 1); // 4 spaces = 1 token
+        assert_eq!(estimate_tokens("\n\n\n\n"), 1); // 4 newlines = 1 token
+        assert_eq!(estimate_tokens("\t\t\t\t"), 1); // 4 tabs = 1 token
     }
 }

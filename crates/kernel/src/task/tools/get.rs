@@ -1,12 +1,12 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::GetTaskOutput;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_GET_TOOL_NAME: &str = "TaskGet";
+pub const TASK_GET_TOOL_NAME: &str = "taskGet";
 
 pub struct TaskGetTool {
     store: SharedTaskStore,
@@ -45,7 +45,7 @@ impl Tool for TaskGetTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let task_id = args["taskId"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?

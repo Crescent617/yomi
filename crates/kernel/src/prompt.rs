@@ -71,7 +71,7 @@ impl<'a> SystemPromptBuilder<'a> {
             base.to_string()
         } else {
             let mut prompt = base.to_string();
-            prompt.push_str("\n\n## Available Skills\n\n");
+            prompt.push_str("\n\n## Available Skills\n\nLoad the following skills on demand\n");
             for skill in self.skills {
                 let location = skill.source_path.to_string_lossy();
                 let _ = write!(
