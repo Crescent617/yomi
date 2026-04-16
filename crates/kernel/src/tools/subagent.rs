@@ -109,10 +109,10 @@ Provide your response in a structured format:
         )
     }
 
-    /// Create a SimpleAgent with the same configuration as this subagent tool
-    fn create_simple_agent(&self, session_id: String) -> SimpleAgent {
+    /// Create a `SimpleAgent` with the same configuration as this subagent tool
+    fn create_simple_agent(&self, session_id: &str) -> SimpleAgent {
         use crate::permissions::Checker;
-        let tool_registry = self.create_tool_registry(&session_id);
+        let tool_registry = self.create_tool_registry(session_id);
         let agent_id = crate::types::AgentId::new();
 
         // Create permission checker if permission state is available
@@ -138,14 +138,13 @@ Provide your response in a structured format:
     fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
         use crate::agent::Agent;
 
-        // Create a dummy input_tx since SimpleAgent doesn't need it
-        let (input_tx, _input_rx) = mpsc::channel(1);
-
+        // Subagent doesn't need input_tx since it doesn't receive AgentInput.
+        // BashTool's async mode will fail gracefully with a clear error message.
         Agent::create_tool_registry(
             &self.parent_id,
             &self.shared,
             &self.working_dir,
-            &input_tx,
+            None, // No input_tx for subagent
             &self.parent_event_tx,
             self.skills.clone(),
             session_id,
@@ -287,7 +286,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         };
 
         // Create SimpleAgent for execution
-        let mut simple_agent = self.create_simple_agent(subagent_session_id.clone());
+        let mut simple_agent = self.create_simple_agent(&subagent_session_id);
         let sub_agent_id = AgentId::new();
 
         // Prepare history if inherit_context is enabled
@@ -301,7 +300,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         let cancel_token = ctx
             .cancel_token
             .clone()
-            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+            .unwrap_or_default();
 
         // Execute based on mode
         match mode {
@@ -341,7 +340,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                         SubAgentStatus::Cancelled => {
                             format!("{output}\n\n[Sub-agent was cancelled]")
                         }
-                        _ => output,
+                        SubAgentStatus::Completed => output,
                     };
 
                     // Forward result to parent agent with structured format
@@ -420,7 +419,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
 }
 
 impl SubagentTool {
-    /// Execute a SimpleAgent and collect output with progress events
+    /// Execute a `SimpleAgent` and collect output with progress events
+    #[allow(clippy::too_many_arguments)]
     async fn execute_simple_agent(
         simple_agent: &mut SimpleAgent,
         system_prompt: String,

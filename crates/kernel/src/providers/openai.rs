@@ -162,6 +162,14 @@ impl Provider for OpenAIProvider {
             tools.len()
         );
 
+        // Check if any message contains an image (for debug logging)
+        let has_image = messages.iter().any(|m| {
+            m.as_ref()
+                .content
+                .iter()
+                .any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }))
+        });
+
         let request_body = OpenAIRequest {
             model: config.model_id.clone(),
             messages: Self::convert_messages(messages),
@@ -176,16 +184,15 @@ impl Provider for OpenAIProvider {
             }),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
+            has_image,
         };
+
         // Debug: log request body for vision requests
-        if serde_json::to_string(&request_body)
-            .unwrap_or_default()
-            .contains("image_url")
-        {
+        if request_body.has_image {
             let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
             // Truncate base64 data for readability
             let truncated = body_json.replace(|c: char| c.is_ascii() && c.is_control(), "");
-            tracing::info!("OpenAI request with image: {}", &truncated[..truncated.len().min(500)]);
+            tracing::debug!("OpenAI request with image: {}", &truncated[..truncated.len().min(500)]);
         }
 
         let request = self
@@ -430,6 +437,9 @@ struct OpenAIRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Track if request contains images (for debug logging, not serialized)
+    #[serde(skip)]
+    has_image: bool,
 }
 
 #[derive(Debug, Serialize)]

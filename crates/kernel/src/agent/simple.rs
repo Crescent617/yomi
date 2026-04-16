@@ -1,14 +1,14 @@
-//! SimpleAgent - Minimal agent implementation for subagents
+//! `SimpleAgent` - Minimal agent implementation for subagents
 //!
-//! Unlike the full Agent, SimpleAgent:
+//! Unlike the full Agent, `SimpleAgent`:
 //! - Has no complex state machine
 //! - No persistence (no storage dependency)
-//! - Uses tokio native CancellationToken
+//! - Uses tokio native `CancellationToken`
 //! - Single request-response loop with tool execution
 //! - Supports streaming events via callback
 //! - Works with Arc<Message> for efficient message sharing
 //!
-//! This is designed to be used by SubagentTool without depending on
+//! This is designed to be used by `SubagentTool` without depending on
 //! the full Agent infrastructure.
 
 use crate::event::{Event, ModelEvent, ToolEvent};
@@ -25,7 +25,7 @@ pub const CANCELLED_ERROR_PREFIX: &str = "[CANCELLED]";
 
 /// Create a cancellation error
 pub fn cancelled_error(msg: &str) -> anyhow::Error {
-    anyhow::anyhow!("{} {}", CANCELLED_ERROR_PREFIX, msg)
+    anyhow::anyhow!("{CANCELLED_ERROR_PREFIX} {msg}")
 }
 
 /// Check if an error is a cancellation error
@@ -78,24 +78,28 @@ impl SimpleAgent {
     }
 
     /// Set permission checker for tool execution
+    #[must_use]
     pub fn with_permission_checker(mut self, checker: Arc<Checker>) -> Self {
         self.permission_checker = Some(checker);
         self
     }
 
     /// Set optional permission checker for tool execution
+    #[must_use]
     pub fn with_permission_checker_opt(mut self, checker: Option<Arc<Checker>>) -> Self {
         self.permission_checker = checker;
         self
     }
 
     /// Set event sender for tool events
+    #[must_use]
     pub fn with_event_tx(mut self, event_tx: mpsc::Sender<Event>) -> Self {
         self.event_tx = Some(event_tx);
         self
     }
 
     /// Set agent ID for events
+    #[must_use]
     pub fn with_agent_id(mut self, agent_id: AgentId) -> Self {
         self.agent_id = agent_id;
         self
@@ -196,8 +200,7 @@ impl SimpleAgent {
             // Get tool calls
             let tool_calls = assistant_arc
                 .tool_calls
-                .as_ref()
-                .cloned()
+                .clone()
                 .unwrap_or_default();
 
             // Send Started event for all tool calls first

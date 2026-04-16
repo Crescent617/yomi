@@ -2,12 +2,12 @@ use arc_swap::ArcSwap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// 可重置的取消令牌 - 使用 arc-swap + CancellationToken 实现安全重置
+/// 可重置的取消令牌 - 使用 arc-swap + `CancellationToken` 实现安全重置
 ///
-/// 设计：CancelToken 包含 Arc<ArcSwap<...>>，这样：
+/// 设计：CancelToken 包含 Arc<`ArcSwap`<...>>，这样：
 /// - Clone 时共享同一个 ArcSwap（共享状态）
-/// - reset/cancel 操作通过 ArcSwap 原子性地替换 token
-/// - cancelled() 获取当前 token 的快照，避免 reset 竞态
+/// - reset/cancel 操作通过 `ArcSwap` 原子性地替换 token
+/// - `cancelled()` 获取当前 token 的快照，避免 reset 竞态
 #[derive(Debug, Clone)]
 pub struct CancelToken {
     inner: Arc<ArcSwap<CancellationToken>>,
@@ -31,14 +31,14 @@ impl CancelToken {
     }
 
     /// 重置取消状态（用于新请求）
-    /// 原子性地替换为新的 CancellationToken
+    /// 原子性地替换为新的 `CancellationToken`
     pub fn reset(&self) {
         self.inner.store(Arc::new(CancellationToken::new()));
     }
 
     /// 返回 Future 用于 select! - 取消时完成
     ///
-    /// 注意：调用时会通过 load_full() 获取当前 token 的所有权，
+    /// 注意：调用时会通过 `load_full()` 获取当前 token 的所有权，
     /// 即使后续 reset 也会继续等待原 token，避免竞态
     pub fn cancelled(&self) -> impl std::future::Future<Output = ()> {
         // 克隆 Arc 以避免持有 arc-swap 的引用
@@ -46,6 +46,14 @@ impl CancelToken {
         async move {
             token.cancelled().await;
         }
+    }
+
+    /// 获取当前的 tokio `CancellationToken` 用于运行时取消检查
+    ///
+    /// 注意：如果后续调用 reset()，此方法返回的 token 会被替换，
+    /// 但已获取的 token 仍然有效（可以继续用于取消检查）
+    pub fn runtime_token(&self) -> CancellationToken {
+        (**self.inner.load()).clone()
     }
 }
 

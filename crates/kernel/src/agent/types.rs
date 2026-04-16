@@ -54,6 +54,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("working_dir", &self.working_dir)
             .field("parent_event_tx", &self.parent_event_tx.is_some())
             .field("cancel_token", &self.cancel_token.is_some())
+            .field("is_subagent", &self.is_subagent)
             .finish()
     }
 }

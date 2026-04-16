@@ -1,4 +1,4 @@
-//! Shared stream collection logic for Agent and SimpleAgent
+//! Shared stream collection logic for Agent and `SimpleAgent`
 //!
 //! This module provides common functionality for collecting model stream output,
 //! handling thinking content, text chunks, tool calls, and token usage.

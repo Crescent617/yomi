@@ -599,7 +599,7 @@ impl InputComponent {
 
             // Find placeholder end
             if let Some(end) = remaining[start..].find(']') {
-                let placeholder = &remaining[start..start + end + 1];
+                let placeholder = &remaining[start..=(start + end)];
 
                 // Look up image path and convert to base64
                 if let Some(path) = self.image_paths.get(placeholder) {
@@ -615,7 +615,7 @@ impl InputComponent {
                         None => {
                             // Failed to convert, show error message to user
                             blocks.push(ContentBlock::Text {
-                                text: format!("[Error: Failed to process {} - unsupported format or read error]", placeholder),
+                                text: format!("[Error: Failed to process {placeholder} - unsupported format or read error]"),
                             });
                         }
                     }
@@ -649,7 +649,7 @@ impl InputComponent {
     }
 
     /// Convert image file to base64 data URL
-    /// OpenAI/Anthropic expect format: data:image/{format};base64,{base64_data}
+    /// OpenAI/Anthropic expect format: `data:image/{format};base64,{base64_data`}
     fn image_to_base64_url(path: &std::path::Path) -> Option<String> {
         // Read image file
         let image_data = match std::fs::read(path) {
@@ -676,7 +676,7 @@ impl InputComponent {
         let base64_clean: String = base64_data.chars().filter(|c| !c.is_whitespace()).collect();
 
         // Create data URL with correct MIME type
-        let data_url = format!("data:{};base64,{}", mime_type, base64_clean);
+        let data_url = format!("data:{mime_type};base64,{base64_clean}");
 
         tracing::debug!(
             "Converted image {:?} to {} base64 ({} bytes -> {} chars)",
@@ -701,8 +701,12 @@ impl InputComponent {
         } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
             Ok("image/webp")
         } else {
-            let magic: String = data.iter().take(16).map(|b| format!("{:02x}", b)).collect();
-            Err(format!("Unsupported image format (magic bytes: {})", magic))
+            let magic: String = data.iter().take(16).fold(String::new(), |mut acc, b| {
+                use std::fmt::Write;
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
+            Err(format!("Unsupported image format (magic bytes: {magic})"))
         }
     }
 
@@ -747,8 +751,6 @@ impl InputComponent {
         self.file_completion.start(cursor_pos);
     }
 
-    /// Refresh file list from cache based on current query
-
     /// Select next file completion item
     fn file_completion_next(&mut self) {
         self.file_completion.next();
@@ -787,26 +789,24 @@ impl InputComponent {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match ev {
-            // Enter: accept completion
+            // Enter or Tab: accept completion
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Enter,
+                code: Key::Enter | Key::Tab,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.accept_file_completion();
                 Msg::InputChanged(self.component.content().to_string())
             }
-            // Tab: also accept completion
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Tab,
-                modifiers: KeyModifiers::NONE,
-            }) => {
-                self.accept_file_completion();
-                Msg::InputChanged(self.component.content().to_string())
-            }
-            // Shift+Tab: navigate up
+            // Shift+Tab, Up arrow or Ctrl+P: navigate up
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::BackTab,
                 modifiers: KeyModifiers::SHIFT,
+            } | KeyEvent {
+                code: Key::Up,
+                modifiers: KeyModifiers::NONE,
+            } | KeyEvent {
+                code: Key::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
             }) => {
                 self.file_completion_prev();
                 Msg::Redraw
@@ -819,24 +819,11 @@ impl InputComponent {
                 self.cancel_file_completion();
                 Msg::Redraw
             }
-            // Up arrow or Ctrl+P: navigate up
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Up,
-                modifiers: KeyModifiers::NONE,
-            })
-            | tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => {
-                self.file_completion_prev();
-                Msg::Redraw
-            }
             // Down arrow or Ctrl+N: navigate down
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Down,
                 modifiers: KeyModifiers::NONE,
-            })
-            | tuirealm::Event::Keyboard(KeyEvent {
+            } | KeyEvent {
                 code: Key::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -1259,9 +1246,7 @@ impl InputComponent {
                     kernel::types::ContentBlock::Text { text } => !text.trim().is_empty(),
                     _ => true,
                 });
-                if !has_content {
-                    None
-                } else {
+                if has_content {
                     // Check if it's a command (only supports text-only content)
                     let text_content = self.component.content();
                     if let Some(cmd_msg) = Self::parse_command(text_content) {
@@ -1277,6 +1262,8 @@ impl InputComponent {
                         self.image_paths.clear();
                         Some(Msg::InputSubmit(content_blocks))
                     }
+                } else {
+                    None
                 }
             }
             tuirealm::Event::Keyboard(KeyEvent {

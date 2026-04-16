@@ -58,6 +58,33 @@ impl AnthropicProvider {
             .collect()
     }
 
+    /// Parse a data URL to extract media type and base64 data
+    /// Format: data:image/{format};base64,{data}
+    fn parse_data_url(url: &str) -> Option<(String, String)> {
+        if !url.starts_with("data:image/") {
+            // Not a data URL, skip
+            return None;
+        }
+
+        // Remove "data:image/" prefix
+        let without_prefix = &url[11..];
+
+        // Find the semicolon separating media type from base64
+        let semicolon_pos = without_prefix.find(';')?;
+        let media_type = format!("image/{}", &without_prefix[..semicolon_pos]);
+
+        // Check for base64 marker
+        let after_semicolon = &without_prefix[semicolon_pos + 1..];
+        if !after_semicolon.starts_with("base64,") {
+            return None;
+        }
+
+        // Extract base64 data
+        let base64_data = &after_semicolon[7..]; // Skip "base64,"
+
+        Some((media_type, base64_data.to_string()))
+    }
+
     fn convert_content_blocks(blocks: &[ContentBlock]) -> Vec<AnthropicContent> {
         let mut content = Vec::new();
 
@@ -71,13 +98,17 @@ impl AnthropicProvider {
                     // Thinking blocks are not sent back to Anthropic
                 }
                 ContentBlock::ImageUrl { image_url } => {
-                    content.push(AnthropicContent::Image {
-                        source: AnthropicImageSource {
-                            type_: "base64".to_string(),
-                            media_type: "image/png".to_string(),
-                            data: image_url.url.clone(),
-                        },
-                    });
+                    // Parse data URL to extract media type and base64 data
+                    // Format: data:image/{format};base64,{data}
+                    if let Some((media_type, base64_data)) = Self::parse_data_url(&image_url.url) {
+                        content.push(AnthropicContent::Image {
+                            source: AnthropicImageSource {
+                                type_: "base64".to_string(),
+                                media_type,
+                                data: base64_data,
+                            },
+                        });
+                    }
                 }
                 _ => {}
             }

@@ -406,10 +406,10 @@ mod tests {
         assert_eq!(buf.cursor_pos(), 0);
 
         buf.move_word_right();
-        assert_eq!(buf.cursor_pos(), 5); // After "hello"
+        assert_eq!(buf.cursor_pos(), 6); // Start of "world" (after "hello ")
 
         buf.move_word_right();
-        assert_eq!(buf.cursor_pos(), 11); // After "world"
+        assert_eq!(buf.cursor_pos(), 11); // End of "world"
     }
 
     #[test]
@@ -427,16 +427,24 @@ mod tests {
     #[test]
     fn test_kill_line() {
         let mut buf = TextBuffer::with_content("hello\nworld");
-        buf.move_word_right(); // After "hello"
 
+        // Position cursor at end of first line (after "hello")
+        buf.set_cursor_pos(5);
+        assert_eq!(buf.cursor_pos(), 5);
+
+        // Nothing after cursor on first line, so kill_to_end_of_line does nothing
         buf.kill_to_end_of_line();
-        assert_eq!(buf.content(), "hello\nworld"); // Nothing after "hello" on that line
+        assert_eq!(buf.content(), "hello\nworld");
 
+        // Move to start of line and kill - already at start of line, does nothing
         buf.move_to_start_of_line();
+        assert_eq!(buf.cursor_pos(), 0);
         buf.kill_to_start_of_line();
-        assert_eq!(buf.content(), "hello\nworld"); // Already at start
+        assert_eq!(buf.content(), "hello\nworld");
 
+        // Move to end of first line and kill to start
         buf.move_to_end_of_line();
+        assert_eq!(buf.cursor_pos(), 5); // End of "hello"
         buf.kill_to_start_of_line();
         assert_eq!(buf.content(), "\nworld");
     }

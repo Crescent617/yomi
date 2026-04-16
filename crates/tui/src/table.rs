@@ -10,7 +10,9 @@ use tuirealm::ratatui::{
 
 /// Cell alignment in a table
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum CellAlign {
+    #[default]
     Left,
     Center,
     Right,
@@ -18,6 +20,7 @@ pub enum CellAlign {
 
 impl CellAlign {
     /// Format content with alignment for given width
+    #[allow(clippy::trivially_copy_pass_by_ref)]
     fn format(&self, content: &str, width: usize) -> String {
         let content_width = unicode_width::UnicodeWidthStr::width(content);
         if content_width >= width {
@@ -36,11 +39,6 @@ impl CellAlign {
     }
 }
 
-impl Default for CellAlign {
-    fn default() -> Self {
-        CellAlign::Left
-    }
-}
 
 /// A row in the table
 #[derive(Debug, Clone)]
@@ -71,7 +69,6 @@ impl Table {
             use pulldown_cmark::TagEnd;
 
             match event {
-                MdEvent::Start(Tag::Table(_)) => {}
                 MdEvent::End(TagEnd::Table) => {
                     break;
                 }
@@ -130,7 +127,7 @@ impl Table {
         }
 
         // First row is header if we don't have explicit header
-        let header = if rows.first().map(|r| r.is_header).unwrap_or(false) {
+        let header = if rows.first().is_some_and(|r| r.is_header) {
             rows.remove(0).into()
         } else {
             None
@@ -144,6 +141,7 @@ impl Table {
     }
 
     /// Calculate optimal column widths
+    #[allow(clippy::cast_precision_loss)]
     fn calculate_widths(&self, max_width: usize) -> Vec<usize> {
         let num_cols = self
             .header
@@ -182,9 +180,9 @@ impl Table {
         // If too wide, scale down proportionally (but keep at least 3 per column)
         if total_width > max_width && max_width > border_width {
             let available = max_width - border_width;
-            let scale = available as f32 / content_width as f32;
+            let scale = available as f64 / content_width as f64;
             for w in &mut widths {
-                *w = ((*w as f32 * scale) as usize).max(3);
+                *w = ((*w as f64 * scale) as usize).max(3);
             }
         }
 
@@ -403,7 +401,7 @@ impl StreamingTableRenderer {
         
         // Check current row + current cell for additional columns
         let current_row_cols = self.current_row.len() 
-            + if self.current_cell.is_empty() { 0 } else { 1 };
+            + usize::from(!self.current_cell.is_empty());
         col_count = col_count.max(current_row_cols);
         
         // Also check completed rows
@@ -521,6 +519,7 @@ impl StreamingTableRenderer {
         Line::from(Span::styled(content, Style::default().fg(colors::border())))
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn calculate_widths(&self, col_count: usize, max_width: usize) -> Vec<usize> {
         let mut widths: Vec<usize> = (0..col_count).map(|_| 3).collect();
 
@@ -559,9 +558,9 @@ impl StreamingTableRenderer {
         // Scale down if needed
         if total_width > max_width && max_width > border_width {
             let available = max_width - border_width;
-            let scale = available as f32 / content_width as f32;
+            let scale = available as f64 / content_width as f64;
             for w in &mut widths {
-                *w = ((*w as f32 * scale) as usize).max(3);
+                *w = ((*w as f64 * scale) as usize).max(3);
             }
         }
 

@@ -96,7 +96,7 @@ impl Agent {
             &id,
             &shared,
             &args.working_dir,
-            &input_tx,
+            Some(&input_tx),
             &event_tx,
             args.skills.clone(),
             &args.session_id,
@@ -149,29 +149,14 @@ impl Agent {
         (handle, event_rx)
     }
 
-    /// Create a runtime CancellationToken linked to the Agent's custom CancelToken.
+    /// Create a runtime `CancellationToken` linked to the Agent's custom `CancelToken`.
     ///
     /// This bridges the Agent layer (with reset support) to the Runtime layer
-    /// (using tokio native CancellationToken).
+    /// (using tokio native `CancellationToken`).
     fn create_runtime_token(&self) -> tokio_util::sync::CancellationToken {
-        let runtime_token = tokio_util::sync::CancellationToken::new();
-        let agent_token = self.cancel_token.clone();
-        let rt_clone = runtime_token.clone();
-
-        // Spawn a task that cancels the runtime token when agent token is cancelled
-        // Also completes if runtime token is dropped (using drop guard pattern)
-        tokio::spawn(async move {
-            tokio::select! {
-                biased;
-                () = agent_token.cancelled() => {
-                    rt_clone.cancel();
-                }
-                // If runtime token is cancelled (request completed), task completes cleanly
-                () = rt_clone.cancelled() => {}
-            }
-        });
-
-        runtime_token
+        // 直接获取父 Agent 的 tokio CancellationToken
+        // 不需要 spawn 桥接任务，因为 CancelToken 内部就是 CancellationToken
+        self.cancel_token.runtime_token()
     }
 
     /// Create tool registry for an agent with standard tools
@@ -180,7 +165,7 @@ impl Agent {
         agent_id: &AgentId,
         shared: &Arc<AgentShared>,
         working_dir: &std::path::PathBuf,
-        input_tx: &mpsc::Sender<AgentInput>,
+        input_tx: Option<&mpsc::Sender<AgentInput>>,
         event_tx: &mpsc::Sender<Event>,
         skills: Vec<Arc<Skill>>,
         session_id: &str,
@@ -195,7 +180,7 @@ impl Agent {
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
 
         // Register Bash tool
-        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.clone(), working_dir.clone());
+        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.cloned(), working_dir.clone());
         let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
         registry.register(bash_tool);
 
@@ -227,7 +212,7 @@ impl Agent {
             let subagent_tool = SubagentTool::new(
                 agent_id.clone(),
                 Arc::clone(shared),
-                input_tx.clone(),
+                input_tx.cloned().unwrap(),
                 skills,
                 shared.storage.clone(),
                 working_dir.clone(),

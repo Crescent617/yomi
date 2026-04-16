@@ -26,7 +26,7 @@ pub struct FileCompletion {
     cache_dirty: bool,
     /// Total files found (may exceed cache limit)
     total_files_scanned: usize,
-    /// Whether scan hit MAX_FILES_TO_SCAN limit
+    /// Whether scan hit `MAX_FILES_TO_SCAN` limit
     files_truncated: bool,
 }
 
@@ -37,7 +37,7 @@ impl Default for FileCompletion {
 }
 
 impl FileCompletion {
-    /// Create a new FileCompletion instance
+    /// Create a new `FileCompletion` instance
     pub fn new() -> Self {
         Self {
             completion: CompletionList::new(),
@@ -72,7 +72,7 @@ impl FileCompletion {
         self.completion.is_visible()
     }
 
-    /// Check if completion is visible (alias for is_active)
+    /// Check if completion is visible (alias for `is_active`)
     pub fn is_visible(&self) -> bool {
         self.is_active()
     }
@@ -175,6 +175,11 @@ impl FileCompletion {
         self.completion.len()
     }
 
+    /// Check if the completion list is empty
+    pub fn is_empty(&self) -> bool {
+        self.completion.len() == 0
+    }
+
     /// Refresh the file list based on current query
     fn refresh_list(&mut self) {
         let filtered = if self.query.is_empty() {
@@ -203,7 +208,7 @@ impl FileCompletion {
     }
 
     /// Scan files recursively with limits, respecting .gitignore
-    /// Returns (files, total_count, was_truncated)
+    /// Returns (files, `total_count`, `was_truncated`)
     fn scan_files(&self) -> (Vec<String>, usize, bool) {
         let gitignore = self.load_gitignore();
         let mut files = Vec::with_capacity(MAX_FILES_TO_SCAN);
@@ -352,10 +357,11 @@ impl FileCompletion {
     }
 
     /// Case-insensitive fuzzy matching
-    fn fuzzy_match(text: &str, pattern_lower: &str) -> Option<i32> {
-        if pattern_lower.is_empty() {
+    fn fuzzy_match(text: &str, pattern: &str) -> Option<i32> {
+        if pattern.is_empty() {
             return Some(0);
         }
+        let pattern_lower = pattern.to_lowercase();
         let pattern_chars: Vec<char> = pattern_lower.chars().collect();
         let mut pattern_idx = 0;
         let mut score = 0i32;

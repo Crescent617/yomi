@@ -101,7 +101,7 @@ impl StreamingMarkdownRenderer {
             Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
 
         let parser = Parser::new_ext(&self.content, options);
-        let mut parser_iter = parser.peekable();
+        let parser_iter = parser.peekable();
 
         let mut current_line: Vec<Span> = Vec::new();
         let mut in_code_block = self.state.in_code_block;
@@ -116,7 +116,7 @@ impl StreamingMarkdownRenderer {
             self.table_renderer = Some(StreamingTableRenderer::new());
         }
 
-        while let Some(event) = parser_iter.next() {
+        for event in parser_iter {
             match event {
                 MdEvent::Start(tag) => match tag {
                     Tag::Strong => {
@@ -430,8 +430,7 @@ impl StreamingMarkdownRenderer {
                     .lines
                     .iter()
                     .rposition(|l| l.to_string().trim().is_empty())
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
+                    .map_or(0, |i| i + 1);
 
                 let table_lines = tr.render(120);
                 self.lines.truncate(table_start);

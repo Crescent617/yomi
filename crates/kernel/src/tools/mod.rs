@@ -52,7 +52,7 @@ impl<'a> ToolExecCtx<'a> {
 
     /// Create a context with tool call ID, parent messages, and runtime token
     /// This is a convenience constructor for the common case where both
-    /// parent_messages and cancel_token are available
+    /// `parent_messages` and `cancel_token` are available
     pub fn with_parent_ctx(
         tool_call_id: &'a str,
         parent_messages: Option<&'a [Arc<crate::types::Message>]>,
@@ -79,7 +79,7 @@ impl<'a> ToolExecCtx<'a> {
 
     /// Check if cancellation has been requested
     pub fn is_cancelled(&self) -> bool {
-        self.cancel_token.as_ref().map_or(false, |t| t.is_cancelled())
+        self.cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
     }
 
     /// Get a future that completes when cancellation is requested

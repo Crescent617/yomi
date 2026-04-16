@@ -24,8 +24,8 @@ fn truncate_output(output: &str) -> String {
 
 /// Execute multiple tool calls in parallel with optional cancellation support
 ///
-/// Accepts tokio native CancellationToken for runtime cancellation control.
-/// The cancel_token should be created from Agent's custom CancelToken at the
+/// Accepts tokio native `CancellationToken` for runtime cancellation control.
+/// The `cancel_token` should be created from Agent's custom `CancelToken` at the
 /// start of each request.
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
