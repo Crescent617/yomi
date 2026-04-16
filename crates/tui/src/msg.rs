@@ -1,6 +1,7 @@
 //! Messages for TUI application
 
 use kernel::event::Event as AppEvent;
+use kernel::types::ContentBlock;
 
 /// User event type for tuirealm
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,8 +26,8 @@ pub enum Msg {
     ToolOutput(String),
     ToolError(String),
 
-    // User input
-    InputSubmit(String),
+    // User input (supports multi-modal content blocks)
+    InputSubmit(Vec<ContentBlock>),
     InputChanged(String),
 
     // Scrolling

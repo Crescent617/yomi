@@ -36,11 +36,9 @@ pub struct ToolExecCtx<'a> {
     pub tool_call_id: &'a str,
     /// Parent agent's message history (for context inheritance)
     pub parent_messages: Option<&'a [Arc<crate::types::Message>]>,
-    /// Cancel token for checking cancellation requests
-    pub cancel_token: Option<CancelToken>,
+    /// Runtime cancel token for checking cancellation requests (tokio native)
+    pub cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
-
-use crate::agent::CancelToken;
 
 impl<'a> ToolExecCtx<'a> {
     /// Create a new context with just the tool call ID
@@ -52,13 +50,13 @@ impl<'a> ToolExecCtx<'a> {
         }
     }
 
-    /// Create a context with tool call ID, parent messages, and cancel token
+    /// Create a context with tool call ID, parent messages, and runtime token
     /// This is a convenience constructor for the common case where both
     /// parent_messages and cancel_token are available
     pub fn with_parent_ctx(
         tool_call_id: &'a str,
         parent_messages: Option<&'a [Arc<crate::types::Message>]>,
-        cancel_token: Option<CancelToken>,
+        cancel_token: Option<tokio_util::sync::CancellationToken>,
     ) -> Self {
         Self {
             tool_call_id,
@@ -74,11 +72,31 @@ impl<'a> ToolExecCtx<'a> {
     }
 
     #[must_use]
-    pub fn with_cancel_token(mut self, token: Option<CancelToken>) -> Self {
+    pub fn with_cancel_token(mut self, token: Option<tokio_util::sync::CancellationToken>) -> Self {
         self.cancel_token = token;
         self
     }
+
+    /// Check if cancellation has been requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token.as_ref().map_or(false, |t| t.is_cancelled())
+    }
+
+    /// Get a future that completes when cancellation is requested
+    pub fn cancelled(&self) -> impl std::future::Future<Output = ()> + 'static {
+        match self.cancel_token.clone() {
+            Some(token) => {
+                Either::Left(async move { token.cancelled().await })
+            }
+            None => {
+                // If no token, never complete (always pending)
+                Either::Right(std::future::pending())
+            }
+        }
+    }
 }
+
+use futures::future::Either;
 
 /// Core trait for tools
 #[async_trait]

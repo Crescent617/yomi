@@ -115,6 +115,28 @@ impl Coordinator {
         result
     }
 
+    /// Send a multi-modal message with content blocks (supports images, text, etc.)
+    pub async fn send_blocks(
+        &self,
+        session_id: &SessionId,
+        blocks: Vec<crate::types::ContentBlock>,
+    ) -> Result<()> {
+        tracing::debug!(
+            "Sending {} content blocks to session {}",
+            blocks.len(),
+            session_id.0
+        );
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        let result = session.read().await.send_blocks(blocks).await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to send blocks to session {}: {}", session_id.0, e);
+        }
+        result
+    }
+
     pub async fn take_session_event_receiver(
         &self,
         session_id: &SessionId,

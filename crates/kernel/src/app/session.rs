@@ -109,6 +109,22 @@ impl Session {
         }
     }
 
+    /// Send a multi-modal message with content blocks (supports images, text, etc.)
+    pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
+        tracing::debug!(
+            "Session {} sending {} content blocks",
+            self.id.0,
+            blocks.len()
+        );
+        match &self.main_agent {
+            Some(handle) => {
+                handle.send_message(blocks).await?;
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("Session not initialized")),
+        }
+    }
+
     pub fn cancel(&self) {
         if let Some(handle) = &self.main_agent {
             tracing::info!("Cancelling session {}", self.id.0);

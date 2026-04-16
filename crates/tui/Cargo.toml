@@ -22,5 +22,11 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
 
+# Image clipboard support
+arboard = { version = "3.3", default-features = false, features = ["image-data"] }
+tempfile = "3.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
 [lints]
 workspace = true

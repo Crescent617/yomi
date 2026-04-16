@@ -40,19 +40,55 @@ impl OpenAIProvider {
             .iter()
             .map(|m| {
                 let m = m.as_ref();
-                // Extract text content
-                let content = if m.content.len() == 1 {
-                    m.content
-                        .first()
-                        .and_then(|c| c.as_text())
-                        .map(|t| t.to_string())
-                        .unwrap_or_default()
-                } else {
-                    m.content
+
+                // Check if message has image content
+                let has_image = m.content.iter().any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }));
+
+                // Build content (text-only or multi-modal)
+                let content = if has_image {
+                    // Multi-modal: convert to content blocks
+                    let blocks: Vec<OpenAIContentBlock> = m.content
                         .iter()
-                        .filter_map(|c| c.as_text())
-                        .collect::<Vec<_>>()
-                        .join("")
+                        .filter_map(|c| match c {
+                            crate::types::ContentBlock::Text { text } if !text.is_empty() => {
+                                Some(OpenAIContentBlock {
+                                    type_: "text".to_string(),
+                                    text: Some(text.clone()),
+                                    image_url: None,
+                                })
+                            }
+                            crate::types::ContentBlock::ImageUrl { image_url } => {
+                                Some(OpenAIContentBlock {
+                                    type_: "image_url".to_string(),
+                                    text: None,
+                                    image_url: Some(OpenAIImageUrl {
+                                        // image_url.url is already base64, wrap in data URL format
+                                        // image_url.url is already a data URL (e.g., data:image/png;base64,...)
+                                        url: image_url.url.clone(),
+                                        detail: image_url.detail.clone(),
+                                    }),
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    OpenAIContent::Blocks(blocks)
+                } else {
+                    // Text-only: use simple string format
+                    let text = if m.content.len() == 1 {
+                        m.content
+                            .first()
+                            .and_then(|c| c.as_text())
+                            .map(|t| t.to_string())
+                            .unwrap_or_default()
+                    } else {
+                        m.content
+                            .iter()
+                            .filter_map(|c| c.as_text())
+                            .collect::<Vec<_>>()
+                            .join("")
+                    };
+                    OpenAIContent::Text(text)
                 };
 
                 // Extract thinking content for reasoning models
@@ -141,6 +177,17 @@ impl Provider for OpenAIProvider {
             max_tokens: config.max_tokens,
             temperature: config.temperature,
         };
+        // Debug: log request body for vision requests
+        if serde_json::to_string(&request_body)
+            .unwrap_or_default()
+            .contains("image_url")
+        {
+            let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
+            // Truncate base64 data for readability
+            let truncated = body_json.replace(|c: char| c.is_ascii() && c.is_control(), "");
+            tracing::info!("OpenAI request with image: {}", &truncated[..truncated.len().min(500)]);
+        }
+
         let request = self
             .client
             .post(&url)
@@ -151,7 +198,13 @@ impl Provider for OpenAIProvider {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            tracing::error!("OpenAI API error: {} - {}", status, text);
+            // Truncate error message if too long
+            let truncated = if text.len() > 200 {
+                format!("{}... (truncated)", &text[..200])
+            } else {
+                text
+            };
+            tracing::error!("OpenAI API error: {} - {}", status, truncated);
             return Err(ProviderError::Http(HttpError(status.as_u16())));
         }
 
@@ -385,9 +438,35 @@ struct StreamOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum OpenAIContent {
+    /// Plain text content (simple mode)
+    Text(String),
+    /// Multi-modal content blocks (vision mode)
+    Blocks(Vec<OpenAIContentBlock>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIContentBlock {
+    #[serde(rename = "type")]
+    type_: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<OpenAIImageUrl>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIImageUrl {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct OpenAIMessage {
     role: String,
-    content: String,
+    content: OpenAIContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kernel::{
     agent::AgentConfig,
+    compactor,
     config::{env_names, Config, ModelProvider},
     event::PermissionCommand,
     expand_tilde,
@@ -9,7 +10,7 @@ use kernel::{
     permissions::Level,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
-    types::SessionId,
+    types::{ContentBlock, SessionId},
     utils::strs,
 };
 use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
@@ -336,21 +337,21 @@ async fn main() -> Result<()> {
         // Load session messages for displaying in chat view
         let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
 
-        // Create channel for input forwarding
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(100);
+        // Create channel for input forwarding (supports multi-modal content blocks)
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<ContentBlock>>(100);
         // Create channel for cancel requests
         let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
         // Create channel for permission responses
         let (permission_tx, mut permission_rx) =
             tokio::sync::mpsc::channel::<PermissionCommand>(10);
 
-        // Spawn task to forward input to coordinator
+        // Spawn task to forward input to coordinator (supports multi-modal content)
         let coord_for_input = coordinator.clone();
         let session_id_for_input = session_id.clone();
         tokio::spawn(async move {
-            while let Some(content) = input_rx.recv().await {
+            while let Some(blocks) = input_rx.recv().await {
                 if let Err(e) = coord_for_input
-                    .send_message(&session_id_for_input, content)
+                    .send_blocks(&session_id_for_input, blocks)
                     .await
                 {
                     tracing::error!("Failed to send message: {}", e);

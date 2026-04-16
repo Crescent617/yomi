@@ -386,6 +386,9 @@ pub struct InputComponent {
     command_completion: CompletionList<(String, String)>,
     // File completion (@-mention)
     file_completion: FileCompletion,
+    // Image paste support
+    image_counter: usize,
+    image_paths: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 impl Default for InputComponent {
@@ -404,12 +407,303 @@ impl InputComponent {
             saved_input: String::new(),
             command_completion: CompletionList::new(),
             file_completion: FileCompletion::new(),
+            image_counter: 0,
+            image_paths: std::collections::HashMap::new(),
         }
     }
 
     /// Set the working directory for file completion
     pub fn set_working_dir(&mut self, path: impl Into<std::path::PathBuf>) {
         self.file_completion.set_working_dir(path);
+    }
+
+    /// Try to read image from clipboard and save to temp file
+    /// Supports both arboard (X11) and wl-clipboard (Wayland)
+    fn try_paste_image(&mut self) -> Option<String> {
+        // Try arboard first (works on X11 and some Wayland setups)
+        if let Some(result) = self.try_paste_image_arboard() {
+            return Some(result);
+        }
+        // Fallback to wl-clipboard for Wayland
+        self.try_paste_image_wlclipboard()
+    }
+
+    /// Try to get image using arboard (X11)
+    fn try_paste_image_arboard(&mut self) -> Option<String> {
+        use arboard::Clipboard;
+
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("Failed to create arboard clipboard: {}", e);
+                return None;
+            }
+        };
+
+        // Try to get image from clipboard
+        let image = match clipboard.get_image() {
+            Ok(img) => img,
+            Err(e) => {
+                tracing::debug!("No image in arboard clipboard: {}", e);
+                return None;
+            }
+        };
+
+        tracing::debug!(
+            "Got image from arboard: {}x{}, {} bytes",
+            image.width,
+            image.height,
+            image.bytes.len()
+        );
+
+        self.save_image_to_temp(image.width, image.height, &image.bytes)
+    }
+
+    /// Try to get image using wl-clipboard (Wayland)
+    fn try_paste_image_wlclipboard(&mut self) -> Option<String> {
+        // Check if wl-paste is available
+        let wl_paste_check = std::process::Command::new("which")
+            .arg("wl-paste")
+            .output();
+
+        if wl_paste_check.is_err() || !wl_paste_check.unwrap().status.success() {
+            tracing::debug!("wl-paste not found, skipping Wayland clipboard");
+            return None;
+        }
+
+        // Try to get image from Wayland clipboard
+        let output = match std::process::Command::new("wl-paste")
+            .args(["--type", "image/png"])
+            .output()
+        {
+            Ok(out) if out.status.success() && !out.stdout.is_empty() => out.stdout,
+            Ok(out) => {
+                tracing::debug!("wl-paste returned no image data: {:?}", out.stderr);
+                return None;
+            }
+            Err(e) => {
+                tracing::debug!("Failed to run wl-paste: {}", e);
+                return None;
+            }
+        };
+
+        tracing::debug!("Got {} bytes from wl-paste", output.len());
+
+        // Load PNG and convert to RGBA
+        let img = match image::load_from_memory_with_format(&output, image::ImageFormat::Png) {
+            Ok(img) => img.to_rgba8(),
+            Err(e) => {
+                tracing::warn!("Failed to decode PNG from wl-paste: {}", e);
+                return None;
+            }
+        };
+
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let bytes = img.into_raw();
+
+        self.save_image_to_temp(width, height, &bytes)
+    }
+
+    /// Save image bytes to temp file and return placeholder
+    fn save_image_to_temp(&mut self, width: usize, height: usize, bytes: &[u8]) -> Option<String> {
+        // Create temp file
+        let temp_dir = std::env::temp_dir().join("yomi_images");
+        if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+            tracing::warn!("Failed to create temp dir: {}", e);
+            return None;
+        }
+
+        self.image_counter += 1;
+        let filename = format!("paste_{}_{}.png", std::process::id(), self.image_counter);
+        let filepath = temp_dir.join(&filename);
+
+        // Check if bytes length is valid for RGBA
+        let expected_len = width * height * 4;
+        if bytes.len() != expected_len {
+            tracing::warn!(
+                "Image bytes length mismatch: got {}, expected {} ({}x{}x4)",
+                bytes.len(),
+                expected_len,
+                width,
+                height
+            );
+            return None;
+        }
+
+        // Save image as PNG using image crate
+        let img = match image::RgbaImage::from_raw(width as u32, height as u32, bytes.to_vec()) {
+            Some(img) => img,
+            None => {
+                tracing::warn!("Failed to create RgbaImage from raw bytes");
+                return None;
+            }
+        };
+
+        if let Err(e) = img.save(&filepath) {
+            tracing::warn!("Failed to save image: {}", e);
+            return None;
+        }
+
+        tracing::info!("Saved pasted image to: {:?}", filepath);
+
+        // Create placeholder and store mapping
+        let placeholder = format!("[Img #{}]", self.image_counter);
+        self.image_paths.insert(placeholder.clone(), filepath);
+
+        Some(placeholder)
+    }
+
+    /// Get current input as content blocks (with image placeholders converted)
+    pub fn get_content_blocks(&self) -> Vec<kernel::types::ContentBlock> {
+        let text = self.component.content();
+        tracing::debug!(
+            "get_content_blocks: text='{}', image_paths={:?}",
+            text,
+            self.image_paths
+        );
+        let blocks = self.convert_to_content_blocks(text);
+        tracing::info!("Converted to {} content blocks", blocks.len());
+        for (i, block) in blocks.iter().enumerate() {
+            match block {
+                kernel::types::ContentBlock::Text { text } => {
+                    tracing::debug!("Block {}: Text ({} chars)", i, text.len());
+                }
+                kernel::types::ContentBlock::ImageUrl { image_url } => {
+                    tracing::info!("Block {}: ImageUrl {}", i, image_url.url);
+                }
+                _ => {
+                    tracing::debug!("Block {}: Other", i);
+                }
+            }
+        }
+        blocks
+    }
+
+    /// Convert input content with placeholders to content blocks
+    /// Images are converted to base64 data URLs for LLM API compatibility
+    fn convert_to_content_blocks(&self, text: &str) -> Vec<kernel::types::ContentBlock> {
+        use kernel::types::{ContentBlock, ImageUrl};
+
+        let mut blocks = Vec::new();
+        let mut remaining = text;
+
+        // Find all placeholders and split text
+        while let Some(start) = remaining.find("[Img #") {
+            // Add text before placeholder
+            if start > 0 {
+                blocks.push(ContentBlock::Text {
+                    text: remaining[..start].to_string(),
+                });
+            }
+
+            // Find placeholder end
+            if let Some(end) = remaining[start..].find(']') {
+                let placeholder = &remaining[start..start + end + 1];
+
+                // Look up image path and convert to base64
+                if let Some(path) = self.image_paths.get(placeholder) {
+                    match Self::image_to_base64_url(path) {
+                        Some(base64_url) => {
+                            blocks.push(ContentBlock::ImageUrl {
+                                image_url: ImageUrl {
+                                    url: base64_url,
+                                    detail: Some("auto".to_string()),
+                                },
+                            });
+                        }
+                        None => {
+                            // Failed to convert, show error message to user
+                            blocks.push(ContentBlock::Text {
+                                text: format!("[Error: Failed to process {} - unsupported format or read error]", placeholder),
+                            });
+                        }
+                    }
+                } else {
+                    // Unknown placeholder, treat as text
+                    blocks.push(ContentBlock::Text {
+                        text: placeholder.to_string(),
+                    });
+                }
+
+                remaining = &remaining[start + end + 1..];
+            } else {
+                break;
+            }
+        }
+
+        // Add remaining text
+        if !remaining.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: remaining.to_string(),
+            });
+        }
+
+        if blocks.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: text.to_string(),
+            });
+        }
+
+        blocks
+    }
+
+    /// Convert image file to base64 data URL
+    /// OpenAI/Anthropic expect format: data:image/{format};base64,{base64_data}
+    fn image_to_base64_url(path: &std::path::Path) -> Option<String> {
+        // Read image file
+        let image_data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!("Failed to read image file {:?}: {}", path, e);
+                return None;
+            }
+        };
+
+        // Detect MIME type from file magic bytes
+        let mime_type = match Self::detect_image_mime_type(&image_data) {
+            Ok(mime) => mime,
+            Err(e) => {
+                tracing::error!("Failed to detect image format: {}", e);
+                return None;
+            }
+        };
+
+        // Encode to base64
+        let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+
+        // Remove any newlines that might be in the base64 output
+        let base64_clean: String = base64_data.chars().filter(|c| !c.is_whitespace()).collect();
+
+        // Create data URL with correct MIME type
+        let data_url = format!("data:{};base64,{}", mime_type, base64_clean);
+
+        tracing::debug!(
+            "Converted image {:?} to {} base64 ({} bytes -> {} chars)",
+            path,
+            mime_type,
+            image_data.len(),
+            base64_clean.len()
+        );
+
+        Some(data_url)
+    }
+
+    /// Detect image MIME type from file magic bytes
+    /// Returns error for unsupported formats
+    fn detect_image_mime_type(data: &[u8]) -> Result<&'static str, String> {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Ok("image/png")
+        } else if data.starts_with(b"\xff\xd8\xff") {
+            Ok("image/jpeg")
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            Ok("image/gif")
+        } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+            Ok("image/webp")
+        } else {
+            let magic: String = data.iter().take(16).map(|b| format!("{:02x}", b)).collect();
+            Err(format!("Unsupported image format (magic bytes: {})", magic))
+        }
     }
 
     /// Update command completion state based on current input
@@ -902,6 +1196,35 @@ impl InputComponent {
         }
 
         match *ev {
+            // Ctrl+V: paste from clipboard (image or text)
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                // Try to paste image first
+                if let Some(placeholder) = self.try_paste_image() {
+                    self.component.insert_str(&placeholder);
+                    self.update_completion();
+                    return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
+                // Fall back to reading text from clipboard
+                #[cfg(not(target_os = "macos"))]
+                {
+                    use arboard::Clipboard;
+                    match Clipboard::new() {
+                        Ok(mut clipboard) => match clipboard.get_text() {
+                            Ok(text) => {
+                                self.component.insert_str(&text);
+                                self.update_completion();
+                                return Some(Msg::InputChanged(self.component.content().to_string()));
+                            }
+                            Err(e) => tracing::debug!("No text in clipboard: {}", e),
+                        },
+                        Err(e) => tracing::debug!("Failed to create clipboard: {}", e),
+                    }
+                }
+                None
+            }
             // @: start file completion (must be before generic Char handler)
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('@'),
@@ -929,15 +1252,31 @@ impl InputComponent {
                     self.update_completion();
                     return Some(Msg::InputChanged(self.component.content().to_string()));
                 }
-                let content = self.component.submit();
-                if content.is_empty() {
+                // Get content blocks (supports multi-modal: text, images, etc.)
+                let content_blocks = self.get_content_blocks();
+                // Check if content is effectively empty (no text and no images)
+                let has_content = content_blocks.iter().any(|block| match block {
+                    kernel::types::ContentBlock::Text { text } => !text.trim().is_empty(),
+                    _ => true,
+                });
+                if !has_content {
                     None
-                } else if let Some(cmd_msg) = Self::parse_command(&content) {
-                    // It's a command, return the command message
-                    Some(cmd_msg)
                 } else {
-                    // Regular input
-                    Some(Msg::InputSubmit(content))
+                    // Check if it's a command (only supports text-only content)
+                    let text_content = self.component.content();
+                    if let Some(cmd_msg) = Self::parse_command(text_content) {
+                        // It's a command, return the command message
+                        // Clear input after submitting command
+                        let _ = self.component.submit();
+                        Some(cmd_msg)
+                    } else {
+                        // Regular input with multi-modal support
+                        // Clear input and image mappings after submitting
+                        let _ = self.component.submit();
+                        self.image_counter = 0;
+                        self.image_paths.clear();
+                        Some(Msg::InputSubmit(content_blocks))
+                    }
                 }
             }
             tuirealm::Event::Keyboard(KeyEvent {

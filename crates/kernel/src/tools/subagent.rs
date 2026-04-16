@@ -1,9 +1,9 @@
-use crate::agent::{Agent, AgentInput, AgentShared, AgentSpawnArgs, SubAgentMode};
-use crate::event::Event;
+use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
+use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
 use crate::storage::Storage;
-use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{AgentId, ContentBlock, ToolOutput};
+use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
+use crate::types::{AgentId, ContentBlock, Message, ToolOutput};
 use crate::utils::tokens::format_tokens;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ pub struct SubagentTool {
     parent_id: AgentId,
     shared: Arc<AgentShared>,
     /// Parent's `input_tx` for forwarding async sub-agent results
-    parent_input_tx: mpsc::Sender<AgentInput>,
+    parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
     /// Skills inherited from parent agent
     skills: Vec<Arc<Skill>>,
     /// Storage for transcript recording (optional)
@@ -28,9 +28,9 @@ pub struct SubagentTool {
     working_dir: std::path::PathBuf,
     /// Parent session ID for task store sharing
     parent_session_id: String,
-    /// Parent's `event_tx` for forwarding permission requests
-    /// Subagent's permission requests will be sent here so TUI can show dialogs
-    parent_event_tx: mpsc::Sender<crate::event::Event>,
+    /// Parent's `event_tx` for forwarding permission requests and progress
+    /// Subagent's permission requests and progress will be sent here so TUI can show dialogs
+    parent_event_tx: mpsc::Sender<Event>,
 }
 
 impl SubagentTool {
@@ -38,12 +38,12 @@ impl SubagentTool {
     pub fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
-        parent_input_tx: mpsc::Sender<AgentInput>,
+        parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
         skills: Vec<Arc<Skill>>,
         storage: Option<Arc<dyn Storage>>,
         working_dir: impl Into<std::path::PathBuf>,
         parent_session_id: String,
-        parent_event_tx: mpsc::Sender<crate::event::Event>,
+        parent_event_tx: mpsc::Sender<Event>,
     ) -> Self {
         Self {
             parent_id,
@@ -109,108 +109,49 @@ Provide your response in a structured format:
         )
     }
 
-    /// Collect output from sub-agent events
-    /// Returns (output, status) where status indicates completion state
-    async fn collect_subagent_output(
-        event_rx: &mut mpsc::Receiver<Event>,
-        output: &mut String,
-        parent_event_tx: &mpsc::Sender<Event>,
-        parent_id: &AgentId,
-        tool_id: &str,
-    ) -> SubAgentStatus {
-        use crate::event::{AgentEvent, ContentChunk, ModelEvent, ToolEvent};
+    /// Create a SimpleAgent with the same configuration as this subagent tool
+    fn create_simple_agent(&self, session_id: String) -> SimpleAgent {
+        use crate::permissions::Checker;
+        let tool_registry = self.create_tool_registry(&session_id);
+        let agent_id = crate::types::AgentId::new();
 
-        // Track token usage (TokenUsage reports cumulative totals)
-        let mut total_prompt_tokens: u32 = 0;
-        let mut total_completion_tokens: u32 = 0;
-        let mut iteration_count: usize = 0;
+        // Create permission checker if permission state is available
+        let permission_checker = self.shared.permission_state.as_ref().map(|state| {
+            std::sync::Arc::new(Checker::new(
+                state.clone(),
+                agent_id.clone(),
+                self.parent_event_tx.clone(),
+            ))
+        });
 
-        while let Some(event) = event_rx.recv().await {
-            match &event {
-                Event::Model(ModelEvent::Chunk {
-                    content: ContentChunk::Text(text),
-                    ..
-                }) => {
-                    // Only capture text output to avoid bloating parent context
-                    output.push_str(text);
-                }
-                Event::Model(ModelEvent::TokenUsage {
-                    prompt_tokens,
-                    completion_tokens,
-                    ..
-                }) => {
-                    // TokenUsage reports cumulative totals, save latest values
-                    total_prompt_tokens = *prompt_tokens;
-                    total_completion_tokens = *completion_tokens;
-                    let total = total_prompt_tokens + total_completion_tokens;
+        SimpleAgent::new(
+            self.shared.provider.clone(),
+            (*self.shared.model_config).clone(),
+            tool_registry,
+        )
+        .with_agent_id(agent_id)
+        .with_event_tx(self.parent_event_tx.clone())
+        .with_permission_checker_opt(permission_checker)
+    }
 
-                    // Send progress update with token count
-                    let progress_msg =
-                        format!("iter {iteration_count} · {} tokens", format_tokens(total));
-                    let _ = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: progress_msg,
-                            tokens: Some(total),
-                        }))
-                        .await;
-                }
-                Event::Model(ModelEvent::Request { .. }) => {
-                    iteration_count += 1;
-                    let progress_msg = format!("iteration {iteration_count}/20 · streaming");
-                    let _ = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: progress_msg,
-                            tokens: None,
-                        }))
-                        .await;
-                }
-                Event::Agent(AgentEvent::Completed { .. }) => {
-                    // Send final progress with total tokens
-                    let total = total_prompt_tokens + total_completion_tokens;
-                    let progress_msg = format!("completed · {} tokens", format_tokens(total));
-                    let _ = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: progress_msg,
-                            tokens: Some(total),
-                        }))
-                        .await;
-                    info!("Sub-agent completed with output");
-                    return SubAgentStatus::Completed;
-                }
-                Event::Agent(AgentEvent::Failed { error, .. }) => {
-                    let total = total_prompt_tokens + total_completion_tokens;
-                    let _ = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: format!("failed · {} tokens", format_tokens(total)),
-                            tokens: Some(total),
-                        }))
-                        .await;
-                    return SubAgentStatus::Failed(error.clone());
-                }
-                Event::Agent(AgentEvent::Cancelled { .. }) => {
-                    let total = total_prompt_tokens + total_completion_tokens;
-                    let _ = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: format!("cancelled · {} tokens", format_tokens(total)),
-                            tokens: Some(total),
-                        }))
-                        .await;
-                    return SubAgentStatus::Cancelled;
-                }
-                _ => {}
-            }
-        }
-        SubAgentStatus::Disconnected
+    /// Create tool registry for the subagent
+    fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
+        use crate::agent::Agent;
+
+        // Create a dummy input_tx since SimpleAgent doesn't need it
+        let (input_tx, _input_rx) = mpsc::channel(1);
+
+        Agent::create_tool_registry(
+            &self.parent_id,
+            &self.shared,
+            &self.working_dir,
+            &input_tx,
+            &self.parent_event_tx,
+            self.skills.clone(),
+            session_id,
+            Some(&self.parent_session_id),
+            false, // Disable nested subagents to prevent infinite recursion
+        )
     }
 }
 
@@ -220,7 +161,6 @@ enum SubAgentStatus {
     Completed,
     Failed(String),
     Cancelled,
-    Disconnected,
 }
 
 #[async_trait]
@@ -289,12 +229,15 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
     }
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+        // Extract and clone all values from args first to avoid lifetime issues
         let description = args["description"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?
+            .to_string();
         let task = args["task"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'task' argument"))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing 'task' argument"))?
+            .to_string();
 
         let mode_str = args["mode"].as_str().unwrap_or("sync");
         let mode = match mode_str {
@@ -343,81 +286,79 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             ));
         };
 
-        let mut config = AgentSpawnArgs::new_for_subagent(system_prompt, subagent_session_id)
-            .with_skills(self.skills.clone())
-            .with_parent_session(&self.parent_session_id)
-            .with_max_iterations(20)
-            .with_working_dir(self.working_dir.clone())
-            .with_parent_event_tx(self.parent_event_tx.clone())
-            .with_cancel_token(ctx.cancel_token.clone().unwrap_or_default());
+        // Create SimpleAgent for execution
+        let mut simple_agent = self.create_simple_agent(subagent_session_id.clone());
+        let sub_agent_id = AgentId::new();
 
-        // If inherit_context is true and parent messages are available, pass them to subagent
-        if inherit_context {
-            if let Some(parent_messages) = ctx.parent_messages {
-                tracing::debug!(
-                    "Inheriting {} messages from parent agent",
-                    parent_messages.len()
-                );
-                config = config.with_arc_history(parent_messages.to_vec());
-            }
-        }
+        // Prepare history if inherit_context is enabled
+        let history: Option<Vec<Arc<Message>>> = if inherit_context {
+            ctx.parent_messages.map(|msgs| msgs.to_vec())
+        } else {
+            None
+        };
 
-        let (handle, mut event_rx) = Agent::spawn(AgentId::new(), &self.shared, config);
+        // Get cancel token from context
+        let cancel_token = ctx
+            .cancel_token
+            .clone()
+            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
 
-        let sub_agent_id = handle.id.clone();
-
-        // Send the task as the first user message
-        // Pattern: system prompt defines role, user message provides task
-        handle.send_text(task.to_string()).await.ok();
-        // Close the agent gracefully after collecting output
-        let _ = handle.close().await;
+        // Execute based on mode
         match mode {
             SubAgentMode::Async => {
-                // Spawn background task to collect results and forward to parent
+                // Clone values for the async block
                 let parent_tx = self.parent_input_tx.clone();
                 let parent_event_tx = self.parent_event_tx.clone();
                 let parent_id = self.parent_id.clone();
+                let desc = description.clone();
                 let sub_id = sub_agent_id.clone();
-                let desc = description.to_string();
                 let tool_id = ctx.tool_call_id.to_string();
+                let _storage = self.storage.clone();
+
+                // Spawn background task to execute subagent
                 tokio::spawn(async move {
-                    let mut output = String::new();
-                    let status = Self::collect_subagent_output(
-                        &mut event_rx,
-                        &mut output,
+                    let (output, status) = Self::execute_simple_agent(
+                        &mut simple_agent,
+                        system_prompt,
+                        history,
+                        task,
+                        cancel_token,
                         &parent_event_tx,
                         &parent_id,
                         &tool_id,
                     )
                     .await;
 
+                    // Persist transcript if storage is available
+                    // Note: Transcript recording from SimpleAgent is not yet implemented
+                    // SimpleAgent.execute() returns messages that could be persisted here
+
                     // Append error/cancelled markers to output
-                    match &status {
+                    let final_output = match &status {
                         SubAgentStatus::Failed(error) => {
-                            use std::fmt::Write;
-                            let _ = write!(output, "\n\n[Sub-agent failed: {error}]");
+                            format!("{output}\n\n[Sub-agent failed: {error}]")
                         }
                         SubAgentStatus::Cancelled => {
-                            output.push_str("\n\n[Sub-agent was cancelled]");
+                            format!("{output}\n\n[Sub-agent was cancelled]")
                         }
-                        _ => {}
-                    }
+                        _ => output,
+                    };
 
                     // Forward result to parent agent with structured format
                     let completed = matches!(status, SubAgentStatus::Completed);
                     let result_text = if completed {
                         format!(
-                            "## Sub-agent Task Completed\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Result\n{output}",
+                            "## Sub-agent Task Completed\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Result\n{final_output}",
                         )
                     } else {
                         format!(
-                            "## Sub-agent Task Ended (Incomplete)\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Partial Result\n{output}"
+                            "## Sub-agent Task Ended (Incomplete)\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Partial Result\n{final_output}"
                         )
                     };
 
                     // Send result back to parent via input_tx (as ContentBlock array)
                     let _ = parent_tx
-                        .send(AgentInput::TaskResult {
+                        .send(crate::agent::AgentInput::TaskResult {
                             task_id: sub_id.to_string(),
                             content: vec![ContentBlock::Text { text: result_text }],
                         })
@@ -434,20 +375,27 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 })
             }
             SubAgentMode::Sync => {
-                // Collect output from sub-agent
-                let mut output = String::new();
-                let status = Self::collect_subagent_output(
-                    &mut event_rx,
-                    &mut output,
+                // Execute directly and collect results
+                let (output, status) = Self::execute_simple_agent(
+                    &mut simple_agent,
+                    system_prompt,
+                    history,
+                    task,
+                    cancel_token,
                     &self.parent_event_tx,
                     &self.parent_id,
                     ctx.tool_call_id,
                 )
                 .await;
+
                 info!(
                     "Sub-agent {} completed with status: {:?}",
                     sub_agent_id, status
                 );
+
+                // Persist transcript if storage is available
+                // Note: Transcript recording from SimpleAgent is not yet implemented
+                // SimpleAgent.execute() returns messages that could be persisted here
 
                 match status {
                     SubAgentStatus::Completed => Ok(ToolOutput {
@@ -465,13 +413,132 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                         stderr: "Sub-agent was cancelled".to_string(),
                         exit_code: 1,
                     }),
-                    SubAgentStatus::Disconnected => Ok(ToolOutput {
-                        stdout: output,
-                        stderr: "Sub-agent ended without completion".to_string(),
-                        exit_code: 1,
-                    }),
                 }
             }
         }
+    }
+}
+
+impl SubagentTool {
+    /// Execute a SimpleAgent and collect output with progress events
+    async fn execute_simple_agent(
+        simple_agent: &mut SimpleAgent,
+        system_prompt: String,
+        history: Option<Vec<Arc<Message>>>,
+        task: String,
+        cancel_token: tokio_util::sync::CancellationToken,
+        parent_event_tx: &mpsc::Sender<Event>,
+        parent_id: &AgentId,
+        tool_id: &str,
+    ) -> (String, SubAgentStatus) {
+        let parent_event_tx_clone = parent_event_tx.clone();
+        let parent_id_clone = parent_id.clone();
+        let tool_id_clone = tool_id.to_string();
+
+        // Track iteration count for progress reporting (local, no locks needed)
+        let mut iteration_count = 0usize;
+
+        let result = simple_agent
+            .execute(
+                system_prompt,
+                history,
+                task,
+                cancel_token,
+                |event| {
+                    // Process events for progress reporting only
+                    match event {
+                        Event::Model(ModelEvent::TokenUsage {
+                            prompt_tokens,
+                            completion_tokens,
+                            ..
+                        }) => {
+                            let total = prompt_tokens + completion_tokens;
+
+                            // Send progress update
+                            let progress_msg =
+                                format!("iter {iteration_count} · {} tokens", format_tokens(total));
+                            if let Err(e) = parent_event_tx_clone.try_send(Event::Tool(ToolEvent::Progress {
+                                agent_id: parent_id_clone.clone(),
+                                tool_id: tool_id_clone.clone(),
+                                message: progress_msg,
+                                tokens: Some(total),
+                            })) {
+                                tracing::warn!("Failed to send progress event: {}", e);
+                            }
+                        }
+                        Event::Model(ModelEvent::Request { .. }) => {
+                            iteration_count += 1;
+                            let progress_msg =
+                                format!("iteration {iteration_count}/20 · streaming");
+                            if let Err(e) = parent_event_tx_clone.try_send(Event::Tool(ToolEvent::Progress {
+                                agent_id: parent_id_clone.clone(),
+                                tool_id: tool_id_clone.clone(),
+                                message: progress_msg,
+                                tokens: None,
+                            })) {
+                                tracing::warn!("Failed to send progress event: {}", e);
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+            )
+            .await;
+
+        // Extract output and status from execute result
+        let (final_output, status) = match result {
+            Ok((_, metrics)) => {
+                let total = metrics.total_prompt_tokens + metrics.total_completion_tokens;
+                let progress_msg = format!("completed · {} tokens", format_tokens(total));
+                if let Err(e) = parent_event_tx
+                    .send(Event::Tool(ToolEvent::Progress {
+                        agent_id: parent_id.clone(),
+                        tool_id: tool_id.to_string(),
+                        message: progress_msg,
+                        tokens: Some(total),
+                    }))
+                    .await
+                {
+                    tracing::warn!("Failed to send progress event: {}", e);
+                }
+                (metrics.output_text, SubAgentStatus::Completed)
+            }
+            Err(e) => {
+                // On error, we don't have metrics - just report the error
+                let error_str = e.to_string();
+                let status = if is_cancelled_error(&e) {
+                    let progress_msg = "cancelled".to_string();
+                    if let Err(e) = parent_event_tx
+                        .send(Event::Tool(ToolEvent::Progress {
+                            agent_id: parent_id.clone(),
+                            tool_id: tool_id.to_string(),
+                            message: progress_msg,
+                            tokens: None,
+                        }))
+                        .await
+                    {
+                        tracing::warn!("Failed to send progress event: {}", e);
+                    }
+                    SubAgentStatus::Cancelled
+                } else {
+                    let progress_msg = format!("failed · {error_str}");
+                    if let Err(e) = parent_event_tx
+                        .send(Event::Tool(ToolEvent::Progress {
+                            agent_id: parent_id.clone(),
+                            tool_id: tool_id.to_string(),
+                            message: progress_msg,
+                            tokens: None,
+                        }))
+                        .await
+                    {
+                        tracing::warn!("Failed to send progress event: {}", e);
+                    }
+                    SubAgentStatus::Failed(error_str)
+                };
+                (String::new(), status)
+            }
+        };
+
+        (final_output, status)
     }
 }

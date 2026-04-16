@@ -4,10 +4,9 @@ use super::{
     CancelToken,
 };
 use crate::compactor;
-use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
+use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
 use crate::permissions::{Checker, ToolLevelResolver};
 use crate::prompt::SystemPromptBuilder;
-use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
@@ -150,9 +149,34 @@ impl Agent {
         (handle, event_rx)
     }
 
+    /// Create a runtime CancellationToken linked to the Agent's custom CancelToken.
+    ///
+    /// This bridges the Agent layer (with reset support) to the Runtime layer
+    /// (using tokio native CancellationToken).
+    fn create_runtime_token(&self) -> tokio_util::sync::CancellationToken {
+        let runtime_token = tokio_util::sync::CancellationToken::new();
+        let agent_token = self.cancel_token.clone();
+        let rt_clone = runtime_token.clone();
+
+        // Spawn a task that cancels the runtime token when agent token is cancelled
+        // Also completes if runtime token is dropped (using drop guard pattern)
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = agent_token.cancelled() => {
+                    rt_clone.cancel();
+                }
+                // If runtime token is cancelled (request completed), task completes cleanly
+                () = rt_clone.cancelled() => {}
+            }
+        });
+
+        runtime_token
+    }
+
     /// Create tool registry for an agent with standard tools
     #[allow(clippy::too_many_arguments)]
-    fn create_tool_registry(
+    pub(crate) fn create_tool_registry(
         agent_id: &AgentId,
         shared: &Arc<AgentShared>,
         working_dir: &std::path::PathBuf,
@@ -481,10 +505,10 @@ impl Agent {
         &mut self,
         stream: &mut crate::providers::ModelStream,
     ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>), AgentError> {
-        let mut current_text = String::new();
-        let mut current_thinking = String::new();
-        let mut content_blocks: Vec<ContentBlock> = Vec::new();
-        let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
+        use super::stream_collector::StreamCollectorState;
+        use crate::providers::ModelStreamItem;
+
+        let mut state = StreamCollectorState::default();
 
         loop {
             tokio::select! {
@@ -494,39 +518,27 @@ impl Agent {
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => match item {
-                        ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
-                            current_text.push_str(&text);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
+                        ModelStreamItem::Chunk(chunk) => {
+                            state.handle_chunk(&chunk);
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Chunk {
                                 agent_id: self.id.clone(),
-                                content: ContentChunk::Text(text),
-                            })).await;
-                        }
-                        ModelStreamItem::Chunk(ContentChunk::Thinking { thinking, signature }) => {
-                            current_thinking.push_str(&thinking);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
-                                agent_id: self.id.clone(),
-                                content: ContentChunk::Thinking { thinking, signature },
-                            })).await;
-                        }
-                        ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
-                            content_blocks.push(ContentBlock::RedactedThinking {
-                                data: String::new(),
-                            });
+                                content: chunk,
+                            })) {
+                                tracing::warn!("Failed to send chunk event: {}", e);
+                            }
                         }
                         ModelStreamItem::ToolCall(request) => {
-                            pending_tool_calls.push(ToolCall {
-                                id: request.id,
-                                name: request.name,
-                                arguments: request.arguments,
-                            });
+                            state.handle_tool_call(request);
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Fallback {
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Fallback {
                                 agent_id: self.id.clone(),
                                 from,
                                 to,
-                            })).await;
+                            })) {
+                                tracing::warn!("Failed to send fallback event: {}", e);
+                            }
                         }
                         ModelStreamItem::TokenUsage { prompt_tokens, completion_tokens } => {
                             // NOTE: this is right because each response's prompt_tokens will contain whole history
@@ -536,16 +548,19 @@ impl Agent {
                                 completion_tokens,
                                 total_tokens: total,
                             });
+                            state.handle_token_usage(prompt_tokens, completion_tokens);
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
                                 .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 prompt_tokens,
                                 completion_tokens,
                                 total_tokens: total,
                                 context_window,
-                            })).await;
+                            })) {
+                                tracing::warn!("Failed to send token usage event: {}", e);
+                            }
                         }
                     },
                     Ok(None) => break,
@@ -556,17 +571,8 @@ impl Agent {
             }
         }
 
-        if !current_thinking.is_empty() {
-            content_blocks.push(ContentBlock::Thinking {
-                thinking: current_thinking,
-                signature: None,
-            });
-        }
-        if !current_text.is_empty() {
-            content_blocks.push(ContentBlock::Text { text: current_text });
-        }
-
-        Ok((content_blocks, pending_tool_calls))
+        let result = state.build_result();
+        Ok((result.content_blocks, result.tool_calls))
     }
 
     /// Check and run compaction if needed
@@ -770,6 +776,9 @@ impl Agent {
             }
         }
 
+        // Create runtime token for this tool execution batch
+        let cancel_token = self.create_runtime_token();
+
         // Execute only approved calls
         let results = if approved_calls.is_empty() {
             Vec::new()
@@ -778,7 +787,7 @@ impl Agent {
                 &self.id,
                 &approved_calls,
                 &self.tool_registry,
-                Some(&self.cancel_token),
+                Some(&cancel_token),
                 Some(self.message_buffer.messages()),
             )
             .await

@@ -5,7 +5,7 @@ use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::agent::CancelToken;
+use tokio_util::sync::CancellationToken;
 
 const MAX_OUTPUT_LENGTH: usize = 40_000;
 const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length.]";
@@ -23,11 +23,15 @@ fn truncate_output(output: &str) -> String {
 }
 
 /// Execute multiple tool calls in parallel with optional cancellation support
+///
+/// Accepts tokio native CancellationToken for runtime cancellation control.
+/// The cancel_token should be created from Agent's custom CancelToken at the
+/// start of each request.
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],
     tool_registry: &ToolRegistry,
-    cancel_token: Option<&CancelToken>,
+    cancel_token: Option<&CancellationToken>,
     parent_messages: Option<&[Arc<Message>]>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();

@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthStr;
 
 use kernel::event::{Event as AppEvent, PermissionCommand};
 use kernel::permissions::Level;
-use kernel::types::Message;
+use kernel::types::{ContentBlock, Message};
 
 use crate::{
     components::{
@@ -66,8 +66,8 @@ pub struct Model {
     pub terminal: TerminalBridge<CrosstermTerminalAdapter>,
     /// Channel to receive events from kernel
     pub event_rx: mpsc::Receiver<AppEvent>,
-    /// Channel to send input to kernel
-    pub input_tx: mpsc::Sender<String>,
+    /// Channel to send input to kernel (supports multi-modal content blocks)
+    pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send cancel requests
     pub cancel_tx: mpsc::Sender<()>,
     /// Channel to send permission commands (responses and level changes)
@@ -100,7 +100,7 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
-        input_tx: mpsc::Sender<String>,
+        input_tx: mpsc::Sender<Vec<ContentBlock>>,
         cancel_tx: mpsc::Sender<()>,
         permission_tx: mpsc::Sender<PermissionCommand>,
         input_history: Vec<String>,
@@ -800,20 +800,29 @@ impl Update<Msg> for Model {
                     None
                 }
                 // Ignore input-related messages in Browse mode
-                Msg::InputSubmit(content) => {
+                Msg::InputSubmit(blocks) => {
                     if self.mode == AppMode::Browse {
                         return None;
                     }
+                    // Extract text content for history and display
+                    let text_content: String = blocks
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => text.as_str(),
+                            ContentBlock::ImageUrl { image_url: _ } => "[Image]",
+                            _ => "",
+                        })
+                        .collect();
                     // Save to history for C-n/C-p navigation
-                    if !content.trim().is_empty() {
-                        self.input_history.push(content.clone());
+                    if !text_content.trim().is_empty() {
+                        self.input_history.push(text_content.clone());
                         let _ = self.init_input_history();
                     }
                     // Add user message to chat view
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_user_message"),
-                        AttrValue::String(content.clone()),
+                        AttrValue::String(text_content),
                     );
                     // Scroll to bottom after adding user message
                     let _ = self.app.attr(
@@ -827,8 +836,8 @@ impl Update<Msg> for Model {
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     );
-                    // Send to kernel
-                    let _ = self.input_tx.try_send(content);
+                    // Send to kernel (supports multi-modal content)
+                    let _ = self.input_tx.try_send(blocks);
                     None
                 }
                 // Scrolling - works in both modes
@@ -1117,7 +1126,7 @@ impl Update<Msg> for Model {
 #[allow(clippy::too_many_arguments, clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
-    input_tx: mpsc::Sender<String>,
+    input_tx: mpsc::Sender<Vec<ContentBlock>>,
     cancel_tx: mpsc::Sender<()>,
     permission_tx: mpsc::Sender<PermissionCommand>,
     working_dir: String,
