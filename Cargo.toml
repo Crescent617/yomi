@@ -27,7 +27,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.23", features = ["v4", "serde", "v7"] }
 
 # TUI deps
-crossterm = "0.29"
+crossterm = { version = "0.29", features = ["bracketed-paste"] }
 pulldown-cmark = "0.13"
 
 # CLI deps

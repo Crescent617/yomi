@@ -1,53 +1,50 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use arc_swap::ArcSwap;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
-/// 可重置的取消令牌 - 支持 select! 和 reset
+/// 可重置的取消令牌 - 使用 arc-swap + CancellationToken 实现安全重置
+///
+/// 设计：CancelToken 包含 Arc<ArcSwap<...>>，这样：
+/// - Clone 时共享同一个 ArcSwap（共享状态）
+/// - reset/cancel 操作通过 ArcSwap 原子性地替换 token
+/// - cancelled() 获取当前 token 的快照，避免 reset 竞态
 #[derive(Debug, Clone)]
 pub struct CancelToken {
-    inner: Arc<CancelTokenInner>,
-}
-
-#[derive(Debug)]
-struct CancelTokenInner {
-    cancelled: AtomicBool,
-    notify: Notify,
+    inner: Arc<ArcSwap<CancellationToken>>,
 }
 
 impl CancelToken {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(CancelTokenInner {
-                cancelled: AtomicBool::new(false),
-                notify: Notify::new(),
-            }),
+            inner: Arc::new(ArcSwap::new(Arc::new(CancellationToken::new()))),
         }
     }
 
     /// 请求取消
     pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::SeqCst);
-        self.inner.notify.notify_waiters();
+        self.inner.load().cancel();
     }
 
     /// 检查是否已取消
     pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::SeqCst)
+        self.inner.load().is_cancelled()
     }
 
     /// 重置取消状态（用于新请求）
+    /// 原子性地替换为新的 CancellationToken
     pub fn reset(&self) {
-        self.inner.cancelled.store(false, Ordering::SeqCst);
-        // Note: Notify 不需要重置，它会在新 wait 时自动处理
+        self.inner.store(Arc::new(CancellationToken::new()));
     }
 
     /// 返回 Future 用于 select! - 取消时完成
-    pub fn cancelled(&self) -> CancelledFuture {
-        CancelledFuture {
-            inner: self.inner.clone(),
+    ///
+    /// 注意：调用时会通过 load_full() 获取当前 token 的所有权，
+    /// 即使后续 reset 也会继续等待原 token，避免竞态
+    pub fn cancelled(&self) -> impl std::future::Future<Output = ()> {
+        // 克隆 Arc 以避免持有 arc-swap 的引用
+        let token = self.inner.load_full();
+        async move {
+            token.cancelled().await;
         }
     }
 }
@@ -58,42 +55,114 @@ impl Default for CancelToken {
     }
 }
 
-/// Future that resolves when token is cancelled
-#[derive(Debug, Clone)]
-pub struct CancelledFuture {
-    inner: Arc<CancelTokenInner>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
 
-impl Future for CancelledFuture {
-    type Output = ();
+    #[tokio::test]
+    async fn test_cancel_token_basic() {
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Fast path: already cancelled
-        if self.inner.cancelled.load(Ordering::SeqCst) {
-            return Poll::Ready(());
-        }
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
 
-        // Register for notification
-        // We need to get a notified future and poll it
-        // Since Notify::notified() returns an owned future, we need to store it
-        // For simplicity, we use a different approach: just check and return Pending
-        // The actual notification will be checked on next poll
+    #[tokio::test]
+    async fn test_cancel_token_reset() {
+        let token = CancelToken::new();
 
-        // Create a waker that will be notified when cancel() is called
-        let notify = &self.inner.notify;
-        let notified = notify.notified();
-        tokio::pin!(notified);
+        // 取消
+        token.cancel();
+        assert!(token.is_cancelled());
 
-        match notified.poll(cx) {
-            Poll::Ready(()) => Poll::Ready(()),
-            Poll::Pending => {
-                // Double-check after registering
-                if self.inner.cancelled.load(Ordering::SeqCst) {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            }
-        }
+        // 重置
+        token.reset();
+        assert!(!token.is_cancelled());
+
+        // 可以再次取消
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_token_cancelled_future() {
+        let token = CancelToken::new();
+
+        // 未取消时，cancelled() 应该等待
+        let cancelled_fut = token.cancelled();
+        let token2 = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            token2.cancel();
+        });
+
+        tokio::time::timeout(Duration::from_millis(100), cancelled_fut)
+            .await
+            .expect("should complete");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_token_reset_while_waiting() {
+        let token = CancelToken::new();
+
+        // 获取 cancelled future（基于当前 token）
+        let cancelled_fut = token.cancelled();
+
+        // reset 会创建新 token
+        token.reset();
+
+        // 但 cancelled_fut 仍然监听旧的 token，不会被唤醒
+        // 因为旧 token 没有被 cancel
+        let result = tokio::time::timeout(Duration::from_millis(50), cancelled_fut).await;
+        assert!(
+            result.is_err(),
+            "old token was never cancelled, so future should not complete"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cancel_token_clone() {
+        let token1 = CancelToken::new();
+        let token2 = token1.clone();
+
+        // 两者共享同一状态
+        token1.cancel();
+        assert!(token1.is_cancelled());
+        assert!(token2.is_cancelled()); // token2 也应该看到取消状态
+
+        // token2 重置也影响 token1
+        token2.reset();
+        assert!(!token1.is_cancelled());
+        assert!(!token2.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_token_cancellation_after_reset() {
+        let token = CancelToken::new();
+
+        // 先获取一个 cancelled future
+        let cancelled_fut = token.cancelled();
+
+        // 重置 token
+        token.reset();
+
+        // 原 future 应该无法完成（等待的是旧的已丢弃的 token）
+        // 新 token 可以正常取消
+        let cancelled_fut2 = token.cancelled();
+        token.cancel();
+
+        // 新 future 应该完成
+        tokio::time::timeout(Duration::from_millis(10), cancelled_fut2)
+            .await
+            .expect("new future should complete");
+
+        // 旧 future 应该超时（因为旧 token 不会被再取消）
+        let result = tokio::time::timeout(Duration::from_millis(50), cancelled_fut).await;
+        assert!(
+            result.is_err(),
+            "old future waits on old token which is never cancelled"
+        );
     }
 }

@@ -23,8 +23,8 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
 
-futures = { workspace = true, features = ["std"] }
 tokio-util = { workspace = true }
+futures = { workspace = true, features = ["std"] }
 smol_str = { workspace = true, features = ["serde"] }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
@@ -33,6 +33,7 @@ toml = { workspace = true }
 reqwest = { workspace = true, optional = true }
 eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+arc-swap = "1"
 
 # Tool dependencies
 regex = "1"

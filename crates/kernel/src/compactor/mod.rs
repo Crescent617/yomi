@@ -293,7 +293,6 @@ async fn generate_summary_with_api(
     // Create a config with limited max_tokens for summary
     let summary_config = ModelConfig {
         max_tokens: Some(max_tokens),
-        temperature: Some(0.3), // Lower temperature for more consistent output
         ..model_config.clone()
     };
 

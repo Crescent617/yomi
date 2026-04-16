@@ -237,22 +237,30 @@ impl Table {
         for line_idx in 0..max_lines {
             let mut spans = vec![Span::styled("│ ", Style::default().fg(colors::border()))];
 
-            for (col_idx, cell) in cell_lines.iter().enumerate() {
-                let content = cell.get(line_idx).unwrap_or(&"");
-                let width = widths.get(col_idx).copied().unwrap_or(10);
+            // Render all columns, not just existing cells
+            for col_idx in 0..widths.len() {
+                let content = cell_lines
+                    .get(col_idx)
+                    .and_then(|cell| cell.get(line_idx))
+                    .copied()
+                    .unwrap_or("");
+                let width = widths[col_idx];
                 let align = self.aligns.get(col_idx).copied().unwrap_or_default();
 
                 let formatted = align.format(content, width);
                 let style = if is_header {
+                    // Header: bold only, no special color
                     Style::default()
-                        .fg(colors::accent_user())
+                        .fg(colors::text_primary())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(colors::text_primary())
                 };
 
                 spans.push(Span::styled(formatted, style));
-                spans.push(Span::styled(" │ ", Style::default().fg(colors::border())));
+                // Last column uses " │" (no trailing space), others use " │ "
+                let border_str = if col_idx == widths.len() - 1 { " │" } else { " │ " };
+                spans.push(Span::styled(border_str, Style::default().fg(colors::border())));
             }
 
             lines.push(Line::from(spans));
@@ -311,6 +319,8 @@ impl StreamingTableRenderer {
 
     /// End table head section
     pub fn end_head(&mut self) {
+        // Flush the header row if there's any content
+        self.end_row();
         self.in_header = false;
         self.expecting_separator = true;
     }
@@ -336,6 +346,7 @@ impl StreamingTableRenderer {
 
     /// End current cell
     pub fn end_cell(&mut self) {
+        // Always add cell content (even empty) to maintain column alignment
         self.current_row.push(self.current_cell.trim().to_string());
         self.current_cell.clear();
 
@@ -346,7 +357,8 @@ impl StreamingTableRenderer {
 
     /// End current row
     pub fn end_row(&mut self) {
-        self.end_cell(); // Ensure last cell is added
+        // Note: end_cell should be called explicitly for each cell
+        // We don't call it here to avoid adding an extra empty cell
 
         if !self.current_row.is_empty() {
             // Check if this is a separator row
@@ -386,7 +398,20 @@ impl StreamingTableRenderer {
             return Vec::new();
         }
 
-        let col_count = self.column_count.unwrap_or(1).max(1);
+        // Calculate column count from all available data
+        let mut col_count = self.column_count.unwrap_or(1);
+        
+        // Check current row + current cell for additional columns
+        let current_row_cols = self.current_row.len() 
+            + if self.current_cell.is_empty() { 0 } else { 1 };
+        col_count = col_count.max(current_row_cols);
+        
+        // Also check completed rows
+        for row in &self.rows {
+            col_count = col_count.max(row.cells.len());
+        }
+        
+        col_count = col_count.max(1);
         let widths = self.calculate_widths(col_count, max_width);
 
         let mut lines = Vec::new();
@@ -447,22 +472,27 @@ impl StreamingTableRenderer {
         for line_idx in 0..max_lines {
             let mut spans = vec![Span::styled("│ ", Style::default().fg(colors::border()))];
 
-            for (col_idx, cell) in cell_lines.iter().enumerate() {
-                let content = cell.get(line_idx).unwrap_or(&"");
-                let width = widths.get(col_idx).copied().unwrap_or(10);
+            // Render all columns, using empty string for missing cells
+            for col_idx in 0..widths.len() {
+                let cell = cell_lines.get(col_idx);
+                let content = cell.and_then(|c| c.get(line_idx)).copied().unwrap_or("");
+                let width = widths[col_idx];
                 let align = self.aligns.get(col_idx).copied().unwrap_or_default();
 
                 let formatted = align.format(content, width);
                 let style = if row.is_header {
+                    // Header: bold only, no special color
                     Style::default()
-                        .fg(colors::accent_user())
+                        .fg(colors::text_primary())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(colors::text_primary())
                 };
 
                 spans.push(Span::styled(formatted, style));
-                spans.push(Span::styled(" │ ", Style::default().fg(colors::border())));
+                // Last column uses " │" (no trailing space), others use " │ "
+                let border_str = if col_idx == widths.len() - 1 { " │" } else { " │ " };
+                spans.push(Span::styled(border_str, Style::default().fg(colors::border())));
             }
 
             lines.push(Line::from(spans));
@@ -570,5 +600,80 @@ mod tests {
         assert_eq!(parse_align("---"), CellAlign::Left);
         assert_eq!(parse_align(":--:"), CellAlign::Center);
         assert_eq!(parse_align("---:"), CellAlign::Right);
+    }
+
+    #[test]
+    fn debug_multi_column() {
+        let mut renderer = StreamingTableRenderer::new();
+        
+        renderer.start_table();
+        renderer.start_head();
+        renderer.start_row();
+        
+        renderer.start_cell();
+        renderer.append_text("Name");
+        renderer.end_cell();
+        
+        renderer.start_cell();
+        renderer.append_text("Status");
+        renderer.end_cell();
+        
+        renderer.start_cell();
+        renderer.append_text("Size");
+        renderer.end_cell();
+        
+        renderer.end_row();
+        renderer.end_head();
+        
+        // Separator
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.append_text("------");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("--------");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("------");
+        renderer.end_cell();
+        renderer.end_row();
+        
+        // Data row
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.append_text("file.txt");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("done");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("1.5KB");
+        renderer.end_cell();
+        renderer.end_row();
+        
+        // Debug
+        println!("column_count: {:?}", renderer.column_count);
+        println!("rows.len(): {}", renderer.rows.len());
+        for (i, row) in renderer.rows.iter().enumerate() {
+            println!("row[{}]: {:?} cells: {:?}", i, row.is_header, row.cells);
+        }
+        println!("current_row: {:?}", renderer.current_row);
+        println!("current_cell: {:?}", renderer.current_cell);
+        println!("aligns: {:?}", renderer.aligns);
+        
+        let lines = renderer.render(80);
+        println!("\nOutput:");
+        for line in &lines {
+            println!("'{}'", line);
+        }
+        
+        // Check column count in output
+        for line in &lines {
+            let s = line.to_string();
+            if s.contains('│') {
+                let count = s.matches('│').count();
+                println!("Line has {} │: '{}'", count, s);
+            }
+        }
     }
 }

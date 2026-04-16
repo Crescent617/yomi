@@ -502,3 +502,4 @@ mod tests {
         assert!(output.contains('│'), "Streaming table should contain borders");
     }
 }
+

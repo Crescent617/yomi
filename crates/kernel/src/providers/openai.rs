@@ -29,7 +29,7 @@ impl OpenAIProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(120))
+                .connect_timeout(std::time::Duration::from_secs(30))
                 .build()?,
             name: "openai".to_string(),
         })

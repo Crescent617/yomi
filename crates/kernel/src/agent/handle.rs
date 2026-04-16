@@ -74,11 +74,6 @@ impl AgentHandle {
         self.cancel_token.cancel();
     }
 
-    /// 检查是否已请求取消
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel_token.is_cancelled()
-    }
-
     /// 优雅地关闭 Agent（发送 Close 信号，区别于 Cancel）
     pub async fn close(&self) -> Result<(), AgentError> {
         self.input_tx

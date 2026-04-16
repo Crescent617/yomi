@@ -27,7 +27,7 @@ impl AnthropicProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: Client::builder()
-                .connect_timeout(Duration::from_secs(120))
+                .connect_timeout(Duration::from_secs(30))
                 .build()?,
             name: "anthropic".to_string(),
         })

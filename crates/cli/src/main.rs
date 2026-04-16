@@ -253,7 +253,7 @@ async fn main() -> Result<()> {
         config.model.clone(),
         Some(task_store),
         project_memory,
-        None, // Compactor is per-agent via agent_config
+        Some(compactor::Compactor::default()),
     ));
 
     // Prepare banner data (before skills is moved)
