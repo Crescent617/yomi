@@ -8,6 +8,78 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use uuid::Uuid;
 
+/// Result of checking permissions for a batch of tool calls
+pub struct PermissionCheckResult {
+    /// Tool calls that are approved for execution
+    pub approved: Vec<ToolCall>,
+    /// Tool calls that were denied, with (`tool_call_id`, `error_message`)
+    pub denied: Vec<(String, String)>,
+}
+
+/// Check permissions for a batch of tool calls.
+///
+/// This function partitions tool calls into approved and denied lists.
+/// If no permission checker is provided (YOLO mode), all calls are approved.
+///
+/// # Arguments
+/// * `tool_calls` - The tool calls to check
+/// * `permission_checker` - Optional permission checker (None = YOLO mode)
+/// * `agent_id` - For logging purposes
+///
+/// # Returns
+/// A `PermissionCheckResult` containing approved calls and denied call error messages.
+pub async fn check_tool_permissions(
+    tool_calls: &[ToolCall],
+    permission_checker: Option<&Checker>,
+    agent_id: &AgentId,
+) -> PermissionCheckResult {
+    use super::resolver::ToolLevelResolver;
+
+    let mut approved = Vec::new();
+    let mut denied = Vec::new();
+
+    for call in tool_calls {
+        let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
+
+        // Check if permission is needed
+        if let Some(checker) = permission_checker {
+            match checker.check_permission(call, level).await {
+                Ok(true) => {
+                    approved.push(call.clone());
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        "Agent {} tool call {} denied: {} exceeds threshold",
+                        agent_id,
+                        call.id,
+                        call.name
+                    );
+                    let error_msg = format!(
+                        "Permission denied: {} tool (level: {:?}) was not approved by user",
+                        call.name, level
+                    );
+                    denied.push((call.id.clone(), error_msg));
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Agent {} permission check failed for {}: {}",
+                        agent_id,
+                        call.name,
+                        e
+                    );
+                    let error_msg = format!("Permission check failed: {e}");
+                    denied.push((call.id.clone(), error_msg));
+                }
+            }
+        } else {
+            // No permission checker (YOLO mode), approve all
+            approved.push(call.clone());
+        }
+    }
+
+    PermissionCheckResult { approved, denied }
+}
+
 /// Response from user for a permission request
 #[derive(Debug, Clone, Copy)]
 pub struct Response {

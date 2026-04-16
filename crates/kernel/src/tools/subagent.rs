@@ -136,11 +136,9 @@ Provide your response in a structured format:
 
     /// Create tool registry for the subagent
     fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
-        use crate::agent::Agent;
-
         // Subagent doesn't need input_tx since it doesn't receive AgentInput.
         // BashTool's async mode will fail gracefully with a clear error message.
-        Agent::create_tool_registry(
+        crate::tools::ToolRegistryFactory::create(
             &self.parent_id,
             &self.shared,
             &self.working_dir,

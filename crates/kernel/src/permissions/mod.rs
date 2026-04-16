@@ -9,6 +9,6 @@ mod checker;
 mod level;
 mod resolver;
 
-pub use checker::{Checker, PermissionState, Responder, Response};
+pub use checker::{check_tool_permissions, Checker, PermissionCheckResult, PermissionState, Responder, Response};
 pub use level::{exceeds_threshold, Level};
 pub use resolver::ToolLevelResolver;
