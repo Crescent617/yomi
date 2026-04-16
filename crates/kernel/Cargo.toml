@@ -21,18 +21,24 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rand = "0.8"
+rand = { workspace = true }
 
-futures = { workspace = true, features = ["std"] }
 tokio-util = { workspace = true }
-smol_str = { version = "0.3", features = ["serde"] }
-serde_yaml = "0.9"
-toml = "0.8"
+futures = { workspace = true, features = ["std"] }
+smol_str = { workspace = true, features = ["serde"] }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
 
 # Optional dependencies for features
 reqwest = { workspace = true, optional = true }
 eventsource-stream = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+arc-swap = "1"
+
+# Tool dependencies
+regex = "1"
+ignore = "0.4"
+globset = "0.4"
 
 # Task system dependencies
 # Note: fs4 removed - using SQLite instead of file-based storage
@@ -41,5 +47,5 @@ sqlx = { workspace = true, optional = true }
 workspace = true
 
 [dev-dependencies]
-tokio-test = "0.4"
-tempfile = "3.0"
+tokio-test = { workspace = true }
+tempfile = { workspace = true }

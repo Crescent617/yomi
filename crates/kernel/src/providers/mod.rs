@@ -1,6 +1,5 @@
 use crate::event::ContentChunk;
 use crate::types::{Message, ToolDefinition};
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -13,7 +12,8 @@ pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
 
 /// Stream of model events
-pub type ModelStream = Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem>> + Send>>;
+pub type ModelStream =
+    Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem, ProviderError>> + Send>>;
 
 /// Items emitted by model stream
 #[derive(Debug, Clone)]
@@ -97,15 +97,68 @@ impl HttpError {
     }
 }
 
+/// Provider error type using thiserror
+#[derive(Error, Debug, Clone)]
+pub enum ProviderError {
+    /// HTTP error with status code (retryable based on code)
+    #[error("HTTP error: {0}")]
+    Http(#[from] HttpError),
+
+    /// Request building or sending failed
+    #[error("Request failed: {0}")]
+    Request(String),
+
+    /// SSE/streaming error
+    #[error("SSE error: {0}")]
+    Sse(String),
+
+    /// Timeout error
+    #[error("Timeout: {0}")]
+    Timeout(String),
+
+    /// JSON parse error
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    /// Configuration error
+    #[error("Configuration error: {0}")]
+    Config(String),
+}
+
+impl ProviderError {
+    /// Returns true if this error is retryable
+    pub const fn is_retryable(&self) -> bool {
+        match self {
+            ProviderError::Http(e) => e.is_retryable(),
+            ProviderError::Timeout(_) | ProviderError::Request(_) | ProviderError::Sse(_) => true,
+            ProviderError::Parse(_) | ProviderError::Config(_) => false,
+        }
+    }
+}
+
+impl From<reqwest::Error> for ProviderError {
+    fn from(e: reqwest::Error) -> Self {
+        if e.is_timeout() {
+            ProviderError::Timeout(format!("Request timeout: {e}"))
+        } else if let Some(status) = e.status() {
+            ProviderError::Http(HttpError(status.as_u16()))
+        } else {
+            ProviderError::Request(format!("Request failed: {e}"))
+        }
+    }
+}
+
+use std::sync::Arc;
+
 /// Core trait for model providers
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream>;
+    ) -> Result<ModelStream, ProviderError>;
 
     fn supports_streaming(&self) -> bool {
         true
@@ -141,10 +194,10 @@ impl<P: Provider> RetryingProvider<P> {
 impl<P: Provider> Provider for RetryingProvider<P> {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream> {
+    ) -> Result<ModelStream, ProviderError> {
         let mut attempt = 0;
         loop {
             match self.inner.stream(messages, tools, config).await {
@@ -154,14 +207,14 @@ impl<P: Provider> Provider for RetryingProvider<P> {
                     if attempt > self.max_retries {
                         return Err(e);
                     }
-                    let err_str = e.to_string();
-                    if err_str.contains("429") || err_str.contains("rate limit") {
+                    if e.is_retryable() {
                         let delay = self.base_delay_ms * 2_u64.pow(attempt - 1);
                         tracing::warn!(
-                            "Rate limited, retrying in {}ms (attempt {}/{})",
+                            "Provider error (retryable), retrying in {}ms (attempt {}/{}): {}",
                             delay,
                             attempt,
-                            self.max_retries
+                            self.max_retries,
+                            e
                         );
                         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
                         continue;

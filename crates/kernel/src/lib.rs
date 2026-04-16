@@ -18,6 +18,8 @@ pub mod app;
 pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod misc;
+pub mod permissions;
 pub mod project_memory;
 pub mod prompt;
 pub mod providers;
@@ -28,6 +30,9 @@ pub mod tools;
 pub mod types;
 pub mod utils;
 
+// Re-export permissions types
+pub use permissions::{Checker, Level, ToolLevelResolver};
+
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, expand_tilde, Config, ModelProvider, DEFAULT_DATA_DIR};
@@ -35,6 +40,7 @@ pub use event::{
     AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
     ToolEvent, UserEvent,
 };
+pub use misc::plugin::{Plugin, PluginLoader};
 pub use prompt::{PromptBuilder, SystemPromptBuilder};
 pub use providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
@@ -42,13 +48,16 @@ pub use providers::{
 };
 pub use skill::{Skill, SkillLoader};
 pub use storage::{Storage, StorageConfig};
-pub use tools::{enable_yolo_mode, is_yolo_mode, Tool, ToolRegistry};
+pub use tools::{Tool, ToolRegistry};
 pub use types::*;
 
 // Conditional re-exports for convenience
 #[cfg(feature = "providers")]
 pub use providers::{AnthropicProvider, OpenAIProvider};
-pub use tools::{execute_tools_parallel, BashTool, EditTool, ReadTool, SubAgentTool};
+pub use tools::{
+    execute_tools_parallel, BashTool, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool,
+    WriteTool,
+};
 
 // Task system re-exports
 pub use task::{

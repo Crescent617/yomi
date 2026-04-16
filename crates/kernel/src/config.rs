@@ -1,10 +1,11 @@
 use crate::agent::AgentConfig;
-use crate::env_name;
+use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::storage::StorageConfig;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Expand `~` to the user's home directory
 pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
@@ -22,7 +23,6 @@ pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
-    use super::env_name;
 
     /// Provider selection
     pub const PROVIDER: &str = env_name!("PROVIDER");
@@ -63,6 +63,15 @@ pub mod env_names {
 
     /// Skill folders (comma-separated paths)
     pub const SKILL_FOLDERS: &str = env_name!("SKILL_FOLDERS");
+
+    /// Plugin directories to load skills from (colon-separated paths)
+    pub const PLUGIN_DIRS: &str = env_name!("PLUGIN_DIRS");
+
+    /// Load skills from claude plugins cache (true/false)
+    pub const LOAD_CLAUDE_PLUGINS: &str = env_name!("LOAD_CLAUDE_PLUGINS");
+
+    /// Auto-approve level for tool permissions (safe | caution | dangerous)
+    pub const AUTO_APPROVE: &str = env_name!("AUTO_APPROVE");
 }
 
 /// Provider type
@@ -144,8 +153,13 @@ pub struct Config {
     pub agent: AgentConfig,
     pub sandbox: bool,
     pub yolo: bool,
+    pub auto_approve: Level,
     pub data_dir: PathBuf,
     pub skill_folders: Vec<String>,
+    /// Plugin directories to load skills from
+    pub plugin_dirs: Vec<PathBuf>,
+    /// Load skills from claude plugins cache (default: true)
+    pub load_claude_plugins: bool,
 }
 
 impl Default for Config {
@@ -158,8 +172,11 @@ impl Default for Config {
             agent: AgentConfig::default(),
             sandbox: false,
             yolo: false,
+            auto_approve: Level::default(),
             data_dir,
             skill_folders: Vec::new(),
+            plugin_dirs: vec![expand_tilde("~/.claude/plugins/cache")],
+            load_claude_plugins: true,
         }
     }
 }
@@ -238,7 +255,7 @@ impl Config {
 
         // Enable sub-agents (default true unless explicitly set to "false")
         if let Some(val) = env_var(env_names::ENABLE_SUB_AGENTS) {
-            self.agent.enable_sub_agents = val != "false";
+            self.agent.enable_subagent = val != "false";
         }
 
         // Data directory (expands ~ to home)
@@ -250,6 +267,28 @@ impl Config {
         // Skill folders (comma-separated)
         if let Some(folders) = env_var(env_names::SKILL_FOLDERS) {
             self.skill_folders = folders.split(',').map(String::from).collect();
+        }
+
+        // Plugin directories (colon-separated, like PATH)
+        if let Some(dirs) = env_var(env_names::PLUGIN_DIRS) {
+            self.plugin_dirs = dirs.split(':').map(expand_tilde).collect();
+        }
+
+        // Load claude plugins (true/false, default true)
+        if let Some(val) = env_var(env_names::LOAD_CLAUDE_PLUGINS) {
+            self.load_claude_plugins = val != "false" && val != "0";
+        }
+
+        // Auto-approve level (safe | caution | dangerous)
+        if let Some(level) = env_var(env_names::AUTO_APPROVE) {
+            if let Ok(l) = Level::from_str(&level) {
+                self.auto_approve = l;
+            }
+        }
+
+        // If yolo mode is enabled, auto-approve level should be Dangerous
+        if self.yolo {
+            self.auto_approve = Level::Dangerous;
         }
 
         // Sync model config to agent config

@@ -52,6 +52,8 @@ pub enum HistoryMessage {
         folded: bool,
         arguments: Option<String>,
         elapsed_ms: Option<u64>,
+        tokens: Option<u32>,
+        progress: Option<String>,
     },
     Error(String),
 }
@@ -153,6 +155,8 @@ impl ChatView {
             folded: !self.expand_all,
             arguments,
             elapsed_ms: None,
+            tokens: None,
+            progress: None,
         });
         if !self.user_scrolled {
             self.scroll_offset = 0;
@@ -214,6 +218,25 @@ impl ChatView {
         }
         if !self.user_scrolled {
             self.scroll_offset = 0;
+        }
+    }
+
+    /// Update tool progress (for long-running tools like subagent)
+    pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, tokens: Option<u32>) {
+        for msg in self.messages.iter_mut().rev() {
+            if let HistoryMessage::Tool {
+                tool_id: id,
+                progress,
+                tokens: tok,
+                ..
+            } = msg
+            {
+                if id == tool_id {
+                    *progress = Some(message.to_string());
+                    *tok = tokens;
+                    break;
+                }
+            }
         }
     }
 
@@ -572,14 +595,17 @@ impl ChatView {
                 folded,
                 arguments,
                 elapsed_ms,
+                ref tokens,
+                ref progress,
                 ..
             } => {
-                let (icon, color) = match status {
-                    ToolStatus::Running => ("", colors::accent_warning()),
-                    ToolStatus::Completed => ("", colors::accent_success()),
-                    ToolStatus::Failed => ("", colors::accent_error()),
-                    ToolStatus::Cancelled => ("", colors::text_secondary()),
+                let color = match status {
+                    ToolStatus::Running => colors::accent_warning(),
+                    ToolStatus::Completed => colors::accent_success(),
+                    ToolStatus::Failed => colors::accent_error(),
+                    ToolStatus::Cancelled => colors::text_secondary(),
                 };
+                let icon = toolname_to_icon(tool_name);
 
                 // Build header with execution time (only show if >= 1s)
                 let time_str = elapsed_ms
@@ -604,26 +630,45 @@ impl ChatView {
                 };
 
                 // Build header line
-                // Capitalize first letter of tool_name
-                let mut chars = tool_name.chars();
-                let tool_name_capitalized = chars
-                    .next()
-                    .map(|c| c.to_uppercase().to_string() + chars.as_str())
-                    .unwrap_or_default();
+                // Convert tool name to CamelCase for display
+                let tool_name_display = to_camel_case(tool_name);
                 let mut header_spans = vec![Span::styled(
-                    format!("{icon} {tool_name_capitalized}{time_str}"),
+                    format!("{icon}{tool_name_display}{time_str}"),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )];
                 if let Some(peek) = peek_args {
                     header_spans.push(Span::styled(
                         format!(" {peek}"),
-                        Style::default().fg(colors::text_secondary()),
+                        Style::default().fg(colors::text_primary()),
                     ));
                 }
                 lines.push(Line::from(header_spans));
 
                 // Output peek in folded mode (max 50 chars, indented)
                 if *folded {
+                    // Show progress for running tools
+                    if *status == ToolStatus::Running {
+                        if let Some(ref prog) = progress {
+                            let prog_text = prog.clone();
+                            lines.push(Line::from(vec![
+                                Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    prog_text,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
+                            ]));
+                        }
+                    }
+
+                    // Show tokens if available
+                    if let Some(total) = tokens {
+                        let token_text = format!(" ⎿ {} tokens", tokens::format_tokens(*total));
+                        lines.push(Line::from(vec![Span::styled(
+                            token_text,
+                            Style::default().fg(colors::text_secondary()),
+                        )]));
+                    }
+
                     let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
                         let trimmed = out.trim();
                         if trimmed.is_empty() {
@@ -635,7 +680,7 @@ impl ChatView {
                     });
                     if let Some(peek) = peek_output {
                         lines.push(Line::from(vec![
-                            Span::styled("⎿ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(peek, Style::default().fg(colors::text_secondary())),
                         ]));
                     }
@@ -699,10 +744,13 @@ impl ChatView {
                             ]));
                         }
                     } else if *status == ToolStatus::Running {
+                        let running_text = progress
+                            .as_ref()
+                            .map_or_else(|| "Running...".to_string(), |p| format!("Running: {p}"));
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
-                                "Running...",
+                                running_text,
                                 Style::default()
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
@@ -1052,6 +1100,15 @@ impl MockComponent for ChatView {
                     }
                 }
             }
+            "update_tool_progress" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let message = parts.get(1).map_or(String::new(), |s| (*s).to_string());
+                    let tokens = parts.get(2).and_then(|s| s.parse().ok());
+                    self.update_tool_progress(&tool_id, &message, tokens);
+                }
+            }
             "page_up" | "page_down" => {
                 if let AttrValue::Number(height) = value {
                     match cmd {
@@ -1060,6 +1117,11 @@ impl MockComponent for ChatView {
                         _ => {}
                     }
                 }
+            }
+            "clear_history" => {
+                self.messages.clear();
+                self.scroll_offset = 0;
+                self.banner = None;
             }
             _ => {}
         }
@@ -1193,5 +1255,37 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
         } else {
             None
         }
+    }
+}
+
+/// Convert tool name to CamelCase for display
+/// e.g., "subagent" -> "Subagent", "read" -> "Read", "`TaskCreate`" -> "`TaskCreate`"
+fn to_camel_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    // If already starts with uppercase, assume it's already CamelCase
+    if s.chars().next().unwrap().is_uppercase() {
+        return s.to_string();
+    }
+
+    // Convert first char to uppercase, keep rest as-is
+    let mut chars = s.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().to_string() + chars.as_str())
+        .unwrap_or_default()
+}
+
+fn toolname_to_icon(tool_name: &str) -> &'static str {
+    match tool_name.to_lowercase().as_str() {
+        "subagent" => "󰚩 ",
+        "read" => " ",
+        "write" | "edit" => " ",
+        "bash" => " ",
+        // start with "task" -> task icon
+        name if name.starts_with("task") => " ",
+        _ => " ",
     }
 }

@@ -1,13 +1,13 @@
-use rand::Rng;
+use rand::RngExt;
 
 const BASE56_CHARS: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
 
 /// Generate a random base56 ID of specified length
 pub fn gen_base56_id(len: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..len)
         .map(|_| {
-            let idx = rng.gen_range(0..BASE56_CHARS.len());
+            let idx = rng.random_range(0..BASE56_CHARS.len());
             BASE56_CHARS[idx] as char
         })
         .collect()
@@ -53,8 +53,7 @@ mod tests {
     #[test]
     fn test_gen_base56_id_uniqueness() {
         // Generate many IDs and verify they're not all the same (probabilistic test)
-        let ids: std::collections::HashSet<String> =
-            (0..100).map(|_| gen_base56_id(8)).collect();
+        let ids: std::collections::HashSet<String> = (0..100).map(|_| gen_base56_id(8)).collect();
         // With 56^8 possible combinations, collisions should be extremely rare
         assert_eq!(ids.len(), 100, "Expected 100 unique IDs");
     }

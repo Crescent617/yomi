@@ -15,7 +15,7 @@ pub fn add_line_numbers(content: &str, start_line: usize) -> String {
     // Calculate the width needed for the largest line number
     let num_width = num_digits(total_lines);
 
-        let mut result = String::new();
+    let mut result = String::new();
     for (i, line) in lines.iter().enumerate() {
         let line_num = start_line + i;
         // Format: right-aligned line number, padded with spaces, followed by tab

@@ -3,22 +3,34 @@
 //! Main application using tuirealm framework for component-based TUI.
 
 use anyhow::Result;
+
+/// Result type returned by TUI
+pub struct TuiResult {
+    /// Input history entries collected during this session
+    pub input_history: Vec<String>,
+    /// Whether to create a new session after exiting
+    pub should_create_new_session: bool,
+}
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::SubEventClause;
-use unicode_width::UnicodeWidthStr;
 use tuirealm::{
     application::PollStrategy,
     ratatui::layout::{Constraint, Direction, Layout},
     terminal::{CrosstermTerminalAdapter, TerminalBridge},
     Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, Update,
 };
+use unicode_width::UnicodeWidthStr;
 
-use kernel::event::Event as AppEvent;
-use kernel::types::Message;
+use kernel::event::{Event as AppEvent, PermissionCommand};
+use kernel::permissions::Level;
+use kernel::types::{ContentBlock, Message};
 
 use crate::{
-    components::{ChatViewComponent, InfoBarComponent, InputComponent, StatusBarComponent},
+    components::{
+        ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
+        StatusBarComponent,
+    },
     id::Id,
     msg::{Msg, UserEvent},
 };
@@ -32,21 +44,34 @@ pub enum AppMode {
 }
 
 /// TUI Model holding application state
-pub struct Model {
-    /// Application
-    pub app: Application<Id, Msg, UserEvent>,
+/// Application state flags grouped to reduce struct bool count
+#[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct AppState {
     /// Indicates that the application must quit
     pub quit: bool,
     /// Tells whether to redraw interface
-    pub redraw: bool,
-    /// Used to draw to terminal
+    pub should_redraw: bool,
+    /// Whether we're currently streaming (showing streaming component)
+    pub is_streaming: bool,
+    /// Flag to indicate if a new session should be created on exit
+    pub should_create_new_session: bool,
+}
+
+pub struct Model {
+    /// Application
+    pub app: Application<Id, Msg, UserEvent>,
+    /// Application state flags
+    pub state: AppState,
     pub terminal: TerminalBridge<CrosstermTerminalAdapter>,
     /// Channel to receive events from kernel
     pub event_rx: mpsc::Receiver<AppEvent>,
-    /// Channel to send input to kernel
-    pub input_tx: mpsc::Sender<String>,
+    /// Channel to send input to kernel (supports multi-modal content blocks)
+    pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send cancel requests
     pub cancel_tx: mpsc::Sender<()>,
+    /// Channel to send permission commands (responses and level changes)
+    pub permission_tx: mpsc::Sender<PermissionCommand>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -54,9 +79,10 @@ pub struct Model {
     /// When thinking started (for calculating elapsed time)
     thinking_start_time: Option<Instant>,
     /// Whether we're currently streaming (showing streaming component)
-    is_streaming: bool,
     /// Application mode - single source of truth
     mode: AppMode,
+    /// Pending permission request (`req_id`) waiting for user confirmation
+    pending_permission: Option<String>,
     /// Input history for the current working directory (loaded + new)
     input_history: Vec<String>,
     /// Initial history length (to identify new entries on exit)
@@ -66,37 +92,48 @@ pub struct Model {
     working_dir: std::path::PathBuf,
     /// Session messages to display on startup (for resumed sessions)
     session_messages: Vec<Message>,
+    /// Permission level for displaying YOLO mode indicator
+    permission_level: Level,
 }
 
 impl Model {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
-        input_tx: mpsc::Sender<String>,
+        input_tx: mpsc::Sender<Vec<ContentBlock>>,
         cancel_tx: mpsc::Sender<()>,
+        permission_tx: mpsc::Sender<PermissionCommand>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
+        permission_level: Level,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
 
         Ok(Self {
             app,
-            quit: false,
-            redraw: true,
+            state: AppState {
+                quit: false,
+                should_redraw: true,
+                is_streaming: false,
+                should_create_new_session: false,
+            },
             terminal,
             event_rx,
             input_tx,
             cancel_tx,
+            permission_tx,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
-            is_streaming: false,
             mode: AppMode::Normal,
+            pending_permission: None,
             initial_history_len: input_history.len(),
             input_history,
             working_dir,
             session_messages,
+            permission_level,
         })
     }
 
@@ -114,6 +151,13 @@ impl Model {
             Attribute::Custom("history"),
             AttrValue::String(history_json),
         )?;
+        // Set working directory for file completion
+        let working_dir_str = self.working_dir.to_string_lossy().to_string();
+        let _ = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("working_dir"),
+            AttrValue::String(working_dir_str),
+        );
         Ok(())
     }
 
@@ -156,6 +200,21 @@ impl Model {
     /// Initialize banner with real data (called once at startup)
     pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
         self.update_banner(working_dir, skills)
+    }
+
+    /// Initialize status bar with permission level for YOLO mode display
+    pub fn init_status_bar(&mut self) -> Result<()> {
+        let level_val = match self.permission_level {
+            Level::Safe => 0,
+            Level::Caution => 1,
+            Level::Dangerous => 2,
+        };
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_permission_level"),
+            AttrValue::Number(level_val),
+        )?;
+        Ok(())
     }
 
     /// Initialize context window display in status bar
@@ -202,7 +261,8 @@ impl Model {
                 // Each line needs at least 1 visual line
                 // Calculate how many lines it wraps to based on content width
                 let line_width = line.width();
-                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1) / content_width.max(1);
+                let wrapped_lines = line_width.saturating_add(content_width).saturating_sub(1)
+                    / content_width.max(1);
                 total_visual_lines += wrapped_lines.max(1);
             }
 
@@ -262,7 +322,8 @@ impl Model {
 
         let _ = self.terminal.draw(|f| {
             // Calculate input height inside draw closure to access terminal area
-            let input_height = Self::calculate_input_height_for_content(&input_content, f.area().width);
+            let input_height =
+                Self::calculate_input_height_for_content(&input_content, f.area().width);
 
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
@@ -304,6 +365,9 @@ impl Model {
                 // Status bar shows current mode (vim-style)
                 self.app.view(&Id::StatusBar, f, chunks[3]);
             }
+
+            // Render dialog on top if active (uses full screen for centering)
+            self.app.view(&Id::Dialog, f, f.area());
         });
     }
 
@@ -342,6 +406,13 @@ impl Model {
             vec![Sub::new(SubEventClause::Tick, SubClause::Always)],
         )?;
 
+        // Mount select dialog component (hidden by default, for permission confirmation)
+        app.mount(
+            Id::Dialog,
+            Box::new(SelectDialogComponent::new("Dialog")),
+            vec![Sub::new(SubEventClause::Any, SubClause::Always)],
+        )?;
+
         // Set focus to input box
         app.active(&Id::InputBox)?;
 
@@ -353,7 +424,7 @@ impl Model {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
-                    self.is_streaming = true;
+                    self.state.is_streaming = true;
                     match content {
                         kernel::event::ContentChunk::Text(text) => {
                             self.current_content.push_str(&text);
@@ -390,10 +461,10 @@ impl Model {
                         }
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Complete { .. }) => {
-                    self.is_streaming = false;
+                AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
+                    self.state.is_streaming = false;
 
                     // Stop status bar
                     self.app.attr(
@@ -453,11 +524,11 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
                     // Clear previous streaming content
-                    self.is_streaming = true;
+                    self.state.is_streaming = true;
                     self.current_content.clear();
                     self.current_thinking.clear();
                     self.thinking_start_time = None;
@@ -468,7 +539,7 @@ impl Model {
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
@@ -478,7 +549,7 @@ impl Model {
                         Attribute::Custom("stop_compacting")
                     };
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
                     total_tokens,
@@ -492,7 +563,7 @@ impl Model {
                         Attribute::Custom("set_ctx_usage"),
                         AttrValue::String(usage_str),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
@@ -508,7 +579,7 @@ impl Model {
                         Attribute::Custom("start_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
                     tool_id,
@@ -523,7 +594,7 @@ impl Model {
                         Attribute::Custom("complete_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Error {
                     tool_id,
@@ -538,10 +609,27 @@ impl Model {
                         Attribute::Custom("fail_tool"),
                         AttrValue::String(combined),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
+                }
+                AppEvent::Tool(kernel::event::ToolEvent::Progress {
+                    tool_id,
+                    message,
+                    tokens,
+                    ..
+                }) => {
+                    // Update tool progress in chat view
+                    // Format: tool_id\x00message\x00tokens (tokens is optional)
+                    let tokens_str = tokens.map(|t| t.to_string()).unwrap_or_default();
+                    let combined = format!("{tool_id}\x00{message}\x00{tokens_str}");
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("update_tool_progress"),
+                        AttrValue::String(combined),
+                    )?;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
-                    self.is_streaming = false;
+                    self.state.is_streaming = false;
 
                     // Save partial content and clear state
                     let _ = self.save_partial_content();
@@ -558,10 +646,10 @@ impl Model {
                         Attribute::Custom("cancel_streaming"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
-                    self.is_streaming = false;
+                    self.state.is_streaming = false;
 
                     // Stop status bar
                     self.app.attr(
@@ -598,7 +686,39 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
-                    self.redraw = true;
+                    self.state.should_redraw = true;
+                }
+                AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
+                    req_id,
+                    tool_name,
+                    tool_args,
+                    tool_level,
+                    ..
+                }) => {
+                    tracing::info!(
+                        "TUI received PermissionRequest: {} for {}",
+                        req_id,
+                        tool_name
+                    );
+                    // Store the pending permission request
+                    self.pending_permission = Some(req_id.clone());
+
+                    // Show confirmation dialog with "Always approve" and "YOLO" options
+                    let message =
+                        format!("Tool: {tool_name}\nLevel: {tool_level}\nArgs: {tool_args}");
+                    let dialog_data = format!(
+                       "Can I run this tool?\x00Sure\x00Always allow this tool with level {tool_level}\x00Not now\x00YOLO - allow all dangerous tools\x00{message}"
+                    );
+                    tracing::debug!("Showing dialog with data: {dialog_data}",);
+                    let _ = self.app.attr(
+                        &Id::Dialog,
+                        Attribute::Custom("show"),
+                        AttrValue::String(dialog_data),
+                    );
+                    // Give focus to dialog so it receives keyboard events
+                    let result = self.app.active(&Id::Dialog);
+                    tracing::debug!("Dialog focus result: {:?}", result);
+                    self.state.should_redraw = true;
                 }
                 _ => {}
             }
@@ -608,7 +728,7 @@ impl Model {
 
     /// Run the main loop
     #[allow(clippy::future_not_send)]
-    pub async fn run(mut self) -> Result<Vec<String>> {
+    pub async fn run(mut self) -> Result<TuiResult> {
         // Enter alternate screen
         self.terminal.enter_alternate_screen()?;
         self.terminal.enable_raw_mode()?;
@@ -622,8 +742,11 @@ impl Model {
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
 
-        // Return new history entries
-        Ok(self.get_new_history_entries())
+        // Return result with new history entries and session flag
+        Ok(TuiResult {
+            input_history: self.get_new_history_entries(),
+            should_create_new_session: self.state.should_create_new_session,
+        })
     }
 
     #[allow(clippy::future_not_send)]
@@ -631,14 +754,14 @@ impl Model {
         // Enable mouse capture
         self.terminal.enable_mouse_capture()?;
 
-        while !self.quit {
+        while !self.state.quit {
             // Process kernel events
             self.process_kernel_events()?;
 
             // Tick the application
             match self.app.tick(PollStrategy::Once) {
                 Ok(messages) if !messages.is_empty() => {
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                     for msg in messages {
                         let mut msg = Some(msg);
                         while msg.is_some() {
@@ -650,9 +773,9 @@ impl Model {
             }
 
             // Redraw if needed
-            if self.redraw {
+            if self.state.should_redraw {
                 self.view();
-                self.redraw = false;
+                self.state.should_redraw = false;
             }
 
             // Small yield to allow tokio to process other tasks
@@ -669,28 +792,38 @@ impl Model {
 impl Update<Msg> for Model {
     fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
-            self.redraw = true;
+            self.state.should_redraw = true;
 
             match msg {
                 Msg::Quit => {
-                    self.quit = true;
+                    self.state.quit = true;
                     None
                 }
                 // Ignore input-related messages in Browse mode
-                Msg::InputSubmit(content) => {
+                Msg::InputSubmit(blocks) => {
                     if self.mode == AppMode::Browse {
                         return None;
                     }
+                    // Extract text content for history and display
+                    let text_content: String = blocks
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => text.as_str(),
+                            ContentBlock::ImageUrl { image_url: _ } => "[Image]",
+                            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => "",
+                            ContentBlock::Audio { .. } => "[Audio]",
+                        })
+                        .collect();
                     // Save to history for C-n/C-p navigation
-                    if !content.trim().is_empty() {
-                        self.input_history.push(content.clone());
+                    if !text_content.trim().is_empty() {
+                        self.input_history.push(text_content.clone());
                         let _ = self.init_input_history();
                     }
                     // Add user message to chat view
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_user_message"),
-                        AttrValue::String(content.clone()),
+                        AttrValue::String(text_content),
                     );
                     // Scroll to bottom after adding user message
                     let _ = self.app.attr(
@@ -704,8 +837,8 @@ impl Update<Msg> for Model {
                         Attribute::Custom("start_streaming"),
                         AttrValue::Flag(true),
                     );
-                    // Send to kernel
-                    let _ = self.input_tx.try_send(content);
+                    // Send to kernel (supports multi-modal content)
+                    let _ = self.input_tx.try_send(blocks);
                     None
                 }
                 // Scrolling - works in both modes
@@ -741,7 +874,7 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::Redraw => {
-                    self.redraw = true;
+                    self.state.should_redraw = true;
                     None
                 }
                 Msg::ShowStatusMessage(msg, duration_ms) => {
@@ -852,6 +985,136 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
+                Msg::DialogSelected(idx) => {
+                    // Send permission response based on selection
+                    // idx: 0 = Approve, 1 = Always approve, 2 = Deny, 3 = YOLO
+                    if let Some(req_id) = self.pending_permission.take() {
+                        let (approved, remember) = match idx {
+                            0 => (true, false), // Approve once
+                            1 => (true, true),  // Always approve this tool
+                            3 => {
+                                // YOLO mode - enable Dangerous level
+                                self.permission_level = Level::Dangerous;
+                                // Update status bar to show YOLO
+                                let _ = self.app.attr(
+                                    &Id::StatusBar,
+                                    Attribute::Custom("set_permission_level"),
+                                    AttrValue::Number(2),
+                                );
+                                // Show status message
+                                let _ = self.app.attr(
+                                    &Id::StatusBar,
+                                    Attribute::Custom("show_message"),
+                                    AttrValue::String(
+                                        "5000\x00YOLO mode enabled - all tools will be auto-approved".to_string(),
+                                    ),
+                                );
+                                // Send command to kernel to update permission level
+                                let _ = self
+                                    .permission_tx
+                                    .try_send(PermissionCommand::SetLevel(Level::Dangerous));
+                                (true, false)
+                            }
+                            _ => (false, false), // Deny
+                        };
+                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                            req_id,
+                            approved,
+                            remember,
+                        });
+                    }
+                    // Return focus to input box
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
+                Msg::DialogCancelled => {
+                    // Deny the permission request if dialog is cancelled
+                    if let Some(req_id) = self.pending_permission.take() {
+                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                            req_id,
+                            approved: false,
+                            remember: false,
+                        });
+                    }
+                    // Return focus to input box
+                    let _ = self.app.active(&Id::InputBox);
+                    None
+                }
+                // Slash commands
+                Msg::CommandNew => {
+                    // Signal that a new session should be created
+                    self.state.should_create_new_session = true;
+                    self.state.quit = true;
+                    None
+                }
+                Msg::CommandClear => {
+                    // Clear chat history
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("clear_history"),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::CommandYolo => {
+                    // Toggle YOLO mode via command
+                    self.update(Some(Msg::ToggleYoloMode))
+                }
+                Msg::ToggleYoloMode => {
+                    // Toggle between Safe and Dangerous permission levels
+                    let new_level = if self.permission_level == Level::Dangerous {
+                        Level::Safe
+                    } else {
+                        Level::Dangerous
+                    };
+                    self.permission_level = new_level;
+
+                    // Update status bar
+                    let level_num = match new_level {
+                        Level::Safe => 0,
+                        Level::Caution => 1,
+                        Level::Dangerous => 2,
+                    };
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("set_permission_level"),
+                        AttrValue::Number(level_num),
+                    );
+
+                    // Show status message
+                    let msg = if new_level == Level::Dangerous {
+                        "YOLO mode enabled - all tools will be auto-approved"
+                    } else {
+                        "YOLO mode disabled"
+                    };
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String(format!("5000\x00{msg}")),
+                    );
+
+                    // Send command to kernel
+                    let _ = self
+                        .permission_tx
+                        .try_send(PermissionCommand::SetLevel(new_level));
+
+                    None
+                }
+                Msg::CommandBrowse => {
+                    // Toggle browse mode
+                    self.update(Some(Msg::ToggleBrowseMode))
+                }
+                Msg::CommandUnknown(cmd) => {
+                    // Show unknown command message in status bar
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("message"),
+                        AttrValue::Payload(tuirealm::props::PropPayload::One(
+                            tuirealm::props::PropValue::Str(format!("Unknown command: {cmd}")),
+                        )),
+                    );
+                    None
+                }
                 _ => None,
             }
         } else {
@@ -861,28 +1124,32 @@ impl Update<Msg> for Model {
 }
 
 /// Run the TUI application
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::future_not_send)]
+#[allow(clippy::too_many_arguments, clippy::future_not_send)]
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
-    input_tx: mpsc::Sender<String>,
+    input_tx: mpsc::Sender<Vec<ContentBlock>>,
     cancel_tx: mpsc::Sender<()>,
+    permission_tx: mpsc::Sender<PermissionCommand>,
     working_dir: String,
     skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
+    permission_level: Level,
     context_window: u32,
-) -> Result<Vec<String>> {
+) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
         event_rx,
         input_tx,
         cancel_tx,
+        permission_tx,
         input_history,
         working_dir_path,
         session_messages,
+        permission_level,
     )?;
     model.init_banner(working_dir, skills)?;
+    model.init_status_bar()?;
     // Set input history after banner init
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)

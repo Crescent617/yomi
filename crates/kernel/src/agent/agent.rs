@@ -1,19 +1,19 @@
 use super::message_buffer::MessageBuffer;
 use super::{
-    AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
+    AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
+    CancelToken,
 };
 use crate::compactor;
-use crate::event::{AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ToolEvent};
+use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
+use crate::permissions::{Checker, ToolLevelResolver};
 use crate::prompt::SystemPromptBuilder;
-use crate::providers::ModelStreamItem;
 use crate::skill::Skill;
+use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
-use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug, Clone)]
@@ -25,8 +25,10 @@ pub enum AgentInput {
         task_id: String,
         content: Vec<ContentBlock>,
     },
-    /// Cancel current operation
-    Cancel,
+    /// Permission response from user/TUI
+    PermissionResponse { req_id: String, approved: bool },
+    /// Close the agent gracefully (for subagent/resource management)
+    Close,
 }
 
 pub struct Agent {
@@ -41,10 +43,13 @@ pub struct Agent {
     max_iterations: usize,
     // Tool registry - each agent has its own set of tools
     tool_registry: crate::tools::ToolRegistry,
+    // Permission checker for tool execution
+    permission_checker: Option<Arc<Checker>>,
     // Store the last error message for display
     last_error: Option<String>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
+    is_subagent: bool,
 }
 
 impl Agent {
@@ -53,9 +58,9 @@ impl Agent {
         shared: &Arc<AgentShared>,
         args: AgentSpawnArgs,
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
-        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(10);
+        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
         let (event_tx, event_rx) = mpsc::channel(100);
-        let cancel_token = CancelToken::new();
+        let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
         // Build system prompt with project memory and skills
@@ -80,9 +85,9 @@ impl Agent {
             id,
             system_prompt
         );
-        let mut messages = vec![Message::system(system_prompt)];
+        let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
-        let message_buffer = MessageBuffer::from_messages(messages);
+        let message_buffer = MessageBuffer::from_arc_messages(messages);
 
         let shared = shared.clone();
 
@@ -91,12 +96,29 @@ impl Agent {
             &id,
             &shared,
             &args.working_dir,
-            &input_tx,
-            args.skills,
+            Some(&input_tx),
+            &event_tx,
+            args.skills.clone(),
             &args.session_id,
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
         );
+
+        // Create permission checker and responder from shared state
+        // If no permission_state in shared (YOLO mode), all tools auto-approve
+        // For subagents: use parent's event_tx so permission requests go to parent TUI
+        let permission_event_tx = args
+            .parent_event_tx
+            .clone()
+            .unwrap_or_else(|| event_tx.clone());
+        let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
+            Some(state) => {
+                let checker = Checker::new(state.clone(), id.clone(), permission_event_tx);
+                let responder = state.create_responder();
+                (Some(Arc::new(checker)), Some(responder))
+            }
+            None => (None, None),
+        };
 
         let agent = Self {
             id: id.clone(),
@@ -109,8 +131,10 @@ impl Agent {
             session_id: args.session_id,
             max_iterations: args.max_iterations,
             tool_registry,
+            permission_checker,
             last_error: None,
             pending_token_usage: None,
+            is_subagent: args.parent_event_tx.is_some(),
         };
 
         let handle_id = id.clone();
@@ -118,31 +142,45 @@ impl Agent {
             if let Err(e) = agent.run().await {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
+            info!("Agent {} closed", handle_id);
         });
 
-        let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token);
+        let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token, permission_responder);
         (handle, event_rx)
+    }
+
+    /// Create a runtime `CancellationToken` linked to the Agent's custom `CancelToken`.
+    ///
+    /// This bridges the Agent layer (with reset support) to the Runtime layer
+    /// (using tokio native `CancellationToken`).
+    fn create_runtime_token(&self) -> tokio_util::sync::CancellationToken {
+        // 直接获取父 Agent 的 tokio CancellationToken
+        // 不需要 spawn 桥接任务，因为 CancelToken 内部就是 CancellationToken
+        self.cancel_token.runtime_token()
     }
 
     /// Create tool registry for an agent with standard tools
     #[allow(clippy::too_many_arguments)]
-    fn create_tool_registry(
+    pub(crate) fn create_tool_registry(
         agent_id: &AgentId,
         shared: &Arc<AgentShared>,
         working_dir: &std::path::PathBuf,
-        input_tx: &mpsc::Sender<AgentInput>,
+        input_tx: Option<&mpsc::Sender<AgentInput>>,
+        event_tx: &mpsc::Sender<Event>,
         skills: Vec<Arc<Skill>>,
         session_id: &str,
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
     ) -> crate::tools::ToolRegistry {
-        use crate::tools::{BashTool, BashToolCtx, EditTool, ReadTool, SubAgentTool};
+        use crate::tools::{
+            BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, WriteTool,
+        };
 
         let mut registry = crate::tools::ToolRegistry::new();
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
 
         // Register Bash tool
-        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.clone(), working_dir.clone());
+        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.cloned(), working_dir.clone());
         let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
         registry.register(bash_tool);
 
@@ -152,19 +190,34 @@ impl Agent {
         registry.register(read_tool);
 
         // Register Edit tool with file state store
-        let edit_tool = EditTool::new(working_dir).with_file_state_store(file_state_store);
+        let edit_tool =
+            EditTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
         registry.register(edit_tool);
+
+        // Register Write tool with file state store
+        let write_tool =
+            WriteTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        registry.register(write_tool);
+
+        // Register Glob tool
+        let glob_tool = GlobTool::new(working_dir);
+        registry.register(glob_tool);
+
+        // Register Grep tool
+        let grep_tool = GrepTool::new(working_dir);
+        registry.register(grep_tool);
 
         // Register SubAgent tool if enabled
         if enable_sub_agents {
-            let subagent_tool = SubAgentTool::new(
+            let subagent_tool = SubagentTool::new(
                 agent_id.clone(),
                 Arc::clone(shared),
-                input_tx.clone(),
+                input_tx.cloned().unwrap(),
                 skills,
                 shared.storage.clone(),
                 working_dir.clone(),
                 session_id.to_owned(),
+                event_tx.clone(),
             );
             registry.register(subagent_tool);
         }
@@ -189,7 +242,7 @@ impl Agent {
         }
     }
 
-    async fn run(mut self) -> Result<()> {
+    async fn run(mut self) -> Result<(), AgentError> {
         tracing::info!(
             "Agent {} started with {} messages",
             self.id,
@@ -204,10 +257,19 @@ impl Agent {
                 break;
             }
 
-            if self.context.iteration_count() >= self.max_iterations {
-                tracing::warn!("Max iterations reached, forcing completion");
-                self.context.transition_to(AgentState::Completed);
-                break;
+            if self.context.iteration_count() >= self.max_iterations
+                && self.context.current_state() == AgentState::Streaming
+            {
+                if self.is_subagent {
+                    tracing::warn!("Max iterations reached, forcing completion");
+                    self.context.transition_to(AgentState::Closed);
+                    break;
+                }
+                tracing::warn!(
+                    "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
+                    self.id
+                );
+                self.context.transition_to(AgentState::WaitingForInput);
             }
 
             // Note: cancel is handled during streaming via select!, not here
@@ -215,24 +277,24 @@ impl Agent {
 
             match state {
                 AgentState::WaitingForInput => {
+                    self.context.reset_iteration();
                     tracing::debug!("Agent {} waiting for input", self.id);
                     if let Err(e) = self.handle_wait_for_input().await {
                         self.record_error("Wait for input failed", &e);
-                        self.context.transition_to(AgentState::Failed);
                     }
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id);
                     if let Err(e) = self.handle_streaming_with_retry().await {
                         self.record_error("Streaming failed", &e);
-                        self.context.transition_to(AgentState::Failed);
+                        self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
                 AgentState::ExecutingTool => {
                     tracing::info!("Agent {} executing tools", self.id);
                     if let Err(e) = self.handle_execute_tool().await {
                         self.record_error("Tool execution failed", &e);
-                        self.context.transition_to(AgentState::Failed);
+                        self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
                 _ => tokio::task::yield_now().await,
@@ -251,48 +313,23 @@ impl Agent {
             tool_calls
         );
 
-        // Send appropriate event based on final state
-        match final_state {
-            AgentState::Cancelled => {
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Cancelled {
-                        agent_id: self.id.clone(),
-                    }))
-                    .await;
-            }
-            AgentState::Failed => {
-                let error_msg = self
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "Agent failed".to_string());
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Failed {
-                        agent_id: self.id.clone(),
-                        error: error_msg,
-                    }))
-                    .await;
-            }
-            _ => {
-                let result = AgentResult {
-                    messages: self.message_buffer.messages().to_vec(),
-                    tool_calls,
-                };
-                let _ = self
-                    .event_tx
-                    .send(Event::Agent(AgentEvent::Completed {
-                        agent_id: self.id.clone(),
-                        result,
-                    }))
-                    .await;
-            }
-        }
+        let result = AgentResult {
+            messages: self.message_buffer.messages().to_vec(),
+            tool_calls,
+        };
+        let _ = self
+            .event_tx
+            .send(Event::Agent(AgentEvent::Completed {
+                agent_id: self.id.clone(),
+                result,
+            }))
+            .await;
+
         Ok(())
     }
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
-    async fn handle_cancel(&self, context: &str) -> Result<()> {
+    async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("Agent {} {} cancelled", self.id, context);
         let _ = self
             .event_tx
@@ -305,17 +342,17 @@ impl Agent {
     }
 
     /// Record an error and store it for later display
-    fn record_error(&mut self, context: &str, error: &anyhow::Error) {
+    fn record_error(&mut self, context: &str, error: &AgentError) {
         let msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, msg);
         self.last_error = Some(msg);
     }
 
     /// Helper to emit `AgentEvent::Failed` and return error
-    async fn fail_agent(&self, context: &str, error: anyhow::Error) -> Result<()> {
+    async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, error_msg);
-        let _ = self
+        let _n = self
             .event_tx
             .send(Event::Agent(AgentEvent::Failed {
                 agent_id: self.id.clone(),
@@ -325,7 +362,7 @@ impl Agent {
         Err(error)
     }
 
-    async fn handle_wait_for_input(&mut self) -> Result<()> {
+    async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
                 self.cancel_token.reset();
@@ -351,25 +388,35 @@ impl Agent {
             }
             Some(AgentInput::TaskResult { task_id, content }) => {
                 tracing::debug!("Task result received: {}", task_id);
+                self.cancel_token.reset();
                 let msg = Message::with_blocks(Role::User, content);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
-            Some(AgentInput::Cancel) => {
-                self.cancel_token.cancel();
-                self.context.transition_to(AgentState::Cancelled);
+            Some(AgentInput::PermissionResponse {
+                req_id,
+                approved: _,
+            }) => {
+                // PermissionResponse 现在通过 PermissionResponder 处理
+                // 保留此方法以防需要特殊处理
+                tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
+                Ok(())
+            }
+            Some(AgentInput::Close) => {
+                tracing::info!("Agent {} received close signal", self.id);
+                self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
             None => {
-                self.context.transition_to(AgentState::Cancelled);
+                self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
         }
     }
 
-    async fn handle_streaming(&mut self) -> Result<()> {
+    async fn handle_streaming(&mut self) -> Result<(), AgentError> {
         let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
@@ -386,23 +433,34 @@ impl Agent {
             }))
             .await;
 
-        let messages = self.message_buffer.messages();
-        let stream_future = tokio::time::timeout(
-            Duration::from_secs(10),
-            self.shared
-                .provider
-                .stream(messages, &tools, &self.shared.model_config),
-        );
+        // Validate and clean message buffer before sending to provider
+        self.message_buffer.validate_and_clean();
+
+        // Clone messages and tools for the spawned task (needs 'static)
+        let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
+
+        // Spawn provider request in a separate task to allow cancellation
+        let provider = self.shared.provider.clone();
+        let model_config = self.shared.model_config.clone();
+        let stream_task =
+            tokio::spawn(async move { provider.stream(&messages, &tools, &model_config).await });
+        let abort_handle = stream_task.abort_handle();
+
+        info!("Agent {} waiting for model stream to start", self.id);
 
         let mut stream = tokio::select! {
             biased;
             () = self.cancel_token.cancelled() => {
+                abort_handle.abort();
                 return self.handle_cancel("stream creation").await;
             }
-            result = stream_future => match result {
+            result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(e.into()),
+                Ok(Err(e)) => return Err(AgentError::Provider(e)),
+                Err(e) if e.is_cancelled() => {
+                    return Err(AgentError::Cancelled);
+                }
+                Err(e) => return Err(AgentError::StreamTaskPanicked(e.to_string())),
             }
         };
 
@@ -431,54 +489,41 @@ impl Agent {
     async fn collect_stream_output(
         &mut self,
         stream: &mut crate::providers::ModelStream,
-    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>)> {
-        let mut current_text = String::new();
-        let mut current_thinking = String::new();
-        let mut content_blocks: Vec<ContentBlock> = Vec::new();
-        let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
+    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>), AgentError> {
+        use super::stream_collector::StreamCollectorState;
+        use crate::providers::ModelStreamItem;
+
+        let mut state = StreamCollectorState::default();
 
         loop {
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
-                    let _ = stream;
                     return self.handle_cancel("streaming").await.map(|()| (vec![], vec![]));
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => match item {
-                        ModelStreamItem::Chunk(ContentChunk::Text(text)) => {
-                            current_text.push_str(&text);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
+                        ModelStreamItem::Chunk(chunk) => {
+                            state.handle_chunk(&chunk);
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Chunk {
                                 agent_id: self.id.clone(),
-                                content: ContentChunk::Text(text),
-                            })).await;
-                        }
-                        ModelStreamItem::Chunk(ContentChunk::Thinking { thinking, signature }) => {
-                            current_thinking.push_str(&thinking);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Chunk {
-                                agent_id: self.id.clone(),
-                                content: ContentChunk::Thinking { thinking, signature },
-                            })).await;
-                        }
-                        ModelStreamItem::Chunk(ContentChunk::RedactedThinking) => {
-                            content_blocks.push(ContentBlock::RedactedThinking {
-                                data: String::new(),
-                            });
+                                content: chunk,
+                            })) {
+                                tracing::warn!("Failed to send chunk event: {}", e);
+                            }
                         }
                         ModelStreamItem::ToolCall(request) => {
-                            pending_tool_calls.push(ToolCall {
-                                id: request.id,
-                                name: request.name,
-                                arguments: request.arguments,
-                            });
+                            state.handle_tool_call(request);
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::Fallback {
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Fallback {
                                 agent_id: self.id.clone(),
                                 from,
                                 to,
-                            })).await;
+                            })) {
+                                tracing::warn!("Failed to send fallback event: {}", e);
+                            }
                         }
                         ModelStreamItem::TokenUsage { prompt_tokens, completion_tokens } => {
                             // NOTE: this is right because each response's prompt_tokens will contain whole history
@@ -488,35 +533,31 @@ impl Agent {
                                 completion_tokens,
                                 total_tokens: total,
                             });
+                            state.handle_token_usage(prompt_tokens, completion_tokens);
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
                                 .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
-                            let _ = self.event_tx.send(Event::Model(ModelEvent::TokenUsage {
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 prompt_tokens,
                                 completion_tokens,
                                 total_tokens: total,
                                 context_window,
-                            })).await;
+                            })) {
+                                tracing::warn!("Failed to send token usage event: {}", e);
+                            }
                         }
                     },
                     Ok(None) => break,
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        return Err(AgentError::Provider(e));
+                    }
                 }
             }
         }
 
-        if !current_thinking.is_empty() {
-            content_blocks.push(ContentBlock::Thinking {
-                thinking: current_thinking,
-                signature: None,
-            });
-        }
-        if !current_text.is_empty() {
-            content_blocks.push(ContentBlock::Text { text: current_text });
-        }
-
-        Ok((content_blocks, pending_tool_calls))
+        let result = state.build_result();
+        Ok((result.content_blocks, result.tool_calls))
     }
 
     /// Check and run compaction if needed
@@ -539,27 +580,38 @@ impl Agent {
             }))
             .await;
 
-        let messages = self.message_buffer.messages_mut();
+        let messages = self.message_buffer.messages();
         let result = compactor
             .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
             .await;
 
-        // Handle result before emitting end event (while messages is still borrowed)
-        match &result {
-            Ok(Some(compaction_result)) => {
-                if compaction_result.is_full_compaction() {
+        // Handle result and update messages
+        match result {
+            Ok(Some(new_messages)) => {
+                let old_count = messages.len();
+                let new_count = new_messages.len();
+                let compacted_count = old_count.saturating_sub(new_count);
+                let is_full = compacted_count > 0;
+
+                if is_full {
                     tracing::info!(
                         "Agent {} performed full compaction: {} messages summarized",
                         agent_id,
-                        compaction_result.compacted_count
+                        compacted_count
                     );
                 } else {
                     tracing::info!("Agent {} performed micro-compaction", agent_id);
                 }
+
+                // Update message buffer with compacted messages
+                self.message_buffer.messages_mut().clone_from(&new_messages);
+
                 // Persist compacted state
                 if let Some(storage) = &self.shared.storage {
                     let sid = crate::types::SessionId(self.session_id.clone());
-                    if let Err(e) = storage.set_messages(&sid, messages).await {
+                    let messages_for_storage: Vec<Message> =
+                        new_messages.iter().map(|m| (**m).clone()).collect();
+                    if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
                         tracing::warn!(
                             "Agent {} failed to persist compacted messages: {}",
                             agent_id,
@@ -583,7 +635,7 @@ impl Agent {
     }
 
     /// Transition to appropriate state after streaming completes
-    async fn transition_after_streaming(&self) -> Result<()> {
+    async fn transition_after_streaming(&self) -> Result<(), AgentError> {
         let has_tool_calls = self
             .message_buffer
             .messages()
@@ -607,13 +659,13 @@ impl Agent {
             );
             self.context.transition_to(AgentState::ExecutingTool);
         } else {
-            tracing::debug!(
+            tracing::info!(
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
             let _ = self
                 .event_tx
-                .send(Event::Model(ModelEvent::Complete {
+                .send(Event::Model(ModelEvent::Completed {
                     agent_id: self.id.clone(),
                 }))
                 .await;
@@ -622,7 +674,7 @@ impl Agent {
         Ok(())
     }
 
-    async fn handle_execute_tool(&mut self) -> Result<()> {
+    async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
         let tool_calls = self
             .message_buffer
             .messages()
@@ -630,6 +682,8 @@ impl Agent {
             .and_then(|m| m.tool_calls.as_deref())
             .unwrap_or(&[]);
 
+        // First: Send Started event for ALL tool calls (before permission check)
+        // This ensures the UI shows all tools that are being attempted
         for call in tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
@@ -643,10 +697,91 @@ impl Agent {
                 .await;
         }
 
-        let results =
-            crate::tools::execute_tools_parallel(&self.id, tool_calls, &self.tool_registry).await;
+        // Second: Check permissions for each tool call
+        let mut approved_calls = Vec::new();
+        let mut denied_results = Vec::new();
 
-        for result in results {
+        for call in tool_calls {
+            let level = ToolLevelResolver::resolve(&call.name, &call.arguments);
+
+            // Check if permission is needed
+            if let Some(ref checker) = self.permission_checker {
+                match checker.check_permission(call, level).await {
+                    Ok(true) => {
+                        // Approved, add to approved calls
+                        approved_calls.push(call.clone());
+                    }
+                    Ok(false) => {
+                        // Denied, create error result
+                        tracing::warn!(
+                            "Agent {} tool call {} denied: {} exceeds threshold",
+                            self.id,
+                            call.id,
+                            call.name
+                        );
+                        let error_msg = format!(
+                            "Permission denied: {} tool (level: {:?}) was not approved by user",
+                            call.name, level
+                        );
+                        denied_results.push(ToolExecutionResult {
+                            tool_call_id: call.id.clone(),
+                            event: ToolEvent::Error {
+                                agent_id: self.id.clone(),
+                                tool_id: call.id.clone(),
+                                error: error_msg.clone(),
+                                elapsed_ms: 0,
+                            },
+                            message: Message::tool_result(call.id.clone(), error_msg),
+                        });
+                    }
+                    Err(e) => {
+                        // Error checking permission, treat as denied
+                        tracing::error!(
+                            "Agent {} permission check failed for {}: {}",
+                            self.id,
+                            call.name,
+                            e
+                        );
+                        let error_msg = format!("Permission check failed: {e}");
+                        denied_results.push(ToolExecutionResult {
+                            tool_call_id: call.id.clone(),
+                            event: ToolEvent::Error {
+                                agent_id: self.id.clone(),
+                                tool_id: call.id.clone(),
+                                error: error_msg.clone(),
+                                elapsed_ms: 0,
+                            },
+                            message: Message::tool_result(call.id.clone(), error_msg),
+                        });
+                    }
+                }
+            } else {
+                // No permission checker (YOLO mode), approve all
+                approved_calls.push(call.clone());
+            }
+        }
+
+        // Create runtime token for this tool execution batch
+        let cancel_token = self.create_runtime_token();
+
+        // Execute only approved calls
+        let results = if approved_calls.is_empty() {
+            Vec::new()
+        } else {
+            crate::tools::execute_tools_parallel(
+                &self.id,
+                &approved_calls,
+                &self.tool_registry,
+                Some(&cancel_token),
+                Some(self.message_buffer.messages()),
+            )
+            .await
+        };
+
+        // Combine denied and executed results
+        let all_results: Vec<_> = denied_results.into_iter().chain(results).collect();
+
+        for result in all_results {
             if self.cancel_token.is_cancelled() {
                 return self.handle_cancel("tool execution").await;
             }
@@ -668,11 +803,11 @@ impl Agent {
     }
 
     #[allow(dead_code)]
-    fn messages(&self) -> &[Message] {
+    fn messages(&self) -> &[Arc<Message>] {
         self.message_buffer.messages()
     }
 
-    async fn handle_streaming_with_retry(&mut self) -> Result<()> {
+    async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
         let max_retries = 10;
         let mut attempt = 0;
 
@@ -692,19 +827,15 @@ impl Agent {
                 Err(e) => {
                     attempt += 1;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(attempt)).await;
                 }
             }
         }
     }
 
     /// Check if an error is retryable.
-    fn is_retryable_error(error: &anyhow::Error) -> bool {
+    fn is_retryable_error(error: &AgentError) -> bool {
         warn!("Streaming error: {}", error);
-        if let Some(http_err) = error.downcast_ref::<crate::providers::HttpError>() {
-            return http_err.is_retryable();
-        }
-        true // Unknown errors default to retryable
+        error.is_retryable()
     }
 }

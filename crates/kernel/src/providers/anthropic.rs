@@ -2,16 +2,17 @@
 //! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
 use crate::event::ContentChunk;
 use crate::providers::{
-    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ToolCallRequest,
+    HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
 use crate::types::{ContentBlock, Message, Role, ToolDefinition};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -26,13 +27,13 @@ impl AnthropicProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: Client::builder()
-                .connect_timeout(Duration::from_secs(120))
+                .connect_timeout(Duration::from_secs(30))
                 .build()?,
             name: "anthropic".to_string(),
         })
     }
 
-    fn convert_messages(messages: &[Message]) -> Vec<AnthropicMessage> {
+    fn convert_messages(messages: &[Arc<Message>]) -> Vec<AnthropicMessage> {
         messages
             .iter()
             .filter_map(|m| {
@@ -57,6 +58,33 @@ impl AnthropicProvider {
             .collect()
     }
 
+    /// Parse a data URL to extract media type and base64 data
+    /// Format: data:image/{format};base64,{data}
+    fn parse_data_url(url: &str) -> Option<(String, String)> {
+        if !url.starts_with("data:image/") {
+            // Not a data URL, skip
+            return None;
+        }
+
+        // Remove "data:image/" prefix
+        let without_prefix = &url[11..];
+
+        // Find the semicolon separating media type from base64
+        let semicolon_pos = without_prefix.find(';')?;
+        let media_type = format!("image/{}", &without_prefix[..semicolon_pos]);
+
+        // Check for base64 marker
+        let after_semicolon = &without_prefix[semicolon_pos + 1..];
+        if !after_semicolon.starts_with("base64,") {
+            return None;
+        }
+
+        // Extract base64 data
+        let base64_data = &after_semicolon[7..]; // Skip "base64,"
+
+        Some((media_type, base64_data.to_string()))
+    }
+
     fn convert_content_blocks(blocks: &[ContentBlock]) -> Vec<AnthropicContent> {
         let mut content = Vec::new();
 
@@ -70,13 +98,17 @@ impl AnthropicProvider {
                     // Thinking blocks are not sent back to Anthropic
                 }
                 ContentBlock::ImageUrl { image_url } => {
-                    content.push(AnthropicContent::Image {
-                        source: AnthropicImageSource {
-                            type_: "base64".to_string(),
-                            media_type: "image/png".to_string(),
-                            data: image_url.url.clone(),
-                        },
-                    });
+                    // Parse data URL to extract media type and base64 data
+                    // Format: data:image/{format};base64,{data}
+                    if let Some((media_type, base64_data)) = Self::parse_data_url(&image_url.url) {
+                        content.push(AnthropicContent::Image {
+                            source: AnthropicImageSource {
+                                type_: "base64".to_string(),
+                                media_type,
+                                data: base64_data,
+                            },
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -87,7 +119,7 @@ impl AnthropicProvider {
         content
     }
 
-    fn convert_tools(tools: &[ToolDefinition]) -> Vec<AnthropicTool> {
+    fn convert_tools(tools: &[Arc<ToolDefinition>]) -> Vec<AnthropicTool> {
         tools
             .iter()
             .map(|t| AnthropicTool {
@@ -98,7 +130,7 @@ impl AnthropicProvider {
             .collect()
     }
 
-    fn extract_system_message(messages: &[Message]) -> Option<String> {
+    fn extract_system_message(messages: &[Arc<Message>]) -> Option<String> {
         messages.iter().find_map(|m| {
             if m.role == Role::System {
                 Some(m.text_content())
@@ -113,10 +145,10 @@ impl AnthropicProvider {
 impl Provider for AnthropicProvider {
     async fn stream(
         &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+        messages: &[Arc<Message>],
+        tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream> {
+    ) -> Result<ModelStream, ProviderError> {
         let url = if config.endpoint.is_empty() {
             "https://api.anthropic.com/v1/messages".to_string()
         } else {
@@ -175,7 +207,7 @@ impl Provider for AnthropicProvider {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("Anthropic API error: {} - {}", status, text);
-            return Err(anyhow!(HttpError(status.as_u16())));
+            return Err(ProviderError::Http(HttpError(status.as_u16())));
         }
 
         tracing::debug!("Anthropic API response received, starting stream processing");
@@ -205,24 +237,24 @@ impl Provider for AnthropicProvider {
                         }
                         Ok(Err(e)) => {
                             tracing::error!("Anthropic SSE error: {}", e);
-                            return Err(anyhow!("SSE error: {e}"));
+                            return Err(ProviderError::Sse(format!("SSE error: {e}")));
                         }
                         Err(_) => {
                             tracing::error!(
                                 "Anthropic SSE idle timeout after {}s",
                                 IDLE_TIMEOUT.as_secs()
                             );
-                            return Err(anyhow!(
+                            return Err(ProviderError::Timeout(format!(
                                 "SSE idle timeout: no data received for {} seconds",
                                 IDLE_TIMEOUT.as_secs()
-                            ));
+                            )));
                         }
                     }
                 }
             },
         )
-        .flat_map(|result: Result<Vec<ModelStreamItem>>| {
-            let items: Vec<Result<ModelStreamItem>> = match result {
+        .flat_map(|result: Result<Vec<ModelStreamItem>, ProviderError>| {
+            let items: Vec<Result<ModelStreamItem, ProviderError>> = match result {
                 Ok(items) => items.into_iter().map(Ok).collect(),
                 Err(e) => vec![Err(e)],
             };
@@ -260,9 +292,10 @@ impl AnthropicStreamState {
         }
     }
 
-    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>> {
-        let event: AnthropicStreamEvent = serde_json::from_str(data)
-            .map_err(|e| anyhow!("Failed to parse SSE chunk: {e} - data: {data}"))?;
+    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
+        let event: AnthropicStreamEvent = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
+        })?;
 
         let mut items = Vec::new();
 
@@ -335,7 +368,10 @@ impl AnthropicStreamState {
                 items.push(ModelStreamItem::Complete);
             }
             AnthropicStreamEvent::Error { error } => {
-                return Err(anyhow!("Anthropic API error: {}", error.message));
+                return Err(ProviderError::Request(format!(
+                    "Anthropic API error: {}",
+                    error.message
+                )));
             }
         }
 
@@ -540,9 +576,9 @@ mod tests {
 
     #[test]
     fn test_extract_system_message() {
-        let messages = vec![
-            Message::system("You are a helpful assistant"),
-            Message::user("Hello"),
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::system("You are a helpful assistant")),
+            Arc::new(Message::user("Hello")),
         ];
 
         let system = AnthropicProvider::extract_system_message(&messages);
@@ -551,10 +587,10 @@ mod tests {
 
     #[test]
     fn test_convert_messages_filters_system() {
-        let messages = vec![
-            Message::system("System prompt"),
-            Message::user("Hello"),
-            Message::assistant("Hi there"),
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::system("System prompt")),
+            Arc::new(Message::user("Hello")),
+            Arc::new(Message::assistant("Hi there")),
         ];
 
         let converted = AnthropicProvider::convert_messages(&messages);
@@ -642,7 +678,8 @@ mod tests {
 
     #[test]
     fn test_convert_tools() {
-        let tools = vec![ToolDefinition {
+        use std::sync::Arc;
+        let tools: Vec<Arc<ToolDefinition>> = vec![Arc::new(ToolDefinition {
             name: "bash".to_string(),
             description: "Execute bash commands".to_string(),
             parameters: serde_json::json!({
@@ -651,7 +688,7 @@ mod tests {
                     "cmd": {"type": "string"}
                 }
             }),
-        }];
+        })];
 
         let converted = AnthropicProvider::convert_tools(&tools);
         assert_eq!(converted.len(), 1);

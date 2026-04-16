@@ -1,13 +1,13 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::TaskUpdates;
 use crate::task::types::{StatusChange, TaskStatus, UpdateTaskOutput};
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-pub const TASK_UPDATE_TOOL_NAME: &str = "TaskUpdate";
+pub const TASK_UPDATE_TOOL_NAME: &str = "taskUpdate";
 
 pub struct TaskUpdateTool {
     store: SharedTaskStore,
@@ -81,7 +81,7 @@ impl Tool for TaskUpdateTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let task_id = args["taskId"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("taskId is required"))?

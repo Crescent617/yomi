@@ -1,5 +1,5 @@
 use crate::agent::AgentInput;
-use crate::tools::Tool;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, ToolOutput};
 use crate::utils::id::gen_base56_id;
 
@@ -14,15 +14,17 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+pub const BASH_TOOL_NAME: &str = "bash";
+
 #[derive(Clone)]
 pub struct BashToolCtx {
-    input_tx: mpsc::Sender<AgentInput>,
+    input_tx: Option<mpsc::Sender<AgentInput>>,
 }
 
 impl BashToolCtx {
     pub fn new(
         _agent_id: AgentId,
-        input_tx: mpsc::Sender<AgentInput>,
+        input_tx: Option<mpsc::Sender<AgentInput>>,
         _working_dir: std::path::PathBuf,
     ) -> Self {
         Self { input_tx }
@@ -60,7 +62,7 @@ impl BashTool {
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &'static str {
-        "bash"
+        BASH_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {
@@ -90,7 +92,7 @@ impl Tool for BashTool {
         })
     }
 
-    async fn exec(&self, args: Value) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
@@ -165,6 +167,12 @@ impl BashTool {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Background mode requires context"))?;
 
+        // Check if input_tx is available (subagents don't have this)
+        let input_tx = ctx
+            .input_tx
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Background mode not supported in subagents"))?;
+
         let task_id = Self::gen_task_id();
         let output_path = Self::log_path(&task_id);
         let output_path_str = output_path.to_string_lossy().to_string();
@@ -180,7 +188,6 @@ impl BashTool {
 
         let pid = child.id().unwrap_or(0);
 
-        let ctx_clone = ctx.clone();
         let task_id_clone = task_id.clone();
         let output_path_clone = output_path;
         let command_clone = command.to_string();
@@ -214,8 +221,7 @@ impl BashTool {
                 ),
             };
 
-            let _ = ctx_clone
-                .input_tx
+            let _ = input_tx
                 .send(AgentInput::TaskResult {
                     task_id: task_id_clone.clone(),
                     content: vec![crate::types::ContentBlock::Text { text }],

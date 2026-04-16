@@ -74,25 +74,85 @@ impl BannerData {
         }
     }
 
+    /// Group skills by prefix (e.g., "superpowers:a", "superpowers:b" -> "superpowers:{a, b}")
+    fn group_skills(skills: &[String]) -> Vec<String> {
+        const MAX_PER_GROUP: usize = 3;
+        use std::collections::HashMap;
+
+        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+
+        for skill in skills {
+            if let Some(colon_pos) = skill.find(':') {
+                let prefix = skill[..colon_pos].to_string();
+                let suffix = skill[colon_pos + 1..].to_string();
+                groups.entry(prefix).or_default().push(suffix);
+            } else {
+                // No colon, treat as standalone skill
+                groups.entry(skill.clone()).or_default();
+            }
+        }
+
+        let mut result: Vec<String> = Vec::new();
+
+        for (prefix, suffixes) in groups {
+            if suffixes.is_empty() {
+                result.push(prefix);
+            } else if suffixes.len() == 1 {
+                result.push(format!("{}:{}", prefix, suffixes[0]));
+            } else {
+                // Sort suffixes for consistent display
+                let mut sorted_suffixes = suffixes;
+                sorted_suffixes.sort();
+
+                // Limit to MAX_PER_GROUP
+                let total = sorted_suffixes.len();
+                let display: Vec<_> = sorted_suffixes.into_iter().take(MAX_PER_GROUP).collect();
+
+                if total > MAX_PER_GROUP {
+                    result.push(format!(
+                        "{prefix}:{{{}}} (+{})",
+                        display.join(", "),
+                        total - MAX_PER_GROUP
+                    ));
+                } else {
+                    result.push(format!("{prefix}:{{{}}}", display.join(", ")));
+                }
+            }
+        }
+
+        // Sort for consistent display
+        result.sort();
+        result
+    }
+
     /// Get info lines for right panel
     pub fn info_lines(&self) -> Vec<String> {
+        const MAX_DISPLAY_LEN: usize = 200;
+
         let working_dir = if self.working_dir.is_empty() {
             "~".to_string()
         } else {
             self.working_dir.clone()
         };
+
         let skills_str = if self.skills.is_empty() {
             "None".to_string()
         } else {
-            // Limit to max 20 skills
-            const MAX_SKILLS: usize = 20;
-            let display_count = self.skills.len().min(MAX_SKILLS);
-            let result = self.skills[..display_count].join(", ");
-            if self.skills.len() > MAX_SKILLS {
-                format!("{result}, +{} more", self.skills.len() - MAX_SKILLS)
-            } else {
-                result
+            // Group skills by prefix
+            let grouped = Self::group_skills(&self.skills);
+
+            let mut result = grouped.join(", ");
+
+            if result.len() > MAX_DISPLAY_LEN {
+                // Find a good cut point
+                let mut cut_len = MAX_DISPLAY_LEN;
+                while cut_len > 0 && !result.is_char_boundary(cut_len) {
+                    cut_len -= 1;
+                }
+                result = format!("{}...", &result[..cut_len]);
             }
+
+            result
         };
 
         vec![
@@ -207,5 +267,113 @@ impl Component<Msg, crate::msg::UserEvent> for BannerComponent {
             return Some(Msg::Redraw);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_skills_empty() {
+        let skills: Vec<String> = vec![];
+        let grouped = BannerData::group_skills(&skills);
+        assert!(grouped.is_empty());
+    }
+
+    #[test]
+    fn test_group_skills_no_prefix() {
+        let skills = vec!["nopua".to_string(), "debug".to_string()];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped, vec!["debug", "nopua"]);
+    }
+
+    #[test]
+    fn test_group_skills_single_prefix() {
+        let skills = vec!["superpowers:a".to_string(), "superpowers:b".to_string()];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped, vec!["superpowers:{a, b}"]);
+    }
+
+    #[test]
+    fn test_group_skills_multiple_prefixes() {
+        let skills = vec![
+            "superpowers:a".to_string(),
+            "superpowers:b".to_string(),
+            "caveman:caveman".to_string(),
+            "nopua".to_string(),
+        ];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(
+            grouped,
+            vec!["caveman:caveman", "nopua", "superpowers:{a, b}"]
+        );
+    }
+
+    #[test]
+    fn test_group_skills_single_item_per_prefix() {
+        let skills = vec!["superpowers:a".to_string(), "caveman:caveman".to_string()];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped, vec!["caveman:caveman", "superpowers:a"]);
+    }
+
+    #[test]
+    fn test_group_skills_sorted() {
+        let skills = vec![
+            "superpowers:z".to_string(),
+            "superpowers:a".to_string(),
+            "superpowers:m".to_string(),
+        ];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped, vec!["superpowers:{a, m, z}"]);
+    }
+
+    #[test]
+    fn test_info_lines_with_grouped_skills() {
+        let banner = BannerData::new(
+            "/home/user".to_string(),
+            vec![
+                "superpowers:a".to_string(),
+                "superpowers:b".to_string(),
+                "caveman:caveman".to_string(),
+                "nopua".to_string(),
+            ],
+        );
+        let lines = banner.info_lines();
+        assert_eq!(lines[0], "Hello!");
+        assert_eq!(lines[1], "CWD: /home/user");
+        assert!(lines[2].contains("caveman:caveman"));
+        assert!(lines[2].contains("nopua"));
+        assert!(lines[2].contains("superpowers:{a, b}"));
+    }
+
+    #[test]
+    fn test_group_skills_max_3_per_group() {
+        let skills = vec![
+            "superpowers:a".to_string(),
+            "superpowers:b".to_string(),
+            "superpowers:c".to_string(),
+            "superpowers:d".to_string(),
+            "superpowers:e".to_string(),
+        ];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped.len(), 1);
+        // Should show first 3 + "(+2)"
+        assert!(grouped[0].contains("superpowers:{a, b, c}"));
+        assert!(grouped[0].contains("(+2)"));
+    }
+
+    #[test]
+    fn test_group_skills_exactly_3() {
+        let skills = vec![
+            "superpowers:a".to_string(),
+            "superpowers:b".to_string(),
+            "superpowers:c".to_string(),
+        ];
+        let grouped = BannerData::group_skills(&skills);
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0], "superpowers:{a, b, c}");
+        // Should not have "+"
+        assert!(!grouped[0].contains('+'));
     }
 }

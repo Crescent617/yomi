@@ -11,9 +11,31 @@ pub use types::*;
 
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
 use crate::types::{ContentBlock, Message, Role};
-use crate::utils::tokens::estimate_tokens_for_messages;
 use anyhow::Result;
 use futures::TryStreamExt;
+use std::sync::Arc;
+
+/// Helper to estimate tokens for Arc-wrapped messages
+fn estimate_tokens_for_arc_messages(messages: &[Arc<Message>]) -> u32 {
+    messages
+        .iter()
+        .map(|m| estimate_tokens_for_message(m))
+        .sum()
+}
+
+/// Estimate tokens for a single message
+fn estimate_tokens_for_message(msg: &Message) -> u32 {
+    // Simple estimation: ~4 characters per token
+    let content_len: usize = msg
+        .content
+        .iter()
+        .map(|c| match c {
+            crate::types::ContentBlock::Text { text } => text.len(),
+            _ => 0,
+        })
+        .sum();
+    ((content_len / 4) + 10) as u32 // +10 for overhead
+}
 
 /// Default token threshold to trigger compaction (80% of context window)
 pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
@@ -69,7 +91,7 @@ impl Compactor {
 
     /// Calculate total tokens from message history
     /// Uses actual token usage from API responses when available
-    pub fn calculate_tokens(messages: &[Message]) -> u32 {
+    pub fn calculate_tokens(messages: &[Arc<Message>]) -> u32 {
         let mut total = 0u32;
         let mut last_usage_idx: Option<usize> = None;
 
@@ -86,71 +108,87 @@ impl Compactor {
             if let Some(usage) = messages[idx].token_usage {
                 total += usage.total_tokens;
                 // Add rough estimation for messages after the last tracked usage
-                total += estimate_tokens_for_messages(&messages[idx + 1..]);
+                total += estimate_tokens_for_arc_messages(&messages[idx + 1..]);
             }
         } else {
             // No tracked usage, estimate all messages
-            total += estimate_tokens_for_messages(messages);
+            total += estimate_tokens_for_arc_messages(messages);
         }
 
         total
     }
 
     /// Check if compaction should be triggered
-    pub fn should_compact(&self, messages: &[Message]) -> bool {
+    pub fn should_compact(&self, messages: &[Arc<Message>]) -> bool {
         let tokens = Self::calculate_tokens(messages);
         tokens >= self.compact_threshold
     }
 
     /// Try micro-compaction: clear old tool results
-    /// Returns true only if any content was actually cleared (not already cleared)
-    pub fn micro_compact(&self, messages: &mut [Message]) -> bool {
+    /// Returns `Some(new_messages)` if compaction was performed, None otherwise
+    pub fn micro_compact(&self, messages: &[Arc<Message>]) -> Option<Vec<Arc<Message>>> {
         const CLEARED_MARKER: &str = "[Old tool result content cleared]";
 
         let keep_start = messages.len().saturating_sub(self.keep_recent);
         if keep_start == 0 {
-            return false;
+            return None;
         }
 
-        // Only iterate over messages that need to be cleared (not the recent ones)
-        messages[..keep_start]
-            .iter_mut()
-            .filter(|m| m.role == Role::Tool)
-            .filter(|m| {
-                if let Some(ContentBlock::Text { ref text }) = m.content.first() {
-                    text != CLEARED_MARKER
-                } else {
-                    false
-                }
-            })
-            .map(|m| {
-                m.content = vec![ContentBlock::Text {
+        let mut modified = false;
+        let mut result = Vec::with_capacity(messages.len());
+
+        for (idx, msg) in messages.iter().enumerate() {
+            if idx < keep_start
+                && msg.role == Role::Tool
+                && msg.content.first().is_some_and(|c| {
+                    if let ContentBlock::Text { text } = c {
+                        text != CLEARED_MARKER
+                    } else {
+                        false
+                    }
+                })
+            {
+                // Need to clear this message
+                let mut new_msg = (**msg).clone();
+                new_msg.content = vec![ContentBlock::Text {
                     text: CLEARED_MARKER.to_string(),
                 }];
-            })
-            .count()
-            > 0
+                result.push(Arc::new(new_msg));
+                modified = true;
+            } else {
+                result.push(Arc::clone(msg));
+            }
+        }
+
+        if modified {
+            Some(result)
+        } else {
+            None
+        }
     }
 
     /// Perform full compaction: generate summary using API
     /// Returns a summary message and the recent messages to keep
     pub async fn full_compact(
         &self,
-        messages: &[Message],
+        messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
     ) -> Result<CompactionResult> {
         if messages.len() <= self.keep_recent {
             return Ok(CompactionResult {
                 summary: None,
-                keep_messages: messages.to_vec(),
+                keep_messages: messages.iter().map(|m| (**m).clone()).collect(),
                 compacted_count: 0,
             });
         }
 
         let split_point = messages.len() - self.keep_recent;
         let to_summarize = &messages[..split_point];
-        let recent = messages[split_point..].to_vec();
+        let recent: Vec<Message> = messages[split_point..]
+            .iter()
+            .map(|m| (**m).clone())
+            .collect();
 
         // Generate summary using API
         let summary_text = generate_summary_with_api(
@@ -166,78 +204,95 @@ impl Compactor {
 
         Ok(CompactionResult {
             summary: Some(summary_message),
-
             keep_messages: recent,
             compacted_count: to_summarize.len(),
         })
     }
 
     /// Auto-compact: try micro first, then full if needed
-    /// Returns compaction result if compaction was performed
+    /// Returns compacted messages if compaction was performed
     pub async fn auto_compact(
         &self,
-        messages: &mut Vec<Message>,
+        messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
-    ) -> Result<Option<CompactionResult>> {
+    ) -> Result<Option<Vec<Arc<Message>>>> {
         // Check if we need to compact
         if !self.should_compact(messages) {
             return Ok(None);
         }
 
         // Try micro-compaction first
-        if self.micro_compact(messages) {
+        if let Some(compacted) = self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
-            if !self.should_compact(messages) {
-                return Ok(Some(CompactionResult {
-                    summary: None,
-                    keep_messages: messages.clone(),
-                    compacted_count: 0,
-                }));
+            if !self.should_compact(&compacted) {
+                return Ok(Some(compacted));
             }
+
+            // Micro-compaction wasn't enough, do full compaction
+            let result = self
+                .full_compact(&compacted, provider, model_config)
+                .await?;
+
+            // Build new message list
+            let new_messages = if let Some(ref summary) = result.summary {
+                let mut msgs = vec![Arc::new(summary.clone())];
+                msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
+                msgs
+            } else {
+                result
+                    .keep_messages
+                    .iter()
+                    .map(|m| Arc::new(m.clone()))
+                    .collect()
+            };
+
+            return Ok(Some(new_messages));
         }
 
-        // Micro-compaction wasn't enough, do full compaction
+        // Micro-compaction didn't help, do full compaction
         let result = self.full_compact(messages, provider, model_config).await?;
 
-        // Replace messages with compacted version
-        *messages = if let Some(ref summary) = result.summary {
-            let mut new_messages = vec![];
-            new_messages.push(summary.clone());
-            new_messages.extend(result.keep_messages.clone());
-            new_messages
+        // Build new message list
+        let new_messages = if let Some(ref summary) = result.summary {
+            let mut msgs = vec![Arc::new(summary.clone())];
+            msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
+            msgs
         } else {
-            result.keep_messages.clone()
+            result
+                .keep_messages
+                .iter()
+                .map(|m| Arc::new(m.clone()))
+                .collect()
         };
 
-        Ok(Some(result))
+        Ok(Some(new_messages))
     }
 }
 
 /// Generate summary using API call
 async fn generate_summary_with_api(
-    messages: &[Message],
+    messages: &[Arc<Message>],
     provider: &dyn Provider,
     model_config: &ModelConfig,
     max_tokens: u32,
 ) -> Result<String> {
     // Build messages for summary generation
-    let mut summary_messages = vec![Message::system(SUMMARY_PROMPT)];
+    let mut summary_messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(SUMMARY_PROMPT))];
 
     // Add conversation to summarize
     for msg in messages {
-        summary_messages.push(msg.clone());
+        summary_messages.push(Arc::clone(msg));
     }
 
     // Add final instruction
-    summary_messages.push(Message::user(
+    summary_messages.push(Arc::new(Message::user(
         "Please provide a comprehensive summary of our conversation above.",
-    ));
+    )));
 
     // Create a config with limited max_tokens for summary
     let summary_config = ModelConfig {
         max_tokens: Some(max_tokens),
-        temperature: Some(0.3), // Lower temperature for more consistent output
         ..model_config.clone()
     };
 
@@ -264,18 +319,23 @@ async fn generate_summary_with_api(
 mod tests {
     use super::*;
     use crate::types::MessageTokenUsage;
+    use std::sync::Arc;
 
     #[test]
     fn test_calculate_tokens_with_usage() {
-        let messages = vec![Message::user("Hello"), Message::assistant("Hi there"), {
-            let mut msg = Message::assistant("Let me help");
-            msg.token_usage = Some(MessageTokenUsage {
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                total_tokens: 150,
-            });
-            msg
-        }];
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::user("Hello")),
+            Arc::new(Message::assistant("Hi there")),
+            {
+                let mut msg = Message::assistant("Let me help");
+                msg.token_usage = Some(MessageTokenUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 50,
+                    total_tokens: 150,
+                });
+                Arc::new(msg)
+            },
+        ];
 
         let tokens = Compactor::calculate_tokens(&messages);
         // Should use the actual usage (150) plus estimation for messages after
@@ -284,28 +344,31 @@ mod tests {
 
     #[test]
     fn test_micro_compact() {
+        use std::sync::Arc;
+
         let compactor = Compactor::new(100, 200, 2, 1000); // keep last 2 messages
-        let mut messages = vec![
-            Message::user("Task 1"),
-            Message::tool_result("call-1", "Result 1"), // will be cleared (index 1)
-            Message::user("Task 2"),
-            Message::tool_result("call-2", "Result 2"), // kept (index 3, in keep_recent)
-            Message::user("Current task"),              // kept (index 4)
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::user("Task 1")),
+            Arc::new(Message::tool_result("call-1", "Result 1")), // will be cleared (index 1)
+            Arc::new(Message::user("Task 2")),
+            Arc::new(Message::tool_result("call-2", "Result 2")), // kept (index 3, in keep_recent)
+            Arc::new(Message::user("Current task")),              // kept (index 4)
         ];
 
-        let compacted = compactor.micro_compact(&mut messages);
-        assert!(compacted);
+        let compacted = compactor.micro_compact(&messages);
+        assert!(compacted.is_some());
+        let new_messages = compacted.unwrap();
         // Old tool result should be cleared
         assert_eq!(
-            messages[1].text_content(),
+            new_messages[1].text_content(),
             "[Old tool result content cleared]"
         );
         // Recent tool result should be preserved (keep_recent = 2)
-        assert_eq!(messages[3].text_content(), "Result 2");
-        assert_eq!(messages[4].text_content(), "Current task");
+        assert_eq!(new_messages[3].text_content(), "Result 2");
+        assert_eq!(new_messages[4].text_content(), "Current task");
 
-        // Second compaction should return false (already cleared)
-        let compacted_again = compactor.micro_compact(&mut messages);
-        assert!(!compacted_again);
+        // Second compaction should return None (already cleared)
+        let compacted_again = compactor.micro_compact(&new_messages);
+        assert!(compacted_again.is_none());
     }
 }

@@ -16,6 +16,7 @@ use tuirealm::{
 };
 
 use crate::{msg::Msg, theme::colors, utils::strs};
+use kernel::permissions::Level;
 
 /// Application mode for status bar display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,15 +24,6 @@ pub enum AppMode {
     #[default]
     Normal,
     Browse,
-}
-
-impl AppMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Normal => "",
-            Self::Browse => " BROWSE ",
-        }
-    }
 }
 
 /// Status bar showing current mode (vim-style at bottom)
@@ -44,6 +36,8 @@ pub struct StatusBar {
     message_timeout: Option<std::time::Instant>,
     /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
+    /// Permission level for displaying YOLO mode
+    permission_level: Option<Level>,
 }
 
 impl StatusBar {
@@ -82,15 +76,27 @@ impl StatusBar {
         self.ctx_usage = Some((tokens, context_window));
     }
 
+    /// Set permission level for YOLO mode display
+    pub fn set_permission_level(&mut self, level: Level) {
+        self.permission_level = Some(level);
+    }
+
     fn render_mode_section(&self) -> Span<'static> {
-        let bg = match self.mode {
-            AppMode::Normal => colors::accent_success(),
-            AppMode::Browse => colors::accent_system(),
+        let (bg, text) = match self.mode {
+            AppMode::Normal => {
+                // Use warning color for YOLO mode
+                if self.permission_level == Some(Level::Dangerous) {
+                    (colors::accent_warning(), " YOLO ".to_string())
+                } else {
+                    (colors::accent_success(), String::new())
+                }
+            }
+            AppMode::Browse => (colors::accent_system(), " BROWSE ".to_string()),
         };
         let fg = colors::code_bg();
 
         Span::styled(
-            self.mode.as_str(),
+            text,
             Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
         )
     }
@@ -221,6 +227,17 @@ impl MockComponent for StatusBar {
                             self.set_ctx_usage(tokens, context_window);
                         }
                     }
+                }
+            }
+            Attribute::Custom("set_permission_level") => {
+                // Parse permission level: 0 = Safe, 1 = Caution, 2 = Dangerous
+                if let AttrValue::Number(level_val) = value {
+                    self.permission_level = match level_val {
+                        0 => Some(Level::Safe),
+                        1 => Some(Level::Caution),
+                        2 => Some(Level::Dangerous),
+                        _ => None,
+                    };
                 }
             }
             _ => {
