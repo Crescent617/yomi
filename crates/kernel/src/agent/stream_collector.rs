@@ -32,7 +32,10 @@ impl StreamCollectorState {
             ContentChunk::Text(text) => {
                 self.current_text.push_str(text);
             }
-            ContentChunk::Thinking { thinking, signature } => {
+            ContentChunk::Thinking {
+                thinking,
+                signature,
+            } => {
                 self.current_thinking.push_str(thinking);
                 if signature.is_some() {
                     self.thinking_signature.clone_from(signature);
@@ -89,4 +92,3 @@ impl StreamCollectorState {
         }
     }
 }
-

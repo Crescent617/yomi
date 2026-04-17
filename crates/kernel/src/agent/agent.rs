@@ -44,11 +44,8 @@ pub struct Agent {
     tool_registry: crate::tools::ToolRegistry,
     // Permission checker for tool execution
     permission_checker: Option<Arc<Checker>>,
-    // Store the last error message for display
-    last_error: Option<String>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
-    is_subagent: bool,
 }
 
 impl Agent {
@@ -105,14 +102,9 @@ impl Agent {
 
         // Create permission checker and responder from shared state
         // If no permission_state in shared (YOLO mode), all tools auto-approve
-        // For subagents: use parent's event_tx so permission requests go to parent TUI
-        let permission_event_tx = args
-            .parent_event_tx
-            .clone()
-            .unwrap_or_else(|| event_tx.clone());
         let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
             Some(state) => {
-                let checker = Checker::new(state.clone(), id.clone(), permission_event_tx);
+                let checker = Checker::new(state.clone(), id.clone(), event_tx.clone());
                 let responder = state.create_responder();
                 (Some(Arc::new(checker)), Some(responder))
             }
@@ -131,9 +123,7 @@ impl Agent {
             max_iterations: args.max_iterations,
             tool_registry,
             permission_checker,
-            last_error: None,
             pending_token_usage: None,
-            is_subagent: args.parent_event_tx.is_some(),
         };
 
         let handle_id = id.clone();
@@ -186,11 +176,6 @@ impl Agent {
             if self.context.iteration_count() >= self.max_iterations
                 && self.context.current_state() == AgentState::Streaming
             {
-                if self.is_subagent {
-                    tracing::warn!("Max iterations reached, forcing completion");
-                    self.context.transition_to(AgentState::Closed);
-                    break;
-                }
                 tracing::warn!(
                     "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
                     self.id
@@ -267,11 +252,9 @@ impl Agent {
         Ok(())
     }
 
-    /// Record an error and store it for later display
-    fn record_error(&mut self, context: &str, error: &AgentError) {
-        let msg = format!("{context}: {error}");
-        tracing::error!("Agent {} failed: {}", self.id, msg);
-        self.last_error = Some(msg);
+    /// Record an error
+    fn record_error(&self, context: &str, error: &AgentError) {
+        tracing::error!("Agent {} failed: {context}: {error}", self.id);
     }
 
     /// Helper to emit `AgentEvent::Failed` and return error

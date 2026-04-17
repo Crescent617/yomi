@@ -42,12 +42,16 @@ impl OpenAIProvider {
                 let m = m.as_ref();
 
                 // Check if message has image content
-                let has_image = m.content.iter().any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }));
+                let has_image = m
+                    .content
+                    .iter()
+                    .any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }));
 
                 // Build content (text-only or multi-modal)
                 let content = if has_image {
                     // Multi-modal: convert to content blocks
-                    let blocks: Vec<OpenAIContentBlock> = m.content
+                    let blocks: Vec<OpenAIContentBlock> = m
+                        .content
                         .iter()
                         .filter_map(|c| match c {
                             crate::types::ContentBlock::Text { text } if !text.is_empty() => {
@@ -192,7 +196,10 @@ impl Provider for OpenAIProvider {
             let body_json = serde_json::to_string_pretty(&request_body).unwrap_or_default();
             // Truncate base64 data for readability
             let truncated = body_json.replace(|c: char| c.is_ascii() && c.is_control(), "");
-            tracing::debug!("OpenAI request with image: {}", &truncated[..truncated.len().min(500)]);
+            tracing::debug!(
+                "OpenAI request with image: {}",
+                &truncated[..truncated.len().min(500)]
+            );
         }
 
         let request = self

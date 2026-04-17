@@ -9,8 +9,7 @@ use tuirealm::ratatui::{
 };
 
 /// Cell alignment in a table
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CellAlign {
     #[default]
     Left,
@@ -38,7 +37,6 @@ impl CellAlign {
         }
     }
 }
-
 
 /// A row in the table
 #[derive(Debug, Clone)]
@@ -92,7 +90,9 @@ impl Table {
                     if current_row.iter().all(|cell| {
                         let trimmed = cell.trim();
                         !trimmed.is_empty()
-                            && trimmed.chars().all(|c| c == '-' || c == ':' || c.is_whitespace())
+                            && trimmed
+                                .chars()
+                                .all(|c| c == '-' || c == ':' || c.is_whitespace())
                     }) {
                         aligns = current_row
                             .iter()
@@ -223,11 +223,7 @@ impl Table {
 
     fn render_row(&self, row: &TableRow, widths: &[usize], is_header: bool) -> Vec<Line<'static>> {
         // Split multi-line cells
-        let cell_lines: Vec<Vec<&str>> = row
-            .cells
-            .iter()
-            .map(|c| c.lines().collect())
-            .collect();
+        let cell_lines: Vec<Vec<&str>> = row.cells.iter().map(|c| c.lines().collect()).collect();
 
         let max_lines = cell_lines.iter().map(|v| v.len()).max().unwrap_or(1);
 
@@ -257,8 +253,15 @@ impl Table {
 
                 spans.push(Span::styled(formatted, style));
                 // Last column uses " │" (no trailing space), others use " │ "
-                let border_str = if col_idx == widths.len() - 1 { " │" } else { " │ " };
-                spans.push(Span::styled(border_str, Style::default().fg(colors::border())));
+                let border_str = if col_idx == widths.len() - 1 {
+                    " │"
+                } else {
+                    " │ "
+                };
+                spans.push(Span::styled(
+                    border_str,
+                    Style::default().fg(colors::border()),
+                ));
             }
 
             lines.push(Line::from(spans));
@@ -273,7 +276,8 @@ impl Table {
         mid: char,
         right: char,
     ) -> Line<'static> {
-        let mut content = String::with_capacity(widths.iter().sum::<usize>() + widths.len() * 3 + 2);
+        let mut content =
+            String::with_capacity(widths.iter().sum::<usize>() + widths.len() * 3 + 2);
         content.push(left);
 
         for (i, width) in widths.iter().enumerate() {
@@ -364,10 +368,16 @@ impl StreamingTableRenderer {
                 && self.current_row.iter().all(|cell| {
                     let trimmed = cell.trim();
                     !trimmed.is_empty()
-                        && trimmed.chars().all(|c| c == '-' || c == ':' || c.is_whitespace())
+                        && trimmed
+                            .chars()
+                            .all(|c| c == '-' || c == ':' || c.is_whitespace())
                 })
             {
-                self.aligns = self.current_row.iter().map(|c| parse_align(c.trim())).collect();
+                self.aligns = self
+                    .current_row
+                    .iter()
+                    .map(|c| parse_align(c.trim()))
+                    .collect();
                 self.expecting_separator = false;
             } else {
                 self.rows.push(TableRow {
@@ -398,17 +408,16 @@ impl StreamingTableRenderer {
 
         // Calculate column count from all available data
         let mut col_count = self.column_count.unwrap_or(1);
-        
+
         // Check current row + current cell for additional columns
-        let current_row_cols = self.current_row.len() 
-            + usize::from(!self.current_cell.is_empty());
+        let current_row_cols = self.current_row.len() + usize::from(!self.current_cell.is_empty());
         col_count = col_count.max(current_row_cols);
-        
+
         // Also check completed rows
         for row in &self.rows {
             col_count = col_count.max(row.cells.len());
         }
-        
+
         col_count = col_count.max(1);
         let widths = self.calculate_widths(col_count, max_width);
 
@@ -458,11 +467,7 @@ impl StreamingTableRenderer {
 
     fn render_row(&self, row: &TableRow, widths: &[usize]) -> Vec<Line<'static>> {
         // Handle multi-line cells
-        let cell_lines: Vec<Vec<&str>> = row
-            .cells
-            .iter()
-            .map(|c| c.lines().collect())
-            .collect();
+        let cell_lines: Vec<Vec<&str>> = row.cells.iter().map(|c| c.lines().collect()).collect();
 
         let max_lines = cell_lines.iter().map(|v| v.len()).max().unwrap_or(1);
 
@@ -489,8 +494,15 @@ impl StreamingTableRenderer {
 
                 spans.push(Span::styled(formatted, style));
                 // Last column uses " │" (no trailing space), others use " │ "
-                let border_str = if col_idx == widths.len() - 1 { " │" } else { " │ " };
-                spans.push(Span::styled(border_str, Style::default().fg(colors::border())));
+                let border_str = if col_idx == widths.len() - 1 {
+                    " │"
+                } else {
+                    " │ "
+                };
+                spans.push(Span::styled(
+                    border_str,
+                    Style::default().fg(colors::border()),
+                ));
             }
 
             lines.push(Line::from(spans));
@@ -505,7 +517,8 @@ impl StreamingTableRenderer {
         mid: char,
         right: char,
     ) -> Line<'static> {
-        let mut content = String::with_capacity(widths.iter().sum::<usize>() + widths.len() * 3 + 2);
+        let mut content =
+            String::with_capacity(widths.iter().sum::<usize>() + widths.len() * 3 + 2);
         content.push(left);
 
         for (i, width) in widths.iter().enumerate() {
@@ -604,26 +617,26 @@ mod tests {
     #[test]
     fn debug_multi_column() {
         let mut renderer = StreamingTableRenderer::new();
-        
+
         renderer.start_table();
         renderer.start_head();
         renderer.start_row();
-        
+
         renderer.start_cell();
         renderer.append_text("Name");
         renderer.end_cell();
-        
+
         renderer.start_cell();
         renderer.append_text("Status");
         renderer.end_cell();
-        
+
         renderer.start_cell();
         renderer.append_text("Size");
         renderer.end_cell();
-        
+
         renderer.end_row();
         renderer.end_head();
-        
+
         // Separator
         renderer.start_row();
         renderer.start_cell();
@@ -636,7 +649,7 @@ mod tests {
         renderer.append_text("------");
         renderer.end_cell();
         renderer.end_row();
-        
+
         // Data row
         renderer.start_row();
         renderer.start_cell();
@@ -649,7 +662,7 @@ mod tests {
         renderer.append_text("1.5KB");
         renderer.end_cell();
         renderer.end_row();
-        
+
         // Debug
         println!("column_count: {:?}", renderer.column_count);
         println!("rows.len(): {}", renderer.rows.len());
@@ -659,13 +672,13 @@ mod tests {
         println!("current_row: {:?}", renderer.current_row);
         println!("current_cell: {:?}", renderer.current_cell);
         println!("aligns: {:?}", renderer.aligns);
-        
+
         let lines = renderer.render(80);
         println!("\nOutput:");
         for line in &lines {
             println!("'{}'", line);
         }
-        
+
         // Check column count in output
         for line in &lines {
             let s = line.to_string();

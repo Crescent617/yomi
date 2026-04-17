@@ -55,10 +55,7 @@ impl<T> CompletionList<T> {
     /// Move selection to the previous item (wraps around)
     pub fn prev(&mut self) {
         if !self.items.is_empty() {
-            self.selected = self
-                .selected
-                .checked_sub(1)
-                .unwrap_or(self.items.len() - 1);
+            self.selected = self.selected.checked_sub(1).unwrap_or(self.items.len() - 1);
         }
     }
 

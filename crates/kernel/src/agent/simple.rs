@@ -198,10 +198,7 @@ impl SimpleAgent {
             }
 
             // Get tool calls
-            let tool_calls = assistant_arc
-                .tool_calls
-                .clone()
-                .unwrap_or_default();
+            let tool_calls = assistant_arc.tool_calls.clone().unwrap_or_default();
 
             // Send Started event for all tool calls first
             for call in &tool_calls {

@@ -14,7 +14,10 @@ use tuirealm::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::{components::input_edit::TextInput, components::CompletionList, components::FileCompletion, msg::Msg, theme::colors};
+use crate::{
+    components::input_edit::TextInput, components::CompletionList, components::FileCompletion,
+    msg::Msg, theme::colors,
+};
 
 #[derive(Debug, Default)]
 pub struct InputMock {
@@ -462,9 +465,7 @@ impl InputComponent {
     /// Try to get image using wl-clipboard (Wayland)
     fn try_paste_image_wlclipboard(&mut self) -> Option<String> {
         // Check if wl-paste is available
-        let wl_paste_check = std::process::Command::new("which")
-            .arg("wl-paste")
-            .output();
+        let wl_paste_check = std::process::Command::new("which").arg("wl-paste").output();
 
         if wl_paste_check.is_err() || !wl_paste_check.unwrap().status.success() {
             tracing::debug!("wl-paste not found, skipping Wayland clipboard");
@@ -670,7 +671,8 @@ impl InputComponent {
         };
 
         // Encode to base64
-        let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
+        let base64_data =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_data);
 
         // Remove any newlines that might be in the base64 output
         let base64_clean: String = base64_data.chars().filter(|c| !c.is_whitespace()).collect();
@@ -782,10 +784,7 @@ impl InputComponent {
     }
 
     /// Handle input when file completion is active
-    fn handle_file_completion_input(
-        &mut self,
-        ev: &tuirealm::Event<crate::msg::UserEvent>,
-    ) -> Msg {
+    fn handle_file_completion_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Msg {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match ev {
@@ -798,16 +797,20 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Shift+Tab, Up arrow or Ctrl+P: navigate up
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::BackTab,
-                modifiers: KeyModifiers::SHIFT,
-            } | KeyEvent {
-                code: Key::Up,
-                modifiers: KeyModifiers::NONE,
-            } | KeyEvent {
-                code: Key::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::BackTab,
+                    modifiers: KeyModifiers::SHIFT,
+                }
+                | KeyEvent {
+                    code: Key::Up,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.file_completion_prev();
                 Msg::Redraw
             }
@@ -820,13 +823,16 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Down,
-                modifiers: KeyModifiers::NONE,
-            } | KeyEvent {
-                code: Key::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => {
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Down,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.file_completion_next();
                 Msg::Redraw
             }
@@ -1203,7 +1209,9 @@ impl InputComponent {
                             Ok(text) => {
                                 self.component.insert_str(&text);
                                 self.update_completion();
-                                return Some(Msg::InputChanged(self.component.content().to_string()));
+                                return Some(Msg::InputChanged(
+                                    self.component.content().to_string(),
+                                ));
                             }
                             Err(e) => tracing::debug!("No text in clipboard: {}", e),
                         },

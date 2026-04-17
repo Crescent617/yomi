@@ -87,9 +87,7 @@ impl<'a> ToolExecCtx<'a> {
     /// Get a future that completes when cancellation is requested
     pub fn cancelled(&self) -> impl std::future::Future<Output = ()> + 'static {
         match self.cancel_token.clone() {
-            Some(token) => {
-                Either::Left(async move { token.cancelled().await })
-            }
+            Some(token) => Either::Left(async move { token.cancelled().await }),
             None => {
                 // If no token, never complete (always pending)
                 Either::Right(std::future::pending())

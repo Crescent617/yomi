@@ -33,12 +33,8 @@ pub struct AgentSpawnArgs {
     pub max_iterations: usize,
     pub enable_sub_agents: bool,
     pub working_dir: std::path::PathBuf,
-    /// Parent agent's `event_tx` for forwarding permission requests
-    /// Subagent's permission requests will be sent here so TUI can show dialogs
-    pub parent_event_tx: Option<tokio::sync::mpsc::Sender<crate::event::Event>>,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
-    pub is_subagent: bool,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -52,9 +48,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("max_iterations", &self.max_iterations)
             .field("enable_sub_agents", &self.enable_sub_agents)
             .field("working_dir", &self.working_dir)
-            .field("parent_event_tx", &self.parent_event_tx.is_some())
             .field("cancel_token", &self.cancel_token.is_some())
-            .field("is_subagent", &self.is_subagent)
             .finish()
     }
 }
@@ -71,16 +65,8 @@ impl AgentSpawnArgs {
             max_iterations: 50,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-            parent_event_tx: None,
             cancel_token: None,
-            is_subagent: false,
         }
-    }
-
-    pub fn new_for_subagent(base_prompt: impl Into<String>, session_id: impl Into<String>) -> Self {
-        let mut ret = Self::new(base_prompt, session_id).with_subagent(false);
-        ret.is_subagent = true;
-        ret
     }
 
     /// Set skills to include
@@ -128,16 +114,6 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = dir.into();
-        self
-    }
-
-    /// Set parent `event_tx` for forwarding permission requests
-    #[must_use]
-    pub fn with_parent_event_tx(
-        mut self,
-        event_tx: tokio::sync::mpsc::Sender<crate::event::Event>,
-    ) -> Self {
-        self.parent_event_tx = Some(event_tx);
         self
     }
 

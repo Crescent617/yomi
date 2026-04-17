@@ -478,9 +478,19 @@ mod tests {
         assert!(!lines.is_empty(), "Table should produce output");
 
         // Check that lines contain table borders
-        let output = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(output.contains('│'), "Table should contain vertical borders");
-        assert!(output.contains('─'), "Table should contain horizontal borders");
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            output.contains('│'),
+            "Table should contain vertical borders"
+        );
+        assert!(
+            output.contains('─'),
+            "Table should contain horizontal borders"
+        );
     }
 
     #[test]
@@ -497,8 +507,14 @@ mod tests {
         let lines = renderer.lines();
         assert!(!lines.is_empty(), "Streaming table should produce output");
 
-        let output = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(output.contains('│'), "Streaming table should contain borders");
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            output.contains('│'),
+            "Streaming table should contain borders"
+        );
     }
 }
-

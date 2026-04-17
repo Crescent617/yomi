@@ -353,7 +353,10 @@ impl FileCompletion {
             std::cmp::Ordering::Equal => a.2.cmp(&b.2),
             other => other,
         });
-        scored.into_iter().map(|(idx, _, _)| files[idx].clone()).collect()
+        scored
+            .into_iter()
+            .map(|(idx, _, _)| files[idx].clone())
+            .collect()
     }
 
     /// Case-insensitive fuzzy matching
