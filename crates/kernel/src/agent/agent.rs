@@ -3,7 +3,7 @@ use super::{
     AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
     CancelToken,
 };
-use crate::compactor;
+use crate::compactor::{self, CompactionError};
 use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
@@ -193,20 +193,31 @@ impl Agent {
                     self.context.reset_iteration();
                     tracing::debug!("Agent {} waiting for input", self.id);
                     if let Err(e) = self.handle_wait_for_input().await {
-                        self.record_error("Wait for input failed", &e);
+                        self.emit_error(
+                            crate::event::ErrorPhase::WaitForInput,
+                            &e.to_string(),
+                            false,
+                        )
+                        .await;
                     }
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id);
                     if let Err(e) = self.handle_streaming_with_retry().await {
-                        self.record_error("Streaming failed", &e);
+                        self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
+                            .await;
                         self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
                 AgentState::ExecutingTool => {
                     tracing::info!("Agent {} executing tools", self.id);
                     if let Err(e) = self.handle_execute_tool().await {
-                        self.record_error("Tool execution failed", &e);
+                        self.emit_error(
+                            crate::event::ErrorPhase::ToolExecution,
+                            &e.to_string(),
+                            false,
+                        )
+                        .await;
                         self.context.transition_to(AgentState::WaitingForInput);
                     }
                 }
@@ -244,6 +255,9 @@ impl Agent {
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("Agent {} {} cancelled", self.id, context);
+        // 发送详细的操作取消事件
+        self.emit_operation_cancelled(context).await;
+        // 同时发送通用的取消事件
         let _ = self
             .event_tx
             .send(Event::Agent(AgentEvent::Cancelled {
@@ -252,11 +266,6 @@ impl Agent {
             .await;
         self.context.transition_to(AgentState::WaitingForInput);
         Ok(())
-    }
-
-    /// Record an error
-    fn record_error(&self, context: &str, error: &AgentError) {
-        tracing::error!("Agent {} failed: {context}: {error}", self.id);
     }
 
     /// Helper to emit `AgentEvent::Failed` and return error
@@ -273,10 +282,58 @@ impl Agent {
         Err(error)
     }
 
+    /// Emit error event (recoverable or not) and log it
+    async fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
+        if is_recoverable {
+            tracing::warn!(
+                "Agent {} {:?} error (recoverable): {}",
+                self.id,
+                phase,
+                error
+            );
+        } else {
+            tracing::error!("Agent {} {:?} error: {}", self.id, phase, error);
+        }
+
+        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Error {
+            agent_id: self.id.clone(),
+            phase,
+            error: error.to_string(),
+            is_recoverable,
+        })) {
+            tracing::warn!("Failed to emit error event: {}", e);
+        }
+    }
+
+    /// Emit retrying event
+    async fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str) {
+        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Retrying {
+            agent_id: self.id.clone(),
+            attempt,
+            max_attempts,
+            reason: reason.to_string(),
+        })) {
+            tracing::warn!("Failed to emit retrying event: {}", e);
+        }
+    }
+
+    /// Emit operation cancelled event
+    async fn emit_operation_cancelled(&self, operation: &str) {
+        if let Err(e) = self
+            .event_tx
+            .try_send(Event::Agent(AgentEvent::OperationCancelled {
+                agent_id: self.id.clone(),
+                operation: operation.to_string(),
+            }))
+        {
+            tracing::warn!("Failed to emit operation cancelled event: {}", e);
+        }
+    }
+
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
-                self.cancel_token.reset();
+                self.cancel_token.reset_if_cancelled();
                 let text_content = content
                     .iter()
                     .filter_map(|block| match block {
@@ -299,7 +356,7 @@ impl Agent {
             }
             Some(AgentInput::TaskResult { task_id, content }) => {
                 tracing::debug!("Task result received: {}", task_id);
-                self.cancel_token.reset();
+                self.cancel_token.reset_if_cancelled();
                 let msg = Message::with_blocks(Role::User, content);
                 self.persist_message(&msg).await;
                 self.message_buffer.push(msg);
@@ -480,6 +537,7 @@ impl Agent {
     }
 
     /// Force compaction regardless of threshold
+    /// Supports cancellation via `cancel_token`
     pub async fn force_compact(&mut self) -> Result<String, String> {
         // Clone compactor to avoid borrow issues
         let compactor = self.shared.compactor.clone();
@@ -489,18 +547,37 @@ impl Agent {
 
         // Emit start event
         let agent_id = self.id.clone();
-        let _ = self
-            .event_tx
-            .send(Event::Model(ModelEvent::Compacting {
-                agent_id: agent_id.clone(),
-                active: true,
-            }))
-            .await;
+        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
+            agent_id: agent_id.clone(),
+            active: true,
+        })) {
+            tracing::warn!("Failed to send compacting start event: {}", e);
+        }
+
+        // Create cancellation channel for compaction
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+
+        // Spawn a task to watch for cancellation
+        let cancel_token = self.cancel_token.runtime_token();
+        let cancel_watch = tokio::spawn(async move {
+            cancel_token.cancelled().await;
+            let _ = cancel_tx.send(());
+        });
 
         let messages = self.message_buffer.messages();
+
+        // Run compaction with cancellation support
         let result = compactor
-            .auto_compact(messages, &*self.shared.provider, &self.shared.model_config)
+            .auto_compact(
+                messages,
+                &*self.shared.provider,
+                &self.shared.model_config,
+                Some(&mut cancel_rx),
+            )
             .await;
+
+        // Abort the cancellation watcher
+        cancel_watch.abort();
 
         // Handle result and update messages
         let compact_result = match result {
@@ -544,20 +621,26 @@ impl Agent {
                 }
             }
             Ok(None) => Ok("No compaction needed".to_string()),
-            Err(e) => {
+            Err(CompactionError::Cancelled) => {
+                tracing::info!("Agent {} compaction was cancelled", agent_id);
+                self.emit_operation_cancelled("compaction").await;
+                Err("Compaction was cancelled".to_string())
+            }
+            Err(CompactionError::Api(e)) => {
                 tracing::warn!("Agent {} compaction failed: {}", agent_id, e);
+                self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
+                    .await;
                 Err(format!("Compaction failed: {e}"))
             }
         };
 
         // Emit end event
-        let _ = self
-            .event_tx
-            .send(Event::Model(ModelEvent::Compacting {
-                agent_id: self.id.clone(),
-                active: false,
-            }))
-            .await;
+        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
+            agent_id: self.id.clone(),
+            active: false,
+        })) {
+            tracing::warn!("Failed to send compacting end event: {}", e);
+        }
 
         compact_result
     }
@@ -574,16 +657,8 @@ impl Agent {
             return;
         }
 
+        // force_compact handles its own start/end events
         let _ = self.force_compact().await;
-
-        // Emit end event (after match block, messages borrow is released)
-        let _ = self
-            .event_tx
-            .send(Event::Model(ModelEvent::Compacting {
-                agent_id: self.id.clone(),
-                active: false,
-            }))
-            .await;
     }
 
     /// Transition to appropriate state after streaming completes
@@ -615,12 +690,11 @@ impl Agent {
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
-            let _ = self
-                .event_tx
-                .send(Event::Model(ModelEvent::Completed {
-                    agent_id: self.id.clone(),
-                }))
-                .await;
+            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Completed {
+                agent_id: self.id.clone(),
+            })) {
+                tracing::warn!("Failed to send completed event: {}", e);
+            }
             self.context.transition_to(AgentState::WaitingForInput);
         }
         Ok(())
@@ -727,19 +801,31 @@ impl Agent {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt >= max_retries => {
+                    // 发送不可恢复错误事件
+                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
+                        .await;
                     return self
                         .fail_agent("Streaming failed after max retries", e)
                         .await;
                 }
                 Err(e) if !Self::is_retryable_error(&e) => {
+                    // 发送不可恢复错误事件
+                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
+                        .await;
                     return self
                         .fail_agent("Streaming failed with non-retryable error", e)
                         .await;
                 }
                 Err(e) => {
                     attempt += 1;
+                    // 发送重试事件
+                    self.emit_retrying(attempt, max_retries, &e.to_string())
+                        .await;
+                    // 发送可恢复错误事件
+                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true)
+                        .await;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(attempt)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(u64::from(attempt))).await;
                 }
             }
         }

@@ -14,6 +14,22 @@ use crate::types::{ContentBlock, Message, Role};
 use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
+use tokio::sync::oneshot;
+
+/// Errors that can occur during compaction
+#[derive(Debug, thiserror::Error)]
+pub enum CompactionError {
+    #[error("Compaction was cancelled")]
+    Cancelled,
+    #[error("API error: {0}")]
+    Api(#[from] anyhow::Error),
+}
+
+impl From<crate::providers::ProviderError> for CompactionError {
+    fn from(e: crate::providers::ProviderError) -> Self {
+        CompactionError::Api(e.into())
+    }
+}
 
 /// Helper to estimate tokens for Arc-wrapped messages
 fn estimate_tokens_for_arc_messages(messages: &[Arc<Message>]) -> u32 {
@@ -169,12 +185,14 @@ impl Compactor {
 
     /// Perform full compaction: generate summary using API
     /// Returns a summary message and the recent messages to keep
+    /// Supports cancellation via `cancel_rx`
     pub async fn full_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
-    ) -> Result<CompactionResult> {
+        cancel_rx: Option<&mut oneshot::Receiver<()>>,
+    ) -> Result<CompactionResult, CompactionError> {
         if messages.len() <= self.keep_recent {
             return Ok(CompactionResult {
                 summary: None,
@@ -196,6 +214,7 @@ impl Compactor {
             provider,
             model_config,
             self.summary_max_tokens,
+            cancel_rx,
         )
         .await?;
 
@@ -211,12 +230,14 @@ impl Compactor {
 
     /// Auto-compact: try micro first, then full if needed
     /// Returns compacted messages if compaction was performed
+    /// Supports cancellation via `cancel_rx`
     pub async fn auto_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
-    ) -> Result<Option<Vec<Arc<Message>>>> {
+        cancel_rx: Option<&mut oneshot::Receiver<()>>,
+    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
         // Check if we need to compact
         if !self.should_compact(messages) {
             return Ok(None);
@@ -231,7 +252,7 @@ impl Compactor {
 
             // Micro-compaction wasn't enough, do full compaction
             let result = self
-                .full_compact(&compacted, provider, model_config)
+                .full_compact(&compacted, provider, model_config, cancel_rx)
                 .await?;
 
             // Build new message list
@@ -251,7 +272,9 @@ impl Compactor {
         }
 
         // Micro-compaction didn't help, do full compaction
-        let result = self.full_compact(messages, provider, model_config).await?;
+        let result = self
+            .full_compact(messages, provider, model_config, cancel_rx)
+            .await?;
 
         // Build new message list
         let new_messages = if let Some(ref summary) = result.summary {
@@ -271,12 +294,14 @@ impl Compactor {
 }
 
 /// Generate summary using API call
+/// Returns Err if cancelled or API fails
 async fn generate_summary_with_api(
     messages: &[Arc<Message>],
     provider: &dyn Provider,
     model_config: &ModelConfig,
     max_tokens: u32,
-) -> Result<String> {
+    mut cancel_rx: Option<&mut oneshot::Receiver<()>>,
+) -> Result<String, CompactionError> {
     // Build messages for summary generation
     let mut summary_messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(SUMMARY_PROMPT))];
 
@@ -301,15 +326,32 @@ async fn generate_summary_with_api(
         .stream(&summary_messages, &[], &summary_config)
         .await?;
 
-    // Collect response
+    // Collect response with cancellation check
     let mut summary = String::with_capacity(max_tokens as usize * 4); // Rough estimate of chars per token
-    while let Some(item) = stream.try_next().await? {
-        match item {
-            ModelStreamItem::Chunk(crate::event::ContentChunk::Text(text)) => {
-                summary.push_str(&text);
+    loop {
+        // Check if cancelled (non-blocking check)
+        if let Some(ref mut rx) = cancel_rx {
+            match rx.try_recv() {
+                Ok(()) => return Err(CompactionError::Cancelled),
+                Err(
+                    tokio::sync::oneshot::error::TryRecvError::Closed
+                    | tokio::sync::oneshot::error::TryRecvError::Empty,
+                ) => {}
             }
-            ModelStreamItem::Complete => break,
-            _ => {}
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_millis(100), stream.try_next()).await {
+            Ok(Ok(Some(item))) => match item {
+                ModelStreamItem::Chunk(crate::event::ContentChunk::Text(text)) => {
+                    summary.push_str(&text);
+                }
+                ModelStreamItem::Complete => break,
+                _ => {} // Ignore other item types
+            },
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => return Err(e.into()),
+            // Timeout, continue loop to check cancellation
+            Err(_) => {}
         }
     }
     Ok(summary)

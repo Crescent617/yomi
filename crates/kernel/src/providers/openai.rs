@@ -227,26 +227,42 @@ impl Provider for OpenAIProvider {
         let eventsource = response.bytes_stream().eventsource();
 
         let stream = stream::try_unfold(
-            (eventsource, ToolCallAssembler::new()),
-            |(mut eventsource, mut assembler)| async move {
+            (eventsource, ToolCallAssembler::new(), tokio::time::Instant::now()),
+            |(mut eventsource, mut assembler, last_content_time)| async move {
                 loop {
-                    match timeout(IDLE_TIMEOUT, eventsource.try_next()).await {
+                    let elapsed = last_content_time.elapsed();
+                    if elapsed >= IDLE_TIMEOUT {
+                        tracing::error!(
+                            "OpenAI SSE content stall: no content for {}s (server may be sending keepalives but no data)",
+                            elapsed.as_secs()
+                        );
+                        return Err(ProviderError::Timeout(format!(
+                            "Content stall: no meaningful data received for {} seconds",
+                            elapsed.as_secs()
+                        )));
+                    }
+
+                    // Adjust timeout based on elapsed time since last content
+                    let remaining = IDLE_TIMEOUT - elapsed;
+                    match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
                                 let items = assembler.finish();
-                                return Ok(Some((items, (eventsource, assembler))));
+                                return Ok(Some((items, (eventsource, assembler, last_content_time))));
                             }
 
                             let items = assembler.process(&event.data)?;
                             if !items.is_empty() {
-                                return Ok(Some((items, (eventsource, assembler))));
+                                // Reset content timer when we actually produce items
+                                return Ok(Some((items, (eventsource, assembler, tokio::time::Instant::now()))));
                             }
+                            // No content produced, continue loop with same timer
                         }
                         Ok(Ok(None)) => {
                             // Stream ended normally
                             tracing::debug!("OpenAI stream ended normally");
                             let items = assembler.finish();
-                            return Ok(Some((items, (eventsource, assembler))));
+                            return Ok(Some((items, (eventsource, assembler, last_content_time))));
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI SSE error: {}", e);
