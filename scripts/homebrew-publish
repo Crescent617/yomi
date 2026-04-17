@@ -1,0 +1,136 @@
+#!/bin/bash
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Config
+TAP_REPO="Crescent617/homebrew-tap"
+FORMULA_NAME="yomi"
+HOMEBREW_TAP_PATH="${HOME}/repos/homebrew-tap"
+
+# Get version from argument or Cargo.toml
+if [ -z "$1" ]; then
+    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    echo -e "${YELLOW}No version specified, using Cargo.toml version: ${VERSION}${NC}"
+else
+    VERSION="$1"
+fi
+
+# Detect platform
+ARCH=$(uname -m)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+# Map platform to Homebrew bottle tag
+if [ "$OS" = "darwin" ]; then
+    if [ "$ARCH" = "arm64" ]; then
+        BOTTLE_TAG="arm64_sequoia"
+    else
+        BOTTLE_TAG="ventura"
+    fi
+else
+    BOTTLE_TAG="x86_64_linux"
+fi
+
+echo -e "${GREEN}=== Publishing yomi ${VERSION} for ${BOTTLE_TAG} ===${NC}"
+
+# Step 1: Build release
+echo -e "${YELLOW}[1/6] Building release binary...${NC}"
+just build-release
+
+# Step 2: Create bottle structure
+echo -e "${YELLOW}[2/6] Creating bottle...${NC}"
+BOTTLE_DIR=$(mktemp -d)
+mkdir -p "${BOTTLE_DIR}/${FORMULA_NAME}/${VERSION}/bin"
+cp "target/release/${FORMULA_NAME}" "${BOTTLE_DIR}/${FORMULA_NAME}/${VERSION}/bin/"
+
+BOTTLE_FILENAME="${FORMULA_NAME}-${VERSION}.${BOTTLE_TAG}.bottle.tar.gz"
+cd "${BOTTLE_DIR}"
+tar czf "${BOTTLE_FILENAME}" .
+cd - > /dev/null
+
+# Step 3: Calculate SHA256
+echo -e "${YELLOW}[3/6] Calculating checksums...${NC}"
+BOTTLE_SHA256=$(shasum -a 256 "${BOTTLE_DIR}/${BOTTLE_FILENAME}" | cut -d' ' -f1)
+echo "Bottle SHA256: ${BOTTLE_SHA256}"
+
+# Create source tarball for formula
+SOURCE_TARBALL="/tmp/${FORMULA_NAME}-${VERSION}.tar.gz"
+git archive --prefix="${FORMULA_NAME}-${VERSION}/" -o "${SOURCE_TARBALL}" HEAD
+SOURCE_SHA256=$(shasum -a 256 "${SOURCE_TARBALL}" | cut -d' ' -f1)
+echo "Source SHA256: ${SOURCE_SHA256}"
+
+# Step 4: Update formula
+echo -e "${YELLOW}[4/6] Updating formula...${NC}"
+FORMULA_PATH="${HOMEBREW_TAP_PATH}/Formula/${FORMULA_NAME}.rb"
+
+cat > "${FORMULA_PATH}" << EOF
+class Yomi < Formula
+  desc "AI coding assistant CLI built in Rust"
+  homepage "https://github.com/Crescent617/yomi"
+  version "${VERSION}"
+  license "MIT"
+
+  url "https://github.com/Crescent617/yomi/archive/refs/tags/v${VERSION}.tar.gz"
+  sha256 "${SOURCE_SHA256}"
+
+  bottle do
+    root_url "https://github.com/Crescent617/yomi/releases/download/v${VERSION}"
+    sha256 ${BOTTLE_TAG}: "${BOTTLE_SHA256}"
+  end
+
+  depends_on "rust" => :build
+
+  def install
+    system "cargo", "install", "--locked", "--root", prefix, "--path", "."
+  end
+
+  test do
+    assert_match "yomi", shell_output("#{bin}/yomi --help")
+  end
+end
+EOF
+
+# Step 5: Upload bottle to GitHub Release
+echo -e "${YELLOW}[5/6] Uploading bottle to GitHub Release...${NC}"
+
+# Check if release exists
+if ! gh release view "v${VERSION}" --repo Crescent617/yomi > /dev/null 2>&1; then
+    echo -e "${YELLOW}Creating new release v${VERSION}...${NC}"
+    gh release create "v${VERSION}" --title "yomi v${VERSION}" --notes "Release v${VERSION}"
+fi
+
+# Upload or replace bottle
+if gh release view "v${VERSION}" --repo Crescent617/yomi --json assets | grep -q "${BOTTLE_FILENAME}"; then
+    echo -e "${YELLOW}Deleting existing bottle...${NC}"
+    gh release delete-asset "v${VERSION}" "${BOTTLE_FILENAME}" --repo Crescent617/yomi --yes
+fi
+
+gh release upload "v${VERSION}" "${BOTTLE_DIR}/${BOTTLE_FILENAME}" --repo Crescent617/yomi
+echo -e "${GREEN}Bottle uploaded successfully!${NC}"
+
+# Step 6: Push formula
+echo -e "${YELLOW}[6/6] Pushing formula...${NC}"
+cd "${HOMEBREW_TAP_PATH}"
+git add "Formula/${FORMULA_NAME}.rb"
+if git diff --cached --quiet; then
+    echo -e "${YELLOW}No changes to commit${NC}"
+else
+    git commit -m "Update yomi to ${VERSION}"
+    git push
+    echo -e "${GREEN}Formula pushed!${NC}"
+fi
+cd - > /dev/null
+
+# Cleanup
+rm -rf "${BOTTLE_DIR}"
+
+echo -e "${GREEN}=== Done! ===${NC}"
+echo ""
+echo "Bottle will be available in 1-5 minutes after CDN propagation."
+echo "Test with: brew update && brew install crescent617/tap/yomi"
+echo ""
+echo "If download fails immediately, wait a few minutes and try again."
