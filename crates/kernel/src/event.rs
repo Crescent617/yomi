@@ -13,9 +13,11 @@ pub enum Event {
     System(SystemEvent),
 }
 
-/// Permission control command from TUI to kernel
+/// Control command from TUI to kernel
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionCommand {
+pub enum ControlCommand {
+    /// Cancel current operation
+    Cancel,
     /// Response to a permission request
     Response {
         req_id: String,
@@ -24,6 +26,8 @@ pub enum PermissionCommand {
     },
     /// Set permission level (for YOLO mode toggle)
     SetLevel(Level),
+    /// Force message compaction
+    Compact,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

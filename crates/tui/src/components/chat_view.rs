@@ -538,6 +538,7 @@ impl ChatView {
 
         match msg {
             HistoryMessage::User(content) => {
+                let user_bg = colors::user_msg_bg();
                 for (i, line) in content.lines().enumerate() {
                     let prefix = if i == 0 { "❯ " } else { "│ " };
                     lines.push(Line::from(vec![
@@ -545,11 +546,12 @@ impl ChatView {
                             prefix,
                             Style::default()
                                 .fg(colors::accent_user())
+                                .bg(user_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             preprocess(line),
-                            Style::default().fg(colors::text_primary()),
+                            Style::default().fg(colors::text_primary()).bg(user_bg),
                         ),
                     ]));
                 }

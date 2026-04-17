@@ -72,6 +72,9 @@ pub mod env_names {
 
     /// Auto-approve level for tool permissions (safe | caution | dangerous)
     pub const AUTO_APPROVE: &str = env_name!("AUTO_APPROVE");
+
+    /// Context window size for the model (e.g., 131072, 200000, 128k, 200k)
+    pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
 }
 
 /// Provider type
@@ -291,6 +294,15 @@ impl Config {
             self.auto_approve = Level::Dangerous;
         }
 
+        // Context window size (supports formats like "131072", "128k", "200k", "200000")
+        if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
+            if let Some(tokens) = parse_context_window(&context_window) {
+                self.agent.compactor.context_window = tokens;
+                // Also update compact_threshold to 80% of context window
+                self.agent.compactor.compact_threshold = tokens * 8 / 10;
+            }
+        }
+
         // Sync model config to agent config
         self.agent.model = self.model.clone();
     }
@@ -347,6 +359,27 @@ fn env_bool_opt(name: &str) -> Option<bool> {
     std::env::var(name)
         .ok()
         .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
+}
+
+/// Parse context window size from string
+/// Supports formats like "131072", "128k", "200k", "1m"
+fn parse_context_window(s: &str) -> Option<u32> {
+    let s = s.trim().to_lowercase();
+
+    // Check for 'k' suffix (thousands)
+    if let Some(num_str) = s.strip_suffix('k') {
+        let num: f32 = num_str.parse().ok()?;
+        return Some((num * 1000.0) as u32);
+    }
+
+    // Check for 'm' suffix (millions)
+    if let Some(num_str) = s.strip_suffix('m') {
+        let num: f32 = num_str.parse().ok()?;
+        return Some((num * 1_000_000.0) as u32);
+    }
+
+    // Plain number
+    s.parse().ok()
 }
 
 #[cfg(test)]
@@ -488,5 +521,29 @@ mod tests {
         let home = std::env::var("HOME").unwrap_or_default();
         assert_eq!(config.data_dir, PathBuf::from(format!("{home}/.yomi")));
         assert!(!config.storage.url.starts_with('~'));
+    }
+
+    #[test]
+    fn test_parse_context_window() {
+        // Plain numbers
+        assert_eq!(parse_context_window("131072"), Some(131072));
+        assert_eq!(parse_context_window("200000"), Some(200000));
+        assert_eq!(parse_context_window("1000"), Some(1000));
+
+        // k suffix
+        assert_eq!(parse_context_window("128k"), Some(128000));
+        assert_eq!(parse_context_window("200k"), Some(200000));
+        assert_eq!(parse_context_window("1.5k"), Some(1500));
+
+        // m suffix
+        assert_eq!(parse_context_window("1m"), Some(1000000));
+        assert_eq!(parse_context_window("2m"), Some(2000000));
+
+        // With whitespace
+        assert_eq!(parse_context_window(" 128k "), Some(128000));
+
+        // Invalid values
+        assert_eq!(parse_context_window("invalid"), None);
+        assert_eq!(parse_context_window(""), None);
     }
 }

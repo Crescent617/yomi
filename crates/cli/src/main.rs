@@ -4,13 +4,11 @@ use kernel::{
     agent::AgentConfig,
     compactor,
     config::{env_names, Config, ModelProvider},
-    event::PermissionCommand,
     expand_tilde,
     misc::plugin::{EnabledPlugins, PluginLoader},
     permissions::Level,
     skill::SkillLoader,
     storage::{FsStorage, Storage},
-    types::{ContentBlock, SessionId},
     utils::strs,
 };
 use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
@@ -20,9 +18,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tui::run_tui;
 
+mod session;
 mod storage;
+
+use session::{resolve_session, run_session_loop, SessionArg, SessionContext};
 use storage::AppStorage;
 
 /// Claude Code settings.json structure (partial)
@@ -73,9 +73,14 @@ struct Args {
     #[arg(long, value_name = "LEVEL")]
     auto_approve: Option<String>,
 
-    /// Resume the last session for this working directory
-    #[arg(short, long)]
-    resume: bool,
+    /// Resume a session: --session/--resume (last session) or --session/--resume <id> (specific)
+    #[allow(clippy::option_option)]
+    #[arg(long, value_name = "SESSION_ID", visible_alias = "resume")]
+    session: Option<Option<String>>,
+
+    /// List all sessions
+    #[arg(long)]
+    list: bool,
 }
 
 #[tokio::main]
@@ -236,6 +241,55 @@ async fn main() -> Result<()> {
     // Create storage
     let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
 
+    // Handle --list command
+    if args.list {
+        use kernel::storage::Storage;
+        let sessions = storage.list_sessions().await?;
+        if sessions.is_empty() {
+            println!("No sessions found.");
+        } else {
+            println!("Sessions (showing first 50):");
+            for session in sessions.iter().take(50) {
+                let age = chrono::Utc::now() - session.updated_at;
+                let age_str = if age.num_days() > 0 {
+                    format!("{}d ago", age.num_days())
+                } else if age.num_hours() > 0 {
+                    format!("{}h ago", age.num_hours())
+                } else if age.num_minutes() > 0 {
+                    format!("{}m ago", age.num_minutes())
+                } else {
+                    "just now".to_string()
+                };
+
+                // Get first user message preview (unicode-safe truncation)
+                let preview = if let Ok(messages) = storage
+                    .get_messages(&kernel::types::SessionId(session.id.clone()))
+                    .await
+                {
+                    messages
+                        .iter()
+                        .find(|m| m.role == kernel::types::Role::User)
+                        .map_or("(no user message)".to_string(), |m| {
+                            let text = m.text_content();
+                            if text.chars().count() > 60 {
+                                format!("{}...", text.chars().take(60).collect::<String>())
+                            } else {
+                                text.clone()
+                            }
+                        })
+                } else {
+                    "(error loading messages)".to_string()
+                };
+
+                println!(
+                    "  {} - {} messages - {} - {}",
+                    session.id, session.message_count, age_str, preview
+                );
+            }
+        }
+        return Ok(());
+    }
+
     // Create provider based on configuration
     let provider: Arc<dyn kernel::Provider> = match config.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
@@ -258,7 +312,6 @@ async fn main() -> Result<()> {
     ));
 
     // Prepare banner data (before skills is moved)
-    let working_dir_str = working_dir.to_string_lossy().to_string();
     let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
 
     // Build agent config (cloneable for session creation)
@@ -278,6 +331,26 @@ async fn main() -> Result<()> {
         auto_approve_level: config.auto_approve,
     };
 
+    // Print startup info once
+    println!("Provider: {}", config.provider);
+    println!("Model: {}", config.model.model_id);
+    println!("Endpoint: {}", config.model.endpoint);
+    let api_key = config.api_key();
+    let key_preview = if api_key.len() > 8 {
+        strs::truncate_with_suffix(api_key, 11, "...")
+    } else {
+        "not set".to_string()
+    };
+    println!("API Key: {key_preview}\n");
+
+    // Session context for reuse
+    let session_ctx = SessionContext {
+        working_dir: working_dir.clone(),
+        skill_names: skill_names.clone(),
+        auto_approve: config.auto_approve,
+        context_window,
+    };
+
     // Main loop: create session, run TUI, optionally create new session
     let mut is_first_session = true;
     let mut input_history = app_storage
@@ -285,167 +358,52 @@ async fn main() -> Result<()> {
         .await
         .unwrap_or_default();
 
+    // Convert session arg for easier matching
+    let session_arg = match args.session {
+        Some(Some(ref id)) => SessionArg::Specific(id.clone()),
+        Some(None) => SessionArg::Last,
+        None => SessionArg::New,
+    };
+
     loop {
-        // Create or restore session
-        let session_id = if is_first_session && args.resume {
-            match app_storage.get_last_session(&working_dir).await? {
-                Some(id) => {
-                    let session_id = SessionId(id);
-                    println!("Restoring previous session: {}", session_id.0);
+        // Resolve session (create new or restore)
+        let session_id = resolve_session(
+            &session_arg,
+            is_first_session,
+            &coordinator,
+            &app_storage,
+            &working_dir,
+            mk_config,
+        )
+        .await?;
 
-                    match coordinator.restore_session(&session_id, mk_config()).await {
-                        Ok(_) => session_id,
-                        Err(e) => {
-                            println!("Failed to restore session: {e}");
-                            println!("Starting new session instead");
-                            coordinator.create_session(mk_config()).await?
-                        }
-                    }
-                }
-                None => {
-                    println!("No previous session found, starting new session");
-                    coordinator.create_session(mk_config()).await?
-                }
-            }
-        } else {
-            coordinator.create_session(mk_config()).await?
-        };
-
-        // Record this session for future --continue
-        app_storage
-            .record_session(&working_dir, &session_id.0)
-            .await?;
-
-        if is_first_session {
-            println!("yomi session started: {}", session_id.0);
-            println!("Working directory: {}", working_dir.display());
-            println!("Provider: {}", config.provider);
-            println!("Model: {}", config.model.model_id);
-            println!("Endpoint: {}", config.model.endpoint);
-            let api_key = config.api_key();
-            let key_preview = if api_key.len() > 8 {
-                strs::truncate_with_suffix(api_key, 11, "...")
-            } else {
-                "not set".to_string()
-            };
-            println!("API Key: {key_preview}");
-        } else {
-            println!("yomi new session started: {}", session_id.0);
-        }
-        println!("Starting TUI...\n");
-
-        // Load session messages for displaying in chat view
+        // Load session messages for display
         let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
 
-        // Create channel for input forwarding (supports multi-modal content blocks)
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<ContentBlock>>(100);
-        // Create channel for cancel requests
-        let (cancel_tx, mut cancel_rx) = tokio::sync::mpsc::channel::<()>(10);
-        // Create channel for permission responses
-        let (permission_tx, mut permission_rx) =
-            tokio::sync::mpsc::channel::<PermissionCommand>(10);
-
-        // Spawn task to forward input to coordinator (supports multi-modal content)
-        let coord_for_input = coordinator.clone();
-        let session_id_for_input = session_id.clone();
-        tokio::spawn(async move {
-            while let Some(blocks) = input_rx.recv().await {
-                if let Err(e) = coord_for_input
-                    .send_blocks(&session_id_for_input, blocks)
-                    .await
-                {
-                    tracing::error!("Failed to send message: {}", e);
-                }
-            }
-        });
-
-        // Spawn task to handle cancel requests
-        let coord_for_cancel = coordinator.clone();
-        let session_id_for_cancel = session_id.clone();
-        tokio::spawn(async move {
-            while cancel_rx.recv().await == Some(()) {
-                if let Err(e) = coord_for_cancel.cancel(&session_id_for_cancel).await {
-                    tracing::error!("Failed to cancel request: {}", e);
-                }
-            }
-        });
-
-        // Spawn task to handle permission commands
-        let coord_for_permission = coordinator.clone();
-        let session_id_for_permission = session_id.clone();
-        tokio::spawn(async move {
-            while let Some(cmd) = permission_rx.recv().await {
-                match cmd {
-                    PermissionCommand::Response {
-                        req_id,
-                        approved,
-                        remember,
-                    } => {
-                        tracing::debug!(
-                            "CLI received permission response: req_id={} approved={} remember={}",
-                            req_id,
-                            approved,
-                            remember
-                        );
-                        if let Err(e) = coord_for_permission
-                            .send_permission_response(
-                                &session_id_for_permission,
-                                &req_id,
-                                approved,
-                                remember,
-                            )
-                            .await
-                        {
-                            tracing::error!("Failed to send permission response: {}", e);
-                        }
-                    }
-                    PermissionCommand::SetLevel(level) => {
-                        tracing::debug!("CLI received SetLevel command: {:?}", level);
-                        if let Err(e) = coord_for_permission
-                            .set_permission_level(&session_id_for_permission, level)
-                            .await
-                        {
-                            tracing::error!("Failed to set permission level: {}", e);
-                        }
-                    }
-                }
-            }
-        });
-
-        // Get event receiver from coordinator for the session
-        let event_rx = coordinator
-            .take_session_event_receiver(&session_id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
-
-        // Run TUI with banner data, input history and session messages
-        let tui_result = run_tui(
-            event_rx,
-            input_tx,
-            cancel_tx,
-            permission_tx,
-            working_dir_str.clone(),
-            skill_names.clone(),
+        // Run session lifecycle
+        let result = run_session_loop(
+            coordinator.clone(),
+            session_id,
+            session_ctx.clone(),
+            app_storage.clone(),
             input_history.clone(),
             session_messages,
-            config.auto_approve,
-            context_window,
+            is_first_session,
         )
         .await?;
 
         // Save new history entries
-        input_history.extend(tui_result.input_history.clone());
-        for entry in &tui_result.input_history {
+        for entry in &result.new_history_entries {
             app_storage.add_input_entry(&working_dir, entry).await?;
         }
+        input_history.extend(result.new_history_entries);
 
         // Check if we should create a new session
-        if tui_result.should_create_new_session {
+        if result.should_create_new_session {
             is_first_session = false;
             continue;
         }
 
-        // Otherwise, exit the loop
         break;
     }
 

@@ -228,4 +228,45 @@ impl Storage for FsStorage {
 
         Ok(())
     }
+
+    async fn list_sessions(&self) -> Result<Vec<crate::storage::SessionInfo>> {
+        let mut sessions = Vec::new();
+        let mut entries = fs::read_dir(&self.base_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+
+            // Extract session ID from filename
+            let filename = path.file_stem().and_then(|s| s.to_str());
+            if filename.is_none() {
+                continue;
+            }
+
+            // Read events to get session info
+            let session_id = SessionId(filename.unwrap().to_string());
+            let events = self.read_events(&session_id).await?;
+
+            if let Some(record) = Self::rebuild_session(&events) {
+                let message_count = events
+                    .iter()
+                    .filter(|r| matches!(r.event, SessionEvent::MessageAdded { .. }))
+                    .count();
+
+                sessions.push(crate::storage::SessionInfo {
+                    id: record.id.0,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                    message_count,
+                });
+            }
+        }
+
+        // Sort by updated_at descending (most recent first)
+        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        Ok(sessions)
+    }
 }

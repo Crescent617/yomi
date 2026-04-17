@@ -362,7 +362,13 @@ impl StreamingMarkdownRenderer {
                     }
                 }
                 MdEvent::Code(code) => {
-                    current_line.push(Span::styled(format!("{code}"), Styles::inline_code()));
+                    if in_table {
+                        if let Some(ref mut tr) = self.table_renderer {
+                            tr.append_text(&code);
+                        }
+                    } else {
+                        current_line.push(Span::styled(format!("{code}"), Styles::inline_code()));
+                    }
                 }
                 MdEvent::TaskListMarker(checked) => {
                     let checkbox = if checked { "[x]" } else { "[ ]" };
@@ -515,6 +521,31 @@ mod tests {
         assert!(
             output.contains('│'),
             "Streaming table should contain borders"
+        );
+    }
+
+    #[test]
+    fn test_table_with_inline_code() {
+        let mut renderer = StreamingMarkdownRenderer::new();
+        // Table with inline code in cells
+        let content = "| Command | Description |\n|---------|-------------|\n| `ls`    | List files  |\n| `cd`    | Change dir  |";
+        let lines = renderer.set_content(content.to_string());
+
+        assert!(!lines.is_empty(), "Table should produce output");
+
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Check that inline code content is present (without backticks in this case,
+        // since the Code event provides just the content)
+        assert!(output.contains("ls"), "Should contain code content 'ls'");
+        assert!(output.contains("cd"), "Should contain code content 'cd'");
+        assert!(
+            output.contains('│'),
+            "Table should contain vertical borders"
         );
     }
 }

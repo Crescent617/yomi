@@ -118,6 +118,9 @@ impl Table {
                 MdEvent::Text(text) => {
                     current_cell.push_str(text);
                 }
+                MdEvent::Code(code) => {
+                    current_cell.push_str(code);
+                }
                 _ => {}
             }
         }
