@@ -318,6 +318,7 @@ async fn main() -> Result<()> {
     let mk_agent_config = || AgentConfig {
         model: config.model.clone(),
         skills: skills.clone(),
+        compactor: config.agent.compactor.clone(),
         ..Default::default()
     };
 

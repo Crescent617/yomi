@@ -141,7 +141,7 @@ impl PluginLoader {
             }
 
             // Fall back to directory scanning
-            self.load_from_dir(dir, &mut plugins, &mut loaded_paths)
+            Self::load_from_dir(dir, &mut plugins, &mut loaded_paths)
                 .with_context(|| format!("Failed to load plugins from {}", dir.display()))?;
         }
 
@@ -204,9 +204,7 @@ impl PluginLoader {
         Ok(plugins)
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn load_from_dir(
-        &self,
         dir: &Path,
         plugins: &mut Vec<Plugin>,
         loaded_paths: &mut std::collections::HashSet<PathBuf>,
@@ -240,7 +238,7 @@ impl PluginLoader {
                     }
                 } else {
                     // Recurse into subdirectory
-                    self.load_from_dir(&path, plugins, loaded_paths)?;
+                    Self::load_from_dir(&path, plugins, loaded_paths)?;
                 }
             }
         }

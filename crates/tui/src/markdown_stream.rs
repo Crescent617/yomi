@@ -167,17 +167,24 @@ impl StreamingMarkdownRenderer {
                             current_line = Vec::new();
                         }
                         self.lines.push(Line::from(""));
-                        current_style = match level {
-                            pulldown_cmark::HeadingLevel::H1 => Style::default()
-                                .fg(colors::accent_user())
-                                .add_modifier(Modifier::BOLD),
-                            pulldown_cmark::HeadingLevel::H2 => Style::default()
+                        // Add heading prefix (###)
+                        let prefix = match level {
+                            pulldown_cmark::HeadingLevel::H1 => "# ",
+                            pulldown_cmark::HeadingLevel::H2 => "## ",
+                            pulldown_cmark::HeadingLevel::H3 => "### ",
+                            pulldown_cmark::HeadingLevel::H4 => "#### ",
+                            pulldown_cmark::HeadingLevel::H5 => "##### ",
+                            pulldown_cmark::HeadingLevel::H6 => "###### ",
+                        };
+                        current_line.push(Span::styled(
+                            prefix,
+                            Style::default()
                                 .fg(colors::text_primary())
                                 .add_modifier(Modifier::BOLD),
-                            _ => Style::default()
-                                .fg(colors::text_secondary())
-                                .add_modifier(Modifier::BOLD),
-                        };
+                        ));
+                        current_style = Style::default()
+                            .fg(colors::text_primary())
+                            .add_modifier(Modifier::BOLD);
                     }
                     Tag::BlockQuote(_) => {
                         current_line.push(Span::styled(
