@@ -38,6 +38,133 @@ impl CellAlign {
     }
 }
 
+/// Wrap text into multiple lines based on display width.
+/// Respects existing newlines and word boundaries when possible.
+fn wrap_text_to_width(text: &str, max_width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+
+    for line in text.lines() {
+        let mut current_line = String::new();
+        let mut current_width = 0;
+        let mut pending_space = false;
+
+        // Try to wrap at word boundaries
+        let mut word_buffer = String::new();
+        let mut word_width = 0;
+
+        for ch in line.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            if ch.is_whitespace() {
+                // End of a word
+                if !word_buffer.is_empty() {
+                    // Check if word + pending space fits in current line
+                    let space_width = usize::from(pending_space);
+                    if current_width + space_width + word_width > max_width {
+                        // Word doesn't fit, flush current line and start new one
+                        if !current_line.is_empty() {
+                            lines.push(current_line);
+                            current_line = String::new();
+                            current_width = 0;
+                        }
+                        // If word itself is longer than max_width, break it
+                        if word_width > max_width {
+                            lines.extend(break_long_word(&word_buffer, max_width));
+                            pending_space = false;
+                        } else {
+                            current_line.clone_from(&word_buffer);
+                            current_width = word_width;
+                            pending_space = true;
+                        }
+                    } else {
+                        // Word fits, add it with pending space
+                        if pending_space {
+                            current_line.push(' ');
+                            current_width += 1;
+                        }
+                        current_line.push_str(&word_buffer);
+                        current_width += word_width;
+                        pending_space = true;
+                    }
+                    word_buffer.clear();
+                    word_width = 0;
+                }
+                // Mark that we have a pending space (but don't add it yet)
+                if !current_line.is_empty() {
+                    pending_space = true;
+                }
+            } else {
+                // Part of a word
+                word_buffer.push(ch);
+                word_width += ch_width;
+            }
+        }
+
+        // Handle remaining word buffer
+        if !word_buffer.is_empty() {
+            let space_width = usize::from(pending_space);
+            if current_width + space_width + word_width > max_width {
+                // Flush current line first
+                if !current_line.is_empty() {
+                    lines.push(current_line);
+                }
+                // If word itself is longer than max_width, break it
+                if word_width > max_width {
+                    lines.extend(break_long_word(&word_buffer, max_width));
+                } else {
+                    lines.push(word_buffer);
+                }
+            } else {
+                if pending_space {
+                    current_line.push(' ');
+                }
+                current_line.push_str(&word_buffer);
+                lines.push(current_line);
+            }
+        } else if !current_line.is_empty() {
+            lines.push(current_line);
+        } else {
+            lines.push(String::new());
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Break a long word into chunks that fit within `max_width`
+fn break_long_word(word: &str, max_width: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+    let mut current_width = 0;
+
+    for ch in word.chars() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+        if current_width + ch_width > max_width && !current_chunk.is_empty() {
+            chunks.push(current_chunk);
+            current_chunk = String::new();
+            current_width = 0;
+        }
+
+        current_chunk.push(ch);
+        current_width += ch_width;
+    }
+
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
+}
+
 /// A row in the table
 #[derive(Debug, Clone)]
 pub struct TableRow {
@@ -225,8 +352,16 @@ impl Table {
     }
 
     fn render_row(&self, row: &TableRow, widths: &[usize], is_header: bool) -> Vec<Line<'static>> {
-        // Split multi-line cells
-        let cell_lines: Vec<Vec<&str>> = row.cells.iter().map(|c| c.lines().collect()).collect();
+        // Wrap cell content to fit column widths
+        let cell_lines: Vec<Vec<String>> = row
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(idx, cell)| {
+                let width = widths.get(idx).copied().unwrap_or(10);
+                wrap_text_to_width(cell, width)
+            })
+            .collect();
 
         let max_lines = cell_lines.iter().map(|v| v.len()).max().unwrap_or(1);
 
@@ -239,8 +374,7 @@ impl Table {
                 let content = cell_lines
                     .get(col_idx)
                     .and_then(|cell| cell.get(line_idx))
-                    .copied()
-                    .unwrap_or("");
+                    .map_or("", |s| s.as_str());
                 let width = widths[col_idx];
                 let align = self.aligns.get(col_idx).copied().unwrap_or_default();
 
@@ -469,8 +603,16 @@ impl StreamingTableRenderer {
     }
 
     fn render_row(&self, row: &TableRow, widths: &[usize]) -> Vec<Line<'static>> {
-        // Handle multi-line cells
-        let cell_lines: Vec<Vec<&str>> = row.cells.iter().map(|c| c.lines().collect()).collect();
+        // Wrap cell content to fit column widths
+        let cell_lines: Vec<Vec<String>> = row
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(idx, cell)| {
+                let width = widths.get(idx).copied().unwrap_or(10);
+                wrap_text_to_width(cell, width)
+            })
+            .collect();
 
         let max_lines = cell_lines.iter().map(|v| v.len()).max().unwrap_or(1);
 
@@ -480,8 +622,10 @@ impl StreamingTableRenderer {
 
             // Render all columns, using empty string for missing cells
             for col_idx in 0..widths.len() {
-                let cell = cell_lines.get(col_idx);
-                let content = cell.and_then(|c| c.get(line_idx)).copied().unwrap_or("");
+                let content = cell_lines
+                    .get(col_idx)
+                    .and_then(|c| c.get(line_idx))
+                    .map_or("", |s| s.as_str());
                 let width = widths[col_idx];
                 let align = self.aligns.get(col_idx).copied().unwrap_or_default();
 
@@ -679,7 +823,7 @@ mod tests {
         let lines = renderer.render(80);
         println!("\nOutput:");
         for line in &lines {
-            println!("'{}'", line);
+            println!("'{line}'");
         }
 
         // Check column count in output
@@ -687,8 +831,136 @@ mod tests {
             let s = line.to_string();
             if s.contains('│') {
                 let count = s.matches('│').count();
-                println!("Line has {} │: '{}'", count, s);
+                println!("Line has {count} │: '{s}'");
             }
         }
+    }
+
+    #[test]
+    fn test_wrap_text_to_width() {
+        // Simple word wrap
+        let lines = wrap_text_to_width("hello world", 5);
+        assert_eq!(lines, vec!["hello", "world"]);
+
+        // No wrap needed
+        let lines = wrap_text_to_width("hi", 10);
+        assert_eq!(lines, vec!["hi"]);
+
+        // Long word break
+        let lines = wrap_text_to_width("abcdefghij", 5);
+        assert_eq!(lines, vec!["abcde", "fghij"]);
+
+        // Empty string
+        let lines = wrap_text_to_width("", 5);
+        assert_eq!(lines, vec![""]);
+
+        // Multiple spaces
+        let lines = wrap_text_to_width("a   b", 3);
+        assert_eq!(lines, vec!["a b"]);
+    }
+
+    #[test]
+    fn test_wrap_with_unicode() {
+        // Chinese characters (each is width 2)
+        let lines = wrap_text_to_width("你好世界", 4);
+        assert_eq!(lines, vec!["你好", "世界"]);
+
+        // Mixed content
+        let lines = wrap_text_to_width("hello 你好", 6);
+        assert_eq!(lines, vec!["hello", "你好"]);
+    }
+
+    #[test]
+    fn test_streaming_table_with_wrapped_content() {
+        let mut renderer = StreamingTableRenderer::new();
+
+        renderer.start_table();
+        renderer.start_head();
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.append_text("Name");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("Description");
+        renderer.end_cell();
+        renderer.end_row();
+        renderer.end_head();
+
+        // Separator
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.append_text("---");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("---");
+        renderer.end_cell();
+        renderer.end_row();
+
+        // Data row with long content
+        renderer.start_row();
+        renderer.start_cell();
+        renderer.append_text("Item1");
+        renderer.end_cell();
+        renderer.start_cell();
+        renderer.append_text("This is a very long description");
+        renderer.end_cell();
+        renderer.end_row();
+
+        // Render with narrow width to force wrapping
+        let lines = renderer.render(30);
+
+        assert!(!lines.is_empty(), "Table should produce output");
+
+        // The description should be wrapped across multiple lines
+        let output: String = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            output.contains('│'),
+            "Table should contain vertical borders"
+        );
+        // Should have multiple lines due to wrapping
+        assert!(
+            lines.len() > 4,
+            "Wrapped table should have more lines: got {} lines",
+            lines.len()
+        );
+    }
+
+    #[test]
+    fn test_complete_table_with_wrapping() {
+        let table = Table {
+            header: Some(TableRow {
+                cells: vec!["Name".to_string(), "Description".to_string()],
+                is_header: true,
+            }),
+            rows: vec![TableRow {
+                cells: vec![
+                    "Item".to_string(),
+                    "This is a very long description that needs wrapping".to_string(),
+                ],
+                is_header: false,
+            }],
+            aligns: vec![CellAlign::Left, CellAlign::Left],
+        };
+
+        // Render with narrow width to force wrapping
+        let lines = table.render(40);
+
+        assert!(!lines.is_empty(), "Table should render");
+        // Should have header + separator + wrapped data rows + borders
+        assert!(lines.len() >= 4, "Wrapped table should have multiple lines");
+
+        // Verify borders are present
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output.contains('│'), "Should have vertical borders");
+        assert!(output.contains('─'), "Should have horizontal borders");
     }
 }

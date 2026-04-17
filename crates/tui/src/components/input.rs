@@ -1163,6 +1163,7 @@ impl InputComponent {
     }
 
     /// Parse slash command from input
+    /// Returns Some(Msg) for known commands, None for unknown (treated as regular message)
     fn parse_command(content: &str) -> Option<Msg> {
         if !content.starts_with('/') {
             return None;
@@ -1179,7 +1180,7 @@ impl InputComponent {
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
             "/compact" => Some(Msg::CommandCompact),
-            cmd => Some(Msg::CommandUnknown(cmd.to_string())),
+            _ => None, // Unknown command: treat as regular message
         }
     }
 

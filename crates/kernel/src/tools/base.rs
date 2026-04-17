@@ -169,15 +169,15 @@ mod tests {
 
         // Create test files
         for i in 0..10 {
-            let file = base_path.join(format!("file{}.txt", i));
-            std::fs::write(&file, format!("content{}", i)).unwrap();
+            let file = base_path.join(format!("file{i}.txt"));
+            std::fs::write(&file, format!("content{i}")).unwrap();
         }
 
         let tool = TestTool {
             base_dir: base_path.clone(),
         };
         let paths: Vec<PathBuf> = (0..10)
-            .map(|i| base_path.join(format!("file{}.txt", i)))
+            .map(|i| base_path.join(format!("file{i}.txt")))
             .collect();
 
         // Use a low concurrency limit
