@@ -62,7 +62,7 @@ impl AgentSpawnArgs {
             history: Vec::<Arc<Message>>::new(),
             session_id: session_id.into(),
             parent_session_id: None,
-            max_iterations: 50,
+            max_iterations: 100,
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             cancel_token: None,

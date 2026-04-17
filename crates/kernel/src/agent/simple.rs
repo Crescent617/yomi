@@ -70,7 +70,7 @@ impl SimpleAgent {
             provider,
             model_config,
             tool_registry,
-            max_iterations: 20,
+            max_iterations: 100,
             permission_checker: None,
             event_tx: None,
             agent_id: AgentId::new(),
