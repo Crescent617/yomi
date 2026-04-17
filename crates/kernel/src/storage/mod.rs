@@ -6,7 +6,17 @@ use crate::config::DEFAULT_DATA_DIR;
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// Session information for listing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: usize,
+}
 
 #[async_trait]
 pub trait Storage: Send + Sync {
@@ -18,6 +28,8 @@ pub trait Storage: Send + Sync {
     async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
     /// Replace all messages for a session (used after compaction)
     async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
+    /// List all sessions with basic info
+    async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

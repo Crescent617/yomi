@@ -375,6 +375,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear chat history"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
+    ("/compact", "Force message compaction"),
 ];
 
 /// Generic completion list for command and file completions
@@ -1177,6 +1178,7 @@ impl InputComponent {
             "/clear" => Some(Msg::CommandClear),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
+            "/compact" => Some(Msg::CommandCompact),
             cmd => Some(Msg::CommandUnknown(cmd.to_string())),
         }
     }

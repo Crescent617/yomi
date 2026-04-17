@@ -177,4 +177,16 @@ impl Session {
             tracing::warn!("Session {} has no permission state to update", self.id.0);
         }
     }
+
+    /// Request compaction of the session's message buffer
+    pub async fn compact(&self) -> Result<()> {
+        tracing::debug!("Session {} requesting compaction", self.id.0);
+        match &self.main_agent {
+            Some(handle) => {
+                handle.force_compact().await?;
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("Session not initialized")),
+        }
+    }
 }

@@ -26,6 +26,8 @@ pub struct ThemeConfig {
     // Accent colors (can be customized to any theme)
     /// User message accent (prompts, user indicators)
     pub accent_user: Color,
+    /// User message background color
+    pub user_msg_bg: Color,
     /// System/tool accent (tool calls, system messages)
     pub accent_system: Color,
     /// Success states
@@ -68,6 +70,7 @@ impl Default for ThemeConfig {
 
             // Accent colors - Purple theme
             accent_user: hex("#C4C6CF"),
+            user_msg_bg: hex("#2A2A35"),
             accent_system: hex("#64C8FF"),
             accent_success: hex("#64DC8C"),
             accent_warning: hex("#FFC864"),
@@ -144,6 +147,9 @@ pub mod colors {
     pub fn accent_user() -> Color {
         current_theme().accent_user
     }
+    pub fn user_msg_bg() -> Color {
+        current_theme().user_msg_bg
+    }
     pub fn accent_system() -> Color {
         current_theme().accent_system
     }
@@ -191,7 +197,9 @@ impl Styles {
 
     /// User message content style
     pub fn user_content() -> Style {
-        Style::default().fg(colors::text_primary())
+        Style::default()
+            .fg(colors::text_primary())
+            .bg(colors::user_msg_bg())
     }
 
     /// Assistant message content style

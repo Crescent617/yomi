@@ -187,4 +187,19 @@ impl Coordinator {
         );
         Ok(())
     }
+
+    /// Request compaction for a session's message buffer
+    pub async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+        let result = session.read().await.compact().await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to compact session {}: {}", session_id.0, e);
+        } else {
+            tracing::info!("Compaction requested for session {}", session_id.0);
+        }
+        result
+    }
 }

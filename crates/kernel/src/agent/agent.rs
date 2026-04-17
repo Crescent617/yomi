@@ -28,6 +28,8 @@ pub enum AgentInput {
     PermissionResponse { req_id: String, approved: bool },
     /// Close the agent gracefully (for subagent/resource management)
     Close,
+    /// Force compaction of message buffer
+    Compact,
 }
 
 pub struct Agent {
@@ -318,6 +320,14 @@ impl Agent {
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
+            Some(AgentInput::Compact) => {
+                tracing::info!("Agent {} received compact request", self.id);
+                if let Err(e) = self.force_compact().await {
+                    tracing::warn!("Agent {} force_compact failed: {}", self.id, e);
+                }
+                // Stay in WaitingForInput state
+                Ok(())
+            }
             None => {
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
@@ -469,17 +479,15 @@ impl Agent {
         Ok((result.content_blocks, result.tool_calls))
     }
 
-    /// Check and run compaction if needed
-    async fn maybe_compact_messages(&mut self) {
-        let Some(compactor) = &self.shared.compactor else {
-            return; // No compactor configured, skip
+    /// Force compaction regardless of threshold
+    pub async fn force_compact(&mut self) -> Result<String, String> {
+        // Clone compactor to avoid borrow issues
+        let compactor = self.shared.compactor.clone();
+        let Some(compactor) = compactor else {
+            return Err("No compactor configured".to_string());
         };
-        let should_compact = compactor.should_compact(self.message_buffer.messages());
-        if !should_compact {
-            return;
-        }
 
-        // Emit start event (before borrowing self mutably for messages)
+        // Emit start event
         let agent_id = self.id.clone();
         let _ = self
             .event_tx
@@ -495,7 +503,7 @@ impl Agent {
             .await;
 
         // Handle result and update messages
-        match result {
+        let compact_result = match result {
             Ok(Some(new_messages)) => {
                 let old_count = messages.len();
                 let new_count = new_messages.len();
@@ -528,10 +536,45 @@ impl Agent {
                         );
                     }
                 }
+
+                if is_full {
+                    Ok(format!("Compacted {compacted_count} messages"))
+                } else {
+                    Ok("Micro-compaction completed".to_string())
+                }
             }
-            Ok(None) => {}
-            Err(e) => tracing::warn!("Agent {} compaction failed: {}", agent_id, e),
+            Ok(None) => Ok("No compaction needed".to_string()),
+            Err(e) => {
+                tracing::warn!("Agent {} compaction failed: {}", agent_id, e);
+                Err(format!("Compaction failed: {e}"))
+            }
+        };
+
+        // Emit end event
+        let _ = self
+            .event_tx
+            .send(Event::Model(ModelEvent::Compacting {
+                agent_id: self.id.clone(),
+                active: false,
+            }))
+            .await;
+
+        compact_result
+    }
+
+    /// Check and run compaction if needed
+    async fn maybe_compact_messages(&mut self) {
+        // Clone compactor to avoid borrow issues
+        let compactor = self.shared.compactor.clone();
+        let Some(compactor) = compactor else {
+            return; // No compactor configured, skip
+        };
+        let should_compact = compactor.should_compact(self.message_buffer.messages());
+        if !should_compact {
+            return;
         }
+
+        let _ = self.force_compact().await;
 
         // Emit end event (after match block, messages borrow is released)
         let _ = self

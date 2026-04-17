@@ -81,4 +81,12 @@ impl AgentHandle {
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }
+
+    /// 请求强制压缩消息缓冲区
+    pub async fn force_compact(&self) -> Result<(), AgentError> {
+        self.input_tx
+            .send(AgentInput::Compact)
+            .await
+            .map_err(|_| AgentError::ChannelClosed)
+    }
 }

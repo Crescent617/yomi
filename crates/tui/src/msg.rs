@@ -66,6 +66,7 @@ pub enum Msg {
     CommandClear,           // /clear - clear history
     CommandYolo,            // /yolo - toggle yolo mode
     CommandBrowse,          // /browse - toggle browse mode
+    CommandCompact,         // /compact - force message compaction
     CommandUnknown(String), // Unknown command
 }
 

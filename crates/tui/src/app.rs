@@ -22,7 +22,7 @@ use tuirealm::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use kernel::event::{Event as AppEvent, PermissionCommand};
+use kernel::event::{ControlCommand, Event as AppEvent};
 use kernel::permissions::Level;
 use kernel::types::{ContentBlock, Message};
 
@@ -68,10 +68,8 @@ pub struct Model {
     pub event_rx: mpsc::Receiver<AppEvent>,
     /// Channel to send input to kernel (supports multi-modal content blocks)
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
-    /// Channel to send cancel requests
-    pub cancel_tx: mpsc::Sender<()>,
-    /// Channel to send permission commands (responses and level changes)
-    pub permission_tx: mpsc::Sender<PermissionCommand>,
+    /// Channel to send control commands (cancel, permission responses, level changes, compaction)
+    pub ctrl_tx: mpsc::Sender<ControlCommand>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -101,8 +99,7 @@ impl Model {
     pub fn new(
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
-        cancel_tx: mpsc::Sender<()>,
-        permission_tx: mpsc::Sender<PermissionCommand>,
+        ctrl_tx: mpsc::Sender<ControlCommand>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
@@ -122,8 +119,7 @@ impl Model {
             terminal,
             event_rx,
             input_tx,
-            cancel_tx,
-            permission_tx,
+            ctrl_tx,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -871,7 +867,7 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::CancelRequest => {
-                    let _ = self.cancel_tx.try_send(());
+                    let _ = self.ctrl_tx.try_send(ControlCommand::Cancel);
                     None
                 }
                 Msg::Redraw => {
@@ -1012,13 +1008,13 @@ impl Update<Msg> for Model {
                                 );
                                 // Send command to kernel to update permission level
                                 let _ = self
-                                    .permission_tx
-                                    .try_send(PermissionCommand::SetLevel(Level::Dangerous));
+                                    .ctrl_tx
+                                    .try_send(ControlCommand::SetLevel(Level::Dangerous));
                                 (true, false)
                             }
                             _ => (false, false), // Deny
                         };
-                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                        let _ = self.ctrl_tx.try_send(ControlCommand::Response {
                             req_id,
                             approved,
                             remember,
@@ -1031,7 +1027,7 @@ impl Update<Msg> for Model {
                 Msg::DialogCancelled => {
                     // Deny the permission request if dialog is cancelled
                     if let Some(req_id) = self.pending_permission.take() {
-                        let _ = self.permission_tx.try_send(PermissionCommand::Response {
+                        let _ = self.ctrl_tx.try_send(ControlCommand::Response {
                             req_id,
                             approved: false,
                             remember: false,
@@ -1095,15 +1091,24 @@ impl Update<Msg> for Model {
                     );
 
                     // Send command to kernel
-                    let _ = self
-                        .permission_tx
-                        .try_send(PermissionCommand::SetLevel(new_level));
+                    let _ = self.ctrl_tx.try_send(ControlCommand::SetLevel(new_level));
 
                     None
                 }
                 Msg::CommandBrowse => {
                     // Toggle browse mode
                     self.update(Some(Msg::ToggleBrowseMode))
+                }
+                Msg::CommandCompact => {
+                    // Send compact request
+                    let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
+                    // Show status message
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String("3000\x00Compacting messages...".to_string()),
+                    );
+                    None
                 }
                 Msg::CommandUnknown(cmd) => {
                     // Show unknown command message in status bar
@@ -1129,8 +1134,7 @@ impl Update<Msg> for Model {
 pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
-    cancel_tx: mpsc::Sender<()>,
-    permission_tx: mpsc::Sender<PermissionCommand>,
+    ctrl_tx: mpsc::Sender<ControlCommand>,
     working_dir: String,
     skills: Vec<String>,
     input_history: Vec<String>,
@@ -1142,8 +1146,7 @@ pub async fn run_tui(
     let mut model = Model::new(
         event_rx,
         input_tx,
-        cancel_tx,
-        permission_tx,
+        ctrl_tx,
         input_history,
         working_dir_path,
         session_messages,

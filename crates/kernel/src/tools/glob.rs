@@ -20,30 +20,16 @@ impl GlobTool {
         }
     }
 
-    /// Build a globset from pattern
-    fn build_glob_matcher(pattern: &str) -> Result<Option<globset::GlobSet>> {
+    /// Build glob matcher for pattern
+    fn build_matcher(pattern: &str) -> Result<Option<globset::GlobMatcher>> {
         if pattern.is_empty() || pattern == "**/*" {
             return Ok(None);
         }
 
-        // Handle multiple patterns
-        let patterns: Vec<&str> = pattern
-            .split([',', ' '])
-            .filter(|s| !s.is_empty())
-            .collect();
+        let glob = globset::Glob::new(pattern)
+            .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{pattern}': {e}"))?;
 
-        let mut builder = globset::GlobSetBuilder::new();
-        for pat in patterns {
-            let glob = globset::Glob::new(pat)
-                .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{pat}': {e}"))?;
-            builder.add(glob);
-        }
-
-        let set = builder
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build glob matcher: {e}"))?;
-
-        Ok(Some(set))
+        Ok(Some(glob.compile_matcher()))
     }
 
     /// Search files using ignore crate with proper glob matching
@@ -55,7 +41,7 @@ impl GlobTool {
         include_hidden: bool,
         limit: usize,
     ) -> Result<Vec<PathBuf>> {
-        let matcher = Self::build_glob_matcher(&pattern)?;
+        let matcher = Self::build_matcher(&pattern)?;
 
         let files = tokio::task::spawn_blocking(move || {
             let mut files = Vec::new();
@@ -426,5 +412,40 @@ mod tests {
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.stdout.contains(".hidden.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_tool_brace_expansion() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create files with different extensions
+        let mut file1 = std::fs::File::create(base_path.join("test.rs")).unwrap();
+        writeln!(file1, "content").unwrap();
+
+        let mut file2 = std::fs::File::create(base_path.join("test.ts")).unwrap();
+        writeln!(file2, "content").unwrap();
+
+        let mut file3 = std::fs::File::create(base_path.join("test.js")).unwrap();
+        writeln!(file3, "content").unwrap();
+
+        std::fs::File::create(base_path.join("test.txt")).unwrap();
+
+        let tool = GlobTool::new(base_path);
+        // Use brace expansion to match multiple extensions
+        let args = serde_json::json!({
+            "pattern": "*.{rs,ts,js}"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(result.success());
+        assert!(result.stdout.contains("test.rs"), "Should match .rs files");
+        assert!(result.stdout.contains("test.ts"), "Should match .ts files");
+        assert!(result.stdout.contains("test.js"), "Should match .js files");
+        assert!(
+            !result.stdout.contains("test.txt"),
+            "Should not match .txt files"
+        );
     }
 }
