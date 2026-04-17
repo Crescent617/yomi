@@ -56,6 +56,7 @@ impl ClaudeSettings {
 #[derive(Parser)]
 #[command(name = "yomi")]
 #[command(about = "AI coding assistant CLI")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     /// Working directory
     #[arg(short, long)]
