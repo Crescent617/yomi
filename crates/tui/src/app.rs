@@ -469,6 +469,13 @@ impl Model {
                         AttrValue::Flag(true),
                     )?;
 
+                    // Clear any retry/status messages from status bar
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("clear_message"),
+                        AttrValue::Flag(true),
+                    )?;
+
                     // Add completed assistant message to history
                     // Save if there's either content or thinking
                     if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
@@ -684,6 +691,68 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
+                // Error events - recoverable or non-recoverable
+                AppEvent::Agent(kernel::event::AgentEvent::Error {
+                    phase,
+                    error,
+                    is_recoverable,
+                    ..
+                }) => {
+                    let phase_str = format!("{phase:?}");
+                    if is_recoverable {
+                        // Recoverable error: show in status bar with warning color
+                        let message = format!("{phase_str} error (will retry): {error}");
+                        self.app.attr(
+                            &Id::StatusBar,
+                            Attribute::Custom("show_message"),
+                            AttrValue::String(format!("3000\x00{message}")),
+                        )?;
+                    } else {
+                        // Non-recoverable error: add to chat view as error message
+                        let message = format!("{phase_str} error: {error}");
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom("add_error_message"),
+                            AttrValue::String(message),
+                        )?;
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom("scroll_to_bottom"),
+                            AttrValue::Flag(true),
+                        )?;
+                    }
+                    self.state.should_redraw = true;
+                }
+                // Retrying event - show in status bar
+                AppEvent::Agent(kernel::event::AgentEvent::Retrying {
+                    attempt,
+                    max_attempts,
+                    reason,
+                    ..
+                }) => {
+                    let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String(format!("0\x00{message}")), // 0 = no timeout, persists until cleared
+                    )?;
+                    self.state.should_redraw = true;
+                }
+                // Operation cancelled - brief notification in status bar
+                AppEvent::Agent(kernel::event::AgentEvent::OperationCancelled {
+                    operation,
+                    ..
+                }) => {
+                    let message = format!("Cancelled: {operation}");
+                    self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom("show_message"),
+                        AttrValue::String(format!("2000\x00{message}")), // 2 second timeout
+                    )?;
+                    self.state.should_redraw = true;
+                }
+                // Note: StateChanged is currently ignored to avoid UI noise
+                // Could be shown in status bar for debugging if needed
                 AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
                     tool_name,
