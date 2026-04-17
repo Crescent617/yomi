@@ -60,6 +60,44 @@ pub enum AgentEvent {
         tool_level: String,
         reason: String,
     },
+    /// 操作错误（可恢复或不可恢复）
+    Error {
+        agent_id: AgentId,
+        /// 错误发生的阶段
+        phase: ErrorPhase,
+        /// 错误详情
+        error: String,
+        /// 是否可恢复（会重试）
+        is_recoverable: bool,
+    },
+    /// 正在重试
+    Retrying {
+        agent_id: AgentId,
+        attempt: u32,
+        max_attempts: u32,
+        reason: String,
+    },
+    /// 状态转换
+    StateChanged {
+        agent_id: AgentId,
+        from: String, // 状态名称字符串
+        to: String,
+    },
+    /// 操作被取消
+    OperationCancelled {
+        agent_id: AgentId,
+        operation: String, // 被cancel的操作名称，如 "streaming", "compaction", "tool_execution"
+    },
+}
+
+/// Agent 执行阶段，用于错误报告
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorPhase {
+    Streaming,
+    ToolExecution,
+    Compaction,
+    WaitForInput,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

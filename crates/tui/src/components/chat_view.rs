@@ -839,7 +839,7 @@ impl ChatView {
             .unwrap_or_default();
 
         lines.push(Line::from(vec![Span::styled(
-            format!(" Thinking ({tokens} tokens){elapsed_str}"),
+            format!(" Thinking ({tokens} tokens){elapsed_str}"),
             Style::default()
                 .fg(colors::text_secondary())
                 .add_modifier(Modifier::ITALIC),
@@ -1283,11 +1283,13 @@ fn to_camel_case(s: &str) -> String {
 fn toolname_to_icon(tool_name: &str) -> &'static str {
     match tool_name.to_lowercase().as_str() {
         "subagent" => "󰚩 ",
-        "read" => " ",
+        "read" => " ",
         "write" | "edit" => " ",
-        "bash" => " ",
+        "bash" => " ",
+        "glob" => "󰱼 ",
+        "grep" => " ",
         // start with "task" -> task icon
         name if name.starts_with("task") => " ",
-        _ => " ",
+        _ => " ",
     }
 }

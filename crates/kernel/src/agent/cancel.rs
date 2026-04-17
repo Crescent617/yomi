@@ -30,9 +30,18 @@ impl CancelToken {
         self.inner.load().is_cancelled()
     }
 
-    /// 重置取消状态（用于新请求）
+    /// 如果已被取消，则重置取消状态（用于新请求）
     /// 原子性地替换为新的 `CancellationToken`
-    pub fn reset(&self) {
+    /// 注意：如果未取消，此操作无效果
+    pub fn reset_if_cancelled(&self) {
+        if self.is_cancelled() {
+            self.inner.store(Arc::new(CancellationToken::new()));
+        }
+    }
+
+    /// 强制重置，无论是否已取消都创建新 token
+    /// 注意：这会使得之前获取的 `cancelled()` future 永远等待旧 token
+    pub fn force_reset(&self) {
         self.inner.store(Arc::new(CancellationToken::new()));
     }
 
@@ -86,7 +95,7 @@ mod tests {
         assert!(token.is_cancelled());
 
         // 重置
-        token.reset();
+        token.reset_if_cancelled();
         assert!(!token.is_cancelled());
 
         // 可以再次取消
@@ -118,8 +127,8 @@ mod tests {
         // 获取 cancelled future（基于当前 token）
         let cancelled_fut = token.cancelled();
 
-        // reset 会创建新 token
-        token.reset();
+        // force_reset 会创建新 token（无论是否已取消）
+        token.force_reset();
 
         // 但 cancelled_fut 仍然监听旧的 token，不会被唤醒
         // 因为旧 token 没有被 cancel
@@ -140,8 +149,8 @@ mod tests {
         assert!(token1.is_cancelled());
         assert!(token2.is_cancelled()); // token2 也应该看到取消状态
 
-        // token2 重置也影响 token1
-        token2.reset();
+        // token2 重置也影响 token1（已取消状态）
+        token2.reset_if_cancelled();
         assert!(!token1.is_cancelled());
         assert!(!token2.is_cancelled());
     }
@@ -153,8 +162,8 @@ mod tests {
         // 先获取一个 cancelled future
         let cancelled_fut = token.cancelled();
 
-        // 重置 token
-        token.reset();
+        // 强制重置 token（无论是否已取消）
+        token.force_reset();
 
         // 原 future 应该无法完成（等待的是旧的已丢弃的 token）
         // 新 token 可以正常取消

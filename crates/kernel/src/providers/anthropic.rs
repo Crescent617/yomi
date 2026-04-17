@@ -215,25 +215,41 @@ impl Provider for AnthropicProvider {
         let eventsource = response.bytes_stream().eventsource();
 
         let stream = stream::try_unfold(
-            (eventsource, AnthropicStreamState::new()),
-            |(mut eventsource, mut state)| async move {
+            (eventsource, AnthropicStreamState::new(), tokio::time::Instant::now()),
+            |(mut eventsource, mut state, last_content_time)| async move {
                 loop {
-                    match timeout(IDLE_TIMEOUT, eventsource.try_next()).await {
+                    let elapsed = last_content_time.elapsed();
+                    if elapsed >= IDLE_TIMEOUT {
+                        tracing::error!(
+                            "Anthropic SSE content stall: no content for {}s (server may be sending keepalives but no data)",
+                            elapsed.as_secs()
+                        );
+                        return Err(ProviderError::Timeout(format!(
+                            "Content stall: no meaningful data received for {} seconds",
+                            elapsed.as_secs()
+                        )));
+                    }
+
+                    // Adjust timeout based on elapsed time since last content
+                    let remaining = IDLE_TIMEOUT - elapsed;
+                    match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
                                 let items = state.finish();
-                                return Ok(Some((items, (eventsource, state))));
+                                return Ok(Some((items, (eventsource, state, last_content_time))));
                             }
 
                             let items = state.process(&event.data)?;
                             if !items.is_empty() {
-                                return Ok(Some((items, (eventsource, state))));
+                                // Reset content timer when we actually produce items
+                                return Ok(Some((items, (eventsource, state, tokio::time::Instant::now()))));
                             }
+                            // No content produced, continue loop with same timer
                         }
                         Ok(Ok(None)) => {
                             tracing::debug!("Anthropic stream ended normally");
                             let items = state.finish();
-                            return Ok(Some((items, (eventsource, state))));
+                            return Ok(Some((items, (eventsource, state, last_content_time))));
                         }
                         Ok(Err(e)) => {
                             tracing::error!("Anthropic SSE error: {}", e);

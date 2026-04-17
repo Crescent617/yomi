@@ -21,8 +21,13 @@ fmt-check:
     cargo fmt -- --check
 
 # Full CI check - runs check, clippy, test, and fmt-check
-ci: check clippy test fmt-check
+ci: check lint test fmt-check
 
+test:
+    cargo test
+
+check:
+    cargo check
 
 # Run with tracing debug logging
 debug *ARGS:
