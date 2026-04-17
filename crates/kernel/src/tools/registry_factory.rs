@@ -51,7 +51,11 @@ impl ToolRegistryFactory {
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
 
         // Register Bash tool
-        let bash_ctx = BashToolCtx::new(agent_id.clone(), input_tx.cloned(), working_dir.to_path_buf());
+        let bash_ctx = BashToolCtx::new(
+            agent_id.clone(),
+            input_tx.cloned(),
+            working_dir.to_path_buf(),
+        );
         let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
         registry.register(bash_tool);
 

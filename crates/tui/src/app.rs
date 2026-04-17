@@ -810,7 +810,8 @@ impl Update<Msg> for Model {
                         .map(|b| match b {
                             ContentBlock::Text { text } => text.as_str(),
                             ContentBlock::ImageUrl { image_url: _ } => "[Image]",
-                            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => "",
+                            ContentBlock::Thinking { .. }
+                            | ContentBlock::RedactedThinking { .. } => "",
                             ContentBlock::Audio { .. } => "[Audio]",
                         })
                         .collect();

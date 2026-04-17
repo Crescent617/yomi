@@ -148,7 +148,9 @@ mod tests {
         std::fs::write(&file2, "content2").unwrap();
         // file3 doesn't exist
 
-        let tool = TestTool { base_dir: base_path };
+        let tool = TestTool {
+            base_dir: base_path,
+        };
         let paths = vec![file1.clone(), file2.clone(), file3.clone()];
 
         let results = tool.get_mtimes_concurrent(paths, None).await;
@@ -174,7 +176,9 @@ mod tests {
         let tool = TestTool {
             base_dir: base_path.clone(),
         };
-        let paths: Vec<PathBuf> = (0..10).map(|i| base_path.join(format!("file{}.txt", i))).collect();
+        let paths: Vec<PathBuf> = (0..10)
+            .map(|i| base_path.join(format!("file{}.txt", i)))
+            .collect();
 
         // Use a low concurrency limit
         let results = tool.get_mtimes_concurrent(paths, Some(2)).await;

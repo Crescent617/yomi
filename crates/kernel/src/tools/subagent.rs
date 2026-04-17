@@ -58,41 +58,20 @@ impl SubagentTool {
     }
 
     /// Build the system prompt for the sub-agent
-    fn build_system_prompt(&self) -> String {
+    fn build_system_prompt(&self, inherit_context: bool) -> String {
+        let context_note = if inherit_context {
+            "You have been provided with the full conversation context from the parent agent, so you understand the ongoing discussion and can build upon previous work.\n- You have access to the parent's conversation history - use it to understand the full context"
+        } else {
+            "You have zero context about the parent conversation - rely on the user message for complete task information."
+        };
+
         format!(
             r"You are a sub-agent spawned by parent agent {parent_id}.
 
 ## Your Role
-You are a specialist agent handling a specific task delegated by the parent agent. You have zero context about the parent conversation - rely on the user message for complete task information.
+You are a specialist agent handling a specific task delegated by the parent agent. {context_note}
 
 ## Guidelines
-- Focus solely on the task described in the user message
-- If the task involves code changes, read the relevant files first
-- Report your findings concisely; avoid unnecessary verbosity
-- If you need more information, use the available tools to gather it
-- When complete, provide a clear summary of what you found or accomplished
-- Do NOT make assumptions about files or code you haven't examined
-
-## Output Format
-Provide your response in a structured format:
-1. **Summary**: Brief overview of what you did
-2. **Details**: Specific findings, changes, or results
-3. **Recommendations**: Any follow-up actions needed (if applicable)
-",
-            parent_id = self.parent_id,
-        )
-    }
-
-    /// Build the system prompt for sub-agent when inheriting parent context
-    fn build_system_prompt_with_context(&self) -> String {
-        format!(
-            r"You are a sub-agent spawned by parent agent {parent_id}.
-
-## Your Role
-You are a specialist agent handling a specific task delegated by the parent agent. You have been provided with the full conversation context from the parent agent, so you understand the ongoing discussion and can build upon previous work.
-
-## Guidelines
-- You have access to the parent's conversation history - use it to understand the full context
 - Focus on the specific task described in the user message
 - If the task involves code changes, read the relevant files first
 - Report your findings concisely; avoid unnecessary verbosity
@@ -100,7 +79,6 @@ You are a specialist agent handling a specific task delegated by the parent agen
 - Do NOT make assumptions about files or code you haven't examined
 
 ## Output Format
-Provide your response in a structured format:
 1. **Summary**: Brief overview of what you did
 2. **Details**: Specific findings, changes, or results
 3. **Recommendations**: Any follow-up actions needed (if applicable)
@@ -253,11 +231,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         );
 
         // Build system prompt (role definition only, no task specifics)
-        let system_prompt = if inherit_context {
-            self.build_system_prompt_with_context()
-        } else {
-            self.build_system_prompt()
-        };
+        let system_prompt = self.build_system_prompt(inherit_context);
 
         // Create session for transcript recording if storage is available
         let subagent_session_id = if let Some(storage) = &self.storage {
@@ -295,10 +269,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         };
 
         // Get cancel token from context
-        let cancel_token = ctx
-            .cancel_token
-            .clone()
-            .unwrap_or_default();
+        let cancel_token = ctx.cancel_token.clone().unwrap_or_default();
 
         // Execute based on mode
         match mode {
@@ -310,7 +281,6 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 let desc = description.clone();
                 let sub_id = sub_agent_id.clone();
                 let tool_id = ctx.tool_call_id.to_string();
-                let _storage = self.storage.clone();
 
                 // Spawn background task to execute subagent
                 tokio::spawn(async move {
@@ -326,34 +296,8 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                     )
                     .await;
 
-                    // Persist transcript if storage is available
-                    // Note: Transcript recording from SimpleAgent is not yet implemented
-                    // SimpleAgent.execute() returns messages that could be persisted here
-
-                    // Append error/cancelled markers to output
-                    let final_output = match &status {
-                        SubAgentStatus::Failed(error) => {
-                            format!("{output}\n\n[Sub-agent failed: {error}]")
-                        }
-                        SubAgentStatus::Cancelled => {
-                            format!("{output}\n\n[Sub-agent was cancelled]")
-                        }
-                        SubAgentStatus::Completed => output,
-                    };
-
-                    // Forward result to parent agent with structured format
-                    let completed = matches!(status, SubAgentStatus::Completed);
-                    let result_text = if completed {
-                        format!(
-                            "## Sub-agent Task Completed\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Result\n{final_output}",
-                        )
-                    } else {
-                        format!(
-                            "## Sub-agent Task Ended (Incomplete)\n\n**Task**: {desc}\n**ID**: {sub_id}\n\n### Partial Result\n{final_output}"
-                        )
-                    };
-
-                    // Send result back to parent via input_tx (as ContentBlock array)
+                    // Format and send result back to parent
+                    let result_text = Self::format_result_text(&desc, &sub_id, &output, &status);
                     let _ = parent_tx
                         .send(crate::agent::AgentInput::TaskResult {
                             task_id: sub_id.to_string(),
@@ -372,7 +316,6 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 })
             }
             SubAgentMode::Sync => {
-                // Execute directly and collect results
                 let (output, status) = Self::execute_simple_agent(
                     &mut simple_agent,
                     system_prompt,
@@ -390,33 +333,113 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                     sub_agent_id, status
                 );
 
-                // Persist transcript if storage is available
-                // Note: Transcript recording from SimpleAgent is not yet implemented
-                // SimpleAgent.execute() returns messages that could be persisted here
-
-                match status {
-                    SubAgentStatus::Completed => Ok(ToolOutput {
-                        stdout: output,
-                        stderr: String::new(),
-                        exit_code: 0,
-                    }),
-                    SubAgentStatus::Failed(error) => Ok(ToolOutput {
-                        stdout: output,
-                        stderr: format!("Sub-agent failed: {error}"),
-                        exit_code: 1,
-                    }),
-                    SubAgentStatus::Cancelled => Ok(ToolOutput {
-                        stdout: output,
-                        stderr: "Sub-agent was cancelled".to_string(),
-                        exit_code: 1,
-                    }),
-                }
+                Ok(Self::build_tool_output(output, status))
             }
         }
     }
 }
 
 impl SubagentTool {
+    /// Format the result text for subagent output
+    fn format_result_text(
+        description: &str,
+        sub_agent_id: &AgentId,
+        output: &str,
+        status: &SubAgentStatus,
+    ) -> String {
+        let final_output = match status {
+            SubAgentStatus::Failed(error) => format!("{output}\n\n[Sub-agent failed: {error}]"),
+            SubAgentStatus::Cancelled => format!("{output}\n\n[Sub-agent was cancelled]"),
+            SubAgentStatus::Completed => output.to_string(),
+        };
+
+        let (header, section) = if matches!(status, SubAgentStatus::Completed) {
+            ("Sub-agent Task Completed", "Result")
+        } else {
+            ("Sub-agent Task Ended (Incomplete)", "Partial Result")
+        };
+
+        format!(
+            "## {header}\n\n**Task**: {description}\n**ID**: {sub_agent_id}\n\n### {section}\n{final_output}",
+        )
+    }
+
+    /// Build `ToolOutput` from execution status
+    fn build_tool_output(output: String, status: SubAgentStatus) -> ToolOutput {
+        match status {
+            SubAgentStatus::Completed => ToolOutput {
+                stdout: output,
+                stderr: String::new(),
+                exit_code: 0,
+            },
+            SubAgentStatus::Failed(error) => ToolOutput {
+                stdout: output,
+                stderr: format!("Sub-agent failed: {error}"),
+                exit_code: 1,
+            },
+            SubAgentStatus::Cancelled => ToolOutput {
+                stdout: output,
+                stderr: "Sub-agent was cancelled".to_string(),
+                exit_code: 1,
+            },
+        }
+    }
+
+    /// Send a progress event, logging any errors
+    fn send_progress(
+        event_tx: &mpsc::Sender<Event>,
+        agent_id: AgentId,
+        tool_id: &str,
+        message: String,
+        tokens: Option<u32>,
+    ) {
+        if let Err(e) = event_tx.try_send(Event::Tool(ToolEvent::Progress {
+            agent_id,
+            tool_id: tool_id.to_string(),
+            message,
+            tokens,
+        })) {
+            tracing::warn!("Failed to send progress event: {}", e);
+        }
+    }
+
+    /// Handle model events during execution, returning the final iteration count
+    fn handle_model_event(
+        event: &Event,
+        iteration_count: &mut usize,
+        event_tx: &mpsc::Sender<Event>,
+        agent_id: AgentId,
+        tool_id: &str,
+    ) {
+        match event {
+            Event::Model(ModelEvent::TokenUsage {
+                prompt_tokens,
+                completion_tokens,
+                ..
+            }) => {
+                let total = prompt_tokens + completion_tokens;
+                Self::send_progress(
+                    event_tx,
+                    agent_id,
+                    tool_id,
+                    format!("iter {iteration_count} · {} tokens", format_tokens(total)),
+                    Some(total),
+                );
+            }
+            Event::Model(ModelEvent::Request { .. }) => {
+                *iteration_count += 1;
+                Self::send_progress(
+                    event_tx,
+                    agent_id,
+                    tool_id,
+                    format!("iteration {iteration_count}/20 · streaming"),
+                    None,
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// Execute a `SimpleAgent` and collect output with progress events
     #[allow(clippy::too_many_arguments)]
     async fn execute_simple_agent(
@@ -429,114 +452,49 @@ impl SubagentTool {
         parent_id: &AgentId,
         tool_id: &str,
     ) -> (String, SubAgentStatus) {
-        let parent_event_tx_clone = parent_event_tx.clone();
-        let parent_id_clone = parent_id.clone();
-        let tool_id_clone = tool_id.to_string();
-
-        // Track iteration count for progress reporting (local, no locks needed)
+        let event_tx = parent_event_tx.clone();
+        let agent_id = parent_id.clone();
+        let tool_id_owned = tool_id.to_string();
         let mut iteration_count = 0usize;
 
         let result = simple_agent
-            .execute(
-                system_prompt,
-                history,
-                task,
-                cancel_token,
-                |event| {
-                    // Process events for progress reporting only
-                    match event {
-                        Event::Model(ModelEvent::TokenUsage {
-                            prompt_tokens,
-                            completion_tokens,
-                            ..
-                        }) => {
-                            let total = prompt_tokens + completion_tokens;
-
-                            // Send progress update
-                            let progress_msg =
-                                format!("iter {iteration_count} · {} tokens", format_tokens(total));
-                            if let Err(e) = parent_event_tx_clone.try_send(Event::Tool(ToolEvent::Progress {
-                                agent_id: parent_id_clone.clone(),
-                                tool_id: tool_id_clone.clone(),
-                                message: progress_msg,
-                                tokens: Some(total),
-                            })) {
-                                tracing::warn!("Failed to send progress event: {}", e);
-                            }
-                        }
-                        Event::Model(ModelEvent::Request { .. }) => {
-                            iteration_count += 1;
-                            let progress_msg =
-                                format!("iteration {iteration_count}/20 · streaming");
-                            if let Err(e) = parent_event_tx_clone.try_send(Event::Tool(ToolEvent::Progress {
-                                agent_id: parent_id_clone.clone(),
-                                tool_id: tool_id_clone.clone(),
-                                message: progress_msg,
-                                tokens: None,
-                            })) {
-                                tracing::warn!("Failed to send progress event: {}", e);
-                            }
-                        }
-                        _ => {}
-                    }
-                },
-            )
+            .execute(system_prompt, history, task, cancel_token, |event| {
+                Self::handle_model_event(
+                    &event,
+                    &mut iteration_count,
+                    &event_tx,
+                    agent_id.clone(),
+                    &tool_id_owned,
+                );
+            })
             .await;
 
-        // Extract output and status from execute result
-        let (final_output, status) = match result {
+        // Handle result and send final progress
+        match result {
             Ok((_, metrics)) => {
                 let total = metrics.total_prompt_tokens + metrics.total_completion_tokens;
-                let progress_msg = format!("completed · {} tokens", format_tokens(total));
-                if let Err(e) = parent_event_tx
-                    .send(Event::Tool(ToolEvent::Progress {
-                        agent_id: parent_id.clone(),
-                        tool_id: tool_id.to_string(),
-                        message: progress_msg,
-                        tokens: Some(total),
-                    }))
-                    .await
-                {
-                    tracing::warn!("Failed to send progress event: {}", e);
-                }
+                Self::send_progress(
+                    parent_event_tx,
+                    parent_id.clone(),
+                    tool_id,
+                    format!("completed · {} tokens", format_tokens(total)),
+                    Some(total),
+                );
                 (metrics.output_text, SubAgentStatus::Completed)
             }
             Err(e) => {
-                // On error, we don't have metrics - just report the error
                 let error_str = e.to_string();
-                let status = if is_cancelled_error(&e) {
-                    let progress_msg = "cancelled".to_string();
-                    if let Err(e) = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: progress_msg,
-                            tokens: None,
-                        }))
-                        .await
-                    {
-                        tracing::warn!("Failed to send progress event: {}", e);
-                    }
-                    SubAgentStatus::Cancelled
+                let (msg, status) = if is_cancelled_error(&e) {
+                    ("cancelled".to_string(), SubAgentStatus::Cancelled)
                 } else {
-                    let progress_msg = format!("failed · {error_str}");
-                    if let Err(e) = parent_event_tx
-                        .send(Event::Tool(ToolEvent::Progress {
-                            agent_id: parent_id.clone(),
-                            tool_id: tool_id.to_string(),
-                            message: progress_msg,
-                            tokens: None,
-                        }))
-                        .await
-                    {
-                        tracing::warn!("Failed to send progress event: {}", e);
-                    }
-                    SubAgentStatus::Failed(error_str)
+                    (
+                        format!("failed · {error_str}"),
+                        SubAgentStatus::Failed(error_str),
+                    )
                 };
+                Self::send_progress(parent_event_tx, parent_id.clone(), tool_id, msg, None);
                 (String::new(), status)
             }
-        };
-
-        (final_output, status)
+        }
     }
 }
