@@ -45,7 +45,7 @@ impl SkillLoader {
 
         for folder in &self.folders {
             if folder.exists() {
-                self.load_from_folder(folder, &mut skills)
+                Self::load_from_folder(folder, &mut skills)
                     .with_context(|| format!("Failed to load skills from {}", folder.display()))?;
             } else {
                 tracing::warn!("Skill folder does not exist: {}", folder.display());
@@ -70,14 +70,12 @@ impl SkillLoader {
     }
 
     /// Load skills from a single folder (recursively)
-    fn load_from_folder(&self, folder: &Path, skills: &mut Vec<Arc<Skill>>) -> Result<()> {
-        self.load_from_folder_recursive(folder, folder, skills)
+    fn load_from_folder(folder: &Path, skills: &mut Vec<Arc<Skill>>) -> Result<()> {
+        Self::load_from_folder_recursive(folder, folder, skills)
     }
 
     /// Recursively load skills, tracking the root folder for name derivation
-    #[allow(clippy::only_used_in_recursion)]
     fn load_from_folder_recursive(
-        &self,
         root_folder: &Path,
         current_folder: &Path,
         skills: &mut Vec<Arc<Skill>>,
@@ -87,7 +85,7 @@ impl SkillLoader {
             let path = entry.path();
 
             if path.is_dir() {
-                self.load_from_folder_recursive(root_folder, &path, skills)?;
+                Self::load_from_folder_recursive(root_folder, &path, skills)?;
             } else if path.is_file() {
                 let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 

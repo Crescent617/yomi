@@ -7,62 +7,85 @@ A powerful AI coding assistant CLI built in Rust, featuring an async agent loop,
 
 ![demo](docs/demo.png)
 
-## ✨ Features
+## Features
 
-### 🤖 Intelligent Agent System
+### Intelligent Agent System
 - **Async Agent Loop** - Event-driven architecture for efficient task processing
-- **State Machine** - Robust state management with proper transitions
-- **Cancel Token** - Graceful cancellation support for long-running tasks
-- **Context Management** - Rich execution context for agents
+- **State Machine** - Robust state management with proper transitions (Idle → Streaming → ExecutingTool → WaitingForInput)
+- **Cancel Token** - Graceful cancellation support for long-running tasks with cascading cancellation to sub-agents
+- **Context Management** - Rich execution context with message history and tool registry
 
-### 🔄 Sub-Agent Support
+### Sub-Agent Support
 - **Parallel Execution** - Spawn multiple sub-agents to work concurrently
 - **Sync & Async Modes** - Choose between waiting for results or fire-and-forget
-- **Task Delegation** - Break complex tasks into smaller, manageable pieces
-- **Result Aggregation** - Collect and merge results from multiple agents
+- **Context Inheritance** - Sub-agents can inherit parent conversation history
+- **Permission Propagation** - Sub-agent permission requests bubble up to the main TUI
 
-### 🖥️ Beautiful TUI
+### Beautiful TUI
 - **Interactive Interface** - Built with `tuirealm` for smooth navigation
-- **Real-time Updates** - Watch task progress live
-- **Markdown Rendering** - Beautiful display of AI responses
-- **Keyboard Shortcuts** - Efficient workflow with vim-like bindings
+- **Real-time Updates** - Watch task progress live with token usage tracking
+- **Markdown Rendering** - Beautiful display of AI responses with table support
+- **Permission Dialogs** - Interactive confirmation for potentially dangerous operations
+- **Command Palette** - Quick access to common actions
 
-### 📦 Modular Architecture
-- **Kernel** - Core agent system, task management, and storage
-- **CLI** - Command-line interface with comprehensive commands
-- **TUI** - Terminal user interface for interactive sessions
+### Built-in Tools
+| Tool | Description | Safety Level |
+|------|-------------|--------------|
+| `Read` | Read file contents with line numbers | Safe |
+| `Write` | Write files (requires read-first) | Caution |
+| `Edit` | Surgical text edits with diff preview | Caution |
+| `Bash` | Execute shell commands | Dangerous |
+| `Glob` | Find files by pattern (respects .gitignore) | Safe |
+| `Grep` | Search file contents with ripgrep | Safe |
+| `Subagent` | Spawn sub-agents for parallel work | Caution |
 
-### 💾 Persistent Storage
+### Permission System
+- **Three Safety Levels** - Safe (read-only), Caution (modifications), Dangerous (destructive)
+- **Per-Tool Memory** - "Remember this choice" per tool type
+- **Auto-approve Threshold** - Configure what level requires confirmation
+- **YOLO Mode** - Optional flag to skip all confirmations (`--yolo`)
+
+### Multi-Provider Support
+- **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
+- **Anthropic** - Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku
+- **Extensible** - Easy to add new providers via trait-based abstraction
+
+### Persistent Storage
 - **SQLite Backend** - Reliable task and session persistence
 - **Session Management** - Resume previous sessions anytime
-- **Message History** - Full conversation context preservation
+- **Message History** - Full conversation context with compaction support
 
-### 🔧 Multi-Provider Support
-- **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo support
-- **Anthropic** - Claude 3.5 Sonnet and family
-- **Extensible** - Easy to add new providers
-
-### 🛡️ Safety & Control
-- **YOLO Mode** - Optional flag to skip all confirmations (`--yolo`)
-- **Confirmation Prompts** - Review before executing shell commands
-- **Read-Only by Default** - Safe exploration of codebases
-- **Git Integration** - Respects your version control workflow
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
 - Rust 1.75+ (install via [rustup](https://rustup.rs))
-- OpenAI API key (Anthropic not yet supported)
+- API key from OpenAI or Anthropic
 
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/yomi.git
+cd yomi
+
+# Build release binary
+cargo build --release
+
+# Install to cargo bin directory
+cargo install --path crates/cli
+```
 
 ### Configuration
 
 ```bash
-# Easiest way
+# OpenAI
 export OPENAI_API_KEY=sk-...
-export OPENAI_API_BASE=http...
-export OPENAI_API_MODEL=gpt-4o
+export OPENAI_API_MODEL=gpt-4o  # optional, defaults to gpt-4o
+
+# Anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_MODEL=claude-3-5-sonnet-20241022
 ```
 
 ### Usage
@@ -78,49 +101,87 @@ yomi -d ./my-project
 
 # Resume last session for this directory
 yomi -r
+
+# Start with specific prompt
+yomi -p "Review the codebase for security issues"
 ```
 
-```
+#### YOLO Mode
 
-#### YOLO Mode ⚡
-
-Skip all confirmations (use with caution!):
+Skip all confirmations (use with caution):
 
 ```bash
 yomi --yolo
 ```
 
-## 🏗️ Architecture
+#### CLI Mode
+
+Execute a single command and exit:
+
+```bash
+yomi --cli "Find all TODO comments in the codebase"
+```
+
+## Architecture
 
 ```
 yomi/
 ├── crates/
 │   ├── kernel/         # Core agent system
-│   │   ├── agent/      # Agent implementation
-│   │   ├── task/       # Task management
-│   │   ├── storage/    # SQLite storage layer
-│   │   ├── provider/   # LLM provider abstractions
-│   │   └── skill/      # Skill/ability system
+│   │   ├── agent/      # Agent implementation with state machine
+│   │   ├── permissions/# Permission checker and level management
+│   │   ├── task/       # Task management with SQLite storage
+│   │   ├── providers/  # LLM provider abstractions (OpenAI, Anthropic)
+│   │   ├── tools/      # Built-in tools (Read, Edit, Bash, Glob, Grep, Subagent)
+│   │   └── skill/      # Skill/ability system for extending capabilities
 │   ├── cli/            # Command-line interface
-│   └── tui/            # Terminal UI
-├── skills/             # Built-in skills
+│   └── tui/            # Terminal UI with tuirealm
+├── skills/             # Built-in skills (markdown files)
 └── docs/               # Documentation
 ```
 
 ### Core Concepts
 
-1. **Agent** - The main execution unit that processes tasks
-2. **Task** - A unit of work with lifecycle management
-3. **Coordinator** - Orchestrates agents and manages resources
-4. **Provider** - Abstraction over different LLM APIs
-5. **Skill** - Reusable capabilities (file operations, bash, etc.)
+1. **Agent** - The main execution unit with event-driven message processing
+2. **SimpleAgent** - Lightweight agent for sub-agents without persistence overhead
+3. **PermissionState** - Shared permission configuration across all agents in a session
+4. **ToolRegistry** - Dynamic tool registration and execution
+5. **Provider** - Trait-based abstraction over different LLM APIs with streaming support
 
-## 📄 License
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+cargo test --workspace
+
+# Run specific crate tests
+cargo test -p kernel
+cargo test -p tui
+```
+
+### Project Structure
+
+- `crates/kernel/src/agent/` - Agent loop, state machine, cancel token
+- `crates/kernel/src/permissions/` - Permission checker with level-based approval
+- `crates/kernel/src/tools/` - Tool implementations (file ops, bash, search, subagent)
+- `crates/tui/src/components/` - TUI components (chat view, input, dialogs)
+
+## Safety
+
+- **Read-Only by Default** - Tools are categorized by safety level
+- **Git-Aware** - Respects .gitignore in Glob/Grep operations
+- **File State Tracking** - Write/Edit tools require reading files first to prevent conflicts
+- **Cancellation Support** - All long-running operations can be cancelled
+
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [Tokio](https://tokio.rs) async runtime
 - TUI powered by [tuirealm](https://github.com/veeso/tuirealm)
-- Inspired by [Claude Code](https://claude.ai/code) and similar tools
+- File operations use [ignore](https://crates.io/crates/ignore) crate for git-aware walking
+- Inspired by [Claude Code](https://claude.ai/code) and similar AI coding assistants
