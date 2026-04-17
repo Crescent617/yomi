@@ -14,6 +14,7 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(ArcSwap::new(Arc::new(CancellationToken::new()))),
@@ -25,7 +26,7 @@ impl CancelToken {
         self.inner.load().cancel();
     }
 
-    /// 检查是否已取消
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.load().is_cancelled()
     }

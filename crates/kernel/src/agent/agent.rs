@@ -536,8 +536,16 @@ impl Agent {
         Ok((result.content_blocks, result.tool_calls))
     }
 
-    /// Force compaction regardless of threshold
-    /// Supports cancellation via `cancel_token`
+    /// Force compaction regardless of threshold.
+    ///
+    /// Supports cancellation via `cancel_token`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if:
+    /// - No compactor is configured
+    /// - Compaction is cancelled
+    /// - API call fails during summary generation
     pub async fn force_compact(&mut self) -> Result<String, String> {
         // Clone compactor to avoid borrow issues
         let compactor = self.shared.compactor.clone();
@@ -678,7 +686,7 @@ impl Agent {
                 .unwrap()
                 .tool_calls
                 .as_ref()
-                .map_or(0, |c| c.len());
+                .map_or(0, std::vec::Vec::len);
             tracing::info!(
                 "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
                 self.id,
@@ -784,7 +792,7 @@ impl Agent {
         self.message_buffer
             .messages()
             .iter()
-            .filter_map(|m| m.tool_calls.as_ref().map(|c| c.len()))
+            .filter_map(|m| m.tool_calls.as_ref().map(std::vec::Vec::len))
             .sum()
     }
 
