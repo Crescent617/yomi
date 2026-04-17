@@ -526,21 +526,21 @@ mod tests {
     #[test]
     fn test_parse_context_window() {
         // Plain numbers
-        assert_eq!(parse_context_window("131072"), Some(131072));
-        assert_eq!(parse_context_window("200000"), Some(200000));
+        assert_eq!(parse_context_window("131072"), Some(131_072));
+        assert_eq!(parse_context_window("200000"), Some(200_000));
         assert_eq!(parse_context_window("1000"), Some(1000));
 
         // k suffix
-        assert_eq!(parse_context_window("128k"), Some(128000));
-        assert_eq!(parse_context_window("200k"), Some(200000));
+        assert_eq!(parse_context_window("128k"), Some(128_000));
+        assert_eq!(parse_context_window("200k"), Some(200_000));
         assert_eq!(parse_context_window("1.5k"), Some(1500));
 
         // m suffix
-        assert_eq!(parse_context_window("1m"), Some(1000000));
-        assert_eq!(parse_context_window("2m"), Some(2000000));
+        assert_eq!(parse_context_window("1m"), Some(1_000_000));
+        assert_eq!(parse_context_window("2m"), Some(2_000_000));
 
         // With whitespace
-        assert_eq!(parse_context_window(" 128k "), Some(128000));
+        assert_eq!(parse_context_window(" 128k "), Some(128_000));
 
         // Invalid values
         assert_eq!(parse_context_window("invalid"), None);

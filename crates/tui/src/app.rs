@@ -1110,17 +1110,6 @@ impl Update<Msg> for Model {
                     );
                     None
                 }
-                Msg::CommandUnknown(cmd) => {
-                    // Show unknown command message in status bar
-                    let _ = self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("message"),
-                        AttrValue::Payload(tuirealm::props::PropPayload::One(
-                            tuirealm::props::PropValue::Str(format!("Unknown command: {cmd}")),
-                        )),
-                    );
-                    None
-                }
                 _ => None,
             }
         } else {

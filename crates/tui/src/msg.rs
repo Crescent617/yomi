@@ -62,12 +62,11 @@ pub enum Msg {
     DialogCancelled,       // Dialog was cancelled
 
     // Slash commands
-    CommandNew,             // /new - create new session
-    CommandClear,           // /clear - clear history
-    CommandYolo,            // /yolo - toggle yolo mode
-    CommandBrowse,          // /browse - toggle browse mode
-    CommandCompact,         // /compact - force message compaction
-    CommandUnknown(String), // Unknown command
+    CommandNew,     // /new - create new session
+    CommandClear,   // /clear - clear history
+    CommandYolo,    // /yolo - toggle yolo mode
+    CommandBrowse,  // /browse - toggle browse mode
+    CommandCompact, // /compact - force message compaction
 }
 
 impl From<AppEvent> for Msg {
