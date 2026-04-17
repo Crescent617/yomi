@@ -432,7 +432,7 @@ impl SubagentTool {
                     event_tx,
                     agent_id,
                     tool_id,
-                    format!("iteration {iteration_count}/20 · streaming"),
+                    format!("iteration {iteration_count} · streaming"),
                     None,
                 );
             }
