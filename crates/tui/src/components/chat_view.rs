@@ -19,6 +19,7 @@ use crate::{
     msg::Msg,
     theme::colors,
     utils::{strs, text::preprocess},
+    utils::text::truncate_unicode,
 };
 use kernel::utils::tokens;
 
@@ -631,14 +632,25 @@ impl ChatView {
                     None
                 };
 
-                // Build header line
-                // Convert tool name to CamelCase for display
+                // Build header line with tool name and target (e.g. "Read src/main.rs")
                 let tool_name_display = to_camel_case(tool_name);
+                let target = extract_tool_target(tool_name, arguments.as_deref());
+
+                // Tool name with status color
+                let tool_part = format!("{icon}{tool_name_display}{time_str}");
                 let mut header_spans = vec![Span::styled(
-                    format!("{icon}{tool_name_display}{time_str}"),
+                    tool_part,
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )];
-                if let Some(peek) = peek_args {
+
+                // Target/args with text_primary color (no bold)
+                if let Some(t) = target {
+                    header_spans.push(Span::styled(
+                        format!(" {t}"),
+                        Style::default().fg(colors::text_primary()),
+                    ));
+                } else if let Some(peek) = peek_args {
+                    // Fallback to peek_args if we couldn't extract a target
                     header_spans.push(Span::styled(
                         format!(" {peek}"),
                         Style::default().fg(colors::text_primary()),
@@ -1292,4 +1304,49 @@ fn toolname_to_icon(tool_name: &str) -> &'static str {
         name if name.starts_with("task") => " ",
         _ => " ",
     }
+}
+
+/// Extract a concise description from tool arguments for the title
+/// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"
+/// Results are truncated to 100 characters (Unicode-safe).
+fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
+    const MAX_LEN: usize = 100;
+    let args = args?;
+    let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
+
+    let target = match tool_name.to_lowercase().as_str() {
+        "read" | "edit" => value["path"].as_str().map(String::from),
+        "write" => value["file_path"].as_str().map(String::from),
+        "bash" => {
+            let cmd = value["command"].as_str()?;
+            let cmd_display = truncate_unicode(cmd, 50); // Reserve space for suffix
+
+            let timeout_secs = value["timeout"].as_u64();
+            let background = value["background"].as_bool().unwrap_or(false);
+
+            // Build suffix like [async, 120s] or [60s]
+            let mut parts = Vec::new();
+            if background {
+                parts.push("async".to_string());
+            }
+            if let Some(t) = timeout_secs {
+                // Only show timeout if explicitly set or background mode
+                if background || t != 60 {
+                    parts.push(format!("{t}s"));
+                }
+            }
+
+            if parts.is_empty() {
+                Some(cmd_display)
+            } else {
+                Some(format!("{} [{}]", cmd_display, parts.join(", ")))
+            }
+        }
+        "glob" | "grep" => value["pattern"].as_str().map(String::from),
+        "subagent" => value["prompt"].as_str().map(|p| truncate_unicode(p, MAX_LEN)),
+        _ => None,
+    };
+
+    // Apply unicode-safe truncation to all results
+    target.map(|t| truncate_unicode(&t, MAX_LEN))
 }
