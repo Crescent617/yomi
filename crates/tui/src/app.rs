@@ -28,6 +28,7 @@ use kernel::types::{ContentBlock, Message};
 
 use crate::{
     components::{
+        status_bar::{get_random_tip, StatusMessage},
         ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
         StatusBarComponent,
     },
@@ -210,6 +211,15 @@ impl Model {
             Attribute::Custom("set_permission_level"),
             AttrValue::Number(level_val),
         )?;
+
+        // Inject a random tip on startup
+        let tip = get_random_tip();
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("show_message"),
+            StatusMessage::tip(format!("💡 {tip}")).to_attr_value(),
+        )?;
+
         Ok(())
     }
 
@@ -734,7 +744,7 @@ impl Model {
                         self.app.attr(
                             &Id::StatusBar,
                             Attribute::Custom("show_message"),
-                            AttrValue::String(format!("3000\x00{message}")),
+                            StatusMessage::warn(message, 3000).to_attr_value(),
                         )?;
                     } else {
                         // Non-recoverable error: add to chat view as error message
@@ -763,12 +773,14 @@ impl Model {
                     self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
-                        AttrValue::String(format!("0\x00{message}")), // 0 = no timeout, persists until cleared
+                        StatusMessage::info(message, 0).to_attr_value(), // 0 = no timeout, persists until cleared
                     )?;
                     self.state.should_redraw = true;
                 }
                 // Max iterations reached - show in chat view
-                AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached { count, .. }) => {
+                AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached {
+                    count, ..
+                }) => {
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_error_message"),
@@ -981,13 +993,11 @@ impl Update<Msg> for Model {
                     self.state.should_redraw = true;
                     None
                 }
-                Msg::ShowStatusMessage(msg, duration_ms) => {
-                    // Format: "duration_ms\x00message"
-                    let value = format!("{duration_ms}\x00{msg}");
+                Msg::ShowStatusMessage(msg) => {
                     let _ = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
-                        AttrValue::String(value),
+                        msg.to_attr_value(),
                     );
                     None
                 }
@@ -1009,13 +1019,14 @@ impl Update<Msg> for Model {
                                 Attribute::Custom("mode"),
                                 AttrValue::Number(1),
                             );
-                            // Show help message for browse mode shortcuts (0 = no auto-clear)
+                            // Show help message for browse mode shortcuts (0 = no timeout)
                             let _ = self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom("show_message"),
-                                AttrValue::String(
-                                    "0\x00C-o toggle, C-e expand, j/k/g/G scroll, q exit".to_string(),
-                                ),
+                                StatusMessage::tip(
+                                    "C-o toggle, C-e expand, j/k/g/G scroll, q exit",
+                                )
+                                .to_attr_value(),
                             );
                             // Initialize scroll progress
                             self.update_scroll_progress();
@@ -1135,9 +1146,11 @@ impl Update<Msg> for Model {
                                 let _ = self.app.attr(
                                     &Id::StatusBar,
                                     Attribute::Custom("show_message"),
-                                    AttrValue::String(
-                                        "5000\x00YOLO mode enabled - all tools will be auto-approved".to_string(),
-                                    ),
+                                    StatusMessage::info(
+                                        "YOLO mode enabled - all tools will be auto-approved",
+                                        5000,
+                                    )
+                                    .to_attr_value(),
                                 );
                                 // Send command to kernel to update permission level
                                 let _ = self
@@ -1220,7 +1233,7 @@ impl Update<Msg> for Model {
                     let _ = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
-                        AttrValue::String(format!("5000\x00{msg}")),
+                        StatusMessage::info(msg, 5000).to_attr_value(),
                     );
 
                     // Send command to kernel
@@ -1239,7 +1252,7 @@ impl Update<Msg> for Model {
                     let _ = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom("show_message"),
-                        AttrValue::String("3000\x00Compacting messages...".to_string()),
+                        StatusMessage::info("Compacting messages...", 3000).to_attr_value(),
                     );
                     None
                 }

@@ -15,8 +15,11 @@ use tuirealm::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    components::input_edit::TextInput, components::CompletionList, components::FileCompletion,
-    msg::Msg, theme::colors,
+    components::{
+        input_edit::TextInput, status_bar::StatusMessage, CompletionList, FileCompletion,
+    },
+    msg::Msg,
+    theme::colors,
 };
 
 #[derive(Debug, Default)]
@@ -1463,10 +1466,11 @@ impl InputComponent {
                     Some(Msg::Quit)
                 } else {
                     // First Ctrl+C: show hint in status bar for 1 second
-                    Some(Msg::ShowStatusMessage(
-                        "Press Ctrl+C again to exit".to_string(),
+                    Some(Msg::ShowStatusMessage(StatusMessage::new(
+                        "Press Ctrl+C again to exit",
+                        crate::components::status_bar::MessageLevel::Unknown,
                         1000, // 1000ms = 1 second, matches double-press detection
-                    ))
+                    )))
                 }
             }
             // PageUp/PageDown always scroll chat view

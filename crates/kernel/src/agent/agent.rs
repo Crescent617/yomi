@@ -320,13 +320,10 @@ impl Agent {
 
     /// Emit operation cancelled event
     async fn emit_operation_cancelled(&self, operation: &str) {
-        if let Err(e) = self
-            .event_tx
-            .try_send(Event::Agent(AgentEvent::Cancelled {
-                agent_id: self.id.clone(),
-                operation: Some(operation.to_string()),
-            }))
-        {
+        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Cancelled {
+            agent_id: self.id.clone(),
+            operation: Some(operation.to_string()),
+        })) {
             tracing::warn!("Failed to emit operation cancelled event: {}", e);
         }
     }
