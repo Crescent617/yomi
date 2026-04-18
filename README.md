@@ -65,15 +65,7 @@ A powerful AI coding assistant CLI built in Rust, featuring an async agent loop,
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/yomi.git
-cd yomi
-
-# Build release binary
-cargo build --release
-
-# Install to cargo bin directory
-cargo install --path crates/cli
+brew update && brew install crescent617/tap/yomi
 ```
 
 ### Configuration

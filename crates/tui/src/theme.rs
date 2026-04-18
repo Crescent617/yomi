@@ -252,7 +252,9 @@ impl Styles {
 
     /// Thinking section header
     pub fn thinking_header() -> Style {
-        Style::default().fg(colors::text_muted())
+        Style::default()
+            .fg(colors::text_secondary())
+            .add_modifier(Modifier::ITALIC)
     }
 
     /// Thinking content
@@ -302,6 +304,7 @@ impl Styles {
     pub fn warning() -> Style {
         Style::default().fg(colors::accent_warning())
     }
+
 }
 
 /// Block characters for drawing UI elements
