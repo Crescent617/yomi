@@ -1,5 +1,6 @@
 //! Messages for TUI application
 
+use crate::components::status_bar::StatusMessage;
 use kernel::event::Event as AppEvent;
 use kernel::types::ContentBlock;
 
@@ -44,8 +45,8 @@ pub enum Msg {
     // Request control
     CancelRequest,
 
-    // Status bar message with duration in milliseconds
-    ShowStatusMessage(String, u64),
+    // Status bar message with level and duration
+    ShowStatusMessage(StatusMessage),
 
     // Browse mode (readonly like less)
     ToggleBrowseMode,

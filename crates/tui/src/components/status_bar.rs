@@ -5,10 +5,10 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, Props},
+    props::{AttrValue, Attribute, PropPayload, Props},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
-        style::{Modifier, Style},
+        style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
     },
@@ -17,6 +17,89 @@ use tuirealm::{
 
 use crate::{msg::Msg, theme::colors, utils::strs};
 use kernel::permissions::Level;
+
+/// Message notification level for status bar
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MessageLevel {
+    #[default]
+    Unknown,
+    Info,
+    Warn,
+    Error,
+}
+
+impl MessageLevel {
+    fn color(self) -> Color {
+        use crate::theme::colors;
+        match self {
+            MessageLevel::Unknown => colors::text_secondary(),
+            MessageLevel::Info => colors::accent_system(),
+            MessageLevel::Warn => colors::accent_warning(),
+            MessageLevel::Error => colors::accent_error(),
+        }
+    }
+}
+
+/// Payload for status bar messages
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusMessage {
+    pub content: String,
+    pub level: MessageLevel,
+    /// Duration in milliseconds, 0 = no timeout
+    pub duration_ms: u64,
+}
+
+impl StatusMessage {
+    pub fn new(content: impl Into<String>, level: MessageLevel, duration_ms: u64) -> Self {
+        Self {
+            content: content.into(),
+            level,
+            duration_ms,
+        }
+    }
+
+    pub fn info(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, MessageLevel::Info, duration_ms)
+    }
+
+    pub fn warn(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, MessageLevel::Warn, duration_ms)
+    }
+
+    pub fn error(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, MessageLevel::Error, duration_ms)
+    }
+
+    pub fn tip(content: impl Into<String>) -> Self {
+        Self::new(content, MessageLevel::Unknown, 10000) // 10s timeout for tips
+    }
+
+    /// Convert to `AttrValue` using `PropPayload::Any` for downcast
+    pub fn to_attr_value(&self) -> AttrValue {
+        AttrValue::Payload(PropPayload::Any(Box::new(self.clone())))
+    }
+}
+
+/// Tips shown on startup
+pub const TIPS: &[&str] = &[
+    "Press Ctrl+O to enter browse mode",
+    "Press Ctrl+Y to toggle YOLO mode",
+    "Type /browse to toggle browse mode",
+    "Press Ctrl+C twice to exit",
+    "Press Ctrl+E to expand/collapse all",
+    "Press Ctrl+P/Ctrl+N for history",
+    "Type /new to start a new session",
+];
+
+/// Get a random tip
+pub fn get_random_tip() -> &'static str {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    TIPS[(now as usize) % TIPS.len()]
+}
 
 /// Application mode for status bar display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,7 +115,8 @@ pub enum AppMode {
 pub struct StatusBar {
     props: Props,
     mode: AppMode,
-    center_message: Option<String>,
+    /// Current message with level (replaces `center_message`)
+    message: Option<StatusMessage>,
     message_timeout: Option<std::time::Instant>,
     /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
@@ -51,18 +135,24 @@ impl StatusBar {
         self.mode = mode;
     }
 
-    /// Show a temporary message in the center section
-    pub fn show_message(&mut self, message: String, timeout_secs: u64) {
-        self.center_message = Some(message);
-        self.message_timeout =
-            Some(std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs));
+    /// Show a message with level and timeout
+    pub fn show_message(&mut self, msg: StatusMessage) {
+        if msg.duration_ms == 0 {
+            // No timeout - for tips
+            self.message = Some(msg);
+            self.message_timeout = None;
+        } else {
+            self.message_timeout =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(msg.duration_ms));
+            self.message = Some(msg);
+        }
     }
 
-    /// Clear message if timeout expired
+    /// Check timeout and clear expired message
     pub fn check_timeout(&mut self) {
         if let Some(timeout) = self.message_timeout {
             if std::time::Instant::now() > timeout {
-                self.center_message = None;
+                self.message = None;
                 self.message_timeout = None;
             }
         }
@@ -114,20 +204,26 @@ impl StatusBar {
     }
 
     fn render_center_section(&self, width: usize) -> Span<'static> {
-        let message = self.center_message.as_deref().unwrap_or("");
+        let (text, level) = self
+            .message
+            .as_ref()
+            .map_or(("", MessageLevel::Unknown), |m| {
+                (m.content.as_str(), m.level)
+            });
+
         // Center the message, truncate if too long
-        let display = if message.chars().count() > width {
-            strs::truncate_with_suffix(message, width, "...")
+        let display = if text.chars().count() > width {
+            strs::truncate_with_suffix(text, width, "...")
         } else {
-            let msg_width = message.chars().count();
-            let padding = (width.saturating_sub(msg_width)) / 2;
-            format!("{:>padding$}{}", "", message, padding = padding)
+            let text_width = text.chars().count();
+            let padding = (width.saturating_sub(text_width)) / 2;
+            format!("{:>padding$}{}", "", text, padding = padding)
         };
 
         Span::styled(
             display,
             Style::default()
-                .fg(colors::text_secondary())
+                .fg(level.color())
                 .add_modifier(Modifier::ITALIC),
         )
     }
@@ -217,21 +313,12 @@ impl MockComponent for StatusBar {
                 }
             }
             Attribute::Custom("show_message") => {
-                // Parse duration (ms) and message from "duration_ms\x00message" format
-                if let AttrValue::String(value_str) = value {
-                    let parts: Vec<&str> = value_str.splitn(2, '\x00').collect();
-                    if parts.len() == 2 {
-                        let duration_ms = parts[0].parse::<u64>().unwrap_or(0);
-                        self.center_message = Some(parts[1].to_string());
-                        // If duration is 0, don't set timeout (message persists until cleared)
-                        self.message_timeout = if duration_ms == 0 {
-                            None
-                        } else {
-                            Some(
-                                std::time::Instant::now()
-                                    + std::time::Duration::from_millis(duration_ms),
-                            )
-                        };
+                // Use downcast from PropPayload::Any
+                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
+                    use tuirealm::props::PropBoundExt;
+                    let any = payload.as_any();
+                    if let Some(msg) = any.downcast_ref::<StatusMessage>() {
+                        self.show_message(msg.clone());
                     }
                 }
             }
@@ -239,7 +326,7 @@ impl MockComponent for StatusBar {
                 self.check_timeout();
             }
             Attribute::Custom("clear_message") => {
-                self.center_message = None;
+                self.message = None;
                 self.message_timeout = None;
             }
             Attribute::Custom("set_ctx_usage") => {

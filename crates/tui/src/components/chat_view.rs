@@ -18,8 +18,8 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::colors,
-    utils::{strs, text::preprocess},
     utils::text::truncate_unicode,
+    utils::{strs, text::preprocess},
 };
 use kernel::utils::tokens;
 
@@ -387,6 +387,8 @@ impl ChatView {
         }
         // Update mascot blink animation
         self.mascot_animator.tick();
+        // Mark cache dirty to re-render banner animation
+        self.cache_dirty = true;
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -470,7 +472,9 @@ impl ChatView {
         // scroll_offset > 0 means scrolled up by that many lines from bottom
         let start_line = if self.scroll_offset == 0 {
             // At bottom: show the last visible_height lines
-            total_lines.saturating_sub(self.last_visible_height.saturating_sub(1)).max(1)
+            total_lines
+                .saturating_sub(self.last_visible_height.saturating_sub(1))
+                .max(1)
         } else {
             // Scrolled up: start_line is scroll_offset lines from bottom
             total_lines.saturating_sub(self.scroll_offset).max(1)
@@ -1365,7 +1369,9 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
             }
         }
         "glob" | "grep" => value["pattern"].as_str().map(String::from),
-        "subagent" => value["prompt"].as_str().map(|p| truncate_unicode(p, MAX_LEN)),
+        "subagent" => value["prompt"]
+            .as_str()
+            .map(|p| truncate_unicode(p, MAX_LEN)),
         _ => None,
     };
 

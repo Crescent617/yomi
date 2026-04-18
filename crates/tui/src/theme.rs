@@ -304,7 +304,6 @@ impl Styles {
     pub fn warning() -> Style {
         Style::default().fg(colors::accent_warning())
     }
-
 }
 
 /// Block characters for drawing UI elements
