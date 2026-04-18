@@ -238,6 +238,21 @@ impl Model {
         Ok(())
     }
 
+    /// Update scroll progress in status bar (for browse mode)
+    fn update_scroll_progress(&mut self) {
+        // Query scroll progress from ChatView
+        if let Ok(Some(AttrValue::String(progress_str))) = self
+            .app
+            .query(&Id::ChatView, Attribute::Custom("scroll_progress"))
+        {
+            let _ = self.app.attr(
+                &Id::StatusBar,
+                Attribute::Custom("set_scroll_progress"),
+                AttrValue::String(progress_str),
+            );
+        }
+    }
+
     /// Calculate input box height based on content (3-10 lines, including borders)
     /// Accounts for text wrapping based on available terminal width
     fn calculate_input_height_for_content(content: &str, terminal_width: u16) -> u16 {
@@ -631,7 +646,7 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                AppEvent::Agent(kernel::event::AgentEvent::Cancelled { .. }) => {
+                AppEvent::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
                     self.state.is_streaming = false;
 
                     // Save partial content and clear state
@@ -647,6 +662,20 @@ impl Model {
                     self.app.attr(
                         &Id::InfoBar,
                         Attribute::Custom("cancel_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
+
+                    // Show cancel message in chat view
+                    let cancel_msg = operation
+                        .map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("add_error_message"),
+                        AttrValue::String(cancel_msg),
+                    )?;
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
                     self.state.should_redraw = true;
@@ -738,16 +767,17 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                // Operation cancelled - brief notification in status bar
-                AppEvent::Agent(kernel::event::AgentEvent::OperationCancelled {
-                    operation,
-                    ..
-                }) => {
-                    let message = format!("Cancelled: {operation}");
+                // Max iterations reached - show in chat view
+                AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached { count, .. }) => {
                     self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("show_message"),
-                        AttrValue::String(format!("2000\x00{message}")), // 2 second timeout
+                        &Id::ChatView,
+                        Attribute::Custom("add_error_message"),
+                        AttrValue::String(format!("Reached maximum iterations ({count})")),
+                    )?;
+                    self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("scroll_to_bottom"),
+                        AttrValue::Flag(true),
                     )?;
                     self.state.should_redraw = true;
                 }
@@ -915,6 +945,10 @@ impl Update<Msg> for Model {
                         Attribute::Custom("scroll_up"),
                         AttrValue::Number(amount as isize),
                     );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
                     None
                 }
                 Msg::ScrollDown => {
@@ -924,6 +958,10 @@ impl Update<Msg> for Model {
                         Attribute::Custom("scroll_down"),
                         AttrValue::Number(amount as isize),
                     );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
                     None
                 }
                 Msg::InputChanged(_) => {
@@ -959,12 +997,6 @@ impl Update<Msg> for Model {
                         AppMode::Normal => {
                             // Enter browse mode
                             self.mode = AppMode::Browse;
-                            // Expand all blocks in browse mode
-                            let _ = self.app.attr(
-                                &Id::ChatView,
-                                Attribute::Custom("expand_all"),
-                                AttrValue::Flag(true),
-                            );
                             // Update status bar to show BROWSE mode
                             let _ = self.app.attr(
                                 &Id::StatusBar,
@@ -982,9 +1014,11 @@ impl Update<Msg> for Model {
                                 &Id::StatusBar,
                                 Attribute::Custom("show_message"),
                                 AttrValue::String(
-                                    "0\x00C-o toggle, j/k/g/G scroll, q exit".to_string(),
+                                    "0\x00C-o toggle, C-e expand, j/k/g/G scroll, q exit".to_string(),
                                 ),
                             );
+                            // Initialize scroll progress
+                            self.update_scroll_progress();
                         }
                         AppMode::Browse => {
                             // Exit browse mode
@@ -1013,6 +1047,12 @@ impl Update<Msg> for Model {
                                 Attribute::Custom("clear_message"),
                                 AttrValue::Flag(true),
                             );
+                            // Clear scroll progress (restore context usage display)
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("clear_scroll_progress"),
+                                AttrValue::Flag(true),
+                            );
                         }
                     }
                     None
@@ -1024,6 +1064,10 @@ impl Update<Msg> for Model {
                         Attribute::Custom("page_up"),
                         AttrValue::Number(height as isize),
                     );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
                     None
                 }
                 Msg::PageDown => {
@@ -1033,6 +1077,10 @@ impl Update<Msg> for Model {
                         Attribute::Custom("page_down"),
                         AttrValue::Number(height as isize),
                     );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
                     None
                 }
                 Msg::GoToTop => {
@@ -1041,12 +1089,28 @@ impl Update<Msg> for Model {
                         Attribute::Custom("scroll_to_top"),
                         AttrValue::Flag(true),
                     );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
                     None
                 }
                 Msg::GoToBottom => {
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("scroll_to_bottom"),
+                        AttrValue::Flag(true),
+                    );
+                    // Update scroll progress in browse mode
+                    if self.mode == AppMode::Browse {
+                        self.update_scroll_progress();
+                    }
+                    None
+                }
+                Msg::ToggleExpandAll => {
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom("toggle_expand_all"),
                         AttrValue::Flag(true),
                     );
                     None

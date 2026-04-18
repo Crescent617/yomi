@@ -49,6 +49,8 @@ pub enum AgentEvent {
     },
     Cancelled {
         agent_id: AgentId,
+        /// Optional operation name that was cancelled (e.g., "streaming", "compaction")
+        operation: Option<String>,
     },
     /// Permission request for tool execution approval
     PermissionRequest {
@@ -83,10 +85,10 @@ pub enum AgentEvent {
         from: String, // 状态名称字符串
         to: String,
     },
-    /// 操作被取消
-    OperationCancelled {
+    /// Agent 达到最大迭代次数
+    MaxIterationsReached {
         agent_id: AgentId,
-        operation: String, // 被cancel的操作名称，如 "streaming", "compaction", "tool_execution"
+        count: usize,
     },
 }
 
