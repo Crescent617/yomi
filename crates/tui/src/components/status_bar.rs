@@ -27,7 +27,7 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center message] [right: ctx win usage]
+/// Layout: [mode] [center message] [right: ctx win usage or scroll progress]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
@@ -38,6 +38,8 @@ pub struct StatusBar {
     ctx_usage: Option<(u32, u32)>,
     /// Permission level for displaying YOLO mode
     permission_level: Option<Level>,
+    /// Scroll progress in browse mode (`current_line`, `total_lines`)
+    scroll_progress: Option<(usize, usize)>,
 }
 
 impl StatusBar {
@@ -81,6 +83,16 @@ impl StatusBar {
         self.permission_level = Some(level);
     }
 
+    /// Set scroll progress for browse mode (`current_line`, `total_lines`)
+    pub const fn set_scroll_progress(&mut self, current: usize, total: usize) {
+        self.scroll_progress = Some((current, total));
+    }
+
+    /// Clear scroll progress (when exiting browse mode)
+    pub const fn clear_scroll_progress(&mut self) {
+        self.scroll_progress = None;
+    }
+
     fn render_mode_section(&self) -> Span<'static> {
         let (bg, text) = match self.mode {
             AppMode::Normal => {
@@ -121,6 +133,20 @@ impl StatusBar {
     }
 
     fn render_right_section(&self) -> Span<'static> {
+        // In browse mode, show scroll progress
+        if self.mode == AppMode::Browse {
+            if let Some((current, total)) = self.scroll_progress {
+                let text = format!("[{current}/{total}]");
+                return Span::styled(
+                    text,
+                    Style::default()
+                        .fg(colors::text_secondary())
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            return Span::styled("[0/0]", Style::default().fg(colors::text_secondary()));
+        }
+
         // Display context window usage: "Context: 0.5%"
         #[allow(clippy::cast_precision_loss)]
         if let Some((tokens, context_window)) = self.ctx_usage {
@@ -155,7 +181,7 @@ impl MockComponent for StatusBar {
             .constraints([
                 Constraint::Length(10), // Mode section (" NORMAL ")
                 Constraint::Min(10),    // Center message section
-                Constraint::Length(12),
+                Constraint::Length(14), // Right section: scroll progress [current/total]
             ])
             .split(area);
 
@@ -239,6 +265,22 @@ impl MockComponent for StatusBar {
                         _ => None,
                     };
                 }
+            }
+            Attribute::Custom("set_scroll_progress") => {
+                // Parse "current\x00total" format
+                if let AttrValue::String(value_str) = value {
+                    let parts: Vec<&str> = value_str.split('\x00').collect();
+                    if parts.len() == 2 {
+                        if let (Ok(current), Ok(total)) =
+                            (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                        {
+                            self.set_scroll_progress(current, total);
+                        }
+                    }
+                }
+            }
+            Attribute::Custom("clear_scroll_progress") => {
+                self.clear_scroll_progress();
             }
             _ => {
                 self.props.set(attr, value);

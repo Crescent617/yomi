@@ -61,6 +61,7 @@ pub enum HistoryMessage {
 
 /// Unified chat view component
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ChatView {
     props: Props,
     messages: Vec<HistoryMessage>,
@@ -81,6 +82,11 @@ pub struct ChatView {
     banner: Option<crate::components::BannerData>,
     // Mascot animator for blinking animation
     mascot_animator: MascotAnimator,
+    // Render cache to avoid re-rendering all messages on every frame
+    cached_lines: Vec<Line<'static>>,
+    cache_dirty: bool,
+    // Track visible height for scroll calculations
+    last_visible_height: usize,
 }
 
 impl Default for ChatView {
@@ -99,6 +105,9 @@ impl Default for ChatView {
             expand_all: false,
             banner: Some(crate::components::BannerData::default()),
             mascot_animator: MascotAnimator::default(),
+            cached_lines: Vec::new(),
+            cache_dirty: true,
+            last_visible_height: 0,
         }
     }
 }
@@ -111,16 +120,19 @@ impl ChatView {
     /// Set banner data to display at the top
     pub fn set_banner(&mut self, banner: crate::components::BannerData) {
         self.banner = Some(banner);
+        self.cache_dirty = true;
     }
 
     pub fn add_user_message(&mut self, content: String) {
         self.messages.push(HistoryMessage::User(content));
+        self.cache_dirty = true;
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
 
     pub fn add_error_message(&mut self, error: String) {
         self.messages.push(HistoryMessage::Error(error));
+        self.cache_dirty = true;
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
@@ -137,6 +149,7 @@ impl ChatView {
             thinking_folded: !self.expand_all,
             thinking_elapsed_ms: elapsed_ms,
         });
+        self.cache_dirty = true;
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
@@ -159,6 +172,7 @@ impl ChatView {
             tokens: None,
             progress: None,
         });
+        self.cache_dirty = true;
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
@@ -166,6 +180,7 @@ impl ChatView {
 
     pub fn complete_tool(&mut self, tool_id: String, output: String, elapsed_ms: u64) {
         // Update the tool message in history
+        let mut updated = false;
         for msg in self.messages.iter_mut().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
@@ -179,6 +194,7 @@ impl ChatView {
                     *status = ToolStatus::Completed;
                     *out = Some(output);
                     *elapsed = Some(elapsed_ms);
+                    updated = true;
                     break;
                 }
             }
@@ -188,6 +204,9 @@ impl ChatView {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Completed));
         }
+        if updated {
+            self.cache_dirty = true;
+        }
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
@@ -195,6 +214,7 @@ impl ChatView {
 
     pub fn fail_tool(&mut self, tool_id: String, error: String, elapsed_ms: u64) {
         // Update the tool message in history
+        let mut updated = false;
         for msg in self.messages.iter_mut().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
@@ -208,6 +228,7 @@ impl ChatView {
                     *status = ToolStatus::Failed;
                     *err = Some(error);
                     *elapsed = Some(elapsed_ms);
+                    updated = true;
                     break;
                 }
             }
@@ -217,6 +238,9 @@ impl ChatView {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Failed));
         }
+        if updated {
+            self.cache_dirty = true;
+        }
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
@@ -224,6 +248,7 @@ impl ChatView {
 
     /// Update tool progress (for long-running tools like subagent)
     pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, tokens: Option<u32>) {
+        let mut updated = false;
         for msg in self.messages.iter_mut().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
@@ -235,15 +260,20 @@ impl ChatView {
                 if id == tool_id {
                     *progress = Some(message.to_string());
                     *tok = tokens;
+                    updated = true;
                     break;
                 }
             }
+        }
+        if updated {
+            self.cache_dirty = true;
         }
     }
 
     /// Flush pending streaming content to history
     /// Called when a new block starts (tool, code block, etc.) to preserve current content
     pub fn flush_streaming(&mut self) {
+        let mut flushed = false;
         // If there's pending thinking content, save it as an assistant message
         if !self.streaming_thinking.is_empty() {
             self.messages.push(HistoryMessage::Assistant {
@@ -253,6 +283,7 @@ impl ChatView {
                 thinking_elapsed_ms: None,
             });
             self.streaming_thinking.clear();
+            flushed = true;
         }
 
         // If there's pending content, save it as an assistant message
@@ -265,6 +296,10 @@ impl ChatView {
             });
             self.streaming_content.clear();
             self.md_renderer = StreamingMarkdownRenderer::new();
+            flushed = true;
+        }
+        if flushed {
+            self.cache_dirty = true;
         }
     }
 
@@ -288,6 +323,8 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
+        // Streaming content affects rendered output
+        self.cache_dirty = true;
     }
 
     /// Cancel streaming - flush partial content and mark running tools as cancelled
@@ -299,6 +336,7 @@ impl ChatView {
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
         // Mark any running tools as cancelled
+        let mut modified = false;
         for (tool_id, (_, status)) in &mut self.active_tools {
             if *status == ToolStatus::Running {
                 *status = ToolStatus::Cancelled;
@@ -311,10 +349,14 @@ impl ChatView {
                     {
                         if id == tool_id {
                             *s = ToolStatus::Cancelled;
+                            modified = true;
                         }
                     }
                 }
             }
+        }
+        if modified {
+            self.cache_dirty = true;
         }
     }
 
@@ -325,6 +367,8 @@ impl ChatView {
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
+        // Streaming content affects rendered output
+        self.cache_dirty = true;
     }
 
     pub fn append_streaming_thinking(&mut self, text: &str) {
@@ -333,6 +377,8 @@ impl ChatView {
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
+        // Streaming content affects rendered output
+        self.cache_dirty = true;
     }
 
     pub fn tick(&mut self) {
@@ -344,15 +390,36 @@ impl ChatView {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        let total_lines = self.calculate_total_lines();
-        let max_scroll = total_lines.saturating_sub(5); // Keep at least 5 lines visible
+        // Use cached_lines.len() for consistency with rendering
+        let total_lines = self.cached_lines.len();
+        // Use last_visible_height to calculate reasonable max_scroll
+        // Ensure we can always see at least 1 line when at top
+        let visible = self.last_visible_height.saturating_sub(1).max(1);
+        let max_scroll = total_lines.saturating_sub(visible);
+
+        // If already at or near top, don't increase offset further
+        if self.scroll_offset >= max_scroll {
+            self.scroll_offset = max_scroll;
+            self.user_scrolled = true;
+            return;
+        }
+
         self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
         // User manually scrolled up, pause auto-scroll
         self.user_scrolled = true;
     }
 
-    pub const fn scroll_down(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    pub fn scroll_down(&mut self, amount: usize) {
+        // Accelerate scrolling when offset is large to quickly return to bottom
+        let accelerated = if self.scroll_offset > 100 {
+            amount.saturating_mul(5) // 5x speed when far from bottom
+        } else if self.scroll_offset > 50 {
+            amount.saturating_mul(3) // 3x speed when moderately far
+        } else {
+            amount
+        };
+
+        self.scroll_offset = self.scroll_offset.saturating_sub(accelerated);
         // If scrolled to bottom, resume auto-scroll
         if self.scroll_offset == 0 {
             self.user_scrolled = false;
@@ -367,23 +434,49 @@ impl ChatView {
 
     pub fn scroll_to_top(&mut self) {
         // Go to the very top by setting scroll_offset to max
-        // This is a simplified approach - we'll calculate based on total lines
-        let total_lines = self.calculate_total_lines();
-        self.scroll_offset = total_lines;
+        // Use cached_lines.len() for consistency with rendering
+        self.scroll_offset = self.cached_lines.len();
         // User manually scrolled, pause auto-scroll
         self.user_scrolled = true;
     }
 
     pub fn toggle_last_thinking(&mut self) {
+        let mut updated = false;
         for msg in self.messages.iter_mut().rev() {
             if let HistoryMessage::Assistant {
                 thinking_folded, ..
             } = msg
             {
                 *thinking_folded = !*thinking_folded;
+                updated = true;
                 break;
             }
         }
+        if updated {
+            self.cache_dirty = true;
+        }
+    }
+
+    /// Get scroll progress for browse mode (`current_line`, `total_lines`)
+    /// Returns the 1-based current visible start position and total lines
+    pub fn get_scroll_progress(&self) -> (usize, usize) {
+        let total_lines = self.cached_lines.len();
+        if total_lines == 0 {
+            return (0, 0);
+        }
+
+        // Calculate current visible start line (1-based) based on scroll_offset
+        // scroll_offset = 0 means at bottom showing latest content
+        // scroll_offset > 0 means scrolled up by that many lines from bottom
+        let start_line = if self.scroll_offset == 0 {
+            // At bottom: show the last visible_height lines
+            total_lines.saturating_sub(self.last_visible_height.saturating_sub(1)).max(1)
+        } else {
+            // Scrolled up: start_line is scroll_offset lines from bottom
+            total_lines.saturating_sub(self.scroll_offset).max(1)
+        };
+
+        (start_line.min(total_lines), total_lines)
     }
 
     pub fn toggle_expand_all(&mut self) {
@@ -402,6 +495,7 @@ impl ChatView {
                 _ => {}
             }
         }
+        self.cache_dirty = true;
     }
 
     pub fn expand_all(&mut self) {
@@ -420,6 +514,7 @@ impl ChatView {
                     _ => {}
                 }
             }
+            self.cache_dirty = true;
         }
     }
 
@@ -439,6 +534,7 @@ impl ChatView {
                     _ => {}
                 }
             }
+            self.cache_dirty = true;
         }
     }
 
@@ -447,90 +543,9 @@ impl ChatView {
         self.scroll_up(amount);
     }
 
-    pub const fn page_down(&mut self, page_height: usize) {
+    pub fn page_down(&mut self, page_height: usize) {
         let amount = page_height.saturating_sub(2); // Leave some context
         self.scroll_down(amount);
-    }
-
-    fn calculate_total_lines(&mut self) -> usize {
-        let mut count = 0;
-        for msg in &self.messages {
-            count += Self::count_message_lines(msg);
-        }
-        if self.is_streaming
-            || !self.streaming_content.is_empty()
-            || !self.streaming_thinking.is_empty()
-        {
-            count += self.count_streaming_lines();
-        }
-        count
-    }
-
-    fn count_message_lines(msg: &HistoryMessage) -> usize {
-        let mut count = 0;
-        match msg {
-            HistoryMessage::User(content) => {
-                count += content.lines().count();
-            }
-            HistoryMessage::Assistant {
-                content,
-                thinking,
-                thinking_folded,
-                ..
-            } => {
-                if let Some(thinking) = thinking {
-                    if !thinking.is_empty() {
-                        if *thinking_folded {
-                            count += 1;
-                        } else {
-                            count += 2 + thinking.lines().count();
-                        }
-                    }
-                }
-                // Count markdown-rendered lines
-                if content.is_empty() {
-                    count += 1;
-                } else {
-                    let mut md_renderer = StreamingMarkdownRenderer::new();
-                    md_renderer.set_content(content.clone());
-                    count += md_renderer.lines().len();
-                }
-            }
-            HistoryMessage::Tool {
-                output,
-                error,
-                folded,
-                ..
-            } => {
-                count += 1; // Header line
-                if !*folded {
-                    if let Some(err) = error {
-                        count += err.lines().count();
-                    } else if let Some(out) = output {
-                        count += out.lines().count();
-                    } else {
-                        count += 1; // "Running..." placeholder
-                    }
-                    count += 1; // Extra line after content
-                }
-            }
-            HistoryMessage::Error(error) => {
-                count += error.lines().count();
-            }
-        }
-        count += 1; // spacing
-        count
-    }
-
-    fn count_streaming_lines(&mut self) -> usize {
-        let mut count = 0;
-        if !self.streaming_thinking.is_empty() {
-            count += 1 + self.streaming_thinking.lines().count();
-        }
-        let content_lines = self.md_renderer.lines().len().max(1);
-        count += content_lines;
-        count += 1; // spacing
-        count
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -784,21 +799,12 @@ impl ChatView {
                 }
             }
             HistoryMessage::Error(error) => {
-                // Render error message with red color and error icon
-                for (i, line) in error.lines().enumerate() {
-                    let prefix = if i == 0 { "⚠ " } else { "  " };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            prefix,
-                            Style::default()
-                                .fg(colors::accent_error())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            preprocess(line),
-                            Style::default().fg(colors::accent_error()),
-                        ),
-                    ]));
+                // Render error message with red color
+                for line in error.lines() {
+                    lines.push(Line::from(vec![Span::styled(
+                        preprocess(line),
+                        Style::default().fg(colors::accent_error()),
+                    )]));
                 }
             }
         }
@@ -878,59 +884,69 @@ impl MockComponent for ChatView {
         const MASCOT_COL_WIDTH: usize = 8;
         let main_area = area;
 
-        let mut all_lines: Vec<Line> = Vec::new();
-
-        // Render banner first (if set), it will scroll with content
-        if let Some(ref banner) = self.banner {
-            // Build banner lines with two-column layout (mascot left, info right)
-            let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
-            let info_lines = banner.info_lines();
-
-            // Column widths for alignment
-
-            let max_rows = mascot_lines.len().max(info_lines.len());
-            for i in 0..max_rows {
-                let mascot_part = mascot_lines.get(i).unwrap_or(&"");
-                let info_part = info_lines.get(i).map_or("", |s| s.as_str());
-
-                // Pad mascot to fixed width for alignment
-                let mascot_padded = format!("{mascot_part:MASCOT_COL_WIDTH$}");
-
-                all_lines.push(Line::from(vec![
-                    Span::styled(mascot_padded, colors::accent_system()),
-                    Span::styled(info_part.to_string(), colors::text_secondary()),
-                ]));
-            }
-            all_lines.push(Line::from(""));
-        }
-
-        // Render history with unified spacing
-        for (i, msg) in self.messages.iter().enumerate() {
-            all_lines.extend(Self::render_message(msg));
-            // Add spacing between messages (but not after the last one)
-            if i < self.messages.len() - 1 {
-                all_lines.push(Line::from(""));
-            }
-        }
-
-        // Render streaming content (if any)
-        // Add spacing if there's history before streaming
-        if !self.messages.is_empty()
-            && (self.is_streaming
-                || !self.streaming_content.is_empty()
-                || !self.streaming_thinking.is_empty())
-        {
-            all_lines.push(Line::from(""));
-        }
-        if self.is_streaming
-            || !self.streaming_content.is_empty()
-            || !self.streaming_thinking.is_empty()
-        {
-            all_lines.extend(self.render_streaming());
-        }
-
-        // Calculate scroll position with wrap support
+        // Save visible height for scroll calculations
         let visible_height = main_area.height as usize;
+        self.last_visible_height = visible_height;
+
+        // Rebuild cache if dirty
+        if self.cache_dirty {
+            self.cached_lines.clear();
+
+            // Render banner first (if set), it will scroll with content
+            if let Some(ref banner) = self.banner {
+                // Build banner lines with two-column layout (mascot left, info right)
+                let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
+                let info_lines = banner.info_lines();
+
+                // Column widths for alignment
+
+                let max_rows = mascot_lines.len().max(info_lines.len());
+                for i in 0..max_rows {
+                    let mascot_part = mascot_lines.get(i).unwrap_or(&"");
+                    let info_part = info_lines.get(i).map_or("", |s| s.as_str());
+
+                    // Pad mascot to fixed width for alignment
+                    let mascot_padded = format!("{mascot_part:MASCOT_COL_WIDTH$}");
+
+                    self.cached_lines.push(Line::from(vec![
+                        Span::styled(mascot_padded, colors::accent_system()),
+                        Span::styled(info_part.to_string(), colors::text_secondary()),
+                    ]));
+                }
+                self.cached_lines.push(Line::from(""));
+            }
+
+            // Render history with unified spacing
+            for (i, msg) in self.messages.iter().enumerate() {
+                self.cached_lines.extend(Self::render_message(msg));
+                // Add spacing between messages (but not after the last one)
+                if i < self.messages.len() - 1 {
+                    self.cached_lines.push(Line::from(""));
+                }
+            }
+
+            // Render streaming content (if any)
+            // Add spacing if there's history before streaming
+            if !self.messages.is_empty()
+                && (self.is_streaming
+                    || !self.streaming_content.is_empty()
+                    || !self.streaming_thinking.is_empty())
+            {
+                self.cached_lines.push(Line::from(""));
+            }
+            if self.is_streaming
+                || !self.streaming_content.is_empty()
+                || !self.streaming_thinking.is_empty()
+            {
+                let streaming_lines = self.render_streaming();
+                self.cached_lines.extend(streaming_lines);
+            }
+
+            self.cache_dirty = false;
+        }
+
+        // Use cached lines for display
+        let all_lines = &self.cached_lines;
         let width = main_area.width as usize;
 
         // Calculate wrapped line counts and find start line
@@ -982,7 +998,13 @@ impl MockComponent for ChatView {
     }
 
     fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+        match attr {
+            Attribute::Custom("scroll_progress") => {
+                let (current, total) = self.get_scroll_progress();
+                Some(AttrValue::String(format!("{current}\x00{total}")))
+            }
+            _ => self.props.get(attr),
+        }
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {

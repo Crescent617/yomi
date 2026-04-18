@@ -1157,6 +1157,11 @@ impl InputComponent {
                 code: Key::Char('G'),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => Some(Msg::GoToBottom),
+            // Toggle expand all with Ctrl+E in browse mode
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => Some(Msg::ToggleExpandAll),
             // Pass through to normal input handler for other keys
             _ => self.handle_normal_input(ev),
         }

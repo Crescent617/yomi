@@ -182,6 +182,14 @@ impl Agent {
                     "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
                     self.id
                 );
+                // Notify TUI that max iterations reached
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::MaxIterationsReached {
+                        agent_id: self.id.clone(),
+                        count: self.max_iterations,
+                    }))
+                    .await;
                 self.context.transition_to(AgentState::WaitingForInput);
             }
 
@@ -255,15 +263,8 @@ impl Agent {
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("Agent {} {} cancelled", self.id, context);
-        // 发送详细的操作取消事件
+        // 发送带 operation 的取消事件
         self.emit_operation_cancelled(context).await;
-        // 同时发送通用的取消事件
-        let _ = self
-            .event_tx
-            .send(Event::Agent(AgentEvent::Cancelled {
-                agent_id: self.id.clone(),
-            }))
-            .await;
         self.context.transition_to(AgentState::WaitingForInput);
         Ok(())
     }
@@ -321,9 +322,9 @@ impl Agent {
     async fn emit_operation_cancelled(&self, operation: &str) {
         if let Err(e) = self
             .event_tx
-            .try_send(Event::Agent(AgentEvent::OperationCancelled {
+            .try_send(Event::Agent(AgentEvent::Cancelled {
                 agent_id: self.id.clone(),
-                operation: operation.to_string(),
+                operation: Some(operation.to_string()),
             }))
         {
             tracing::warn!("Failed to emit operation cancelled event: {}", e);
