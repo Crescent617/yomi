@@ -36,3 +36,6 @@ debug *ARGS:
 # Run with tracing info logging (less verbose)
 info *ARGS:
     RUST_LOG=info cargo run --bin yomi -- {{ARGS}}
+
+build-release:
+    cargo build --release
