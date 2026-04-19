@@ -55,8 +55,8 @@ pub use types::*;
 #[cfg(feature = "providers")]
 pub use providers::{AnthropicProvider, OpenAIProvider};
 pub use tools::{
-    execute_tools_parallel, BashTool, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool,
-    WriteTool,
+    execute_tools_parallel, BashTool, EditTool, GlobTool, GrepTool, ReadTool, SkillTool,
+    SubagentTool, WriteTool,
 };
 
 // Task system re-exports

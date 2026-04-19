@@ -84,6 +84,7 @@ impl Session {
             self.agent_shared.compactor.clone(),
             self.agent_shared.storage.clone(),
             permission_state,
+            self.agent_shared.skill_folders.clone(),
         ));
 
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, config);

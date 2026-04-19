@@ -311,6 +311,7 @@ async fn main() -> Result<()> {
         Some(task_store),
         project_memory,
         Some(compactor::Compactor::default()),
+        skill_folders.iter().map(expand_tilde).collect(),
     ));
 
     // Prepare banner data (before skills is moved)

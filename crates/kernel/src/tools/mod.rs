@@ -17,6 +17,7 @@ pub mod line_numbers;
 pub mod parallel;
 pub mod read;
 pub mod registry_factory;
+pub mod skill_load;
 pub mod subagent;
 pub mod write;
 
@@ -29,6 +30,7 @@ pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use parallel::execute_tools_parallel;
 pub use read::{ReadTool, READ_TOOL_NAME};
 pub use registry_factory::ToolRegistryFactory;
+pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
 

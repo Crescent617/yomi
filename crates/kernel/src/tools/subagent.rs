@@ -126,6 +126,7 @@ You are a specialist agent handling a specific task delegated by the parent agen
             session_id,
             Some(&self.parent_session_id),
             false, // Disable nested subagents to prevent infinite recursion
+            self.shared.skill_folders.clone(),
         )
     }
 }

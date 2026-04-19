@@ -164,7 +164,7 @@ impl SkillLoader {
 
     /// Derive skill name from relative path
     /// e.g., root/a/b/SKILL.md -> a:b
-    fn derive_skill_name(path: &Path, root_folder: &Path) -> String {
+    pub fn derive_skill_name(path: &Path, root_folder: &Path) -> String {
         // Get the relative path from root
         let relative = path.strip_prefix(root_folder).unwrap_or(path);
 
@@ -193,6 +193,40 @@ impl SkillLoader {
             // Join components with ':'
             components.join(":")
         }
+    }
+
+    /// Find a skill file by name in configured folders (async version)
+    /// Returns the path to the skill file if found
+    pub async fn find_skill_file(&self, name: &str) -> Option<PathBuf> {
+        for folder in &self.folders {
+            if let Some(path) = Self::resolve_skill_path(folder, name).await {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Resolve skill path by name: folder/{name}/SKILL.md
+    /// e.g., "debugging" -> folder/debugging/SKILL.md
+    /// e.g., "superpowers:writing" -> folder/superpowers/writing/SKILL.md
+    async fn resolve_skill_path(folder: &Path, name: &str) -> Option<PathBuf> {
+        let parts: Vec<&str> = name.split(':').collect();
+        let skill_path = folder
+            .join(parts.iter().collect::<std::path::PathBuf>())
+            .join("SKILL.md");
+
+        if tokio::fs::try_exists(&skill_path).await.unwrap_or(false) {
+            skill_path.canonicalize().ok().or(Some(skill_path))
+        } else {
+            None
+        }
+    }
+
+    /// Read skill file content asynchronously
+    pub async fn read_skill_content(path: &Path) -> Result<String> {
+        tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("Failed to read skill file: {}", path.display()))
     }
 
     /// Load skills from a plugin

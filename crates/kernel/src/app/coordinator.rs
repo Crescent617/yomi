@@ -24,6 +24,7 @@ impl Coordinator {
         task_store: Option<Arc<crate::task::TaskStore>>,
         project_memory: crate::project_memory::MemoryFiles,
         compactor: Option<crate::compactor::Compactor>,
+        skill_folders: Vec<std::path::PathBuf>,
     ) -> Self {
         let agent_shared = Arc::new(AgentShared::new(
             provider,
@@ -33,6 +34,7 @@ impl Coordinator {
             compactor,
             Some(storage.clone()),
             None, // permission_state is created per-session
+            skill_folders,
         ));
         Self {
             storage,
