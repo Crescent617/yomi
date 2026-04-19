@@ -59,7 +59,11 @@ macro_rules! const_concat {
     }};
 }
 
-pub const fn push_str<const N: usize>(mut out: [u8; N], offset: usize, s: &str) -> ([u8; N], usize) {
+pub const fn push_str<const N: usize>(
+    mut out: [u8; N],
+    offset: usize,
+    s: &str,
+) -> ([u8; N], usize) {
     let bytes = s.as_bytes();
     let mut i = 0;
     let mut off = offset;

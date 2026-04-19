@@ -82,11 +82,13 @@ pub struct ChatView {
     banner: Option<crate::components::BannerData>,
     // Mascot animator for blinking animation
     mascot_animator: MascotAnimator,
-    // Render cache to avoid re-rendering all messages on every frame
-    cached_lines: Vec<Line<'static>>,
-    cache_dirty: bool,
     // Track visible height for scroll calculations
     last_visible_height: usize,
+    // Message-level cache: None means dirty (needs re-render), Some means cached
+    msg_cache: Vec<Option<Vec<Line<'static>>>>,
+    // Full cached lines for scroll calculations (includes banner + messages + streaming)
+    cached_lines: Vec<Line<'static>>,
+    cache_dirty: bool,
 }
 
 impl Default for ChatView {
@@ -105,9 +107,10 @@ impl Default for ChatView {
             expand_all: false,
             banner: Some(crate::components::BannerData::default()),
             mascot_animator: MascotAnimator::default(),
+            last_visible_height: 0,
+            msg_cache: Vec::new(),
             cached_lines: Vec::new(),
             cache_dirty: true,
-            last_visible_height: 0,
         }
     }
 }
@@ -115,6 +118,35 @@ impl Default for ChatView {
 impl ChatView {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Invalidate cache for a specific message by index.
+    fn invalidate_msg_cache(&mut self, idx: usize) {
+        if idx < self.msg_cache.len() {
+            self.msg_cache[idx] = None;
+            self.cache_dirty = true;
+        }
+    }
+
+    /// Add a new empty cache entry for a new message.
+    fn push_new_msg_cache(&mut self) {
+        self.msg_cache.push(None);
+        self.cache_dirty = true;
+    }
+
+    /// Invalidate all message caches.
+    fn invalidate_all_caches(&mut self) {
+        for cache in &mut self.msg_cache {
+            *cache = None;
+        }
+        self.cache_dirty = true;
+    }
+
+    /// Clear all caches and messages.
+    fn clear_all_caches(&mut self) {
+        self.msg_cache.clear();
+        self.cached_lines.clear();
+        self.cache_dirty = true;
     }
 
     /// Set banner data to display at the top
@@ -125,14 +157,14 @@ impl ChatView {
 
     pub fn add_user_message(&mut self, content: String) {
         self.messages.push(HistoryMessage::User(content));
-        self.cache_dirty = true;
+        self.push_new_msg_cache();
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
 
     pub fn add_error_message(&mut self, error: String) {
         self.messages.push(HistoryMessage::Error(error));
-        self.cache_dirty = true;
+        self.push_new_msg_cache();
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
@@ -149,7 +181,7 @@ impl ChatView {
             thinking_folded: !self.expand_all,
             thinking_elapsed_ms: elapsed_ms,
         });
-        self.cache_dirty = true;
+        self.push_new_msg_cache();
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
     }
@@ -172,16 +204,15 @@ impl ChatView {
             tokens: None,
             progress: None,
         });
-        self.cache_dirty = true;
+        self.push_new_msg_cache();
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
     }
 
     pub fn complete_tool(&mut self, tool_id: String, output: String, elapsed_ms: u64) {
-        // Update the tool message in history
-        let mut updated = false;
-        for msg in self.messages.iter_mut().rev() {
+        // Update the tool message in history and invalidate cache
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
                 status,
@@ -194,7 +225,7 @@ impl ChatView {
                     *status = ToolStatus::Completed;
                     *out = Some(output);
                     *elapsed = Some(elapsed_ms);
-                    updated = true;
+                    self.invalidate_msg_cache(i);
                     break;
                 }
             }
@@ -204,18 +235,14 @@ impl ChatView {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Completed));
         }
-        if updated {
-            self.cache_dirty = true;
-        }
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
     }
 
     pub fn fail_tool(&mut self, tool_id: String, error: String, elapsed_ms: u64) {
-        // Update the tool message in history
-        let mut updated = false;
-        for msg in self.messages.iter_mut().rev() {
+        // Update the tool message in history and invalidate cache
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
                 status,
@@ -228,7 +255,7 @@ impl ChatView {
                     *status = ToolStatus::Failed;
                     *err = Some(error);
                     *elapsed = Some(elapsed_ms);
-                    updated = true;
+                    self.invalidate_msg_cache(i);
                     break;
                 }
             }
@@ -238,9 +265,6 @@ impl ChatView {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Failed));
         }
-        if updated {
-            self.cache_dirty = true;
-        }
         if !self.user_scrolled {
             self.scroll_offset = 0;
         }
@@ -248,8 +272,7 @@ impl ChatView {
 
     /// Update tool progress (for long-running tools like subagent)
     pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, tokens: Option<u32>) {
-        let mut updated = false;
-        for msg in self.messages.iter_mut().rev() {
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Tool {
                 tool_id: id,
                 progress,
@@ -260,20 +283,16 @@ impl ChatView {
                 if id == tool_id {
                     *progress = Some(message.to_string());
                     *tok = tokens;
-                    updated = true;
+                    self.invalidate_msg_cache(i);
                     break;
                 }
             }
-        }
-        if updated {
-            self.cache_dirty = true;
         }
     }
 
     /// Flush pending streaming content to history
     /// Called when a new block starts (tool, code block, etc.) to preserve current content
     pub fn flush_streaming(&mut self) {
-        let mut flushed = false;
         // If there's pending thinking content, save it as an assistant message
         if !self.streaming_thinking.is_empty() {
             self.messages.push(HistoryMessage::Assistant {
@@ -282,8 +301,8 @@ impl ChatView {
                 thinking_folded: !self.expand_all,
                 thinking_elapsed_ms: None,
             });
+            self.push_new_msg_cache();
             self.streaming_thinking.clear();
-            flushed = true;
         }
 
         // If there's pending content, save it as an assistant message
@@ -294,12 +313,9 @@ impl ChatView {
                 thinking_folded: true,
                 thinking_elapsed_ms: None,
             });
+            self.push_new_msg_cache();
             self.streaming_content.clear();
             self.md_renderer = StreamingMarkdownRenderer::new();
-            flushed = true;
-        }
-        if flushed {
-            self.cache_dirty = true;
         }
     }
 
@@ -335,28 +351,27 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
-        // Mark any running tools as cancelled
-        let mut modified = false;
+        // Mark any running tools as cancelled and invalidate their caches
+        let mut indices_to_invalidate = Vec::new();
         for (tool_id, (_, status)) in &mut self.active_tools {
             if *status == ToolStatus::Running {
                 *status = ToolStatus::Cancelled;
-                for msg in &mut self.messages {
-                    if let HistoryMessage::Tool {
-                        tool_id: id,
-                        status: s,
-                        ..
-                    } = msg
-                    {
+                for (i, msg) in self.messages.iter().enumerate().rev() {
+                    if let HistoryMessage::Tool { tool_id: id, .. } = msg {
                         if id == tool_id {
-                            *s = ToolStatus::Cancelled;
-                            modified = true;
+                            indices_to_invalidate.push(i);
+                            break;
                         }
                     }
                 }
             }
         }
-        if modified {
-            self.cache_dirty = true;
+        // Update message statuses and invalidate caches
+        for idx in indices_to_invalidate {
+            if let Some(HistoryMessage::Tool { status, .. }) = self.messages.get_mut(idx) {
+                *status = ToolStatus::Cancelled;
+            }
+            self.invalidate_msg_cache(idx);
         }
     }
 
@@ -443,19 +458,15 @@ impl ChatView {
     }
 
     pub fn toggle_last_thinking(&mut self) {
-        let mut updated = false;
-        for msg in self.messages.iter_mut().rev() {
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Assistant {
                 thinking_folded, ..
             } = msg
             {
                 *thinking_folded = !*thinking_folded;
-                updated = true;
+                self.invalidate_msg_cache(i);
                 break;
             }
-        }
-        if updated {
-            self.cache_dirty = true;
         }
     }
 
@@ -499,7 +510,7 @@ impl ChatView {
                 _ => {}
             }
         }
-        self.cache_dirty = true;
+        self.invalidate_all_caches();
     }
 
     pub fn expand_all(&mut self) {
@@ -518,7 +529,7 @@ impl ChatView {
                     _ => {}
                 }
             }
-            self.cache_dirty = true;
+            self.invalidate_all_caches();
         }
     }
 
@@ -538,7 +549,7 @@ impl ChatView {
                     _ => {}
                 }
             }
-            self.cache_dirty = true;
+            self.invalidate_all_caches();
         }
     }
 
@@ -892,7 +903,15 @@ impl MockComponent for ChatView {
         let visible_height = main_area.height as usize;
         self.last_visible_height = visible_height;
 
-        // Rebuild cache if dirty
+        // Sync msg_cache length with messages
+        while self.msg_cache.len() < self.messages.len() {
+            self.msg_cache.push(None);
+        }
+        if self.msg_cache.len() > self.messages.len() {
+            self.msg_cache.truncate(self.messages.len());
+        }
+
+        // Rebuild full cache if dirty
         if self.cache_dirty {
             self.cached_lines.clear();
 
@@ -920,9 +939,18 @@ impl MockComponent for ChatView {
                 self.cached_lines.push(Line::from(""));
             }
 
-            // Render history with unified spacing
+            // Render history with unified spacing, using msg_cache for individual messages
             for (i, msg) in self.messages.iter().enumerate() {
-                self.cached_lines.extend(Self::render_message(msg));
+                // Use cached lines if available, otherwise render and cache
+                let msg_lines = match &self.msg_cache[i] {
+                    Some(lines) => lines,
+                    None => {
+                        let rendered = Self::render_message(msg);
+                        self.msg_cache[i] = Some(rendered);
+                        self.msg_cache[i].as_ref().unwrap()
+                    }
+                };
+                self.cached_lines.extend(msg_lines.iter().cloned());
                 // Add spacing between messages (but not after the last one)
                 if i < self.messages.len() - 1 {
                     self.cached_lines.push(Line::from(""));
@@ -1071,24 +1099,31 @@ impl MockComponent for ChatView {
                         thinking_folded: !self.expand_all,
                         thinking_elapsed_ms: parts.get(2).and_then(|s| s.parse().ok()),
                     });
+                    self.push_new_msg_cache();
 
-                    // Mark running tools as cancelled
+                    // Mark running tools as cancelled and invalidate their caches
+                    let mut indices_to_invalidate = Vec::new();
                     for (tool_id, (_, status)) in &mut self.active_tools {
                         if *status == ToolStatus::Running {
                             *status = ToolStatus::Cancelled;
-                            for msg in &mut self.messages {
-                                if let HistoryMessage::Tool {
-                                    tool_id: id,
-                                    status: s,
-                                    ..
-                                } = msg
-                                {
+                            for (i, msg) in self.messages.iter().enumerate().rev() {
+                                if let HistoryMessage::Tool { tool_id: id, .. } = msg {
                                     if id == tool_id {
-                                        *s = ToolStatus::Cancelled;
+                                        indices_to_invalidate.push(i);
+                                        break;
                                     }
                                 }
                             }
                         }
+                    }
+                    // Update message statuses and invalidate caches
+                    for idx in indices_to_invalidate {
+                        if let Some(HistoryMessage::Tool { status, .. }) =
+                            self.messages.get_mut(idx)
+                        {
+                            *status = ToolStatus::Cancelled;
+                        }
+                        self.invalidate_msg_cache(idx);
                     }
 
                     // Clear streaming state
@@ -1159,6 +1194,7 @@ impl MockComponent for ChatView {
                 }
             }
             "clear_history" => {
+                self.clear_all_caches();
                 self.messages.clear();
                 self.scroll_offset = 0;
                 self.banner = None;
