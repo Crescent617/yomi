@@ -21,6 +21,15 @@ pub const fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
+/// Estimate tokens as f64 for accurate accumulation
+#[allow(clippy::cast_precision_loss)]
+pub fn estimate_tokens_f64(text: &str) -> f64 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    text.len() as f64 / 4.0
+}
+
 /// Estimate tokens for JSON content
 /// JSON is denser (more single-char tokens like `{`, `}`, `:`, `,`)
 /// Uses 2 chars/token instead of 4
@@ -47,6 +56,16 @@ pub fn format_token_count(count: usize) -> String {
         format!("~{:.1}k", count as f64 / 1000.0)
     } else {
         format!("~{count}")
+    }
+}
+
+/// Format f64 token count with ~ prefix (display as integer)
+pub fn format_token_count_f64(count: f64) -> String {
+    let count_rounded = count.round() as usize;
+    if count_rounded >= 1000 {
+        format!("~{:.1}k", count_rounded as f64 / 1000.0)
+    } else {
+        format!("~{count_rounded}")
     }
 }
 

@@ -4,7 +4,7 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, Props},
+    props::{AttrValue, Attribute},
     ratatui::{
         layout::Rect,
         style::{Modifier, Style},
@@ -85,11 +85,9 @@ impl InfoBarState {
 /// Info bar component showing streaming progress
 #[derive(Debug, Default)]
 pub struct InfoBar {
-    props: Props,
     state: InfoBarState,
     tick_frame: usize,
-    content: String,
-    thinking: String,
+    token_count: f64,
     start_time: Option<std::time::Instant>,
 }
 
@@ -103,8 +101,7 @@ impl InfoBar {
         if state.is_active() {
             self.tick_frame = 0;
             if state == InfoBarState::Streaming {
-                self.content.clear();
-                self.thinking.clear();
+                self.token_count = 0.0;
             }
             self.start_time = Some(std::time::Instant::now());
         } else if state.clears_timer() {
@@ -113,11 +110,11 @@ impl InfoBar {
     }
 
     pub fn append_content(&mut self, text: &str) {
-        self.content.push_str(text);
+        self.token_count += tokens::estimate_tokens_f64(text);
     }
 
     pub fn append_thinking(&mut self, text: &str) {
-        self.thinking.push_str(text);
+        self.token_count += tokens::estimate_tokens_f64(text);
     }
 
     pub const fn tick(&mut self) {
@@ -141,8 +138,8 @@ impl InfoBar {
     }
 
     fn render(&self) -> Line<'static> {
-        // Show when streaming, compacting, or has content
-        if self.state == InfoBarState::Idle && self.content.is_empty() && self.thinking.is_empty() {
+        // Show when streaming, compacting, or has tokens
+        if self.state == InfoBarState::Idle && self.token_count == 0.0 {
             return Line::from("");
         }
 
@@ -154,18 +151,11 @@ impl InfoBar {
 
         // Status text (e.g., "Compacting...")
         if !status_text.is_empty() {
-            spans.push(Span::styled(
-                format!("{status_text} "),
-                indicator_style, // Use same style as indicator for consistency
-            ));
+            spans.push(Span::styled(format!("{status_text} "), indicator_style));
         }
 
-        let content_tokens = tokens::estimate_tokens(&self.content);
-        let thinking_tokens = tokens::estimate_tokens(&self.thinking);
-        let total_tokens = content_tokens + thinking_tokens;
-
         let token_style = Style::default().fg(colors::text_secondary());
-        let token_text = format!("{} tokens", tokens::format_token_count(total_tokens));
+        let token_text = format!("{} tokens", tokens::format_token_count_f64(self.token_count));
         spans.push(Span::styled(token_text, token_style));
 
         // Elapsed time (when active)
@@ -184,8 +174,8 @@ impl MockComponent for InfoBar {
         frame.render_widget(paragraph, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query(&self, _attr: Attribute) -> Option<AttrValue> {
+        None
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -203,7 +193,6 @@ impl MockComponent for InfoBar {
                 self.set_state(InfoBarState::Compacting);
             }
             Attribute::Custom("stop_compacting") => {
-                // Return to idle or completed based on previous state
                 self.set_state(InfoBarState::Idle);
             }
             Attribute::Custom("append_content") => {
@@ -219,9 +208,7 @@ impl MockComponent for InfoBar {
             Attribute::Custom("tick") => {
                 self.tick();
             }
-            _ => {
-                self.props.set(attr, value);
-            }
+            _ => {}
         }
     }
 
