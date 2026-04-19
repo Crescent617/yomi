@@ -61,11 +61,11 @@ pub fn format_token_count(count: usize) -> String {
 
 /// Format f64 token count with ~ prefix (display as integer)
 pub fn format_token_count_f64(count: f64) -> String {
-    let count_rounded = count.round() as usize;
-    if count_rounded >= 1000 {
-        format!("~{:.1}k", count_rounded as f64 / 1000.0)
+    let count_rounded = count.round();
+    if count_rounded >= 1000.0 {
+        format!("~{:.1}k", count_rounded / 1000.0)
     } else {
-        format!("~{count_rounded}")
+        format!("~{count_rounded:.0}")
     }
 }
 
