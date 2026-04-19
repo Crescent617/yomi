@@ -291,9 +291,12 @@ pub struct AgentShared {
     pub storage: Option<Arc<dyn crate::storage::Storage>>,
     /// Shared permission state for all agents in a session
     pub permission_state: Option<crate::permissions::PermissionState>,
+    /// Skill folders for the `skill_load` tool
+    pub skill_folders: Vec<std::path::PathBuf>,
 }
 
 impl AgentShared {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn crate::providers::Provider>,
         model_config: Arc<ModelConfig>,
@@ -302,6 +305,7 @@ impl AgentShared {
         compactor: Option<crate::compactor::Compactor>,
         storage: Option<Arc<dyn crate::storage::Storage>>,
         permission_state: Option<crate::permissions::PermissionState>,
+        skill_folders: Vec<std::path::PathBuf>,
     ) -> Self {
         Self {
             provider,
@@ -311,6 +315,7 @@ impl AgentShared {
             compactor,
             storage,
             permission_state,
+            skill_folders,
         }
     }
 }

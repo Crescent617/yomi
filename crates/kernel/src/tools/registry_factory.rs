@@ -7,8 +7,8 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::tools::{
-    BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SubagentTool, ToolRegistry,
-    WriteTool,
+    BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SkillTool, SubagentTool,
+    ToolRegistry, WriteTool,
 };
 use crate::types::AgentId;
 use std::path::Path;
@@ -35,6 +35,7 @@ impl ToolRegistryFactory {
     /// * `session_id` - Session ID for transcript recording
     /// * `parent_session_id` - Parent session ID for task store sharing (subagents)
     /// * `enable_sub_agents` - Whether to enable the subagent tool
+    /// * `skill_folders` - Folders to search for skills (for `skill_load` tool)
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         agent_id: &AgentId,
@@ -46,6 +47,7 @@ impl ToolRegistryFactory {
         session_id: &str,
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
+        skill_folders: Vec<std::path::PathBuf>,
     ) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
@@ -81,6 +83,10 @@ impl ToolRegistryFactory {
         // Register Grep tool
         let grep_tool = GrepTool::new(working_dir);
         registry.register(grep_tool);
+
+        // Register SkillLoad tool
+        let skill_load_tool = SkillTool::new(skill_folders);
+        registry.register(skill_load_tool);
 
         // Register SubAgent tool if enabled
         if enable_sub_agents {
