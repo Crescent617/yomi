@@ -374,7 +374,24 @@ impl StreamingMarkdownRenderer {
                             tr.append_text(&code);
                         }
                     } else {
-                        current_line.push(Span::styled(format!("{code}"), Styles::inline_code()));
+                        // Inline code should inherit modifiers (italic, underline, etc.) from context
+                        let style = Styles::inline_code().patch(current_style);
+                        current_line.push(Span::styled(format!("{code}"), style));
+                    }
+                }
+                MdEvent::InlineHtml(html) => {
+                    let html_str = html.to_string();
+                    match html_str.as_str() {
+                        "<u>" | "<ins>" | "<underline>" => {
+                            current_style = current_style.add_modifier(Modifier::UNDERLINED);
+                        }
+                        "</u>" | "</ins>" | "</underline>" => {
+                            current_style = current_style.remove_modifier(Modifier::UNDERLINED);
+                        }
+                        _ => {
+                            // Pass through other HTML tags as text
+                            current_line.push(Span::styled(html_str, current_style));
+                        }
                     }
                 }
                 MdEvent::TaskListMarker(checked) => {
@@ -554,5 +571,60 @@ mod tests {
             output.contains('│'),
             "Table should contain vertical borders"
         );
+    }
+
+    #[test]
+    fn test_italic_code_combination() {
+        let mut renderer = StreamingMarkdownRenderer::new();
+        // Italic with inline code: *`斜体代码`*
+        let content = "*`斜体代码`*";
+        let lines = renderer.set_content(content.to_string());
+
+        // The code content should be present with both bold and italic
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(output.contains("斜体代码"), "Should contain code content");
+
+        // Check the actual spans to verify styling
+        for line in lines {
+            for span in &line.spans {
+                if span.content.contains("斜体代码") {
+                    let style = &span.style;
+                    assert!(style.add_modifier.contains(Modifier::BOLD), "Should have bold");
+                    assert!(style.add_modifier.contains(Modifier::ITALIC), "Should have italic");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_bold_underline_combination() {
+        let mut renderer = StreamingMarkdownRenderer::new();
+        // Bold + underline: **<u>粗体加下划线</u>**
+        let content = "**<u>粗体加下划线</u>**";
+        let lines = renderer.set_content(content.to_string());
+
+        let output = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(output.contains("粗体加下划线"), "Should contain content");
+
+        // Check the styling has both bold and underline
+        for line in lines {
+            for span in &line.spans {
+                if span.content.contains("粗体加下划线") {
+                    let style = &span.style;
+                    assert!(style.add_modifier.contains(Modifier::BOLD), "Should have bold");
+                    assert!(style.add_modifier.contains(Modifier::UNDERLINED), "Should have underline");
+                }
+            }
+        }
     }
 }
