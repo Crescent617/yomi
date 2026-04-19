@@ -88,12 +88,15 @@ pub struct ChatView {
     last_visible_height: usize,
     // Message-level cache: None means dirty (needs re-render), Some means cached (Arc for sharing)
     msg_cache: Vec<Option<Vec<Arc<Line<'static>>>>>,
-    // Full cached lines for scroll calculations (includes banner + messages + streaming)
-    cached_lines: Vec<Arc<Line<'static>>>,
+    // Banner cache (separate because mascot animates)
+    banner_cache: Vec<Arc<Line<'static>>>,
+    banner_dirty: bool,
+    // Message lines cache (excluding banner and streaming)
+    msg_lines: Vec<Arc<Line<'static>>>,
+    msg_cache_dirty: bool,
     // Viewport cache: only the currently visible lines (cloned from Arc)
     viewport_lines: Vec<Line<'static>>,
     last_viewport: (usize, usize), // (start_line, end_line)
-    cache_dirty: bool,
 }
 
 impl Default for ChatView {
@@ -114,10 +117,12 @@ impl Default for ChatView {
             mascot_animator: MascotAnimator::default(),
             last_visible_height: 0,
             msg_cache: Vec::new(),
-            cached_lines: Vec::new(),
+            banner_cache: Vec::new(),
+            banner_dirty: true,
+            msg_lines: Vec::new(),
+            msg_cache_dirty: true,
             viewport_lines: Vec::new(),
             last_viewport: (0, 0),
-            cache_dirty: true,
         }
     }
 }
@@ -131,14 +136,14 @@ impl ChatView {
     fn invalidate_msg_cache(&mut self, idx: usize) {
         if idx < self.msg_cache.len() {
             self.msg_cache[idx] = None;
-            self.cache_dirty = true;
+            self.msg_cache_dirty = true;
         }
     }
 
     /// Add a new empty cache entry for a new message.
     fn push_new_msg_cache(&mut self) {
         self.msg_cache.push(None);
-        self.cache_dirty = true;
+        self.msg_cache_dirty = true;
     }
 
     /// Invalidate all message caches.
@@ -146,22 +151,25 @@ impl ChatView {
         for cache in &mut self.msg_cache {
             *cache = None;
         }
-        self.cache_dirty = true;
+        self.msg_lines.clear();
+        self.msg_cache_dirty = true;
     }
 
     /// Clear all caches and messages.
     fn clear_all_caches(&mut self) {
         self.msg_cache.clear();
-        self.cached_lines.clear();
+        self.msg_lines.clear();
         self.viewport_lines.clear();
+        self.banner_cache.clear();
         self.last_viewport = (0, 0);
-        self.cache_dirty = true;
+        self.msg_cache_dirty = true;
+        self.banner_dirty = true;
     }
 
     /// Set banner data to display at the top
     pub fn set_banner(&mut self, banner: crate::components::BannerData) {
         self.banner = Some(banner);
-        self.cache_dirty = true;
+        self.banner_dirty = true;
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -339,7 +347,7 @@ impl ChatView {
         self.user_scrolled = false;
     }
 
-    pub const fn stop_streaming(&mut self) {
+    pub fn stop_streaming(&mut self) {
         self.is_streaming = false;
     }
 
@@ -349,7 +357,7 @@ impl ChatView {
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
         // Streaming content affects rendered output
-        self.cache_dirty = true;
+        self.msg_cache_dirty = true;
     }
 
     /// Cancel streaming - flush partial content and mark running tools as cancelled
@@ -392,7 +400,7 @@ impl ChatView {
             self.scroll_offset = 0;
         }
         // Streaming content affects rendered output
-        self.cache_dirty = true;
+        self.msg_cache_dirty = true;
     }
 
     pub fn append_streaming_thinking(&mut self, text: &str) {
@@ -402,7 +410,7 @@ impl ChatView {
             self.scroll_offset = 0;
         }
         // Streaming content affects rendered output
-        self.cache_dirty = true;
+        self.msg_cache_dirty = true;
     }
 
     pub fn tick(&mut self) {
@@ -410,14 +418,13 @@ impl ChatView {
             self.tick_frame = self.tick_frame.wrapping_add(1);
         }
         // Update mascot blink animation
-        self.mascot_animator.tick();
-        // Mark cache dirty to re-render banner animation
-        self.cache_dirty = true;
+        if self.mascot_animator.tick() {
+            self.banner_dirty = true;
+        }
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        // Use cached_lines.len() for consistency with rendering
-        let total_lines = self.cached_lines.len();
+        let total_lines = self.all_lines_len();
         // Use last_visible_height to calculate reasonable max_scroll
         // Ensure we can always see at least 1 line when at top
         let visible = self.last_visible_height.saturating_sub(1).max(1);
@@ -459,9 +466,7 @@ impl ChatView {
     }
 
     pub fn scroll_to_top(&mut self) {
-        // Go to the very top by setting scroll_offset to max
-        // Use cached_lines.len() for consistency with rendering
-        self.scroll_offset = self.cached_lines.len();
+        self.scroll_offset = self.accurate_lines_len();
         // User manually scrolled, pause auto-scroll
         self.user_scrolled = true;
     }
@@ -482,7 +487,7 @@ impl ChatView {
     /// Get scroll progress for browse mode (`current_line`, `total_lines`)
     /// Returns the 1-based current visible start position and total lines
     pub fn get_scroll_progress(&self) -> (usize, usize) {
-        let total_lines = self.cached_lines.len();
+        let total_lines = self.all_lines_len();
         if total_lines == 0 {
             return (0, 0);
         }
@@ -916,15 +921,13 @@ impl ChatView {
         }
     }
 
-    /// Rebuild `cached_lines` from `msg_cache` and streaming content if dirty.
-    fn rebuild_cached_lines(&mut self) {
-        if !self.cache_dirty {
+    /// Rebuild banner cache (separate because mascot animates).
+    fn rebuild_banner_cache(&mut self) {
+        if !self.banner_dirty {
             return;
         }
+        self.banner_cache.clear();
 
-        self.cached_lines.clear();
-
-        // Render banner first (if set), it will scroll with content
         if let Some(ref banner) = self.banner {
             let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
             let info_lines = banner.info_lines();
@@ -935,15 +938,23 @@ impl ChatView {
                 let info_part = info_lines.get(i).map_or("", |s| s.as_str());
                 let mascot_padded = format!("{mascot_part:width$}", width = Self::MASCOT_COL_WIDTH);
 
-                self.cached_lines.push(Arc::new(Line::from(vec![
+                self.banner_cache.push(Arc::new(Line::from(vec![
                     Span::styled(mascot_padded, colors::accent_system()),
                     Span::styled(info_part.to_string(), colors::text_secondary()),
                 ])));
             }
-            self.cached_lines.push(Arc::new(Line::from("")));
+            self.banner_cache.push(Arc::new(Line::from("")));
         }
+        self.banner_dirty = false;
+    }
 
-        // Render history with unified spacing
+    /// Rebuild `msg_lines` from `msg_cache` if dirty.
+    fn rebuild_msg_cache(&mut self) {
+        if !self.msg_cache_dirty {
+            return;
+        }
+        self.msg_lines.clear();
+
         for (i, msg) in self.messages.iter().enumerate() {
             let msg_lines = match &self.msg_cache[i] {
                 Some(lines) => lines,
@@ -953,35 +964,58 @@ impl ChatView {
                     self.msg_cache[i].as_ref().unwrap()
                 }
             };
-            self.cached_lines.extend(msg_lines.iter().cloned());
+            self.msg_lines.extend(msg_lines.iter().cloned());
             if i < self.messages.len() - 1 {
-                self.cached_lines.push(Arc::new(Line::from("")));
+                self.msg_lines.push(Arc::new(Line::from("")));
             }
         }
 
-        // Render streaming content (if any)
+        self.msg_cache_dirty = false;
+    }
+
+    /// Get total line count (uses cached values, may be stale if dirty).
+    /// Note: This is called from scroll functions. For accurate count, ensure caches are rebuilt first.
+    fn all_lines_len(&self) -> usize {
+        let banner_len = self.banner_cache.len();
+        let msg_len = self.msg_lines.len();
+        // Note: streaming is not included in cached count since it changes frequently
+        banner_len + msg_len
+    }
+
+    /// Get accurate total line count (includes streaming, rebuilds caches if needed).
+    fn accurate_lines_len(&mut self) -> usize {
+        self.all_lines().len()
+    }
+
+    /// Get all lines (banner + messages + streaming) for viewport calculation.
+    fn all_lines(&mut self) -> Vec<Arc<Line<'static>>> {
+        self.rebuild_banner_cache();
+        self.rebuild_msg_cache();
+
+        let mut result = self.banner_cache.clone();
+        result.extend(self.msg_lines.iter().cloned());
+
+        // Add streaming content if any
         let has_streaming = self.is_streaming
             || !self.streaming_content.is_empty()
             || !self.streaming_thinking.is_empty();
         if !self.messages.is_empty() && has_streaming {
-            self.cached_lines.push(Arc::new(Line::from("")));
+            result.push(Arc::new(Line::from("")));
         }
         if has_streaming {
-            let streaming_lines = self.render_streaming();
-            self.cached_lines.extend(streaming_lines);
+            result.extend(self.render_streaming());
         }
 
-        self.cache_dirty = false;
-        self.last_viewport = (0, 0);
+        result
     }
 
     /// Get visible lines for the current viewport, rebuilding cache if needed.
     fn get_lines(&mut self, visible_height: usize, width: usize) -> Vec<Line<'static>> {
         self.sync_msg_cache();
-        self.rebuild_cached_lines();
+        let all_lines = self.all_lines();
 
-        let (start_line, end_line) = self.calculate_viewport(visible_height, width);
-        self.update_viewport_cache(start_line, end_line);
+        let (start_line, end_line) = self.calculate_viewport(&all_lines, visible_height, width);
+        self.update_viewport_cache(&all_lines, start_line, end_line);
 
         // Pad with empty lines to fill the entire area
         let mut result = self.viewport_lines.clone();
@@ -992,8 +1026,16 @@ impl ChatView {
     }
 
     /// Calculate viewport range (`start_line`, `end_line`) based on scroll state.
-    fn calculate_viewport(&self, visible_height: usize, width: usize) -> (usize, usize) {
-        let all_lines = &self.cached_lines;
+    fn calculate_viewport(
+        &self,
+        all_lines: &[Arc<Line<'static>>],
+        visible_height: usize,
+        width: usize,
+    ) -> (usize, usize) {
+        let total_lines = all_lines.len();
+        if total_lines == 0 {
+            return (0, 0);
+        }
 
         let start_line = if self.scroll_offset == 0 {
             // At bottom: work backwards to find which lines fit
@@ -1014,13 +1056,13 @@ impl ChatView {
                 }
                 wrapped_lines += wrapped_height;
                 if i == 0 {
+                    start = 0;
                     break;
                 }
             }
             start
         } else {
             // Manual scroll: use simple line-based calculation
-            let total_lines = all_lines.len();
             if total_lines > visible_height + self.scroll_offset {
                 total_lines - visible_height - self.scroll_offset
             } else {
@@ -1028,18 +1070,32 @@ impl ChatView {
             }
         };
 
-        let end_line = (start_line + visible_height).min(all_lines.len());
+        // When at bottom, show all lines from start to end
+        // When scrolling, limit to visible_height
+        let end_line = if self.scroll_offset == 0 {
+            total_lines
+        } else {
+            (start_line + visible_height).min(total_lines)
+        };
         (start_line, end_line)
     }
 
-    /// Update viewport cache only when viewport range changes.
-    fn update_viewport_cache(&mut self, start_line: usize, end_line: usize) {
-        if self.last_viewport == (start_line, end_line) {
-            return;
-        }
-
+    /// Update viewport cache when viewport range or content changes.
+    ///
+    /// NOTE: This always clones the visible lines rather than using a dirty check,
+    /// because content can change without the viewport range changing (e.g., streaming
+    /// text updates). The performance cost is negligible for typical terminal sizes
+    /// (~30-50 lines). If profiling shows this is a bottleneck, consider adding a
+    /// `viewport_dirty` flag to track content changes and skip unnecessary clones.
+    fn update_viewport_cache(
+        &mut self,
+        all_lines: &[Arc<Line<'static>>],
+        start_line: usize,
+        end_line: usize,
+    ) {
+        // Always update because content may have changed even if range is same
         self.viewport_lines.clear();
-        for arc_line in &self.cached_lines[start_line..end_line] {
+        for arc_line in &all_lines[start_line..end_line] {
             self.viewport_lines.push((**arc_line).clone());
         }
         self.last_viewport = (start_line, end_line);
