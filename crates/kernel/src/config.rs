@@ -277,10 +277,7 @@ impl Config {
             self.plugin_dirs = dirs.split(':').map(expand_tilde).collect();
         }
 
-        // Load claude plugins (true/false, default true)
-        if let Some(val) = env_var(env_names::LOAD_CLAUDE_PLUGINS) {
-            self.load_claude_plugins = val != "false" && val != "0";
-        }
+        self.load_claude_plugins = env_bool(env_names::LOAD_CLAUDE_PLUGINS);
 
         // Auto-approve level (safe | caution | dangerous)
         if let Some(level) = env_var(env_names::AUTO_APPROVE) {
