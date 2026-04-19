@@ -155,7 +155,10 @@ impl InfoBar {
         }
 
         let token_style = Style::default().fg(colors::text_secondary());
-        let token_text = format!("{} tokens", tokens::format_token_count_f64(self.token_count));
+        let token_text = format!(
+            "{} tokens",
+            tokens::format_token_count_f64(self.token_count)
+        );
         spans.push(Span::styled(token_text, token_style));
 
         // Elapsed time (when active)

@@ -25,7 +25,11 @@ pub const TIPS: &[&str] = &[
     "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
     "Type /new to start a new session",
     "Type /yolo to toggle YOLO mode",
-    const_concat!("Use env var ", env_names::CONTEXT_WINDOW, " to set llm context window"),
+    const_concat!(
+        "Use env var ",
+        env_names::CONTEXT_WINDOW,
+        " to set llm context window"
+    ),
 ];
 
 /// Message notification level for status bar

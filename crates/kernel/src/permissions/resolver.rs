@@ -25,6 +25,11 @@ impl ToolLevelResolver {
             "git push",
             "git reset",
             "git clean",
+            "git checkout ",
+            "git merge ",
+            "git rebase ",
+            "git revert ",
+            "git cherry-pick ",
             // 删除操作
             "rm ",
         ];
