@@ -429,7 +429,7 @@ impl StreamingMarkdownRenderer {
                 MdEvent::Rule => {
                     // Horizontal divider line using box-drawing character
                     self.lines.push(Line::from(Span::styled(
-                        "─".repeat(60),
+                        "─".repeat(40),
                         Style::default().fg(colors::divider()),
                     )));
                 }
