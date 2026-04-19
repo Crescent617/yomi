@@ -16,7 +16,17 @@ use tuirealm::{
 };
 
 use crate::{msg::Msg, theme::colors, utils::strs};
-use kernel::permissions::Level;
+use kernel::{const_concat, env_names, permissions::Level};
+
+/// Tips shown on startup
+pub const TIPS: &[&str] = &[
+    "Press Ctrl+O to enter browse mode",
+    "Press Ctrl+C twice to exit",
+    "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
+    "Type /new to start a new session",
+    "Type /yolo to toggle YOLO mode",
+    const_concat!("Use ", env_names::CONTEXT_WINDOW, " tokens context window"),
+];
 
 /// Message notification level for status bar
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -79,17 +89,6 @@ impl StatusMessage {
         AttrValue::Payload(PropPayload::Any(Box::new(self.clone())))
     }
 }
-
-/// Tips shown on startup
-pub const TIPS: &[&str] = &[
-    "Press Ctrl+O to enter browse mode",
-    "Press Ctrl+Y to toggle YOLO mode",
-    "Type /browse to toggle browse mode",
-    "Press Ctrl+C twice to exit",
-    "Press Ctrl+E to expand/collapse all",
-    "Press Ctrl+P/Ctrl+N for history",
-    "Type /new to start a new session",
-];
 
 /// Get a random tip
 pub fn get_random_tip() -> &'static str {

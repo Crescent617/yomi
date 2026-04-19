@@ -30,6 +30,49 @@ pub fn truncate_with_suffix(s: &str, max_bytes: usize, suffix: &str) -> String {
     format!("{}{}", &s[..byte_idx], suffix)
 }
 
+#[macro_export]
+macro_rules! const_concat {
+    ($a:expr $(,)?) => {
+        $a
+    };
+
+    ($($args:expr),+ $(,)?) => {{
+        // 1️⃣ 编译期计算总长度
+        const LEN: usize = 0 $(+ $args.len())+;
+
+        // 2️⃣ 构造 buffer
+        const BYTES: [u8; LEN] = {
+            let mut out = [0u8; LEN];
+            let mut offset = 0;
+
+            $(
+                {
+                    let (new_out, new_offset) = $crate::utils::strs::push_str(out, offset, $args);
+                    out = new_out;
+                    offset = new_offset;
+                }
+            )+
+
+            out
+        };
+        unsafe { std::str::from_utf8_unchecked(&BYTES) }
+    }};
+}
+
+pub const fn push_str<const N: usize>(mut out: [u8; N], offset: usize, s: &str) -> ([u8; N], usize) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut off = offset;
+
+    while i < bytes.len() {
+        out[off] = bytes[i];
+        off += 1;
+        i += 1;
+    }
+
+    (out, off)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

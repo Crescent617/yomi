@@ -1495,11 +1495,6 @@ impl InputComponent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
-            // Toggle YOLO mode with Ctrl+Y
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('y'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => Some(Msg::ToggleYoloMode),
             _ => None,
         }
     }
