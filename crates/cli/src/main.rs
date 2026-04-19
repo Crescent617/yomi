@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
         &vec![
             ".agents/skills".into(),
             "~/.yomi/skills".into(),
-            "~/.config/agents/skills".into(),
+            "~/.agents/skills".into(),
             "~/.claude/skills".into(),
         ]
     } else {
