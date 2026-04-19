@@ -2,6 +2,8 @@
 //!
 //! Displays chat history + streaming message in a single scrollable view.
 
+use std::sync::Arc;
+
 use tuirealm::{
     command::{Cmd, CmdResult},
     props::{AttrValue, Attribute, Props},
@@ -84,10 +86,13 @@ pub struct ChatView {
     mascot_animator: MascotAnimator,
     // Track visible height for scroll calculations
     last_visible_height: usize,
-    // Message-level cache: None means dirty (needs re-render), Some means cached
-    msg_cache: Vec<Option<Vec<Line<'static>>>>,
+    // Message-level cache: None means dirty (needs re-render), Some means cached (Arc for sharing)
+    msg_cache: Vec<Option<Vec<Arc<Line<'static>>>>>,
     // Full cached lines for scroll calculations (includes banner + messages + streaming)
-    cached_lines: Vec<Line<'static>>,
+    cached_lines: Vec<Arc<Line<'static>>>,
+    // Viewport cache: only the currently visible lines (cloned from Arc)
+    viewport_lines: Vec<Line<'static>>,
+    last_viewport: (usize, usize), // (start_line, end_line)
     cache_dirty: bool,
 }
 
@@ -110,6 +115,8 @@ impl Default for ChatView {
             last_visible_height: 0,
             msg_cache: Vec::new(),
             cached_lines: Vec::new(),
+            viewport_lines: Vec::new(),
+            last_viewport: (0, 0),
             cache_dirty: true,
         }
     }
@@ -146,6 +153,8 @@ impl ChatView {
     fn clear_all_caches(&mut self) {
         self.msg_cache.clear();
         self.cached_lines.clear();
+        self.viewport_lines.clear();
+        self.last_viewport = (0, 0);
         self.cache_dirty = true;
     }
 
@@ -564,7 +573,7 @@ impl ChatView {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    fn render_message(msg: &HistoryMessage) -> Vec<Line<'static>> {
+    fn render_message(msg: &HistoryMessage) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         match msg {
@@ -572,7 +581,7 @@ impl ChatView {
                 let user_bg = colors::user_msg_bg();
                 for (i, line) in content.lines().enumerate() {
                     let prefix = if i == 0 { "❯ " } else { "│ " };
-                    lines.push(Line::from(vec![
+                    lines.push(Arc::new(Line::from(vec![
                         Span::styled(
                             prefix,
                             Style::default()
@@ -584,7 +593,7 @@ impl ChatView {
                             preprocess(line),
                             Style::default().fg(colors::text_primary()).bg(user_bg),
                         ),
-                    ]));
+                    ])));
                 }
             }
             HistoryMessage::Assistant {
@@ -605,7 +614,7 @@ impl ChatView {
 
                 // Add separator between thinking and content if both exist
                 if thinking_rendered && !content.is_empty() {
-                    lines.push(Line::from(""));
+                    lines.push(Arc::new(Line::from("")));
                 }
 
                 // Render content with markdown (no indicator)
@@ -616,7 +625,7 @@ impl ChatView {
                     let md_lines = md_renderer.lines();
 
                     for line in md_lines {
-                        lines.push(line.clone());
+                        lines.push(Arc::new(line.clone()));
                     }
                 }
             }
@@ -686,7 +695,7 @@ impl ChatView {
                         Style::default().fg(colors::text_primary()),
                     ));
                 }
-                lines.push(Line::from(header_spans));
+                lines.push(Arc::new(Line::from(header_spans)));
 
                 // Output peek in folded mode (max 50 chars, indented)
                 if *folded {
@@ -694,23 +703,23 @@ impl ChatView {
                     if *status == ToolStatus::Running {
                         if let Some(ref prog) = progress {
                             let prog_text = prog.clone();
-                            lines.push(Line::from(vec![
+                            lines.push(Arc::new(Line::from(vec![
                                 Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
                                     prog_text,
                                     Style::default().fg(colors::text_secondary()),
                                 ),
-                            ]));
+                            ])));
                         }
                     }
 
                     // Show tokens if available
                     if let Some(total) = tokens {
                         let token_text = format!(" ⎿ {} tokens", tokens::format_tokens(*total));
-                        lines.push(Line::from(vec![Span::styled(
+                        lines.push(Arc::new(Line::from(vec![Span::styled(
                             token_text,
                             Style::default().fg(colors::text_secondary()),
-                        )]));
+                        )])));
                     }
 
                     let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
@@ -723,10 +732,10 @@ impl ChatView {
                         }
                     });
                     if let Some(peek) = peek_output {
-                        lines.push(Line::from(vec![
+                        lines.push(Arc::new(Line::from(vec![
                             Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(peek, Style::default().fg(colors::text_secondary())),
-                        ]));
+                        ])));
                     }
                 }
 
@@ -734,7 +743,7 @@ impl ChatView {
                     // Show tool arguments if available
                     if let Some(args) = arguments {
                         if !args.is_empty() {
-                            lines.push(Line::from(vec![
+                            lines.push(Arc::new(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
                                     "Arguments:",
@@ -742,9 +751,9 @@ impl ChatView {
                                         .fg(colors::text_secondary())
                                         .add_modifier(Modifier::BOLD),
                                 ),
-                            ]));
+                            ])));
                             for line in args.lines() {
-                                lines.push(Line::from(vec![
+                                lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
                                         "│   ",
                                         Style::default().fg(colors::text_secondary()),
@@ -753,23 +762,23 @@ impl ChatView {
                                         preprocess(line),
                                         Style::default().fg(colors::text_secondary()),
                                     ),
-                                ]));
+                                ])));
                             }
                         }
                     }
 
                     if let Some(err) = error {
                         for line in err.lines() {
-                            lines.push(Line::from(vec![
+                            lines.push(Arc::new(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_error())),
                                 Span::styled(
                                     preprocess(line),
                                     Style::default().fg(colors::accent_error()),
                                 ),
-                            ]));
+                            ])));
                         }
                     } else if let Some(out) = output {
-                        lines.push(Line::from(vec![
+                        lines.push(Arc::new(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
                                 "Output:",
@@ -777,21 +786,21 @@ impl ChatView {
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::BOLD),
                             ),
-                        ]));
+                        ])));
                         for line in out.lines() {
-                            lines.push(Line::from(vec![
+                            lines.push(Arc::new(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(colors::accent_system())),
                                 Span::styled(
                                     preprocess(line),
                                     Style::default().fg(colors::text_primary()),
                                 ),
-                            ]));
+                            ])));
                         }
                     } else if *status == ToolStatus::Running {
                         let running_text = progress
                             .as_ref()
                             .map_or_else(|| "Running...".to_string(), |p| format!("Running: {p}"));
-                        lines.push(Line::from(vec![
+                        lines.push(Arc::new(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
                                 running_text,
@@ -799,9 +808,9 @@ impl ChatView {
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
                             ),
-                        ]));
+                        ])));
                     } else if *status == ToolStatus::Cancelled {
-                        lines.push(Line::from(vec![
+                        lines.push(Arc::new(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
                                 "Cancelled",
@@ -809,17 +818,17 @@ impl ChatView {
                                     .fg(colors::text_secondary())
                                     .add_modifier(Modifier::ITALIC),
                             ),
-                        ]));
+                        ])));
                     }
                 }
             }
             HistoryMessage::Error(error) => {
                 // Render error message with red color
                 for line in error.lines() {
-                    lines.push(Line::from(vec![Span::styled(
+                    lines.push(Arc::new(Line::from(vec![Span::styled(
                         preprocess(line),
                         Style::default().fg(colors::accent_error()),
-                    )]));
+                    )])));
                 }
             }
         }
@@ -827,7 +836,7 @@ impl ChatView {
         lines
     }
 
-    fn render_streaming(&mut self) -> Vec<Line<'static>> {
+    fn render_streaming(&mut self) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         // Render thinking if present (collapsed by default, expanded in expand_all mode)
@@ -836,17 +845,17 @@ impl ChatView {
         // Render content (no indicator, status shown in status bar)
         // Add separator between thinking and content
         if !self.streaming_thinking.is_empty() && !self.streaming_content.is_empty() {
-            lines.push(Line::from(""));
+            lines.push(Arc::new(Line::from("")));
         }
         let md_lines = self.md_renderer.lines();
 
         for line in md_lines {
-            lines.push(line.clone());
+            lines.push(Arc::new(line.clone()));
         }
 
         // Add empty line placeholder only if no thinking (thinking already adds one)
         if md_lines.is_empty() && self.streaming_thinking.is_empty() {
-            lines.push(Line::from(""));
+            lines.push(Arc::new(Line::from("")));
         }
 
         lines
@@ -857,7 +866,7 @@ impl ChatView {
     /// Returns true if thinking was rendered (i.e., thinking was non-empty)
     #[allow(clippy::cast_precision_loss)]
     fn render_thinking_lines(
-        lines: &mut Vec<Line<'static>>,
+        lines: &mut Vec<Arc<Line<'static>>>,
         thinking: &str,
         is_folded: bool,
         elapsed_ms: Option<u64>,
@@ -871,22 +880,22 @@ impl ChatView {
             .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
             .unwrap_or_default();
 
-        lines.push(Line::from(vec![Span::styled(
+        lines.push(Arc::new(Line::from(vec![Span::styled(
             format!(" Thinking ({tokens} tokens){elapsed_str}"),
             Style::default()
                 .fg(colors::text_secondary())
                 .add_modifier(Modifier::ITALIC),
-        )]));
+        )])));
 
         if !is_folded {
             for line in thinking.lines() {
-                lines.push(Line::from(vec![
+                lines.push(Arc::new(Line::from(vec![
                     Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                     Span::styled(
                         preprocess(line),
                         Style::default().fg(colors::text_secondary()),
                     ),
-                ]));
+                ])));
             }
         }
 
@@ -894,94 +903,98 @@ impl ChatView {
     }
 }
 
-impl MockComponent for ChatView {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        const MASCOT_COL_WIDTH: usize = 8;
-        let main_area = area;
+impl ChatView {
+    const MASCOT_COL_WIDTH: usize = 8;
 
-        // Save visible height for scroll calculations
-        let visible_height = main_area.height as usize;
-        self.last_visible_height = visible_height;
-
-        // Sync msg_cache length with messages
+    /// Sync `msg_cache` length with messages length.
+    fn sync_msg_cache(&mut self) {
         while self.msg_cache.len() < self.messages.len() {
             self.msg_cache.push(None);
         }
         if self.msg_cache.len() > self.messages.len() {
             self.msg_cache.truncate(self.messages.len());
         }
+    }
 
-        // Rebuild full cache if dirty
-        if self.cache_dirty {
-            self.cached_lines.clear();
-
-            // Render banner first (if set), it will scroll with content
-            if let Some(ref banner) = self.banner {
-                // Build banner lines with two-column layout (mascot left, info right)
-                let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
-                let info_lines = banner.info_lines();
-
-                // Column widths for alignment
-
-                let max_rows = mascot_lines.len().max(info_lines.len());
-                for i in 0..max_rows {
-                    let mascot_part = mascot_lines.get(i).unwrap_or(&"");
-                    let info_part = info_lines.get(i).map_or("", |s| s.as_str());
-
-                    // Pad mascot to fixed width for alignment
-                    let mascot_padded = format!("{mascot_part:MASCOT_COL_WIDTH$}");
-
-                    self.cached_lines.push(Line::from(vec![
-                        Span::styled(mascot_padded, colors::accent_system()),
-                        Span::styled(info_part.to_string(), colors::text_secondary()),
-                    ]));
-                }
-                self.cached_lines.push(Line::from(""));
-            }
-
-            // Render history with unified spacing, using msg_cache for individual messages
-            for (i, msg) in self.messages.iter().enumerate() {
-                // Use cached lines if available, otherwise render and cache
-                let msg_lines = match &self.msg_cache[i] {
-                    Some(lines) => lines,
-                    None => {
-                        let rendered = Self::render_message(msg);
-                        self.msg_cache[i] = Some(rendered);
-                        self.msg_cache[i].as_ref().unwrap()
-                    }
-                };
-                self.cached_lines.extend(msg_lines.iter().cloned());
-                // Add spacing between messages (but not after the last one)
-                if i < self.messages.len() - 1 {
-                    self.cached_lines.push(Line::from(""));
-                }
-            }
-
-            // Render streaming content (if any)
-            // Add spacing if there's history before streaming
-            if !self.messages.is_empty()
-                && (self.is_streaming
-                    || !self.streaming_content.is_empty()
-                    || !self.streaming_thinking.is_empty())
-            {
-                self.cached_lines.push(Line::from(""));
-            }
-            if self.is_streaming
-                || !self.streaming_content.is_empty()
-                || !self.streaming_thinking.is_empty()
-            {
-                let streaming_lines = self.render_streaming();
-                self.cached_lines.extend(streaming_lines);
-            }
-
-            self.cache_dirty = false;
+    /// Rebuild `cached_lines` from `msg_cache` and streaming content if dirty.
+    fn rebuild_cached_lines(&mut self) {
+        if !self.cache_dirty {
+            return;
         }
 
-        // Use cached lines for display
-        let all_lines = &self.cached_lines;
-        let width = main_area.width as usize;
+        self.cached_lines.clear();
 
-        // Calculate wrapped line counts and find start line
+        // Render banner first (if set), it will scroll with content
+        if let Some(ref banner) = self.banner {
+            let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
+            let info_lines = banner.info_lines();
+            let max_rows = mascot_lines.len().max(info_lines.len());
+
+            for i in 0..max_rows {
+                let mascot_part = mascot_lines.get(i).unwrap_or(&"");
+                let info_part = info_lines.get(i).map_or("", |s| s.as_str());
+                let mascot_padded = format!("{mascot_part:width$}", width = Self::MASCOT_COL_WIDTH);
+
+                self.cached_lines.push(Arc::new(Line::from(vec![
+                    Span::styled(mascot_padded, colors::accent_system()),
+                    Span::styled(info_part.to_string(), colors::text_secondary()),
+                ])));
+            }
+            self.cached_lines.push(Arc::new(Line::from("")));
+        }
+
+        // Render history with unified spacing
+        for (i, msg) in self.messages.iter().enumerate() {
+            let msg_lines = match &self.msg_cache[i] {
+                Some(lines) => lines,
+                None => {
+                    let rendered = Self::render_message(msg);
+                    self.msg_cache[i] = Some(rendered);
+                    self.msg_cache[i].as_ref().unwrap()
+                }
+            };
+            self.cached_lines.extend(msg_lines.iter().cloned());
+            if i < self.messages.len() - 1 {
+                self.cached_lines.push(Arc::new(Line::from("")));
+            }
+        }
+
+        // Render streaming content (if any)
+        let has_streaming = self.is_streaming
+            || !self.streaming_content.is_empty()
+            || !self.streaming_thinking.is_empty();
+        if !self.messages.is_empty() && has_streaming {
+            self.cached_lines.push(Arc::new(Line::from("")));
+        }
+        if has_streaming {
+            let streaming_lines = self.render_streaming();
+            self.cached_lines.extend(streaming_lines);
+        }
+
+        self.cache_dirty = false;
+        self.last_viewport = (0, 0);
+    }
+
+    /// Get visible lines for the current viewport, rebuilding cache if needed.
+    fn get_lines(&mut self, visible_height: usize, width: usize) -> Vec<Line<'static>> {
+        self.sync_msg_cache();
+        self.rebuild_cached_lines();
+
+        let (start_line, end_line) = self.calculate_viewport(visible_height, width);
+        self.update_viewport_cache(start_line, end_line);
+
+        // Pad with empty lines to fill the entire area
+        let mut result = self.viewport_lines.clone();
+        while result.len() < visible_height {
+            result.push(Line::from(""));
+        }
+        result
+    }
+
+    /// Calculate viewport range (`start_line`, `end_line`) based on scroll state.
+    fn calculate_viewport(&self, visible_height: usize, width: usize) -> (usize, usize) {
+        let all_lines = &self.cached_lines;
+
         let start_line = if self.scroll_offset == 0 {
             // At bottom: work backwards to find which lines fit
             let mut wrapped_lines = 0;
@@ -1016,17 +1029,33 @@ impl MockComponent for ChatView {
         };
 
         let end_line = (start_line + visible_height).min(all_lines.len());
-        let mut visible_lines: Vec<Line> = all_lines[start_line..end_line].to_vec();
+        (start_line, end_line)
+    }
 
-        // Pad with empty lines to fill the entire area and prevent residue
-        while visible_lines.len() < visible_height {
-            visible_lines.push(Line::from(""));
+    /// Update viewport cache only when viewport range changes.
+    fn update_viewport_cache(&mut self, start_line: usize, end_line: usize) {
+        if self.last_viewport == (start_line, end_line) {
+            return;
         }
 
-        let paragraph = Paragraph::new(Text::from(visible_lines))
+        self.viewport_lines.clear();
+        for arc_line in &self.cached_lines[start_line..end_line] {
+            self.viewport_lines.push((**arc_line).clone());
+        }
+        self.last_viewport = (start_line, end_line);
+    }
+}
+
+impl MockComponent for ChatView {
+    fn view(&mut self, frame: &mut Frame, area: Rect) {
+        let visible_height = area.height as usize;
+        self.last_visible_height = visible_height;
+
+        let lines = self.get_lines(visible_height, area.width as usize);
+        let paragraph = Paragraph::new(Text::from(lines))
             .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
 
-        frame.render_widget(paragraph, main_area);
+        frame.render_widget(paragraph, area);
     }
 
     fn query(&self, attr: Attribute) -> Option<AttrValue> {

@@ -594,8 +594,14 @@ mod tests {
             for span in &line.spans {
                 if span.content.contains("斜体代码") {
                     let style = &span.style;
-                    assert!(style.add_modifier.contains(Modifier::BOLD), "Should have bold");
-                    assert!(style.add_modifier.contains(Modifier::ITALIC), "Should have italic");
+                    assert!(
+                        style.add_modifier.contains(Modifier::BOLD),
+                        "Should have bold"
+                    );
+                    assert!(
+                        style.add_modifier.contains(Modifier::ITALIC),
+                        "Should have italic"
+                    );
                 }
             }
         }
@@ -621,8 +627,14 @@ mod tests {
             for span in &line.spans {
                 if span.content.contains("粗体加下划线") {
                     let style = &span.style;
-                    assert!(style.add_modifier.contains(Modifier::BOLD), "Should have bold");
-                    assert!(style.add_modifier.contains(Modifier::UNDERLINED), "Should have underline");
+                    assert!(
+                        style.add_modifier.contains(Modifier::BOLD),
+                        "Should have bold"
+                    );
+                    assert!(
+                        style.add_modifier.contains(Modifier::UNDERLINED),
+                        "Should have underline"
+                    );
                 }
             }
         }
