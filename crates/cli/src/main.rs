@@ -142,9 +142,10 @@ async fn main() -> Result<()> {
     // Default skill folders if no folders configured via env
     let skill_folders = if config.skill_folders.is_empty() {
         &vec![
+            ".agents/skills".into(),
             "~/.yomi/skills".into(),
+            "~/.config/agents/skills".into(),
             "~/.claude/skills".into(),
-            "~/.agents/skills".into(),
         ]
     } else {
         &config.skill_folders
