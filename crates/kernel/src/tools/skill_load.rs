@@ -28,7 +28,7 @@ impl Tool for SkillTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Load a skill file and return its content. Use this to load skill documentation on demand."
+        "Load a skill file and return its content."
     }
 
     fn params(&self) -> Value {

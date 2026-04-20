@@ -56,6 +56,8 @@ pub mod env_names {
     /// Thinking configuration
     pub const THINKING: &str = env_name!("THINKING");
     pub const THINKING_BUDGET: &str = env_name!("THINKING_BUDGET");
+    /// Reasoning effort for OpenAI o1/o3 models (low/medium/high)
+    pub const THINKING_EFFORT: &str = env_name!("THINKING_EFFORT");
 
     /// Logging configuration
     pub const LOG_DIR: &str = env_name!("LOG_DIR");
@@ -252,6 +254,9 @@ impl Config {
         // Boolean settings
         if let Some(enabled) = env_bool_opt(env_names::THINKING) {
             self.model.thinking.enabled = enabled;
+        }
+        if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
+            self.model.thinking.effort = Some(effort);
         }
         self.sandbox = env_bool(env_names::SANDBOX);
         self.yolo = env_bool(env_names::YOLO);

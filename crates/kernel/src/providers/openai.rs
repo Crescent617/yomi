@@ -188,6 +188,11 @@ impl Provider for OpenAIProvider {
             }),
             max_tokens: config.max_tokens,
             temperature: config.temperature,
+            reasoning_effort: if config.thinking.enabled {
+                Some(config.thinking.effort.clone().unwrap_or_else(|| "medium".to_string()))
+            } else {
+                None
+            },
             has_image,
         };
 
@@ -460,6 +465,9 @@ struct OpenAIRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Reasoning effort for o1/o3 models (low/medium/high)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
     /// Track if request contains images (for debug logging, not serialized)
     #[serde(skip)]
     has_image: bool,

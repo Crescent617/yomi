@@ -70,6 +70,8 @@ brew update && brew install crescent617/tap/yomi
 
 ### Configuration
 
+更多配置选项请参见 [config.md](docs/config.md)。
+
 ```bash
 # OpenAI
 export OPENAI_API_KEY=sk-...
