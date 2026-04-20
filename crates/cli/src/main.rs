@@ -58,6 +58,10 @@ impl ClaudeSettings {
 #[command(about = "AI coding assistant CLI")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 struct Args {
+    /// Initial prompt to send on startup (non-interactive mode if provided)
+    #[arg(value_name = "PROMPT")]
+    prompt: Option<String>,
+
     /// Working directory
     #[arg(short, long)]
     directory: Option<PathBuf>,
@@ -393,6 +397,7 @@ async fn main() -> Result<()> {
             input_history.clone(),
             session_messages,
             is_first_session,
+            args.prompt.clone(),
         )
         .await?;
 

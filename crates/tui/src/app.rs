@@ -57,6 +57,8 @@ pub struct AppState {
     pub is_streaming: bool,
     /// Flag to indicate if a new session should be created on exit
     pub should_create_new_session: bool,
+    /// Initial message to send on startup (from CLI prompt arg)
+    pub initial_message: Option<String>,
 }
 
 pub struct Model {
@@ -105,6 +107,7 @@ impl Model {
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
         permission_level: Level,
+        initial_message: Option<String>,
     ) -> Result<Self> {
         let terminal = TerminalBridge::init_crossterm()?;
         let app = Self::init_app()?;
@@ -116,6 +119,7 @@ impl Model {
                 should_redraw: true,
                 is_streaming: false,
                 should_create_new_session: false,
+                initial_message,
             },
             terminal,
             event_rx,
@@ -781,6 +785,12 @@ impl Model {
                 AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached {
                     count, ..
                 }) => {
+                    self.state.is_streaming = false;
+
+                    // Save partial content and clear state
+                    let _ = self.save_partial_content();
+                    self.clear_streaming_state();
+
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_error_message"),
@@ -866,6 +876,37 @@ impl Model {
     async fn run_loop(&mut self) -> Result<()> {
         // Enable mouse capture
         self.terminal.enable_mouse_capture()?;
+
+        // Send initial message if provided (from CLI prompt arg)
+        if let Some(initial_msg) = self.state.initial_message.take() {
+            let blocks = vec![ContentBlock::Text { text: initial_msg }];
+            // Send to coordinator
+            if let Err(e) = self.input_tx.try_send(blocks.clone()) {
+                tracing::error!("Failed to send initial message: {}", e);
+            }
+            // Display user message in chat
+            let text_content: Vec<String> = blocks
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.clone(),
+                    ContentBlock::Thinking { thinking, .. } => format!("[Thinking: {thinking}]"),
+                    ContentBlock::RedactedThinking { data } => format!("[Redacted: {data}]"),
+                    ContentBlock::ImageUrl { image_url } => format!("[Image: {}]", image_url.url),
+                    ContentBlock::Audio { audio } => format!("[Audio: {}]", audio.data),
+                })
+                .collect();
+            let _ = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom("add_user_message"),
+                AttrValue::String(text_content.join("\n")),
+            );
+            // Start streaming indicator
+            let _ = self.app.attr(
+                &Id::InfoBar,
+                Attribute::Custom("start_streaming"),
+                AttrValue::Flag(true),
+            );
+        }
 
         while !self.state.quit {
             // Process kernel events
@@ -1282,6 +1323,7 @@ pub async fn run_tui(
     session_messages: Vec<Message>,
     permission_level: Level,
     context_window: u32,
+    initial_message: Option<String>,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1292,6 +1334,7 @@ pub async fn run_tui(
         working_dir_path,
         session_messages,
         permission_level,
+        initial_message,
     )?;
     model.init_banner(working_dir, skills)?;
     model.init_status_bar()?;

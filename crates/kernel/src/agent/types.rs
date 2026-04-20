@@ -130,7 +130,7 @@ impl Default for AgentConfig {
         Self {
             model: ModelConfig::default(),
             storage: StorageConfig::default(),
-            max_iterations: 50,
+            max_iterations: 100,
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),

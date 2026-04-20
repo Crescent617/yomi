@@ -100,6 +100,7 @@ pub async fn run_session_loop(
     input_history: Vec<String>,
     session_messages: Vec<kernel::types::Message>,
     is_first_session: bool,
+    initial_message: Option<String>,
 ) -> Result<SessionResult> {
     // Print startup info
     if is_first_session {
@@ -184,6 +185,7 @@ pub async fn run_session_loop(
         session_messages,
         ctx.auto_approve,
         ctx.context_window,
+        initial_message,
     )
     .await?;
 
