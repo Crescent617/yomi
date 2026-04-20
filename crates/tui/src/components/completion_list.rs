@@ -8,6 +8,7 @@ pub struct CompletionList<T> {
     visible: bool,
     selected: usize,
     items: Vec<T>,
+    scroll_offset: usize, // Track window start position for sticky scrolling
 }
 
 impl<T> Default for CompletionList<T> {
@@ -23,6 +24,7 @@ impl<T> CompletionList<T> {
             visible: false,
             selected: 0,
             items: Vec::new(),
+            scroll_offset: 0,
         }
     }
 
@@ -36,6 +38,7 @@ impl<T> CompletionList<T> {
         self.items = items;
         self.visible = !self.items.is_empty();
         self.selected = 0;
+        self.scroll_offset = 0;
     }
 
     /// Hide the completion list and clear items
@@ -43,6 +46,7 @@ impl<T> CompletionList<T> {
         self.visible = false;
         self.items.clear();
         self.selected = 0;
+        self.scroll_offset = 0;
     }
 
     /// Move selection to the next item (wraps around)
@@ -62,6 +66,31 @@ impl<T> CompletionList<T> {
     /// Get the currently selected index
     pub fn selected_index(&self) -> usize {
         self.selected
+    }
+
+    /// Get the current scroll offset (window start position)
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Adjust scroll offset to ensure selected item is visible.
+    /// Uses "sticky window" behavior: only scrolls when selection hits boundary.
+    pub fn ensure_visible(&mut self, max_visible: usize) {
+        if self.items.len() <= max_visible {
+            self.scroll_offset = 0;
+            return;
+        }
+        // If selected is above current window, scroll up
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+        // If selected is below current window, scroll down
+        else if self.selected >= self.scroll_offset + max_visible {
+            self.scroll_offset = self.selected.saturating_sub(max_visible - 1);
+        }
+        // Clamp scroll_offset to valid range
+        let max_scroll = self.items.len().saturating_sub(max_visible);
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
     }
 
     /// Get the currently selected item
