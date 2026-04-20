@@ -53,6 +53,9 @@ macro_rules! const_concat {
                 }
             )+
 
+            // Silence unused_assignments warning for the final offset update
+            let _ = offset;
+
             out
         };
         unsafe { std::str::from_utf8_unchecked(&BYTES) }

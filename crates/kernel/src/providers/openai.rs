@@ -236,19 +236,17 @@ impl Provider for OpenAIProvider {
             |(mut eventsource, mut assembler, last_content_time)| async move {
                 loop {
                     let elapsed = last_content_time.elapsed();
-                    if elapsed >= IDLE_TIMEOUT {
+                    // Adjust timeout based on elapsed time since last content
+                    let Some(remaining) = IDLE_TIMEOUT.checked_sub(elapsed) else {
                         tracing::error!(
-                            "OpenAI SSE content stall: no content for {}s (server may be sending keepalives but no data)",
+                            "OpenAI SSE content stall: no content for {}s",
                             elapsed.as_secs()
                         );
                         return Err(ProviderError::Timeout(format!(
                             "Content stall: no meaningful data received for {} seconds",
                             elapsed.as_secs()
                         )));
-                    }
-
-                    // Adjust timeout based on elapsed time since last content
-                    let remaining = IDLE_TIMEOUT - elapsed;
+                    };
                     match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
