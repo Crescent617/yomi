@@ -44,6 +44,9 @@ pub struct ToolCallRequest {
 pub struct ThinkingConfig {
     pub enabled: bool,
     pub budget_tokens: u32,
+    /// Reasoning effort level for OpenAI o1/o3 models (low/medium/high)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl Default for ThinkingConfig {
@@ -51,6 +54,7 @@ impl Default for ThinkingConfig {
         Self {
             enabled: true,
             budget_tokens: 1024,
+            effort: None,
         }
     }
 }

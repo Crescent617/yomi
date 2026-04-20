@@ -791,6 +791,12 @@ impl Model {
                         Attribute::Custom("scroll_to_bottom"),
                         AttrValue::Flag(true),
                     )?;
+                    // Stop the infobar spinner
+                    self.app.attr(
+                        &Id::InfoBar,
+                        Attribute::Custom("stop_streaming"),
+                        AttrValue::Flag(true),
+                    )?;
                     self.state.should_redraw = true;
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise

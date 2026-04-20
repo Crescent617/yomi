@@ -24,6 +24,13 @@ use crate::{
     utils::{strs, text::preprocess},
 };
 use kernel::utils::tokens;
+use kernel::tools::{
+    BASH_TOOL_NAME, EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME,
+    SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WRITE_TOOL_NAME,
+};
+use kernel::task::{
+    TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
+};
 
 use super::banner::MascotAnimator;
 
@@ -1441,14 +1448,18 @@ fn to_camel_case(s: &str) -> String {
 
 fn toolname_to_icon(tool_name: &str) -> &'static str {
     match tool_name.to_lowercase().as_str() {
-        "subagent" => "󰚩 ",
-        "read" => " ",
-        "write" | "edit" => " ",
-        "bash" => " ",
-        "glob" => "󰱼 ",
-        "grep" => " ",
-        // start with "task" -> task icon
-        name if name.starts_with("task") => " ",
+        n if n == SUBAGENT_TOOL_NAME => "󰚩 ",
+        n if n == READ_TOOL_NAME => " ",
+        n if n == WRITE_TOOL_NAME || n == EDIT_TOOL_NAME => " ",
+        n if n == BASH_TOOL_NAME => " ",
+        n if n == GLOB_TOOL_NAME => "󰱼 ",
+        n if n == GREP_TOOL_NAME => " ",
+        n if n == SKILL_TOOL_NAME => "⚡",
+        // Task tools
+        n if n == TASK_CREATE_TOOL_NAME
+            || n == TASK_GET_TOOL_NAME
+            || n == TASK_LIST_TOOL_NAME
+            || n == TASK_UPDATE_TOOL_NAME => " ",
         _ => " ",
     }
 }
@@ -1490,7 +1501,7 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
             }
         }
         "glob" | "grep" => value["pattern"].as_str().map(String::from),
-        "subagent" => value["prompt"]
+        n if n == SUBAGENT_TOOL_NAME => value["prompt"]
             .as_str()
             .map(|p| truncate_unicode(p, MAX_LEN)),
         _ => None,

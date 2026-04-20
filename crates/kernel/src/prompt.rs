@@ -44,6 +44,8 @@ pub struct SystemPromptBuilder<'a> {
     skills: &'a [Arc<Skill>],
 }
 
+const SKILL_SECTION_HEADER: &str = "\n\n# Skills\nIMPORTANT: before replying, you must scan available skills and load skill when task hits its description.\n\n";
+
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {
         Self::default()
@@ -71,19 +73,17 @@ impl<'a> SystemPromptBuilder<'a> {
             base.to_string()
         } else {
             let mut prompt = base.to_string();
-            prompt.push_str("\n\n## Available Skills\n\nLoad the following skills on demand\n");
+            prompt.push_str(SKILL_SECTION_HEADER);
+            prompt.push_str("## Available Skills\n");
             for skill in self.skills {
-                let location = skill.source_path.to_string_lossy();
                 let _ = write!(
                     prompt,
-                    r#"<skill name="{}" location="{}">"#,
-                    skill.name, location
+                    "name: {}\ndescription: {}\npath: {}\n\n",
+                    skill.name,
+                    skill.description,
+                    skill.source_path.display()
                 );
-                // Use CDATA to safely embed skill content
-                prompt.push_str(&skill.description);
-                prompt.push_str("</skill>\n");
             }
-            let _ = prompt.pop(); // Remove last newline
             prompt
         }
     }

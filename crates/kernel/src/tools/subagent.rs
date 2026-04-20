@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
 
-pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+pub const SUBAGENT_TOOL_NAME: &str = "agent";
 
 /// Tool for spawning sub-agents to handle specific tasks
 pub struct SubagentTool {
