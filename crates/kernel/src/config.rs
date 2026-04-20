@@ -56,7 +56,7 @@ pub mod env_names {
     /// Thinking configuration
     pub const THINKING: &str = env_name!("THINKING");
     pub const THINKING_BUDGET: &str = env_name!("THINKING_BUDGET");
-    /// Reasoning effort for OpenAI o1/o3 models (low/medium/high)
+    /// Reasoning effort for `OpenAI` o1/o3 models (low/medium/high)
     pub const THINKING_EFFORT: &str = env_name!("THINKING_EFFORT");
 
     /// Logging configuration
