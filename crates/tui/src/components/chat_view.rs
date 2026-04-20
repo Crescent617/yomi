@@ -675,7 +675,7 @@ impl ChatView {
                         if compact.is_empty() {
                             None
                         } else {
-                            let peek = strs::truncate_with_suffix(compact, 80, "...");
+                            let peek = strs::truncate_with_suffix(compact, 150, "...");
                             Some(peek)
                         }
                     })
