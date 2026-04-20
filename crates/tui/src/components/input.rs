@@ -948,7 +948,15 @@ impl MockComponent for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         // Render completion dropdown above input if visible
         if self.command_completion.is_visible() && !self.command_completion.items().is_empty() {
-            let completion_height = self.command_completion.len().min(4) as u16;
+            const MAX_VISIBLE_ITEMS: usize = 6;
+            let total_items = self.command_completion.len();
+
+            // Ensure selected item is visible (sticky window behavior)
+            self.command_completion.ensure_visible(MAX_VISIBLE_ITEMS);
+            let scroll_offset = self.command_completion.scroll_offset();
+
+            let visible_count = total_items.min(MAX_VISIBLE_ITEMS);
+            let completion_height = visible_count as u16;
             let completion_area = Rect {
                 x: area.x,
                 y: area.y.saturating_sub(completion_height),
@@ -959,12 +967,14 @@ impl MockComponent for InputComponent {
             // Clear the area first
             frame.render_widget(tuirealm::ratatui::widgets::Clear, completion_area);
 
-            // Render completion items with command and description
+            // Render completion items with command and description (with scrolling)
             let items: Vec<tuirealm::ratatui::text::Line> = self
                 .command_completion
                 .items()
                 .iter()
                 .enumerate()
+                .skip(scroll_offset)
+                .take(MAX_VISIBLE_ITEMS)
                 .map(|(i, (cmd, desc))| {
                     let is_selected = i == self.command_completion.selected_index();
                     let cmd_style = if is_selected {
