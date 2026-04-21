@@ -425,17 +425,11 @@ impl InputComponent {
     }
 
     /// Try to read image from clipboard and save to temp file
-    /// Supports both arboard (X11) and wl-clipboard (Wayland)
     fn try_paste_image(&mut self) -> Option<String> {
-        // Try arboard first (works on X11 and some Wayland setups)
-        if let Some(result) = self.try_paste_image_arboard() {
-            return Some(result);
-        }
-        // Fallback to wl-clipboard for Wayland
-        self.try_paste_image_wlclipboard()
+        self.try_paste_image_arboard()
     }
 
-    /// Try to get image using arboard (X11)
+    /// Try to get image from clipboard
     fn try_paste_image_arboard(&mut self) -> Option<String> {
         use arboard::Clipboard;
 
@@ -464,50 +458,6 @@ impl InputComponent {
         );
 
         self.save_image_to_temp(image.width, image.height, &image.bytes)
-    }
-
-    /// Try to get image using wl-clipboard (Wayland)
-    fn try_paste_image_wlclipboard(&mut self) -> Option<String> {
-        // Check if wl-paste is available
-        let wl_paste_check = std::process::Command::new("which").arg("wl-paste").output();
-
-        if wl_paste_check.is_err() || !wl_paste_check.unwrap().status.success() {
-            tracing::debug!("wl-paste not found, skipping Wayland clipboard");
-            return None;
-        }
-
-        // Try to get image from Wayland clipboard
-        let output = match std::process::Command::new("wl-paste")
-            .args(["--type", "image/png"])
-            .output()
-        {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => out.stdout,
-            Ok(out) => {
-                tracing::debug!("wl-paste returned no image data: {:?}", out.stderr);
-                return None;
-            }
-            Err(e) => {
-                tracing::debug!("Failed to run wl-paste: {}", e);
-                return None;
-            }
-        };
-
-        tracing::debug!("Got {} bytes from wl-paste", output.len());
-
-        // Load PNG and convert to RGBA
-        let img = match image::load_from_memory_with_format(&output, image::ImageFormat::Png) {
-            Ok(img) => img.to_rgba8(),
-            Err(e) => {
-                tracing::warn!("Failed to decode PNG from wl-paste: {}", e);
-                return None;
-            }
-        };
-
-        let width = img.width() as usize;
-        let height = img.height() as usize;
-        let bytes = img.into_raw();
-
-        self.save_image_to_temp(width, height, &bytes)
     }
 
     /// Save image bytes to temp file and return placeholder
@@ -575,7 +525,12 @@ impl InputComponent {
                     tracing::debug!("Block {}: Text ({} chars)", i, text.len());
                 }
                 kernel::types::ContentBlock::ImageUrl { image_url } => {
-                    tracing::info!("Block {}: ImageUrl {}", i, image_url.url);
+                    let preview = if image_url.url.len() > 60 {
+                        format!("{}...({} chars)", &image_url.url[..50], image_url.url.len())
+                    } else {
+                        image_url.url.clone()
+                    };
+                    tracing::info!("Block {}: ImageUrl {}", i, preview);
                 }
                 _ => {
                     tracing::debug!("Block {}: Other", i);

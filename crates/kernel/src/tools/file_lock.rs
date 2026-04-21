@@ -26,7 +26,10 @@ impl std::fmt::Display for FileLockError {
             FileLockError::OpenError(e) => write!(f, "Failed to open file: {e}"),
             FileLockError::LockError(e) => write!(f, "Failed to acquire file lock: {e}"),
             FileLockError::Timeout => {
-                write!(f, "Timeout waiting for file lock (another process may be holding it)")
+                write!(
+                    f,
+                    "Timeout waiting for file lock (another process may be holding it)"
+                )
             }
         }
     }

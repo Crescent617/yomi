@@ -70,4 +70,3 @@ image = { version = "0.25", default-features = false }
 regex = "1"
 lru = "0.17"
 html2md = "0.2"
-textwrap = "0.16"

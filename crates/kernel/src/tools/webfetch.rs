@@ -331,7 +331,9 @@ mod tests {
             content: "test".to_string(),
             content_type: "text/plain".to_string(),
             bytes: 4,
-            fetched_at: Instant::now().checked_sub(CACHE_TTL + Duration::from_secs(1)).unwrap(),
+            fetched_at: Instant::now()
+                .checked_sub(CACHE_TTL + Duration::from_secs(1))
+                .unwrap(),
         };
         assert!(entry.is_expired());
 

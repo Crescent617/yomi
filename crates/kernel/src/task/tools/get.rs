@@ -55,6 +55,9 @@ impl Tool for TaskGetTool {
 
         let output = GetTaskOutput { task };
 
-        Ok(ToolOutput::text_with_summary(serde_json::to_string(&output)?, ""))
+        Ok(ToolOutput::text_with_summary(
+            serde_json::to_string(&output)?,
+            "",
+        ))
     }
 }

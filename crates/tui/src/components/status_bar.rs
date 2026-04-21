@@ -23,6 +23,7 @@ pub const TIPS: &[&str] = &[
     "Press Ctrl+O to enter browse mode",
     "Press Ctrl+C twice to exit",
     "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
+    "Use Ctrl+V to paste image in clipboard",
     "Type /new to start a new session",
     "Type /yolo to toggle YOLO mode",
     const_concat!(
