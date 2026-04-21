@@ -52,6 +52,10 @@ pub struct ThemeConfig {
     pub border_active: Color,
     /// Divider lines
     pub divider: Color,
+
+    // Selection
+    /// Selected text background
+    pub selected_bg: Color,
 }
 
 impl Default for ThemeConfig {
@@ -77,7 +81,7 @@ impl Default for ThemeConfig {
             accent_error: hex("#FF6464"),
 
             // Code colors
-            code_bg: hex("#23232D"),
+            code_bg: Color::Reset,
             code_fg: hex("#8CDCF0"),
             code_border: hex("#707080"),
 
@@ -85,6 +89,9 @@ impl Default for ThemeConfig {
             border: hex("#707080"),
             border_active: hex("#A0A0AF"),
             divider: hex("#707080"),
+
+            // Selection - subtle blue-gray background
+            selected_bg: hex("#3A4A5A"),
         }
     }
 }
@@ -181,6 +188,10 @@ pub mod colors {
     }
     pub fn divider() -> Color {
         current_theme().divider
+    }
+
+    pub fn selected_bg() -> Color {
+        current_theme().selected_bg
     }
 }
 

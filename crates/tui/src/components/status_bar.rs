@@ -40,6 +40,7 @@ pub enum MessageLevel {
     Info,
     Warn,
     Error,
+    Success,
 }
 
 impl MessageLevel {
@@ -50,6 +51,7 @@ impl MessageLevel {
             MessageLevel::Info => colors::accent_system(),
             MessageLevel::Warn => colors::accent_warning(),
             MessageLevel::Error => colors::accent_error(),
+            MessageLevel::Success => colors::accent_success(),
         }
     }
 }
@@ -86,6 +88,10 @@ impl StatusMessage {
 
     pub fn tip(content: impl Into<String>) -> Self {
         Self::new(content, MessageLevel::Unknown, 10000) // 10s timeout for tips
+    }
+
+    pub fn success(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, MessageLevel::Success, duration_ms)
     }
 
     /// Convert to `AttrValue` using `PropPayload::Any` for downcast
