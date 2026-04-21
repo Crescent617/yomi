@@ -1,5 +1,6 @@
 use crate::tools::base::FileTool;
 use crate::tools::edit_utils::generate_diff;
+use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
@@ -33,7 +34,7 @@ impl WriteTool {
     }
 
     /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &PathBuf) -> Option<String> {
+    async fn check_staleness(&self, path: &Path) -> Option<String> {
         let store = self.file_state_store.as_ref()?;
 
         // Check if file has been modified (mtime changed)
@@ -125,15 +126,25 @@ impl Tool for WriteTool {
             }
         }
 
-        // Read original content for diff if file exists
+        // Write the file (with exclusive lock for existing files)
         let original_content = if file_exists {
-            tokio::fs::read_to_string(&path).await.ok()
+            // For existing files, acquire exclusive lock first, then read and write
+            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+
+            // Read original content for diff (while holding exclusive lock)
+            let original = tokio::fs::read_to_string(&path).await.ok();
+
+            // Write new content
+            tokio::fs::write(&path, content).await?;
+
+            original
         } else {
+            // For new files, just write (no lock needed)
+            tokio::fs::write(&path, content).await?;
             None
         };
-
-        // Write the file
-        tokio::fs::write(&path, content).await?;
 
         // Update file state store
         if let Some(ref store) = self.file_state_store {
@@ -293,5 +304,53 @@ mod tests {
 
         let content = tokio::fs::read_to_string(absolute_path).await.unwrap();
         assert_eq!(content, "absolute path content");
+    }
+
+    #[tokio::test]
+    async fn test_write_then_edit_no_need_read() {
+        let temp_dir = TempDir::new().unwrap();
+        // Use non-canonicalized path to match real-world usage
+        let base_path = temp_dir.path().to_path_buf();
+
+        // Create a shared file state store
+        let store = Arc::new(crate::tools::file_state::FileStateStore::new());
+
+        // Create WriteTool with file state store
+        let write_tool = WriteTool::new(&base_path).with_file_state_store(Arc::clone(&store));
+
+        // Write a new file
+        let args = serde_json::json!({
+            "file_path": "test.txt",
+            "content": "Hello, World!"
+        });
+        let ctx = ToolExecCtx::new("test_tool_call");
+        let result = write_tool.exec(args, ctx).await.unwrap();
+        assert!(result.success());
+
+        // Now create EditTool with the same file state store
+        let edit_tool = crate::tools::edit::EditTool::new(&base_path).with_file_state_store(store);
+
+        // Try to edit the file without reading first
+        // This should succeed because WriteTool already recorded the file state
+        let args = serde_json::json!({
+            "path": "test.txt",
+            "old_str": "Hello",
+            "new_str": "Goodbye"
+        });
+        let ctx = ToolExecCtx::new("test_tool_call_2");
+        let result = edit_tool.exec(args, ctx).await.unwrap();
+
+        // Should succeed, not fail with "not been read" error
+        assert!(
+            result.success(),
+            "Edit after write should succeed without read first, but got: {}",
+            result.error_text()
+        );
+
+        // Verify file was edited
+        let content = tokio::fs::read_to_string(base_path.join("test.txt"))
+            .await
+            .unwrap();
+        assert_eq!(content, "Goodbye, World!");
     }
 }

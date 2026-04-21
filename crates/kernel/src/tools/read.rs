@@ -1,4 +1,5 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
+use crate::tools::file_lock::{lock_shared_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
@@ -34,6 +35,11 @@ impl ReadTool {
 
     /// Read an image file and return `ToolOutput` with image content
     async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
+        // Acquire shared lock before reading to coordinate with writers
+        let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+
         // Check file size
         let metadata = tokio::fs::metadata(path).await?;
         if metadata.len() > MAX_IMAGE_SIZE {
@@ -71,6 +77,11 @@ impl ReadTool {
         offset: usize,
         limit: Option<usize>,
     ) -> Result<ToolOutput> {
+        // Acquire shared lock before reading to coordinate with writers
+        let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+
         let content = tokio::fs::read_to_string(path).await?;
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();

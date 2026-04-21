@@ -8,7 +8,7 @@ use crate::event::Event;
 use crate::skill::Skill;
 use crate::tools::{
     BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SkillTool, SubagentTool,
-    ToolRegistry, WriteTool,
+    ToolRegistry, WebFetchTool, WriteTool,
 };
 use crate::types::AgentId;
 use std::path::Path;
@@ -83,6 +83,10 @@ impl ToolRegistryFactory {
         // Register Grep tool
         let grep_tool = GrepTool::new(working_dir);
         registry.register(grep_tool);
+
+        // Register WebFetch tool
+        let webfetch_tool = WebFetchTool::new();
+        registry.register(webfetch_tool);
 
         // Register SkillLoad tool
         let skill_load_tool = SkillTool::new(skill_folders);
