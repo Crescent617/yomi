@@ -107,13 +107,13 @@ impl Tool for EditTool {
 
         // Check if file exists
         if !tokio::fs::try_exists(&path).await? {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "File does not exist: {path_str}"
             )));
         }
         // Check file size
         if tokio::fs::metadata(&path).await?.len() > MAX_FILE_SIZE {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "File is too large to edit: {path_str}"
             )));
         }
@@ -121,14 +121,14 @@ impl Tool for EditTool {
         // Check if file has been read before editing
         if let Some(ref store) = self.file_state_store {
             if !store.has_recorded(&path) {
-                return Ok(ToolOutput::new_err(format!(
+                return Ok(ToolOutput::error(format!(
                     "File has not been read yet. Read it first before editing: {path_str}"
                 )));
             }
 
             // Check for staleness
             if let Some(error) = self.check_staleness(&path).await {
-                return Ok(ToolOutput::new_err(error));
+                return Ok(ToolOutput::error(error));
             }
         }
 
@@ -136,21 +136,21 @@ impl Tool for EditTool {
 
         // Validate old_str is not empty (except for creating new files)
         if old_str.is_empty() && !content.is_empty() {
-            return Ok(ToolOutput::new_err(
+            return Ok(ToolOutput::error(
                 "Cannot use empty old_str on existing file with content. Provide the text to replace."
             ));
         }
 
         // Check if old_str and new_str are the same
         if old_str == new_str {
-            return Ok(ToolOutput::new_err(
+            return Ok(ToolOutput::error(
                 "No changes to make: old_str and new_str are exactly the same.",
             ));
         }
 
         // Find the actual string in the file (handles quote normalization)
         let Some(actual_old_str) = find_actual_string(&content, old_str) else {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Could not find 'old_str' in file. String not found:\n{old_str}"
             )));
         };
@@ -158,14 +158,14 @@ impl Tool for EditTool {
         // Count occurrences
         let occurrences = content.matches(&actual_old_str).count();
         if occurrences == 0 {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Could not find 'old_str' in file. String not found:\n{old_str}"
             )));
         }
 
         // Check for multiple matches when replace_all is false
         if occurrences > 1 && !replace_all {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Found {occurrences} matches of the string to replace, but replace_all is false. \
                  To replace all occurrences, set replace_all to true. \
                  To replace only one occurrence, please provide more context to uniquely identify the instance.\n\
@@ -206,7 +206,7 @@ impl Tool for EditTool {
             format_file_lines(&diff, 1)
         );
 
-        Ok(ToolOutput::new(response, ""))
+        Ok(ToolOutput::text_with_summary(response, ""))
     }
 }
 
@@ -252,7 +252,7 @@ mod tests {
 
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
-        assert!(result.stdout.contains("Replaced"));
+        assert!(result.text_content().contains("Replaced"));
 
         let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
         assert_eq!(new_content, "goodbye world\n");
@@ -276,6 +276,7 @@ mod tests {
 
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
-        assert!(result.stderr.contains("not been read"));
+        assert!(result.is_error);
+        assert!(result.error_text().contains("not been read"));
     }
 }

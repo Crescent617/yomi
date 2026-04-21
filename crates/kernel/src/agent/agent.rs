@@ -748,6 +748,7 @@ impl Agent {
                     agent_id: self.id.clone(),
                     tool_id: tool_call_id.clone(),
                     error: error_msg.clone(),
+                    content_blocks: Vec::new(),
                     elapsed_ms: 0,
                 },
                 message: Message::tool_result(tool_call_id, error_msg),

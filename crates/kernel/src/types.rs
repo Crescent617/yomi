@@ -365,40 +365,159 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-/// Tool output
+/// Tool output block - represents a piece of tool output (text or image)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolOutputBlock {
+    /// Plain text content
+    Text { text: String },
+    /// Image content (base64 data URL or regular URL)
+    Image {
+        url: String,
+        mime_type: Option<String>,
+    },
+}
+
+impl ToolOutputBlock {
+    /// Get text content if this is a text block
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text { text } => Some(text),
+            Self::Image { .. } => None,
+        }
+    }
+
+    /// Check if this is a text block
+    pub const fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+
+    /// Check if this is an image block
+    pub const fn is_image(&self) -> bool {
+        matches!(self, Self::Image { .. })
+    }
+}
+
+impl From<String> for ToolOutputBlock {
+    fn from(text: String) -> Self {
+        Self::Text { text }
+    }
+}
+
+impl From<&str> for ToolOutputBlock {
+    fn from(text: &str) -> Self {
+        Self::Text {
+            text: text.to_string(),
+        }
+    }
+}
+
+/// Tool output - supports multimodal content (text + images)
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
+    pub contents: Vec<ToolOutputBlock>,
+    pub is_error: bool,
 }
 
 impl ToolOutput {
-    pub fn new(stdout: impl Into<String>, stderr: impl Into<String>) -> Self {
+    /// Create a new tool output with text content
+    /// If summary is non-empty, it will be prepended to the text
+    pub fn text_with_summary(text: impl Into<String>, summary: impl Into<String>) -> Self {
+        let summary = summary.into();
+        let text = text.into();
+        let content = if summary.is_empty() {
+            text
+        } else {
+            format!("{summary}\n{text}")
+        };
         Self {
-            stdout: stdout.into(),
-            stderr: stderr.into(),
-            exit_code: 0,
+            contents: vec![ToolOutputBlock::Text { text: content }],
+            is_error: false,
         }
     }
 
-    #[must_use]
-    pub const fn with_exit_code(mut self, exit_code: i32) -> Self {
-        self.exit_code = exit_code;
-        self
-    }
-
-    pub fn new_err(stderr: impl Into<String>) -> Self {
+    /// Create a tool output with just text (simplified API)
+    pub fn text(text: impl Into<String>) -> Self {
         Self {
-            stdout: String::new(),
-            stderr: stderr.into(),
-            exit_code: 1,
+            contents: vec![ToolOutputBlock::Text { text: text.into() }],
+            is_error: false,
         }
     }
 
+    /// Create an error output with text
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            contents: vec![ToolOutputBlock::Text { text: text.into() }],
+            is_error: true,
+        }
+    }
+
+    /// Create an output with an image
+    pub fn image(url: impl Into<String>) -> Self {
+        Self {
+            contents: vec![ToolOutputBlock::Image {
+                url: url.into(),
+                mime_type: None,
+            }],
+            is_error: false,
+        }
+    }
+
+    /// Create an output with image and text
+    pub fn with_image_and_text(url: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            contents: vec![
+                ToolOutputBlock::Image {
+                    url: url.into(),
+                    mime_type: None,
+                },
+                ToolOutputBlock::Text { text: text.into() },
+            ],
+            is_error: false,
+        }
+    }
+
+    /// Check if this output represents an error
     pub const fn success(&self) -> bool {
-        self.exit_code == 0
+        !self.is_error
     }
+
+    /// Get all text content concatenated (for backward compatibility)
+    pub fn text_content(&self) -> String {
+        self.contents
+            .iter()
+            .filter_map(|block| block.as_text())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Get all text content for error display
+    pub fn error_text(&self) -> String {
+        self.text_content()
+    }
+
+    /// Add a content block
+    pub fn add_block(&mut self, block: ToolOutputBlock) {
+        self.contents.push(block);
+    }
+
+    /// Append text to the output
+    pub fn append_text(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if let Some(ToolOutputBlock::Text { text: existing }) = self.contents.last_mut() {
+            existing.push_str(&text);
+        } else {
+            self.contents.push(ToolOutputBlock::Text { text });
+        }
+    }
+}
+
+// Backward compatibility: implement Deref to allow .stdout access in tests
+#[deprecated(note = "ToolOutput fields have changed, use text_content() instead")]
+pub struct ToolOutputCompat {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
 }
 
 /// Tool definition for model

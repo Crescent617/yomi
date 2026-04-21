@@ -332,9 +332,6 @@ impl SimpleAgent {
 
         let output = tool.exec(call.arguments.clone(), ctx).await?;
 
-        Ok(Message::tool_result(
-            call.id.clone(),
-            format!("{}{}", output.stdout, output.stderr),
-        ))
+        Ok(Message::tool_result(call.id.clone(), output.text_content()))
     }
 }

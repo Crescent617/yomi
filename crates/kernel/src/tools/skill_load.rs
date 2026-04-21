@@ -56,7 +56,7 @@ impl Tool for SkillTool {
         let skill_path = if let Some(path_str) = path_arg {
             let path = PathBuf::from(path_str);
             if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                return Ok(ToolOutput::new_err(format!(
+                return Ok(ToolOutput::error(format!(
                     "Skill file not found: {}",
                     path.display()
                 )));
@@ -66,13 +66,13 @@ impl Tool for SkillTool {
             match self.loader.find_skill_file(name).await {
                 Some(path) => path,
                 None => {
-                    return Ok(ToolOutput::new_err(format!(
+                    return Ok(ToolOutput::error(format!(
                         "Skill '{name}' not found in configured skill folders"
                     )));
                 }
             }
         } else {
-            return Ok(ToolOutput::new_err(
+            return Ok(ToolOutput::error(
                 "Either 'name' or 'path' must be provided".to_string(),
             ));
         };
@@ -81,11 +81,9 @@ impl Tool for SkillTool {
         match SkillLoader::read_skill_content(&skill_path).await {
             Ok(content) => {
                 let summary = format!("Loaded skill from {}", skill_path.display());
-                Ok(ToolOutput::new(content, &summary))
+                Ok(ToolOutput::text_with_summary(content, &summary))
             }
-            Err(e) => Ok(ToolOutput::new_err(format!(
-                "Failed to read skill file: {e}"
-            ))),
+            Err(e) => Ok(ToolOutput::error(format!("Failed to read skill file: {e}"))),
         }
     }
 }
@@ -122,8 +120,8 @@ This is a test skill.";
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
-        assert!(result.stdout.contains("Test Skill"));
-        assert!(result.stdout.contains("description: Test skill"));
+        assert!(result.text_content().contains("Test Skill"));
+        assert!(result.text_content().contains("description: Test skill"));
     }
 
     #[tokio::test]
@@ -151,7 +149,7 @@ description: Debugging skill
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
-        assert!(result.stdout.contains("Debugging Skill"));
+        assert!(result.text_content().contains("Debugging Skill"));
     }
 
     #[tokio::test]
@@ -164,8 +162,8 @@ description: Debugging skill
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
 
-        assert!(!result.success());
-        assert!(result.stderr.contains("not found"));
+        assert!(result.is_error);
+        assert!(result.error_text().contains("not found"));
     }
 
     #[tokio::test]
@@ -178,8 +176,8 @@ description: Debugging skill
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
 
-        assert!(!result.success());
-        assert!(result.stderr.contains("not found"));
+        assert!(result.is_error);
+        assert!(result.error_text().contains("not found"));
     }
 
     #[tokio::test]
@@ -211,6 +209,6 @@ description: Writing superpower
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
-        assert!(result.stdout.contains("Writing Superpower"));
+        assert!(result.text_content().contains("Writing Superpower"));
     }
 }

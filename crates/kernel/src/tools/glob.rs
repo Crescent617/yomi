@@ -162,14 +162,14 @@ impl Tool for GlobTool {
 
         // Validate directory exists
         if !tokio::fs::try_exists(&search_dir).await? {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Directory does not exist: {}",
                 path.unwrap_or(".")
             )));
         }
 
         if !tokio::fs::metadata(&search_dir).await?.is_dir() {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Path is not a directory: {}",
                 path.unwrap_or(".")
             )));
@@ -229,7 +229,7 @@ impl Tool for GlobTool {
             )
         };
 
-        Ok(ToolOutput::new(response, &summary))
+        Ok(ToolOutput::text_with_summary(response, &summary))
     }
 }
 
@@ -260,9 +260,9 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("test1.rs"));
-        assert!(result.stdout.contains("test2.rs"));
-        assert!(!result.stdout.contains("test.txt"));
+        assert!(result.text_content().contains("test1.rs"));
+        assert!(result.text_content().contains("test2.rs"));
+        assert!(!result.text_content().contains("test.txt"));
     }
 
     #[tokio::test]
@@ -284,7 +284,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("src/main.rs"));
+        assert!(result.text_content().contains("src/main.rs"));
     }
 
     #[tokio::test]
@@ -318,8 +318,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("tracked.rs"));
-        assert!(!result.stdout.contains("target/ignored.rs"));
+        assert!(result.text_content().contains("tracked.rs"));
+        assert!(!result.text_content().contains("target/ignored.rs"));
     }
 
     #[tokio::test]
@@ -335,7 +335,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("No files found"));
+        assert!(result.text_content().contains("No files found"));
     }
 
     #[tokio::test]
@@ -358,7 +358,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("main.rs"));
+        assert!(result.text_content().contains("main.rs"));
     }
 
     #[tokio::test]
@@ -374,8 +374,8 @@ mod tests {
 
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
-        assert!(!result.success());
-        assert!(result.stderr.contains("does not exist"));
+        assert!(result.is_error);
+        assert!(result.error_text().contains("does not exist"));
     }
 
     #[tokio::test]
@@ -400,8 +400,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(!result.stdout.contains(".hidden.rs"));
-        assert!(result.stdout.contains("normal.rs"));
+        assert!(!result.text_content().contains(".hidden.rs"));
+        assert!(result.text_content().contains("normal.rs"));
 
         // With hidden flag - should include .hidden.rs
         let args = serde_json::json!({
@@ -411,7 +411,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains(".hidden.rs"));
+        assert!(result.text_content().contains(".hidden.rs"));
     }
 
     #[tokio::test]
@@ -440,11 +440,20 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("test.rs"), "Should match .rs files");
-        assert!(result.stdout.contains("test.ts"), "Should match .ts files");
-        assert!(result.stdout.contains("test.js"), "Should match .js files");
         assert!(
-            !result.stdout.contains("test.txt"),
+            result.text_content().contains("test.rs"),
+            "Should match .rs files"
+        );
+        assert!(
+            result.text_content().contains("test.ts"),
+            "Should match .ts files"
+        );
+        assert!(
+            result.text_content().contains("test.js"),
+            "Should match .js files"
+        );
+        assert!(
+            !result.text_content().contains("test.txt"),
             "Should not match .txt files"
         );
     }

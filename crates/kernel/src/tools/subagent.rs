@@ -247,13 +247,13 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 }
                 Err(e) => {
                     tracing::warn!("Failed to create sub-agent session: {}", e);
-                    return Ok(ToolOutput::new_err(
+                    return Ok(ToolOutput::error(
                         "Failed to create storage session for sub-agent",
                     ));
                 }
             }
         } else {
-            return Ok(ToolOutput::new_err(
+            return Ok(ToolOutput::error(
                 "Storage is required to spawn sub-agents for transcript recording",
             ));
         };
@@ -310,11 +310,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                 let result = format!(
                     "Sub-agent '{description}' ({sub_agent_id}) spawned in async mode. Results will be sent when complete."
                 );
-                Ok(ToolOutput {
-                    stdout: result,
-                    stderr: String::new(),
-                    exit_code: 0,
-                })
+                Ok(ToolOutput::text(result))
             }
             SubAgentMode::Sync => {
                 let (output, status) = Self::execute_simple_agent(
@@ -368,21 +364,13 @@ impl SubagentTool {
     /// Build `ToolOutput` from execution status
     fn build_tool_output(output: String, status: SubAgentStatus) -> ToolOutput {
         match status {
-            SubAgentStatus::Completed => ToolOutput {
-                stdout: output,
-                stderr: String::new(),
-                exit_code: 0,
-            },
-            SubAgentStatus::Failed(error) => ToolOutput {
-                stdout: output,
-                stderr: format!("Sub-agent failed: {error}"),
-                exit_code: 1,
-            },
-            SubAgentStatus::Cancelled => ToolOutput {
-                stdout: output,
-                stderr: "Sub-agent was cancelled".to_string(),
-                exit_code: 1,
-            },
+            SubAgentStatus::Completed => ToolOutput::text(output),
+            SubAgentStatus::Failed(error) => {
+                ToolOutput::error(format!("{output}\nSub-agent failed: {error}"))
+            }
+            SubAgentStatus::Cancelled => {
+                ToolOutput::error(format!("{output}\nSub-agent was cancelled"))
+            }
         }
     }
 

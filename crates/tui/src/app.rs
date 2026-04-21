@@ -616,11 +616,15 @@ impl Model {
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
                     tool_id,
                     output,
+                    content_blocks,
                     elapsed_ms,
                     ..
                 }) => {
                     // Show tool output in chat view
-                    let combined = format!("{tool_id}\x00{output}\x00{elapsed_ms}");
+                    // Format: tool_id\x00output\x00elapsed_ms\x00content_blocks_json
+                    let blocks_json = serde_json::to_string(&content_blocks).unwrap_or_default();
+                    let combined =
+                        format!("{tool_id}\x00{output}\x00{elapsed_ms}\x00{blocks_json}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("complete_tool"),
@@ -884,21 +888,12 @@ impl Model {
             if let Err(e) = self.input_tx.try_send(blocks.clone()) {
                 tracing::error!("Failed to send initial message: {}", e);
             }
-            // Display user message in chat
-            let text_content: Vec<String> = blocks
-                .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => text.clone(),
-                    ContentBlock::Thinking { thinking, .. } => format!("[Thinking: {thinking}]"),
-                    ContentBlock::RedactedThinking { data } => format!("[Redacted: {data}]"),
-                    ContentBlock::ImageUrl { image_url } => format!("[Image: {}]", image_url.url),
-                    ContentBlock::Audio { audio } => format!("[Audio: {}]", audio.data),
-                })
-                .collect();
+            // Display user message in chat with content blocks
+            let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
             let _ = self.app.attr(
                 &Id::ChatView,
                 Attribute::Custom("add_user_message"),
-                AttrValue::String(text_content.join("\n")),
+                AttrValue::String(blocks_json),
             );
             // Start streaming indicator
             let _ = self.app.attr(
@@ -958,27 +953,26 @@ impl Update<Msg> for Model {
                     if self.mode == AppMode::Browse {
                         return None;
                     }
-                    // Extract text content for history and display
+                    // Extract text content for history navigation
                     let text_content: String = blocks
                         .iter()
-                        .map(|b| match b {
-                            ContentBlock::Text { text } => text.as_str(),
-                            ContentBlock::ImageUrl { image_url: _ } => "[Image]",
-                            ContentBlock::Thinking { .. }
-                            | ContentBlock::RedactedThinking { .. } => "",
-                            ContentBlock::Audio { .. } => "[Audio]",
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
                         })
-                        .collect();
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     // Save to history for C-n/C-p navigation
                     if !text_content.trim().is_empty() {
                         self.input_history.push(text_content.clone());
                         let _ = self.init_input_history();
                     }
-                    // Add user message to chat view
+                    // Add user message to chat view with content blocks
+                    let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("add_user_message"),
-                        AttrValue::String(text_content),
+                        AttrValue::String(blocks_json),
                     );
                     // Scroll to bottom after adding user message
                     let _ = self.app.attr(

@@ -129,11 +129,7 @@ impl BashTool {
                     timeout_secs.unwrap_or(60),
                     command
                 );
-                return Ok(ToolOutput {
-                    stdout: String::new(),
-                    stderr: "Command timed out".to_string(),
-                    exit_code: -1,
-                });
+                return Ok(ToolOutput::error("Command timed out"));
             }
         };
 
@@ -153,11 +149,12 @@ impl BashTool {
             );
         }
 
-        Ok(ToolOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr,
-            exit_code,
-        })
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if exit_code == 0 {
+            Ok(ToolOutput::text(stdout))
+        } else {
+            Ok(ToolOutput::error(format!("{stdout}\n{stderr}")))
+        }
     }
 
     /// Execute command in background and notify via `TaskResult` when complete
@@ -229,13 +226,9 @@ impl BashTool {
                 .await;
         });
 
-        Ok(ToolOutput {
-            stdout: format!(
-                "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\nYou will be notified when it completes."
-            ),
-            stderr: String::new(),
-            exit_code: 0,
-        })
+        Ok(ToolOutput::text(format!(
+            "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\nYou will be notified when it completes."
+        )))
     }
 }
 
