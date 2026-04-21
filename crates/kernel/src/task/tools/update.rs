@@ -96,7 +96,7 @@ impl Tool for TaskUpdateTool {
                 error: Some("Task not found".to_string()),
                 status_change: None,
             };
-            return Ok(ToolOutput::new(serde_json::to_string(&output)?, ""));
+            return Ok(ToolOutput::text_with_summary(serde_json::to_string(&output)?, ""));
         }
         let existing = existing.unwrap();
 
@@ -124,7 +124,7 @@ impl Tool for TaskUpdateTool {
                     None
                 },
             };
-            return Ok(ToolOutput::new(serde_json::to_string(&output)?, ""));
+            return Ok(ToolOutput::text_with_summary(serde_json::to_string(&output)?, ""));
         }
 
         // Build updates - including blocks/blocked_by changes
@@ -239,7 +239,7 @@ impl Tool for TaskUpdateTool {
                 },
             };
 
-            Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
+            Ok(ToolOutput::text_with_summary(serde_json::to_string(&output)?, ""))
         } else {
             let output = UpdateTaskOutput {
                 success: false,
@@ -248,7 +248,7 @@ impl Tool for TaskUpdateTool {
                 error: Some("Task not found".to_string()),
                 status_change: None,
             };
-            Ok(ToolOutput::new(serde_json::to_string(&output)?, ""))
+            Ok(ToolOutput::text_with_summary(serde_json::to_string(&output)?, ""))
         }
     }
 }

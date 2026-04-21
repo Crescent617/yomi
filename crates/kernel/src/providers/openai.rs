@@ -189,7 +189,13 @@ impl Provider for OpenAIProvider {
             max_tokens: config.max_tokens,
             temperature: config.temperature,
             reasoning_effort: if config.thinking.enabled {
-                Some(config.thinking.effort.clone().unwrap_or_else(|| "medium".to_string()))
+                Some(
+                    config
+                        .thinking
+                        .effort
+                        .clone()
+                        .unwrap_or_else(|| "medium".to_string()),
+                )
             } else {
                 None
             },
@@ -232,7 +238,11 @@ impl Provider for OpenAIProvider {
         let eventsource = response.bytes_stream().eventsource();
 
         let stream = stream::try_unfold(
-            (eventsource, ToolCallAssembler::new(), tokio::time::Instant::now()),
+            (
+                eventsource,
+                ToolCallAssembler::new(),
+                tokio::time::Instant::now(),
+            ),
             |(mut eventsource, mut assembler, last_content_time)| async move {
                 loop {
                     let elapsed = last_content_time.elapsed();
@@ -251,13 +261,19 @@ impl Provider for OpenAIProvider {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
                                 let items = assembler.finish();
-                                return Ok(Some((items, (eventsource, assembler, last_content_time))));
+                                return Ok(Some((
+                                    items,
+                                    (eventsource, assembler, last_content_time),
+                                )));
                             }
 
                             let items = assembler.process(&event.data)?;
                             if !items.is_empty() {
                                 // Reset content timer when we actually produce items
-                                return Ok(Some((items, (eventsource, assembler, tokio::time::Instant::now()))));
+                                return Ok(Some((
+                                    items,
+                                    (eventsource, assembler, tokio::time::Instant::now()),
+                                )));
                             }
                             // No content produced, continue loop with same timer
                         }

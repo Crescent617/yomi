@@ -215,7 +215,11 @@ impl Provider for AnthropicProvider {
         let eventsource = response.bytes_stream().eventsource();
 
         let stream = stream::try_unfold(
-            (eventsource, AnthropicStreamState::new(), tokio::time::Instant::now()),
+            (
+                eventsource,
+                AnthropicStreamState::new(),
+                tokio::time::Instant::now(),
+            ),
             |(mut eventsource, mut state, last_content_time)| async move {
                 loop {
                     let elapsed = last_content_time.elapsed();
@@ -240,7 +244,10 @@ impl Provider for AnthropicProvider {
                             let items = state.process(&event.data)?;
                             if !items.is_empty() {
                                 // Reset content timer when we actually produce items
-                                return Ok(Some((items, (eventsource, state, tokio::time::Instant::now()))));
+                                return Ok(Some((
+                                    items,
+                                    (eventsource, state, tokio::time::Instant::now()),
+                                )));
                             }
                             // No content produced, continue loop with same timer
                         }

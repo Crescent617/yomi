@@ -77,31 +77,48 @@ pub async fn execute_tools_parallel(
                     );
                     execute_single_tool_with_ctx(tool, arguments, ctx).await
                 }
-                None => ToolOutput {
-                    exit_code: 1,
-                    stdout: String::new(),
-                    stderr: format!("Unknown tool: {call_name}"),
-                },
+                None => ToolOutput::error(format!("Unknown tool: {call_name}")),
             };
             let elapsed = start.elapsed().as_millis() as u64;
             let success = result.success();
 
             // Truncate output if too long
-            let stdout = truncate_output(&result.stdout);
-            let stderr = truncate_output(&result.stderr);
+            let text = truncate_output(&result.text_content());
 
             let (event, message) = if success {
-                let output = stdout;
+                // Convert ToolOutput blocks to ContentBlocks for the message
+                let content_blocks: Vec<ContentBlock> = result
+                    .contents
+                    .iter()
+                    .map(|block| match block {
+                        crate::types::ToolOutputBlock::Text { text } => {
+                            ContentBlock::Text { text: text.clone() }
+                        }
+                        crate::types::ToolOutputBlock::Image { url, mime_type: _ } => {
+                            ContentBlock::ImageUrl {
+                                image_url: crate::types::ImageUrl {
+                                    url: url.clone(),
+                                    detail: None,
+                                },
+                            }
+                        }
+                    })
+                    .collect();
+
+                // For the event's text output, use the text content
+                let output = text;
+
                 (
                     ToolEvent::Output {
                         agent_id: agent_id.clone(),
                         tool_id: call_id.clone(),
                         output: output.clone(),
+                        content_blocks: result.contents.clone(),
                         elapsed_ms: elapsed,
                     },
                     Message {
                         role: Role::Tool,
-                        content: vec![ContentBlock::Text { text: output }],
+                        content: content_blocks,
                         tool_calls: None,
                         tool_call_id: Some(call_id.clone()),
                         created_at: chrono::Utc::now(),
@@ -109,12 +126,14 @@ pub async fn execute_tools_parallel(
                     },
                 )
             } else {
-                let error = format!("Exit code: {}\n{}\n{}", result.exit_code, stdout, stderr);
+                let error_text = result.error_text();
+                let error = format!("Error: {error_text}");
                 (
                     ToolEvent::Error {
                         agent_id: agent_id.clone(),
                         tool_id: call_id.clone(),
                         error: error.clone(),
+                        content_blocks: Vec::new(),
                         elapsed_ms: elapsed,
                     },
                     Message {
@@ -219,10 +238,6 @@ async fn execute_single_tool_with_ctx(
 ) -> ToolOutput {
     match tool.exec(arguments, ctx).await {
         Ok(output) => output,
-        Err(e) => ToolOutput {
-            exit_code: 1,
-            stdout: String::new(),
-            stderr: format!("Tool execution error: {e}"),
-        },
+        Err(e) => ToolOutput::error(format!("Tool execution error: {e}")),
     }
 }

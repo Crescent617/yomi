@@ -453,7 +453,7 @@ impl Tool for GrepTool {
 
         // Validate path exists
         if !tokio::fs::try_exists(&search_path).await? {
-            return Ok(ToolOutput::new_err(format!(
+            return Ok(ToolOutput::error(format!(
                 "Path does not exist: {}",
                 path.unwrap_or(".")
             )));
@@ -508,7 +508,7 @@ impl Tool for GrepTool {
             )
         };
 
-        Ok(ToolOutput::new(response, &stderr))
+        Ok(ToolOutput::text_with_summary(response, &stderr))
     }
 }
 
@@ -547,9 +547,9 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("test1.rs"));
-        assert!(result.stdout.contains("test2.rs"));
-        assert!(!result.stdout.contains("test.txt"));
+        assert!(result.text_content().contains("test1.rs"));
+        assert!(result.text_content().contains("test2.rs"));
+        assert!(!result.text_content().contains("test.txt"));
     }
 
     #[tokio::test]
@@ -573,7 +573,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("println"));
+        assert!(result.text_content().contains("println"));
     }
 
     #[tokio::test]
@@ -595,7 +595,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("MAIN"));
+        assert!(result.text_content().contains("MAIN"));
     }
 
     #[tokio::test]
@@ -619,8 +619,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("test.rs"));
-        assert!(!result.stdout.contains("test.js"));
+        assert!(result.text_content().contains("test.rs"));
+        assert!(!result.text_content().contains("test.js"));
     }
 
     #[tokio::test]
@@ -641,7 +641,7 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("No files found"));
+        assert!(result.text_content().contains("No files found"));
     }
 
     #[tokio::test]
@@ -667,11 +667,11 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("line 1"));
-        assert!(result.stdout.contains("line 2"));
-        assert!(result.stdout.contains("fn main"));
-        assert!(result.stdout.contains("line 4"));
-        assert!(result.stdout.contains("line 5"));
+        assert!(result.text_content().contains("line 1"));
+        assert!(result.text_content().contains("line 2"));
+        assert!(result.text_content().contains("fn main"));
+        assert!(result.text_content().contains("line 4"));
+        assert!(result.text_content().contains("line 5"));
     }
 
     #[tokio::test]
@@ -695,6 +695,6 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains(".hidden.rs"));
+        assert!(result.text_content().contains(".hidden.rs"));
     }
 }

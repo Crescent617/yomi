@@ -106,14 +106,14 @@ impl Tool for WriteTool {
         if file_exists {
             if let Some(ref store) = self.file_state_store {
                 if !store.has_recorded(&path) {
-                    return Ok(ToolOutput::new_err(format!(
+                    return Ok(ToolOutput::error(format!(
                         "File has not been read yet. Read it first before writing: {file_path_str}"
                     )));
                 }
 
                 // Check for staleness
                 if let Some(error) = self.check_staleness(&path).await {
-                    return Ok(ToolOutput::new_err(error));
+                    return Ok(ToolOutput::error(error));
                 }
             }
         }
@@ -157,7 +157,7 @@ impl Tool for WriteTool {
             )
         };
 
-        Ok(ToolOutput::new(response, ""))
+        Ok(ToolOutput::text_with_summary(response, ""))
     }
 }
 
@@ -180,8 +180,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("created successfully"));
-        assert!(result.stdout.contains("Hello, World!"));
+        assert!(result.text_content().contains("created successfully"));
+        assert!(result.text_content().contains("Hello, World!"));
 
         // Verify file was created
         let content = tokio::fs::read_to_string(base_path.join("test.txt"))
@@ -233,8 +233,8 @@ mod tests {
         // Should fail because file hasn't been read
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
-        assert!(!result.success());
-        assert!(result.stderr.contains("not been read"));
+        assert!(result.is_error);
+        assert!(result.error_text().contains("not been read"));
     }
 
     #[tokio::test]
@@ -267,8 +267,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.stdout.contains("updated"));
-        assert!(result.stdout.contains("Diff:"));
+        assert!(result.text_content().contains("updated"));
+        assert!(result.text_content().contains("Diff:"));
 
         // Verify file was updated
         let content = tokio::fs::read_to_string(&file_path).await.unwrap();

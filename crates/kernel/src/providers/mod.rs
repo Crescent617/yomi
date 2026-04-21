@@ -52,7 +52,7 @@ pub struct ThinkingConfig {
 impl Default for ThinkingConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             budget_tokens: 1024,
             effort: None,
         }

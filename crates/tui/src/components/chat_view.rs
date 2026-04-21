@@ -23,14 +23,15 @@ use crate::{
     utils::text::truncate_unicode,
     utils::{strs, text::preprocess},
 };
-use kernel::utils::tokens;
+use kernel::task::{
+    TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
+};
 use kernel::tools::{
     BASH_TOOL_NAME, EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME,
     SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WRITE_TOOL_NAME,
 };
-use kernel::task::{
-    TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
-};
+use kernel::types::{ContentBlock, ToolOutputBlock};
+use kernel::utils::tokens;
 
 use super::banner::MascotAnimator;
 
@@ -46,7 +47,7 @@ pub enum ToolStatus {
 /// A chat message in history
 #[derive(Debug, Clone)]
 pub enum HistoryMessage {
-    User(String),
+    User(Vec<ContentBlock>),
     Assistant {
         content: String,
         thinking: Option<String>,
@@ -64,6 +65,7 @@ pub enum HistoryMessage {
         elapsed_ms: Option<u64>,
         tokens: Option<u32>,
         progress: Option<String>,
+        content_blocks: Vec<ToolOutputBlock>,
     },
     Error(String),
 }
@@ -179,8 +181,8 @@ impl ChatView {
         self.banner_dirty = true;
     }
 
-    pub fn add_user_message(&mut self, content: String) {
-        self.messages.push(HistoryMessage::User(content));
+    pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
+        self.messages.push(HistoryMessage::User(content_blocks));
         self.push_new_msg_cache();
         // Auto scroll to bottom on new message
         self.scroll_to_bottom();
@@ -227,6 +229,7 @@ impl ChatView {
             elapsed_ms: None,
             tokens: None,
             progress: None,
+            content_blocks: Vec::new(),
         });
         self.push_new_msg_cache();
         if !self.user_scrolled {
@@ -234,7 +237,13 @@ impl ChatView {
         }
     }
 
-    pub fn complete_tool(&mut self, tool_id: String, output: String, elapsed_ms: u64) {
+    pub fn complete_tool(
+        &mut self,
+        tool_id: String,
+        output: String,
+        elapsed_ms: u64,
+        content_blocks: Vec<ToolOutputBlock>,
+    ) {
         // Update the tool message in history and invalidate cache
         for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Tool {
@@ -242,6 +251,7 @@ impl ChatView {
                 status,
                 output: out,
                 elapsed_ms: elapsed,
+                content_blocks: blocks,
                 ..
             } = msg
             {
@@ -249,6 +259,7 @@ impl ChatView {
                     *status = ToolStatus::Completed;
                     *out = Some(output);
                     *elapsed = Some(elapsed_ms);
+                    *blocks = content_blocks;
                     self.invalidate_msg_cache(i);
                     break;
                 }
@@ -589,23 +600,49 @@ impl ChatView {
         let mut lines = Vec::new();
 
         match msg {
-            HistoryMessage::User(content) => {
+            HistoryMessage::User(content_blocks) => {
                 let user_bg = colors::user_msg_bg();
-                for (i, line) in content.lines().enumerate() {
-                    let prefix = if i == 0 { "❯ " } else { "│ " };
-                    lines.push(Arc::new(Line::from(vec![
-                        Span::styled(
-                            prefix,
-                            Style::default()
-                                .fg(colors::accent_user())
-                                .bg(user_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            preprocess(line),
-                            Style::default().fg(colors::text_primary()).bg(user_bg),
-                        ),
-                    ])));
+                let mut line_idx = 0;
+                for block in content_blocks {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            for line in text.lines() {
+                                let prefix = if line_idx == 0 { "❯ " } else { "│ " };
+                                lines.push(Arc::new(Line::from(vec![
+                                    Span::styled(
+                                        prefix,
+                                        Style::default()
+                                            .fg(colors::accent_user())
+                                            .bg(user_bg)
+                                            .add_modifier(Modifier::BOLD),
+                                    ),
+                                    Span::styled(
+                                        preprocess(line),
+                                        Style::default().fg(colors::text_primary()).bg(user_bg),
+                                    ),
+                                ])));
+                                line_idx += 1;
+                            }
+                        }
+                        ContentBlock::ImageUrl { .. } => {
+                            let prefix = if line_idx == 0 { "❯ " } else { "│ " };
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled(
+                                    prefix,
+                                    Style::default()
+                                        .fg(colors::accent_user())
+                                        .bg(user_bg)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    "[Image]",
+                                    Style::default().fg(colors::text_secondary()).bg(user_bg),
+                                ),
+                            ])));
+                            line_idx += 1;
+                        }
+                        _ => {}
+                    }
                 }
             }
             HistoryMessage::Assistant {
@@ -643,6 +680,7 @@ impl ChatView {
             }
             HistoryMessage::Tool {
                 tool_name,
+                tool_id: _,
                 status,
                 output,
                 error,
@@ -651,7 +689,7 @@ impl ChatView {
                 elapsed_ms,
                 ref tokens,
                 ref progress,
-                ..
+                content_blocks,
             } => {
                 let color = match status {
                     ToolStatus::Running => colors::accent_warning(),
@@ -831,6 +869,41 @@ impl ChatView {
                                     .add_modifier(Modifier::ITALIC),
                             ),
                         ])));
+                    }
+
+                    // Show image details in unfolded mode
+                    for block in content_blocks {
+                        if let ToolOutputBlock::Image { url, mime_type, .. } = block {
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    "Image:",
+                                    Style::default()
+                                        .fg(colors::text_secondary())
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                            ])));
+                            let url_display = strs::truncate_with_suffix(url, 100, "...");
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled("│   ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    url_display,
+                                    Style::default().fg(colors::text_primary()),
+                                ),
+                            ])));
+                            if let Some(mime) = mime_type {
+                                lines.push(Arc::new(Line::from(vec![
+                                    Span::styled(
+                                        "│   ",
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                    Span::styled(
+                                        format!("Type: {mime}"),
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                ])));
+                            }
+                        }
                     }
                 }
             }
@@ -1140,8 +1213,10 @@ impl MockComponent for ChatView {
 
         match cmd {
             "add_user_message" => {
-                if let AttrValue::String(content) = value {
-                    self.add_user_message(content);
+                if let AttrValue::String(blocks_json) = value {
+                    let content_blocks: Vec<ContentBlock> =
+                        serde_json::from_str(&blocks_json).unwrap_or_default();
+                    self.add_user_message(content_blocks);
                 }
             }
             "add_error_message" => {
@@ -1254,17 +1329,27 @@ impl MockComponent for ChatView {
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }
-            "complete_tool" | "fail_tool" => {
+            "complete_tool" => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
-                    let second = parts.get(1).map_or(String::new(), |s| (*s).to_string());
+                    let output = parts.get(1).map_or(String::new(), |s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    match cmd {
-                        "complete_tool" => self.complete_tool(tool_id, second, elapsed_ms),
-                        "fail_tool" => self.fail_tool(tool_id, second, elapsed_ms),
-                        _ => {}
-                    }
+                    // Parse content blocks from 4th part (JSON)
+                    let content_blocks: Vec<ToolOutputBlock> = parts
+                        .get(3)
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+                    self.complete_tool(tool_id, output, elapsed_ms, content_blocks);
+                }
+            }
+            "fail_tool" => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let error = parts.get(1).map_or(String::new(), |s| (*s).to_string());
+                    let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    self.fail_tool(tool_id, error, elapsed_ms);
                 }
             }
             "update_tool_progress" => {
@@ -1344,9 +1429,8 @@ impl ChatViewComponent {
         for msg in messages {
             match msg.role {
                 kernel::types::Role::User => {
-                    let text = msg.text_content();
-                    if !text.is_empty() {
-                        self.component.add_user_message(text);
+                    if !msg.content.is_empty() {
+                        self.component.add_user_message(msg.content.clone());
                     }
                 }
                 kernel::types::Role::Assistant => {
@@ -1369,8 +1453,9 @@ impl ChatViewComponent {
                         let output = msg.text_content();
                         // For tool messages, we need to find the corresponding tool in history
                         // and mark it as completed. Since we don't have elapsed_ms, use 0.
+                        // Content blocks are not available during history init, pass empty vec.
                         self.component
-                            .complete_tool(tool_call_id.clone(), output, 0);
+                            .complete_tool(tool_call_id.clone(), output, 0, Vec::new());
                     }
                 }
                 kernel::types::Role::System => {}
@@ -1459,7 +1544,10 @@ fn toolname_to_icon(tool_name: &str) -> &'static str {
         n if n == TASK_CREATE_TOOL_NAME
             || n == TASK_GET_TOOL_NAME
             || n == TASK_LIST_TOOL_NAME
-            || n == TASK_UPDATE_TOOL_NAME => " ",
+            || n == TASK_UPDATE_TOOL_NAME =>
+        {
+            " "
+        }
         _ => " ",
     }
 }

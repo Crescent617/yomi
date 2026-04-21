@@ -92,6 +92,7 @@ pub async fn resolve_session(
 }
 
 /// Run a single session lifecycle
+#[allow(clippy::too_many_arguments)]
 pub async fn run_session_loop(
     coordinator: Arc<Coordinator>,
     session_id: SessionId,
