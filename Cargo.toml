@@ -68,3 +68,5 @@ globset = "0.4"
 ignore = "0.4"
 image = { version = "0.25", default-features = false }
 regex = "1"
+lru = "0.17"
+html2md = "0.2"

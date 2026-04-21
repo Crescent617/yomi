@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 /// Simple file mtime tracking for detecting stale reads
@@ -18,23 +18,32 @@ impl FileStateStore {
     }
 
     /// Record a file's modification time
+    /// Path is canonicalized if possible for consistent lookup
     pub fn record(&self, path: PathBuf, mtime: u64) {
-        self.mtimes.write().unwrap().insert(path, mtime);
+        // Use canonicalized path as key for consistent lookup
+        let key = path.canonicalize().unwrap_or(path);
+        self.mtimes.write().unwrap().insert(key, mtime);
     }
 
     /// Get the recorded mtime for a file
-    pub fn get_mtime(&self, path: &PathBuf) -> Option<u64> {
-        self.mtimes.read().unwrap().get(path).copied()
+    /// Path is canonicalized if possible for consistent lookup
+    pub fn get_mtime(&self, path: &Path) -> Option<u64> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.mtimes.read().unwrap().get(&key).copied()
     }
 
     /// Check if a file has been recorded
-    pub fn has_recorded(&self, path: &PathBuf) -> bool {
-        self.mtimes.read().unwrap().contains_key(path)
+    /// Path is canonicalized if possible for consistent lookup
+    pub fn has_recorded(&self, path: &Path) -> bool {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.mtimes.read().unwrap().contains_key(&key)
     }
 
     /// Remove a file entry
-    pub fn remove(&self, path: &PathBuf) -> Option<u64> {
-        self.mtimes.write().unwrap().remove(path)
+    /// Path is canonicalized if possible for consistent lookup
+    pub fn remove(&self, path: &Path) -> Option<u64> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.mtimes.write().unwrap().remove(&key)
     }
 
     /// Clear all entries
@@ -44,7 +53,7 @@ impl FileStateStore {
 
     /// Check if file has been modified since last read
     /// Returns true if file was not recorded or mtime differs
-    pub fn is_stale(&self, path: &PathBuf, current_mtime: u64) -> bool {
+    pub fn is_stale(&self, path: &Path, current_mtime: u64) -> bool {
         self.get_mtime(path) != Some(current_mtime)
     }
 }

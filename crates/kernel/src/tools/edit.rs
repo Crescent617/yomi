@@ -1,5 +1,6 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::edit_utils::{find_actual_string, generate_diff};
+use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
@@ -33,7 +34,7 @@ impl EditTool {
     }
 
     /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &PathBuf) -> Option<String> {
+    async fn check_staleness(&self, path: &Path) -> Option<String> {
         let store = self.file_state_store.as_ref()?;
 
         // Check if file has been modified (mtime changed)
@@ -132,6 +133,13 @@ impl Tool for EditTool {
             }
         }
 
+        // Acquire exclusive lock BEFORE reading to prevent race conditions
+        // This ensures no other process can modify the file between our read and write
+        let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+
+        // Read file content (now protected by exclusive lock)
         let content = tokio::fs::read_to_string(&path).await?;
 
         // Validate old_str is not empty (except for creating new files)
@@ -180,7 +188,7 @@ impl Tool for EditTool {
             content.replacen(&actual_old_str, new_str, 1)
         };
 
-        // Write the new content
+        // Write the new content (exclusive lock still held)
         tokio::fs::write(&path, &new_content).await?;
 
         // Update file mtime in store

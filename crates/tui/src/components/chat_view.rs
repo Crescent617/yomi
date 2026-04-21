@@ -28,7 +28,7 @@ use kernel::task::{
 };
 use kernel::tools::{
     BASH_TOOL_NAME, EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME,
-    SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WRITE_TOOL_NAME,
+    SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WEBFETCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -1540,6 +1540,7 @@ fn toolname_to_icon(tool_name: &str) -> &'static str {
         n if n == GLOB_TOOL_NAME => "󰱼 ",
         n if n == GREP_TOOL_NAME => " ",
         n if n == SKILL_TOOL_NAME => "⚡",
+        n if n == WEBFETCH_TOOL_NAME => "󰖟 ",
         // Task tools
         n if n == TASK_CREATE_TOOL_NAME
             || n == TASK_GET_TOOL_NAME
@@ -1561,9 +1562,11 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
 
     let target = match tool_name.to_lowercase().as_str() {
-        "read" | "edit" => value["path"].as_str().map(String::from),
-        "write" => value["file_path"].as_str().map(String::from),
-        "bash" => {
+        n if n == READ_TOOL_NAME || n == EDIT_TOOL_NAME => {
+            value["path"].as_str().map(String::from)
+        }
+        n if n == WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
+        n if n == BASH_TOOL_NAME => {
             let cmd = value["command"].as_str()?;
             let cmd_display = truncate_unicode(cmd, 50); // Reserve space for suffix
 
@@ -1588,7 +1591,20 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
                 Some(format!("{} [{}]", cmd_display, parts.join(", ")))
             }
         }
-        "glob" | "grep" => value["pattern"].as_str().map(String::from),
+        n if n == GLOB_TOOL_NAME || n == GREP_TOOL_NAME => {
+            value["pattern"].as_str().map(String::from)
+        }
+        n if n == WEBFETCH_TOOL_NAME => value["url"].as_str().map(|url| {
+            // Truncate long URLs for display
+            truncate_unicode(url, MAX_LEN)
+        }),
+        n if n == SKILL_TOOL_NAME => {
+            // Prefer 'name', fallback to 'path'
+            value["name"]
+                .as_str()
+                .map(|s| truncate_unicode(s, MAX_LEN))
+                .or_else(|| value["path"].as_str().map(|s| truncate_unicode(s, MAX_LEN)))
+        }
         n if n == SUBAGENT_TOOL_NAME => value["prompt"]
             .as_str()
             .map(|p| truncate_unicode(p, MAX_LEN)),
