@@ -6,6 +6,24 @@ pub fn preprocess(text: impl AsRef<str>) -> String {
     text.as_ref().replace('\t', "  ")
 }
 
+/// Get byte index from character index (Unicode-safe)
+/// Returns the byte position corresponding to the `char_idx`-th character
+pub fn char_idx_to_byte_idx(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(text.len())
+}
+
+/// Extract substring by character indices (Unicode-safe)
+/// Returns the substring from `start_char` to `end_char` (in characters, not bytes)
+pub fn substring_by_chars(text: &str, start_char: usize, end_char: usize) -> String {
+    text.chars()
+        .skip(start_char)
+        .take(end_char.saturating_sub(start_char))
+        .collect()
+}
+
 /// Truncate text to max character count (Unicode-safe)
 /// Returns the truncated string with "..." suffix if truncated
 pub fn truncate_unicode(text: &str, max_chars: usize) -> String {

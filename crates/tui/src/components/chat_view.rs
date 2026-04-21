@@ -17,10 +17,11 @@ use tuirealm::{
 };
 
 use crate::{
+    components::status_bar::StatusMessage,
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::colors,
-    utils::text::truncate_unicode,
+    utils::text::{char_idx_to_byte_idx, substring_by_chars, truncate_unicode},
     utils::{strs, text::preprocess},
 };
 use kernel::task::{
@@ -70,6 +71,40 @@ pub enum HistoryMessage {
     Error(String),
 }
 
+/// Text selection state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
+impl Selection {
+    /// Get normalized selection (start <= end)
+    pub fn normalized(&self) -> Self {
+        if self.start_line < self.end_line
+            || (self.start_line == self.end_line && self.start_col <= self.end_col)
+        {
+            *self
+        } else {
+            Self {
+                start_line: self.end_line,
+                start_col: self.end_col,
+                end_line: self.start_line,
+                end_col: self.start_col,
+            }
+        }
+    }
+
+    /// Check if a position is within the selection
+    pub fn contains(&self, line: usize, col: usize) -> bool {
+        let norm = self.normalized();
+        (line > norm.start_line || (line == norm.start_line && col >= norm.start_col))
+            && (line < norm.end_line || (line == norm.end_line && col < norm.end_col))
+    }
+}
+
 /// Unified chat view component
 #[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
@@ -106,6 +141,16 @@ pub struct ChatView {
     // Viewport cache: only the currently visible lines (cloned from Arc)
     viewport_lines: Vec<Line<'static>>,
     last_viewport: (usize, usize), // (start_line, end_line)
+    // Line height cache for wrapped lines (cached_width, Vec<height>)
+    cached_line_heights: Option<(usize, Vec<usize>)>,
+    // Text selection state
+    selection: Option<Selection>,
+    is_selecting: bool,
+    // Track last click for double-click detection
+    last_click_time: Option<std::time::Instant>,
+    last_click_pos: Option<(usize, usize)>,
+    // Current display area for mouse coordinate conversion
+    current_area: Option<Rect>,
 }
 
 impl Default for ChatView {
@@ -132,6 +177,12 @@ impl Default for ChatView {
             msg_cache_dirty: true,
             viewport_lines: Vec::new(),
             last_viewport: (0, 0),
+            cached_line_heights: None,
+            selection: None,
+            is_selecting: false,
+            last_click_time: None,
+            last_click_pos: None,
+            current_area: None,
         }
     }
 }
@@ -162,6 +213,8 @@ impl ChatView {
         }
         self.msg_lines.clear();
         self.msg_cache_dirty = true;
+        // Clear line height cache since content changed
+        self.cached_line_heights = None;
     }
 
     /// Clear all caches and messages.
@@ -173,6 +226,39 @@ impl ChatView {
         self.last_viewport = (0, 0);
         self.msg_cache_dirty = true;
         self.banner_dirty = true;
+        self.cached_line_heights = None;
+        self.selection = None;
+        self.is_selecting = false;
+    }
+
+    /// Start text selection at the given position.
+    pub fn start_selection(&mut self, line: usize, col: usize) {
+        self.selection = Some(Selection {
+            start_line: line,
+            start_col: col,
+            end_line: line,
+            end_col: col,
+        });
+        self.is_selecting = true;
+    }
+
+    /// Update selection end position while dragging.
+    pub fn update_selection(&mut self, line: usize, col: usize) {
+        if let Some(ref mut sel) = self.selection {
+            sel.end_line = line;
+            sel.end_col = col;
+        }
+    }
+
+    /// End text selection.
+    pub fn end_selection(&mut self) {
+        self.is_selecting = false;
+    }
+
+    /// Clear the current selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.is_selecting = false;
     }
 
     /// Set banner data to display at the top
@@ -1089,6 +1175,302 @@ impl ChatView {
         result
     }
 
+    /// Calculate wrap boundaries for a line using textwrap.
+    /// Returns vector of character indices where each visual row starts.
+    fn calculate_wrap_boundaries(text: &str, width: usize) -> Vec<usize> {
+        if width == 0 || text.is_empty() {
+            return vec![0];
+        }
+
+        let options = textwrap::Options::new(width);
+        let wrapped = textwrap::wrap(text, &options);
+
+        let mut boundaries = Vec::new();
+        let mut char_count = 0;
+
+        for line in wrapped {
+            boundaries.push(char_count);
+            char_count += line.chars().count();
+        }
+
+        boundaries
+    }
+
+    /// Convert screen coordinates to line/column in visible content.
+    /// Uses textwrap to accurately map visual coordinates to character positions.
+    fn screen_to_position(&self, mouse_x: u16, mouse_y: u16, width: usize) -> Option<(usize, usize)> {
+        let area = self.current_area?;
+
+        // Check if click is within our area
+        if mouse_x < area.x
+            || mouse_x >= area.x + area.width
+            || mouse_y < area.y
+            || mouse_y >= area.y + area.height
+        {
+            return None;
+        }
+
+        let terminal_col = (mouse_x - area.x) as usize;
+        let terminal_row = (mouse_y - area.y) as usize;
+
+        // Calculate which logical line and visual row within that line
+        let viewport_start = self.last_viewport.0;
+        let mut current_row = 0;
+
+        for (i, line) in self.viewport_lines.iter().enumerate() {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+            // Get wrap boundaries for this line
+            let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
+            let wrapped_height = boundaries.len();
+
+            if current_row + wrapped_height > terminal_row {
+                // This logical line contains the clicked terminal row
+                let line_idx = viewport_start + i;
+                let visual_row_in_line = terminal_row - current_row;
+
+                // Calculate character column based on visual row
+                let row_start_char = boundaries.get(visual_row_in_line).copied().unwrap_or(0);
+                let char_col = row_start_char + terminal_col;
+                let total_chars = line_text.chars().count();
+
+                return Some((line_idx, char_col.min(total_chars)));
+            }
+
+            current_row += wrapped_height;
+        }
+
+        // Click is past all visible lines - use the last line
+        let last_idx = viewport_start + self.viewport_lines.len().saturating_sub(1);
+        self.viewport_lines.last().map(|line| {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            (last_idx, text.chars().count())
+        })
+    }
+
+    /// Extract selected text from all lines.
+    fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        let all_lines = self.all_lines_for_selection();
+
+        let norm = sel.normalized();
+        let mut result = String::new();
+
+        for (line_idx, line) in all_lines.iter().enumerate() {
+            if line_idx < norm.start_line || line_idx > norm.end_line {
+                continue;
+            }
+
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+            if line_idx == norm.start_line && line_idx == norm.end_line {
+                let char_count = line_text.chars().count();
+                let start = norm.start_col.min(char_count);
+                let end = norm.end_col.min(char_count);
+                result.push_str(&substring_by_chars(&line_text, start, end));
+            } else if line_idx == norm.start_line {
+                let char_count = line_text.chars().count();
+                let start = norm.start_col.min(char_count);
+                result.push_str(&substring_by_chars(&line_text, start, char_count));
+                result.push('\n');
+            } else if line_idx == norm.end_line {
+                let char_count = line_text.chars().count();
+                let end = norm.end_col.min(char_count);
+                result.push_str(&substring_by_chars(&line_text, 0, end));
+            } else {
+                result.push_str(&line_text);
+                result.push('\n');
+            }
+        }
+
+        Some(result)
+    }
+
+    /// Get all lines for selection extraction (without modifying state).
+    fn all_lines_for_selection(&self) -> Vec<Arc<Line<'static>>> {
+        let mut result = self.banner_cache.clone();
+        result.extend(self.msg_lines.iter().cloned());
+
+        // Add streaming content if any
+        let has_streaming = self.is_streaming
+            || !self.streaming_content.is_empty()
+            || !self.streaming_thinking.is_empty();
+        if !self.messages.is_empty() && has_streaming {
+            result.push(Arc::new(Line::from("")));
+        }
+        if has_streaming {
+            result.extend(self.render_streaming_static());
+        }
+
+        result
+    }
+
+    /// Static version of render_streaming for selection (doesn't modify self).
+    fn render_streaming_static(&self) -> Vec<Arc<Line<'static>>> {
+        let mut lines = Vec::new();
+
+        // Render thinking if present
+        if !self.streaming_thinking.is_empty() {
+            lines.push(Arc::new(Line::from(vec![Span::styled(
+                format!("Thinking ({} tokens)", tokens::estimate_tokens(&self.streaming_thinking)),
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            )])));
+        }
+
+        // Add separator
+        if !self.streaming_thinking.is_empty() && !self.streaming_content.is_empty() {
+            lines.push(Arc::new(Line::from("")));
+        }
+
+        // Render content
+        if !self.streaming_content.is_empty() {
+            let mut md_renderer = StreamingMarkdownRenderer::new();
+            md_renderer.set_content(self.streaming_content.clone());
+            for line in md_renderer.lines() {
+                lines.push(Arc::new(line.clone()));
+            }
+        }
+
+        lines
+    }
+
+    /// Copy the current selection to clipboard.
+    pub fn copy_selection(&self) -> Option<String> {
+        let text = self.get_selected_text()?;
+        if text.is_empty() {
+            return None;
+        }
+
+        // Copy to clipboard
+        if let Err(e) = crate::utils::clipboard::copy_text(&text) {
+            tracing::debug!("Failed to copy to clipboard: {}", e);
+            return None;
+        }
+
+        Some(text)
+    }
+
+    /// Check if this is a double click (within 300ms and same position).
+    fn is_double_click(&mut self, line: usize, col: usize) -> bool {
+        const DOUBLE_CLICK_THRESHOLD: std::time::Duration =
+            std::time::Duration::from_millis(300);
+
+        let now = std::time::Instant::now();
+        let is_double = self
+            .last_click_time
+            .map(|t| now.duration_since(t) < DOUBLE_CLICK_THRESHOLD)
+            .unwrap_or(false)
+            && self.last_click_pos == Some((line, col));
+
+        self.last_click_time = Some(now);
+        self.last_click_pos = Some((line, col));
+
+        is_double
+    }
+
+    /// Select a word at the given position (double-click).
+    fn select_word_at(&mut self, line: usize, col: usize) {
+        let all_lines = self.all_lines_for_selection();
+        if line >= all_lines.len() {
+            return;
+        }
+
+        let line_text: String = all_lines[line]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+
+        let char_count = line_text.chars().count();
+        if col >= char_count {
+            return;
+        }
+
+        // Convert character position to char indices for iteration
+        let char_indices: Vec<(usize, char)> = line_text.char_indices().collect();
+
+        // Map character column to byte position
+        let byte_pos = char_idx_to_byte_idx(&line_text, col);
+
+        // Find start of word (in characters)
+        let mut start_char_idx = col;
+        for (idx, (byte_idx, c)) in char_indices.iter().enumerate() {
+            if *byte_idx > byte_pos {
+                break;
+            }
+            if !c.is_alphanumeric() && *c != '_' {
+                start_char_idx = idx + 1;
+            }
+        }
+
+        // Find end of word (in characters)
+        let mut end_char_idx = col;
+        for (idx, (byte_idx, c)) in char_indices.iter().enumerate() {
+            if *byte_idx < byte_pos {
+                continue;
+            }
+            if !c.is_alphanumeric() && *c != '_' {
+                end_char_idx = idx;
+                break;
+            }
+            end_char_idx = idx + 1;
+        }
+
+        self.selection = Some(Selection {
+            start_line: line,
+            start_col: start_char_idx,
+            end_line: line,
+            end_col: end_char_idx,
+        });
+        // Mark as selecting so copy will trigger on mouse up
+        self.is_selecting = true;
+    }
+
+    /// Handle mouse event for text selection.
+    /// Returns the copied text if a selection was copied, None otherwise.
+    pub fn handle_mouse_event(&mut self, kind: tuirealm::event::MouseEventKind, x: u16, y: u16) -> Option<String> {
+        use tuirealm::event::MouseEventKind;
+
+        // Get width from current area for coordinate conversion
+        let width = self.current_area.map(|a| a.width as usize).unwrap_or(80);
+
+        match kind {
+            MouseEventKind::Down(_) => {
+                if let Some((line, col)) = self.screen_to_position(x, y, width) {
+                    if self.is_double_click(line, col) {
+                        self.select_word_at(line, col);
+                    } else {
+                        self.start_selection(line, col);
+                    }
+                    None
+                } else {
+                    self.clear_selection();
+                    None
+                }
+            }
+            MouseEventKind::Drag(_) => {
+                if self.is_selecting {
+                    if let Some((line, col)) = self.screen_to_position(x, y, width) {
+                        self.update_selection(line, col);
+                    }
+                }
+                None
+            }
+            MouseEventKind::Up(_) => {
+                if self.is_selecting {
+                    self.end_selection();
+                    // Auto-copy selection to clipboard when mouse is released
+                    self.copy_selection()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Get visible lines for the current viewport, rebuilding cache if needed.
     fn get_lines(&mut self, visible_height: usize, width: usize) -> Vec<Line<'static>> {
         self.sync_msg_cache();
@@ -1097,12 +1479,119 @@ impl ChatView {
         let (start_line, end_line) = self.calculate_viewport(&all_lines, visible_height, width);
         self.update_viewport_cache(&all_lines, start_line, end_line);
 
+        // Apply selection highlighting if there's an active selection
+        let mut result = if self.selection.is_some() {
+            self.apply_selection_highlight(start_line)
+        } else {
+            self.viewport_lines.clone()
+        };
+
         // Pad with empty lines to fill the entire area
-        let mut result = self.viewport_lines.clone();
         while result.len() < visible_height {
             result.push(Line::from(""));
         }
         result
+    }
+
+    /// Apply selection highlighting to visible lines.
+    /// This is optimized to only process visible lines.
+    fn apply_selection_highlight(&self, viewport_start: usize) -> Vec<Line<'static>> {
+        use crate::theme::colors;
+
+        let selection = match self.selection {
+            Some(s) => s.normalized(),
+            None => return self.viewport_lines.clone(),
+        };
+
+        let highlight_bg = colors::selected_bg();
+        let highlight_fg = colors::text_primary();
+
+        self.viewport_lines
+            .iter()
+            .enumerate()
+            .map(|(idx, line)| {
+                let global_line_idx = viewport_start + idx;
+
+                // Fast path: line is completely outside selection
+                if global_line_idx < selection.start_line || global_line_idx > selection.end_line {
+                    return line.clone();
+                }
+
+                // Fast path: entire line is selected
+                let is_first_line = global_line_idx == selection.start_line;
+                let is_last_line = global_line_idx == selection.end_line;
+
+                if !is_first_line && !is_last_line {
+                    // Entire line is in the middle of selection - highlight whole line
+                    let highlight_style = Style::default().fg(highlight_fg).bg(highlight_bg);
+                    return Line::from(
+                        line.spans
+                            .iter()
+                            .map(|s| Span::styled(s.content.to_string(), highlight_style))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+
+                // Partial line selection - need character-level processing
+                let mut new_spans = Vec::new();
+                let mut current_char_col: usize = 0;
+
+                let sel_start_col = if is_first_line { selection.start_col } else { 0 };
+                let sel_end_col = if is_last_line { selection.end_col } else { usize::MAX };
+
+                for span in &line.spans {
+                    let span_text = span.content.as_ref();
+                    let span_char_count = span_text.chars().count();
+                    let span_start_char = current_char_col;
+                    let span_end_char = current_char_col + span_char_count;
+
+                    // Check overlap with selection
+                    if span_end_char <= sel_start_col || span_start_char >= sel_end_col {
+                        // No overlap
+                        new_spans.push(span.clone());
+                    } else if span_start_char >= sel_start_col && span_end_char <= sel_end_col {
+                        // Entire span is selected
+                        new_spans.push(Span::styled(
+                            span_text.to_string(),
+                            Style::default().fg(highlight_fg).bg(highlight_bg),
+                        ));
+                    } else {
+                        // Partial overlap - split the span
+                        let sel_start_in_span = sel_start_col.saturating_sub(span_start_char);
+                        let sel_end_in_span = span_char_count.min(sel_end_col.saturating_sub(span_start_char));
+
+                        // Part before selection
+                        if sel_start_in_span > 0 {
+                            let before: String = span_text.chars().take(sel_start_in_span).collect();
+                            new_spans.push(Span::styled(before, span.style));
+                        }
+
+                        // Selected part
+                        let selected: String = span_text
+                            .chars()
+                            .skip(sel_start_in_span)
+                            .take(sel_end_in_span.saturating_sub(sel_start_in_span))
+                            .collect();
+                        if !selected.is_empty() {
+                            new_spans.push(Span::styled(
+                                selected,
+                                Style::default().fg(highlight_fg).bg(highlight_bg),
+                            ));
+                        }
+
+                        // Part after selection
+                        if sel_end_in_span < span_char_count {
+                            let after: String = span_text.chars().skip(sel_end_in_span).collect();
+                            new_spans.push(Span::styled(after, span.style));
+                        }
+                    }
+
+                    current_char_col += span_char_count;
+                }
+
+                Line::from(new_spans)
+            })
+            .collect()
     }
 
     /// Calculate viewport range (`start_line`, `end_line`) based on scroll state.
@@ -1186,6 +1675,7 @@ impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let visible_height = area.height as usize;
         self.last_visible_height = visible_height;
+        self.current_area = Some(area);
 
         let lines = self.get_lines(visible_height, area.width as usize);
         let paragraph = Paragraph::new(Text::from(lines))
@@ -1500,13 +1990,36 @@ impl MockComponent for ChatViewComponent {
 
 impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        // Keyboard events are handled at app level via InputComponent
-        // Only handle Tick here for the blinking indicator
-        if ev == tuirealm::Event::Tick {
-            self.component.tick();
-            Some(Msg::Redraw)
-        } else {
-            None
+        use tuirealm::event::MouseEvent;
+
+        match ev {
+            tuirealm::Event::Tick => {
+                self.component.tick();
+                Some(Msg::Redraw)
+            }
+            // Handle mouse events for text selection
+            tuirealm::Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                ..
+            }) => {
+                let copied_text = self.component.handle_mouse_event(kind, column, row);
+                if let Some(text) = copied_text {
+                    // Show status message with copied text preview
+                    let preview = truncate_unicode(&text, 50);
+                    Some(Msg::ShowStatusMessage(StatusMessage::success(
+                        format!(" {}", preview),
+                        2000,
+                    )))
+                } else if matches!(kind, tuirealm::event::MouseEventKind::Down(_) | tuirealm::event::MouseEventKind::Drag(_)) {
+                    // Selection in progress, just redraw
+                    Some(Msg::Redraw)
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 }

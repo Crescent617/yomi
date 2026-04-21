@@ -249,13 +249,10 @@ impl StreamingMarkdownRenderer {
                                 ));
                                 current_line = Vec::new();
                             }
+                            // Show closing ```
                             self.lines.push(Line::from(Span::styled(
-                                format!(
-                                    "{}{}",
-                                    chars::CODE_BOTTOM_LEFT,
-                                    chars::CODE_HORIZONTAL.repeat(40)
-                                ),
-                                Style::default().fg(colors::code_border()),
+                                "```",
+                                Styles::code_lang(),
                             )));
                             code_language = None;
                         }
@@ -322,19 +319,13 @@ impl StreamingMarkdownRenderer {
                 MdEvent::Text(text) => {
                     if in_code_block {
                         for line in text.lines() {
+                            // Show ```{lang} at start of code block
                             if current_line.is_empty() && code_language.is_some() {
                                 let lang = code_language.take().unwrap();
-                                self.lines.push(Line::from(vec![
-                                    Span::styled(
-                                        format!(
-                                            "{}{} ",
-                                            chars::CODE_TOP_LEFT,
-                                            chars::CODE_HORIZONTAL.repeat(2)
-                                        ),
-                                        Style::default().fg(colors::code_border()),
-                                    ),
-                                    Span::styled(lang, Styles::code_lang()),
-                                ]));
+                                self.lines.push(Line::from(Span::styled(
+                                    format!("```{lang}"),
+                                    Styles::code_lang(),
+                                )));
                             }
                             if !current_line.is_empty() {
                                 self.lines.push(Line::from(
@@ -350,15 +341,12 @@ impl StreamingMarkdownRenderer {
                                 ));
                                 current_line = Vec::new();
                             }
-                            // Convert tabs to 2 spaces for consistent display width
+                            // Simple code line without border
                             let expanded_line = line.replace('\t', "  ");
-                            self.lines.push(Line::from(vec![
-                                Span::styled(
-                                    format!("{} ", chars::CODE_VERTICAL),
-                                    Style::default().fg(colors::code_border()),
-                                ),
-                                Span::styled(expanded_line, Style::default().fg(colors::code_fg())),
-                            ]));
+                            self.lines.push(Line::from(Span::styled(
+                                expanded_line,
+                                Style::default().fg(colors::code_fg()).bg(colors::code_bg()),
+                            )));
                         }
                     } else if in_table {
                         if let Some(ref mut tr) = self.table_renderer {

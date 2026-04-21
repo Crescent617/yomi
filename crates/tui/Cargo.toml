@@ -28,5 +28,8 @@ tempfile = { workspace = true }
 image = { workspace = true, features = ["png"] }
 base64 = { workspace = true }
 
+# Text wrapping for accurate selection
+textwrap = { workspace = true }
+
 [lints]
 workspace = true
