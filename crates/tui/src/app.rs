@@ -408,7 +408,10 @@ impl Model {
         app.mount(
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
-            vec![Sub::new(SubEventClause::Tick, SubClause::Always), Sub::new(SubEventClause::Any, SubClause::Always)],
+            vec![
+                Sub::new(SubEventClause::Tick, SubClause::Always),
+                Sub::new(SubEventClause::Any, SubClause::Always),
+            ],
         )?;
 
         // Mount info bar component (token/streaming status)
@@ -428,7 +431,10 @@ impl Model {
         app.mount(
             Id::StatusBar,
             Box::new(StatusBarComponent::new()),
-            vec![Sub::new(SubEventClause::Tick, SubClause::Always), Sub::new(SubEventClause::Any, SubClause::Always)],
+            vec![
+                Sub::new(SubEventClause::Tick, SubClause::Always),
+                Sub::new(SubEventClause::Any, SubClause::Always),
+            ],
         )?;
 
         // Mount select dialog component (hidden by default, for permission confirmation)

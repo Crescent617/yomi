@@ -250,10 +250,8 @@ impl StreamingMarkdownRenderer {
                                 current_line = Vec::new();
                             }
                             // Show closing ```
-                            self.lines.push(Line::from(Span::styled(
-                                "```",
-                                Styles::code_lang(),
-                            )));
+                            self.lines
+                                .push(Line::from(Span::styled("```", Styles::code_lang())));
                             code_language = None;
                         }
                         TagEnd::Item => {

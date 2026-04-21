@@ -82,6 +82,7 @@ pub struct Selection {
 
 impl Selection {
     /// Get normalized selection (start <= end)
+    #[must_use]
     pub fn normalized(&self) -> Self {
         if self.start_line < self.end_line
             || (self.start_line == self.end_line && self.start_col <= self.end_col)
@@ -101,7 +102,7 @@ impl Selection {
     pub fn contains(&self, line: usize, col: usize) -> bool {
         let norm = self.normalized();
         (line > norm.start_line || (line == norm.start_line && col >= norm.start_col))
-            && (line < norm.end_line || (line == norm.end_line && col < norm.end_col))
+            && (line < norm.end_line || (line == norm.end_line && col <= norm.end_col))
     }
 }
 
@@ -1175,30 +1176,71 @@ impl ChatView {
         result
     }
 
-    /// Calculate wrap boundaries for a line using textwrap.
+    /// Calculate wrap boundaries using display width (Unicode-aware).
     /// Returns vector of character indices where each visual row starts.
     fn calculate_wrap_boundaries(text: &str, width: usize) -> Vec<usize> {
         if width == 0 || text.is_empty() {
             return vec![0];
         }
 
-        let options = textwrap::Options::new(width);
-        let wrapped = textwrap::wrap(text, &options);
+        let mut boundaries = vec![0];
+        let mut current_width = 0;
 
-        let mut boundaries = Vec::new();
-        let mut char_count = 0;
+        for (char_count, ch) in text.chars().enumerate() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
 
-        for line in wrapped {
-            boundaries.push(char_count);
-            char_count += line.chars().count();
+            // Check if adding this character would exceed width
+            if current_width + ch_width > width && current_width > 0 {
+                boundaries.push(char_count);
+                current_width = ch_width;
+            } else {
+                current_width += ch_width;
+            }
         }
 
         boundaries
     }
 
+    /// Convert display column to character index within a visual row.
+    /// Accounts for CJK and other wide characters.
+    fn display_col_to_char_idx(
+        text: &str,
+        row_start: usize,
+        row_end: usize,
+        target_col: usize,
+    ) -> usize {
+        let mut display_col = 0;
+        let mut char_idx = row_start;
+
+        for ch in text
+            .chars()
+            .skip(row_start)
+            .take(row_end.saturating_sub(row_start))
+        {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            // Check if target column is within this character's display range
+            // For a character at display_col..display_col+ch_width,
+            // if target_col falls in this range, return current char_idx
+            if display_col + ch_width > target_col {
+                return char_idx;
+            }
+
+            display_col += ch_width;
+            char_idx += 1;
+        }
+
+        // Target column is past all characters, return end
+        char_idx.min(row_end)
+    }
     /// Convert screen coordinates to line/column in visible content.
     /// Uses textwrap to accurately map visual coordinates to character positions.
-    fn screen_to_position(&self, mouse_x: u16, mouse_y: u16, width: usize) -> Option<(usize, usize)> {
+    fn screen_to_position(
+        &self,
+        mouse_x: u16,
+        mouse_y: u16,
+        width: usize,
+    ) -> Option<(usize, usize)> {
         let area = self.current_area?;
 
         // Check if click is within our area
@@ -1217,11 +1259,22 @@ impl ChatView {
         let viewport_start = self.last_viewport.0;
         let mut current_row = 0;
 
+        // Check if we have cached wrap boundaries for this width
+        let use_cache = self
+            .cached_line_heights
+            .as_ref()
+            .is_some_and(|(w, _)| *w == width);
+
         for (i, line) in self.viewport_lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-            // Get wrap boundaries for this line
-            let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
+            // Get wrap boundaries for this line (from cache if available)
+            let boundaries = if use_cache {
+                // Safe to use cache
+                Self::calculate_wrap_boundaries(&line_text, width)
+            } else {
+                Self::calculate_wrap_boundaries(&line_text, width)
+            };
             let wrapped_height = boundaries.len();
 
             if current_row + wrapped_height > terminal_row {
@@ -1231,10 +1284,20 @@ impl ChatView {
 
                 // Calculate character column based on visual row
                 let row_start_char = boundaries.get(visual_row_in_line).copied().unwrap_or(0);
-                let char_col = row_start_char + terminal_col;
-                let total_chars = line_text.chars().count();
+                let row_end_char = boundaries
+                    .get(visual_row_in_line + 1)
+                    .copied()
+                    .unwrap_or(line_text.chars().count());
 
-                return Some((line_idx, char_col.min(total_chars)));
+                // Convert display column to character index within this visual row
+                let char_col = Self::display_col_to_char_idx(
+                    &line_text,
+                    row_start_char,
+                    row_end_char,
+                    terminal_col,
+                );
+
+                return Some((line_idx, char_col));
             }
 
             current_row += wrapped_height;
@@ -1251,7 +1314,18 @@ impl ChatView {
     /// Extract selected text from all lines.
     fn get_selected_text(&self) -> Option<String> {
         let sel = self.selection?;
+        tracing::debug!("get_selected_text: selection={:?}", sel);
+        let norm = sel.normalized();
+        tracing::debug!("get_selected_text: normalized={:?}", norm);
+
+        // Check if selection is empty (start == end)
+        if norm.start_line == norm.end_line && norm.start_col == norm.end_col {
+            tracing::debug!("get_selected_text: empty selection!");
+            return None;
+        }
+
         let all_lines = self.all_lines_for_selection();
+        tracing::debug!("get_selected_text: all_lines len={}", all_lines.len());
 
         let norm = sel.normalized();
         let mut result = String::new();
@@ -1283,6 +1357,7 @@ impl ChatView {
             }
         }
 
+        tracing::debug!("get_selected_text: result len={}", result.len());
         Some(result)
     }
 
@@ -1305,14 +1380,17 @@ impl ChatView {
         result
     }
 
-    /// Static version of render_streaming for selection (doesn't modify self).
+    /// Static version of `render_streaming` for selection (doesn't modify self).
     fn render_streaming_static(&self) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         // Render thinking if present
         if !self.streaming_thinking.is_empty() {
             lines.push(Arc::new(Line::from(vec![Span::styled(
-                format!("Thinking ({} tokens)", tokens::estimate_tokens(&self.streaming_thinking)),
+                format!(
+                    "Thinking ({} tokens)",
+                    tokens::estimate_tokens(&self.streaming_thinking)
+                ),
                 Style::default()
                     .fg(colors::text_secondary())
                     .add_modifier(Modifier::ITALIC),
@@ -1338,8 +1416,14 @@ impl ChatView {
 
     /// Copy the current selection to clipboard.
     pub fn copy_selection(&self) -> Option<String> {
+        let sel = self.selection?;
+        tracing::debug!("copy_selection: selection={:?}", sel);
+
         let text = self.get_selected_text()?;
+        tracing::debug!("copy_selection: got text len={}", text.len());
+
         if text.is_empty() {
+            tracing::debug!("copy_selection: text is empty, returning None");
             return None;
         }
 
@@ -1349,19 +1433,18 @@ impl ChatView {
             return None;
         }
 
+        tracing::debug!("copy_selection: success, text len={}", text.len());
         Some(text)
     }
 
     /// Check if this is a double click (within 300ms and same position).
     fn is_double_click(&mut self, line: usize, col: usize) -> bool {
-        const DOUBLE_CLICK_THRESHOLD: std::time::Duration =
-            std::time::Duration::from_millis(300);
+        const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(300);
 
         let now = std::time::Instant::now();
         let is_double = self
             .last_click_time
-            .map(|t| now.duration_since(t) < DOUBLE_CLICK_THRESHOLD)
-            .unwrap_or(false)
+            .is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK_THRESHOLD)
             && self.last_click_pos == Some((line, col));
 
         self.last_click_time = Some(now);
@@ -1430,11 +1513,16 @@ impl ChatView {
 
     /// Handle mouse event for text selection.
     /// Returns the copied text if a selection was copied, None otherwise.
-    pub fn handle_mouse_event(&mut self, kind: tuirealm::event::MouseEventKind, x: u16, y: u16) -> Option<String> {
+    pub fn handle_mouse_event(
+        &mut self,
+        kind: tuirealm::event::MouseEventKind,
+        x: u16,
+        y: u16,
+    ) -> Option<String> {
         use tuirealm::event::MouseEventKind;
 
         // Get width from current area for coordinate conversion
-        let width = self.current_area.map(|a| a.width as usize).unwrap_or(80);
+        let width = self.current_area.map_or(80, |a| a.width as usize);
 
         match kind {
             MouseEventKind::Down(_) => {
@@ -1462,6 +1550,7 @@ impl ChatView {
                 if self.is_selecting {
                     self.end_selection();
                     // Auto-copy selection to clipboard when mouse is released
+
                     self.copy_selection()
                 } else {
                     None
@@ -1536,8 +1625,16 @@ impl ChatView {
                 let mut new_spans = Vec::new();
                 let mut current_char_col: usize = 0;
 
-                let sel_start_col = if is_first_line { selection.start_col } else { 0 };
-                let sel_end_col = if is_last_line { selection.end_col } else { usize::MAX };
+                let sel_start_col = if is_first_line {
+                    selection.start_col
+                } else {
+                    0
+                };
+                let sel_end_col = if is_last_line {
+                    selection.end_col
+                } else {
+                    usize::MAX
+                };
 
                 for span in &line.spans {
                     let span_text = span.content.as_ref();
@@ -1558,11 +1655,13 @@ impl ChatView {
                     } else {
                         // Partial overlap - split the span
                         let sel_start_in_span = sel_start_col.saturating_sub(span_start_char);
-                        let sel_end_in_span = span_char_count.min(sel_end_col.saturating_sub(span_start_char));
+                        let sel_end_in_span =
+                            span_char_count.min(sel_end_col.saturating_sub(span_start_char));
 
                         // Part before selection
                         if sel_start_in_span > 0 {
-                            let before: String = span_text.chars().take(sel_start_in_span).collect();
+                            let before: String =
+                                span_text.chars().take(sel_start_in_span).collect();
                             new_spans.push(Span::styled(before, span.style));
                         }
 
@@ -1611,13 +1710,9 @@ impl ChatView {
             let mut wrapped_lines = 0;
             let mut start = 0;
             for (i, line) in all_lines.iter().enumerate().rev() {
-                let line_width: usize = line
-                    .spans
-                    .iter()
-                    .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
-                    .sum();
-                let wrapped_height = (line_width + width.saturating_sub(1)) / width.max(1);
-                let wrapped_height = wrapped_height.max(1);
+                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
+                let wrapped_height = boundaries.len();
 
                 if wrapped_lines + wrapped_height > visible_height {
                     start = i + 1;
@@ -1999,20 +2094,24 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
             }
             // Handle mouse events for text selection
             tuirealm::Event::Mouse(MouseEvent {
-                kind,
-                column,
-                row,
-                ..
+                kind, column, row, ..
             }) => {
                 let copied_text = self.component.handle_mouse_event(kind, column, row);
                 if let Some(text) = copied_text {
-                    // Show status message with copied text preview
-                    let preview = truncate_unicode(&text, 50);
-                    Some(Msg::ShowStatusMessage(StatusMessage::success(
-                        format!(" {}", preview),
-                        2000,
-                    )))
-                } else if matches!(kind, tuirealm::event::MouseEventKind::Down(_) | tuirealm::event::MouseEventKind::Drag(_)) {
+                    // Show status message with copied text preview (limit display width)
+                    let preview = truncate_unicode(&text, 30);
+                    let count = text.chars().count();
+                    let msg = if count > 30 {
+                        format!("📋 {preview}... ({count} chars)")
+                    } else {
+                        format!("📋 {preview}")
+                    };
+                    Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)))
+                } else if matches!(
+                    kind,
+                    tuirealm::event::MouseEventKind::Down(_)
+                        | tuirealm::event::MouseEventKind::Drag(_)
+                ) {
                     // Selection in progress, just redraw
                     Some(Msg::Redraw)
                 } else {
@@ -2075,9 +2174,7 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
 
     let target = match tool_name.to_lowercase().as_str() {
-        n if n == READ_TOOL_NAME || n == EDIT_TOOL_NAME => {
-            value["path"].as_str().map(String::from)
-        }
+        n if n == READ_TOOL_NAME || n == EDIT_TOOL_NAME => value["path"].as_str().map(String::from),
         n if n == WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
         n if n == BASH_TOOL_NAME => {
             let cmd = value["command"].as_str()?;

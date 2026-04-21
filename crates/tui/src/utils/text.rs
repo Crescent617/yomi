@@ -11,8 +11,7 @@ pub fn preprocess(text: impl AsRef<str>) -> String {
 pub fn char_idx_to_byte_idx(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
-        .map(|(byte_idx, _)| byte_idx)
-        .unwrap_or(text.len())
+        .map_or(text.len(), |(byte_idx, _)| byte_idx)
 }
 
 /// Extract substring by character indices (Unicode-safe)

@@ -23,13 +23,11 @@ tracing = { workspace = true }
 serde_json = { workspace = true }
 
 # Image clipboard support
-arboard = { workspace = true, features = ["image-data"] }
+# Enable wayland-data-control for native Wayland support (no XWayland needed)
+arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 tempfile = { workspace = true }
 image = { workspace = true, features = ["png"] }
 base64 = { workspace = true }
-
-# Text wrapping for accurate selection
-textwrap = { workspace = true }
 
 [lints]
 workspace = true
