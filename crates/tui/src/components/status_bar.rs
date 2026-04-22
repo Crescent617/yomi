@@ -205,7 +205,7 @@ impl StatusBar {
             }
             AppMode::Browse => (colors::accent_system(), " BROWSE ".to_string()),
         };
-        let fg = colors::code_bg();
+        let fg = colors::selected_bg();
 
         Span::styled(
             text,
