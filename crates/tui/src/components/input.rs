@@ -393,9 +393,10 @@ pub struct InputComponent {
     command_completion: CompletionList<(String, String)>,
     // File completion (@-mention)
     file_completion: FileCompletion,
-    // Image paste support
-    image_counter: usize,
+    // Paste support (images and text)
+    placeholder_counter: usize,
     image_paths: std::collections::HashMap<String, std::path::PathBuf>,
+    pasted_contents: std::collections::HashMap<String, String>,
 }
 
 impl Default for InputComponent {
@@ -414,8 +415,9 @@ impl InputComponent {
             saved_input: String::new(),
             command_completion: CompletionList::new(),
             file_completion: FileCompletion::new(),
-            image_counter: 0,
+            placeholder_counter: 0,
             image_paths: std::collections::HashMap::new(),
+            pasted_contents: std::collections::HashMap::new(),
         }
     }
 
@@ -469,8 +471,12 @@ impl InputComponent {
             return None;
         }
 
-        self.image_counter += 1;
-        let filename = format!("paste_{}_{}.png", std::process::id(), self.image_counter);
+        self.placeholder_counter += 1;
+        let filename = format!(
+            "paste_{}_{}.png",
+            std::process::id(),
+            self.placeholder_counter
+        );
         let filepath = temp_dir.join(&filename);
 
         // Check if bytes length is valid for RGBA
@@ -503,19 +509,30 @@ impl InputComponent {
         tracing::info!("Saved pasted image to: {:?}", filepath);
 
         // Create placeholder and store mapping
-        let placeholder = format!("[Img #{}]", self.image_counter);
+        let placeholder = format!("[Pasted #{} image]", self.placeholder_counter);
         self.image_paths.insert(placeholder.clone(), filepath);
 
         Some(placeholder)
     }
 
-    /// Get current input as content blocks (with image placeholders converted)
+    /// Handle text paste by creating a placeholder
+    fn handle_text_paste(&mut self, text: String) -> Msg {
+        self.placeholder_counter += 1;
+        let placeholder = format!("[Pasted #{} text]", self.placeholder_counter);
+        self.pasted_contents.insert(placeholder.clone(), text);
+        self.component.insert_str(&placeholder);
+        self.update_completion();
+        Msg::InputChanged(self.component.content().to_string())
+    }
+
+    /// Get current input as content blocks (with image and paste placeholders converted)
     pub fn get_content_blocks(&self) -> Vec<kernel::types::ContentBlock> {
         let text = self.component.content();
         tracing::debug!(
-            "get_content_blocks: text='{}', image_paths={:?}",
+            "get_content_blocks: text='{}', image_paths={:?}, pasted_contents={:?}",
             text,
-            self.image_paths
+            self.image_paths,
+            self.pasted_contents
         );
         let blocks = self.convert_to_content_blocks(text);
         tracing::info!("Converted to {} content blocks", blocks.len());
@@ -542,14 +559,15 @@ impl InputComponent {
 
     /// Convert input content with placeholders to content blocks
     /// Images are converted to base64 data URLs for LLM API compatibility
+    /// Paste placeholders [Pasted #N image/text] are replaced with actual content
     fn convert_to_content_blocks(&self, text: &str) -> Vec<kernel::types::ContentBlock> {
         use kernel::types::{ContentBlock, ImageUrl};
 
         let mut blocks = Vec::new();
         let mut remaining = text;
 
-        // Find all placeholders and split text
-        while let Some(start) = remaining.find("[Img #") {
+        // Find all placeholders (both image and paste) and split text
+        while let Some(start) = remaining.find('[') {
             // Add text before placeholder
             if start > 0 {
                 blocks.push(ContentBlock::Text {
@@ -559,35 +577,40 @@ impl InputComponent {
 
             // Find placeholder end
             if let Some(end) = remaining[start..].find(']') {
-                let placeholder = &remaining[start..=(start + end)];
+                let end_idx = start + end;
+                let potential_placeholder = &remaining[start..=end_idx];
 
-                // Look up image path and convert to base64
-                if let Some(path) = self.image_paths.get(placeholder) {
+                // Check if it's a known placeholder
+                if let Some(path) = self.image_paths.get(potential_placeholder) {
+                    // Image placeholder
                     match Self::image_to_base64_url(path) {
-                        Some(base64_url) => {
-                            blocks.push(ContentBlock::ImageUrl {
-                                image_url: ImageUrl {
-                                    url: base64_url,
-                                    detail: Some("auto".to_string()),
-                                },
-                            });
-                        }
-                        None => {
-                            // Failed to convert, show error message to user
-                            blocks.push(ContentBlock::Text {
-                                text: format!("[Error: Failed to process {placeholder} - unsupported format or read error]"),
-                            });
-                        }
+                        Some(base64_url) => blocks.push(ContentBlock::ImageUrl {
+                            image_url: ImageUrl {
+                                url: base64_url,
+                                detail: Some("auto".to_string()),
+                            },
+                        }),
+                        None => blocks.push(ContentBlock::Text {
+                            text: format!("[Error: Failed to process {potential_placeholder}]"),
+                        }),
                     }
-                } else {
-                    // Unknown placeholder, treat as text
+                    remaining = &remaining[end_idx + 1..];
+                } else if let Some(pasted_text) = self.pasted_contents.get(potential_placeholder) {
+                    // Text placeholder
                     blocks.push(ContentBlock::Text {
-                        text: placeholder.to_string(),
+                        text: pasted_text.clone(),
                     });
+                    remaining = &remaining[end_idx + 1..];
                 }
-
-                remaining = &remaining[start + end + 1..];
+                // Not a recognized placeholder, treat '[' as regular text
+                else {
+                    blocks.push(ContentBlock::Text {
+                        text: "[".to_string(),
+                    });
+                    remaining = &remaining[start + 1..];
+                }
             } else {
+                // No closing ']', treat as regular text
                 break;
             }
         }
@@ -1164,8 +1187,13 @@ impl InputComponent {
             return Some(self.handle_file_completion_input(ev));
         }
 
+        // Handle paste event first (needs to borrow text)
+        if let tuirealm::Event::Paste(text) = ev {
+            return Some(self.handle_text_paste(text.clone()));
+        }
+
         match *ev {
-            // Ctrl+V: paste from clipboard (image or text)
+            // Ctrl+V: paste from clipboard (fallback for systems without bracketed paste)
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('v'),
                 modifiers: KeyModifiers::CONTROL,
@@ -1182,13 +1210,7 @@ impl InputComponent {
                     use arboard::Clipboard;
                     match Clipboard::new() {
                         Ok(mut clipboard) => match clipboard.get_text() {
-                            Ok(text) => {
-                                self.component.insert_str(&text);
-                                self.update_completion();
-                                return Some(Msg::InputChanged(
-                                    self.component.content().to_string(),
-                                ));
-                            }
+                            Ok(text) => return Some(self.handle_text_paste(text)),
                             Err(e) => tracing::debug!("No text in clipboard: {}", e),
                         },
                         Err(e) => tracing::debug!("Failed to create clipboard: {}", e),
@@ -1240,10 +1262,11 @@ impl InputComponent {
                         Some(cmd_msg)
                     } else {
                         // Regular input with multi-modal support
-                        // Clear input and image mappings after submitting
+                        // Clear input and mappings after submitting
                         let _ = self.component.submit();
-                        self.image_counter = 0;
+                        self.placeholder_counter = 0;
                         self.image_paths.clear();
+                        self.pasted_contents.clear();
                         Some(Msg::InputSubmit(content_blocks))
                     }
                 } else {

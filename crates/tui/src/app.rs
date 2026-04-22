@@ -887,6 +887,9 @@ impl Model {
         // Enable mouse capture
         self.terminal.enable_mouse_capture()?;
 
+        // Enable bracketed paste mode for paste event detection
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
+
         // Send initial message if provided (from CLI prompt arg)
         if let Some(initial_msg) = self.state.initial_message.take() {
             let blocks = vec![ContentBlock::Text { text: initial_msg }];
@@ -939,6 +942,9 @@ impl Model {
 
         // Disable mouse capture before exit
         self.terminal.disable_mouse_capture()?;
+
+        // Disable bracketed paste mode on exit
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
 
         Ok(())
     }
