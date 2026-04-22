@@ -832,6 +832,26 @@ impl ChatView {
                         Style::default().fg(colors::text_primary()),
                     ));
                 }
+
+                // For bash commands, add timeout info with text_secondary style
+                if tool_name == BASH_TOOL_NAME {
+                    if let Some(ref args) = arguments {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
+                            let timeout_secs = value["timeout"].as_u64();
+                            let background = value["background"].as_bool().unwrap_or(false);
+                            if let Some(t) = timeout_secs {
+                                // Only show timeout if explicitly set or background mode
+                                if background || t != 60 {
+                                    header_spans.push(Span::styled(
+                                        format!(" timeout {t}s"),
+                                        Style::default().fg(colors::text_secondary()),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 lines.push(Arc::new(Line::from(header_spans)));
 
                 // Output peek in folded mode (max 50 chars, indented)
@@ -2167,28 +2187,8 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
         n if n == WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
         n if n == BASH_TOOL_NAME => {
             let cmd = value["command"].as_str()?;
-            let cmd_display = truncate_unicode(cmd, 50); // Reserve space for suffix
-
-            let timeout_secs = value["timeout"].as_u64();
-            let background = value["background"].as_bool().unwrap_or(false);
-
-            // Build suffix like [async, 120s] or [60s]
-            let mut parts = Vec::new();
-            if background {
-                parts.push("async".to_string());
-            }
-            if let Some(t) = timeout_secs {
-                // Only show timeout if explicitly set or background mode
-                if background || t != 60 {
-                    parts.push(format!("{t}s"));
-                }
-            }
-
-            if parts.is_empty() {
-                Some(cmd_display)
-            } else {
-                Some(format!("{} [{}]", cmd_display, parts.join(", ")))
-            }
+            // Return command only, timeout will be rendered separately with text_secondary style
+            Some(truncate_unicode(cmd, 50))
         }
         n if n == GLOB_TOOL_NAME || n == GREP_TOOL_NAME => {
             value["pattern"].as_str().map(String::from)
