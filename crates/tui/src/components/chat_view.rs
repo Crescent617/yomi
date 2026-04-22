@@ -45,6 +45,17 @@ pub enum ToolStatus {
     Cancelled,
 }
 
+/// Result of handling a mouse event
+#[derive(Debug)]
+pub enum MouseAction {
+    /// Selection was copied to clipboard
+    Copied(String),
+    /// Scroll-to-bottom button was clicked
+    ScrollToBottom,
+    /// No action taken
+    None,
+}
+
 /// A chat message in history
 #[derive(Debug, Clone)]
 pub enum HistoryMessage {
@@ -152,6 +163,8 @@ pub struct ChatView {
     last_click_pos: Option<(usize, usize)>,
     // Current display area for mouse coordinate conversion
     current_area: Option<Rect>,
+    // Scroll-to-bottom button area for click detection
+    scroll_button_area: Option<Rect>,
 }
 
 impl Default for ChatView {
@@ -184,6 +197,7 @@ impl Default for ChatView {
             last_click_time: None,
             last_click_pos: None,
             current_area: None,
+            scroll_button_area: None,
         }
     }
 }
@@ -1520,15 +1534,48 @@ impl ChatView {
         self.is_selecting = true;
     }
 
+    /// Check if a point is within the scroll-to-bottom button area.
+    /// Also validates that the button area is within the current display area
+    /// to prevent stale area bugs after window resize.
+    fn is_click_on_scroll_button(&self, x: u16, y: u16) -> bool {
+        let Some(button_area) = self.scroll_button_area else {
+            return false;
+        };
+        let Some(current_area) = self.current_area else {
+            return false;
+        };
+
+        // Validate button area is within current display bounds
+        let button_in_bounds = button_area.x >= current_area.x
+            && button_area.y >= current_area.y
+            && button_area.x + button_area.width <= current_area.x + current_area.width
+            && button_area.y + button_area.height <= current_area.y + current_area.height;
+
+        if !button_in_bounds {
+            return false;
+        }
+
+        x >= button_area.x
+            && x < button_area.x + button_area.width
+            && y >= button_area.y
+            && y < button_area.y + button_area.height
+    }
+
     /// Handle mouse event for text selection.
-    /// Returns the copied text if a selection was copied, None otherwise.
+    /// Returns the action taken based on the mouse event.
     pub fn handle_mouse_event(
         &mut self,
         kind: tuirealm::event::MouseEventKind,
         x: u16,
         y: u16,
-    ) -> Option<String> {
+    ) -> MouseAction {
         use tuirealm::event::MouseEventKind;
+
+        // Check if scroll button was clicked (on Down event)
+        if matches!(kind, MouseEventKind::Down(_)) && self.is_click_on_scroll_button(x, y) {
+            self.scroll_to_bottom();
+            return MouseAction::ScrollToBottom;
+        }
 
         // Get width from current area for coordinate conversion
         let width = self.current_area.map_or(80, |a| a.width as usize);
@@ -1541,10 +1588,10 @@ impl ChatView {
                     } else {
                         self.start_selection(line, col);
                     }
-                    None
+                    MouseAction::None
                 } else {
                     self.clear_selection();
-                    None
+                    MouseAction::None
                 }
             }
             MouseEventKind::Drag(_) => {
@@ -1553,19 +1600,21 @@ impl ChatView {
                         self.update_selection(line, col);
                     }
                 }
-                None
+                MouseAction::None
             }
             MouseEventKind::Up(_) => {
                 if self.is_selecting {
                     self.end_selection();
                     // Auto-copy selection to clipboard when mouse is released
-
-                    self.copy_selection()
+                    match self.copy_selection() {
+                        Some(text) => MouseAction::Copied(text),
+                        None => MouseAction::None,
+                    }
                 } else {
-                    None
+                    MouseAction::None
                 }
             }
-            _ => None,
+            _ => MouseAction::None,
         }
     }
 
@@ -1773,6 +1822,53 @@ impl ChatView {
         }
         self.last_viewport = (start_line, end_line);
     }
+
+    /// Draw scroll-to-bottom button at the bottom center
+    fn draw_scroll_button(&mut self, frame: &mut Frame, area: Rect) {
+        use tuirealm::ratatui::{
+            layout::Alignment,
+            widgets::{Clear, Paragraph},
+        };
+
+        const BUTTON_TEXT: &str = "↓ Bottom";
+        const BUTTON_WIDTH: u16 = 10; // "↓ Bottom" = 8 chars + 2 padding
+        const BUTTON_HEIGHT: u16 = 1;
+
+        // Position button at bottom-center
+        let button_x = area
+            .x
+            .saturating_add(area.width / 2)
+            .saturating_sub(BUTTON_WIDTH / 2);
+        let button_y = area
+            .y
+            .saturating_add(area.height)
+            .saturating_sub(BUTTON_HEIGHT)
+            .max(area.y);
+
+        let button_area = Rect {
+            x: button_x,
+            y: button_y,
+            width: BUTTON_WIDTH.min(area.width),
+            height: BUTTON_HEIGHT.min(area.height),
+        };
+
+        // Store button area for click detection
+        self.scroll_button_area = Some(button_area);
+
+        // Clear the area behind the button
+        frame.render_widget(Clear, button_area);
+
+        // Render button with accent style
+        let button_style = Style::default()
+            .fg(colors::text_primary())
+            .bg(colors::surface());
+
+        let button = Paragraph::new(BUTTON_TEXT)
+            .style(button_style)
+            .alignment(Alignment::Center);
+
+        frame.render_widget(button, button_area);
+    }
 }
 
 impl MockComponent for ChatView {
@@ -1780,12 +1876,19 @@ impl MockComponent for ChatView {
         let visible_height = area.height as usize;
         self.last_visible_height = visible_height;
         self.current_area = Some(area);
+        // Reset scroll button area at start of each frame
+        self.scroll_button_area = None;
 
         let lines = self.get_lines(visible_height, area.width as usize);
         let paragraph = Paragraph::new(Text::from(lines))
             .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
+
+        // Draw scroll-to-bottom button if not at bottom
+        if self.scroll_offset > 0 {
+            self.draw_scroll_button(frame, area);
+        }
     }
 
     fn query(&self, attr: Attribute) -> Option<AttrValue> {
@@ -2101,30 +2204,36 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
                 self.component.tick();
                 Some(Msg::Redraw)
             }
-            // Handle mouse events for text selection
+            // Handle mouse events for text selection and scroll button
             tuirealm::Event::Mouse(MouseEvent {
                 kind, column, row, ..
             }) => {
-                let copied_text = self.component.handle_mouse_event(kind, column, row);
-                if let Some(text) = copied_text {
-                    // Show status message with copied text preview (limit display width)
-                    let preview = truncate_unicode(&text, 30);
-                    let count = text.chars().count();
-                    let msg = if count > 30 {
-                        format!("📋 {preview}... ({count} chars)")
-                    } else {
-                        format!("📋 {preview}")
-                    };
-                    Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)))
-                } else if matches!(
-                    kind,
-                    tuirealm::event::MouseEventKind::Down(_)
-                        | tuirealm::event::MouseEventKind::Drag(_)
-                ) {
-                    // Selection in progress, just redraw
-                    Some(Msg::Redraw)
-                } else {
-                    None
+                let action = self.component.handle_mouse_event(kind, column, row);
+                match action {
+                    MouseAction::ScrollToBottom => Some(Msg::Redraw),
+                    MouseAction::Copied(text) => {
+                        // Show status message with copied text preview (limit display width)
+                        let preview = truncate_unicode(&text, 30);
+                        let count = text.chars().count();
+                        let msg = if count > 30 {
+                            format!("📋 {preview}... ({count} chars)")
+                        } else {
+                            format!("📋 {preview}")
+                        };
+                        Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)))
+                    }
+                    MouseAction::None => {
+                        if matches!(
+                            kind,
+                            tuirealm::event::MouseEventKind::Down(_)
+                                | tuirealm::event::MouseEventKind::Drag(_)
+                        ) {
+                            // Selection in progress, just redraw
+                            Some(Msg::Redraw)
+                        } else {
+                            None
+                        }
+                    }
                 }
             }
             _ => None,

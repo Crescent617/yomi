@@ -59,13 +59,13 @@ pub struct ThemeConfig {
 }
 
 impl Default for ThemeConfig {
-    /// Default theme with transparent backgrounds
+    /// Default theme with dark surface colors for input areas
     fn default() -> Self {
         Self {
             // Core backgrounds - default to transparent
             background: Color::Reset,
-            surface: Color::Reset,
-            surface_hover: Color::Reset,
+            surface: hex("#484955"),       // Dark surface for input areas
+            surface_hover: hex("#5A5A6A"), // Slightly lighter for hover states
 
             // Text colors
             text_primary: hex("#F5F5FA"),
@@ -91,7 +91,7 @@ impl Default for ThemeConfig {
             divider: hex("#707080"),
 
             // Selection - subtle blue-gray background
-            selected_bg: hex("#3A4A5A"),
+            selected_bg: hex("#4A4A5F"),
         }
     }
 }
