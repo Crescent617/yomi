@@ -1259,22 +1259,11 @@ impl ChatView {
         let viewport_start = self.last_viewport.0;
         let mut current_row = 0;
 
-        // Check if we have cached wrap boundaries for this width
-        let use_cache = self
-            .cached_line_heights
-            .as_ref()
-            .is_some_and(|(w, _)| *w == width);
-
         for (i, line) in self.viewport_lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
 
-            // Get wrap boundaries for this line (from cache if available)
-            let boundaries = if use_cache {
-                // Safe to use cache
-                Self::calculate_wrap_boundaries(&line_text, width)
-            } else {
-                Self::calculate_wrap_boundaries(&line_text, width)
-            };
+            // Calculate wrap boundaries for this line
+            let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
             let wrapped_height = boundaries.len();
 
             if current_row + wrapped_height > terminal_row {
