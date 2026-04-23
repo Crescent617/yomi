@@ -344,7 +344,7 @@ impl InputMock {
     }
 
     /// Handle mouse event for text selection
-    /// Returns MouseEventResult indicating how the event was handled
+    /// Returns `MouseEventResult` indicating how the event was handled
     pub fn handle_mouse_event(
         &mut self,
         kind: tuirealm::event::MouseEventKind,

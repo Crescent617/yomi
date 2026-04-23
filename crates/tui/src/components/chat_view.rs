@@ -1239,12 +1239,9 @@ impl ChatView {
         // Use byte-based slicing carefully to avoid panics
         let start_char_idx = text
             .get(..safe_start_byte)
-            .map(|s| s.chars().count())
-            .unwrap_or(0);
+            .map_or(0, |s| s.chars().count());
         let end_char_idx = text
-            .get(..safe_end_byte)
-            .map(|s| s.chars().count())
-            .unwrap_or_else(|| text.chars().count());
+            .get(..safe_end_byte).map_or_else(|| text.chars().count(), |s| s.chars().count());
 
         for (i, ch) in text.chars().enumerate() {
             if i < start_char_idx {
@@ -1314,7 +1311,7 @@ impl ChatView {
                 let row_end_byte = boundaries
                     .get(visual_row_in_line + 1)
                     .copied()
-                    .unwrap_or_else(|| line_text.len());
+                    .unwrap_or(line_text.len());
 
                 // Convert display column to character index within this visual row
                 let char_col = Self::display_col_to_char_idx(

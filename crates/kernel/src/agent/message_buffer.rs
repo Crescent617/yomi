@@ -7,6 +7,12 @@ pub struct MessageBuffer {
     messages: Vec<Arc<Message>>,
 }
 
+impl Default for MessageBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(dead_code)]
 impl MessageBuffer {
     /// Create an empty buffer
@@ -24,8 +30,10 @@ impl MessageBuffer {
     }
 
     /// Create from existing Arc messages (internal use)
-    pub fn from_arc_messages(messages: Vec<Arc<Message>>) -> Self {
-        Self { messages }
+    pub fn from_arc_messages(messages: &[Arc<Message>]) -> Self {
+        Self {
+            messages: messages.to_vec(),
+        }
     }
 
     pub fn push(&mut self, message: Message) {
