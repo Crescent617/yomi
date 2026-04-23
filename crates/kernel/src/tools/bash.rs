@@ -5,14 +5,27 @@ use crate::utils::id::gen_base56_id;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use regex::Regex;
 use serde_json::Value;
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+
+/// Regex to match ANSI escape sequences
+static ANSI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])").unwrap()
+});
+
+/// Strip ANSI escape sequences from text
+#[inline]
+fn strip_ansi(text: &str) -> String {
+    ANSI_REGEX.replace_all(text, "").to_string()
+}
 
 pub const BASH_TOOL_NAME: &str = "bash";
 
@@ -134,7 +147,10 @@ impl BashTool {
         };
 
         let exit_code = output.status.code().unwrap_or(-1);
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        // Strip ANSI escape sequences from output
+        let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+        let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
 
         if exit_code == 0 {
             tracing::debug!(
@@ -149,7 +165,6 @@ impl BashTool {
             );
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         if exit_code == 0 {
             Ok(ToolOutput::text(stdout))
         } else {
@@ -275,7 +290,8 @@ async fn wait_for_child(
     let out_reader = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if tx_out.send(format!("{line}\n")).await.is_err() {
+            let cleaned = strip_ansi(&line);
+            if tx_out.send(format!("{cleaned}\n")).await.is_err() {
                 break;
             }
         }
@@ -285,7 +301,8 @@ async fn wait_for_child(
     let err_reader = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if tx_err.send(format!("[stderr] {line}\n")).await.is_err() {
+            let cleaned = strip_ansi(&line);
+            if tx_err.send(format!("[stderr] {cleaned}\n")).await.is_err() {
                 break;
             }
         }
@@ -328,4 +345,52 @@ async fn wait_for_child(
     }
 
     Ok((code, timed_out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi;
+
+    #[test]
+    fn test_strip_ansi_colors() {
+        // Red text
+        let input = "\x1b[31mred text\x1b[0m";
+        assert_eq!(strip_ansi(input), "red text");
+
+        // Green text
+        let input = "\x1b[32mgreen text\x1b[0m";
+        assert_eq!(strip_ansi(input), "green text");
+
+        // Bold + blue
+        let input = "\x1b[1;34mbold blue\x1b[0m";
+        assert_eq!(strip_ansi(input), "bold blue");
+    }
+
+    #[test]
+    fn test_strip_ansi_cursor_control() {
+        // Clear screen
+        let input = "\x1b[2Jcleared";
+        assert_eq!(strip_ansi(input), "cleared");
+
+        // Cursor up
+        let input = "\x1b[Aup";
+        assert_eq!(strip_ansi(input), "up");
+    }
+
+    #[test]
+    fn test_strip_ansi_mixed_content() {
+        let input = "normal \x1b[31mred\x1b[0m normal \x1b[32mgreen\x1b[0m";
+        assert_eq!(strip_ansi(input), "normal red normal green");
+    }
+
+    #[test]
+    fn test_strip_ansi_no_escape() {
+        let input = "no escape codes here";
+        assert_eq!(strip_ansi(input), "no escape codes here");
+    }
+
+    #[test]
+    fn test_strip_ansi_empty() {
+        assert_eq!(strip_ansi(""), "");
+    }
 }

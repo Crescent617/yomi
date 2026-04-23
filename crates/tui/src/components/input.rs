@@ -1,5 +1,7 @@
 //! Input component for tuirealm
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use tuirealm::{
     command::{Cmd, CmdResult},
     event::{Key, KeyEvent, KeyModifiers, MouseEventKind},
@@ -71,6 +73,8 @@ pub struct InputMock {
     current_area: Option<Rect>,
     // Manual scroll offset for auto-scroll during selection
     scroll_override: Option<usize>,
+    // Random tip to show in placeholder
+    placeholder_tip: String,
 }
 
 /// Result of handling a mouse event
@@ -87,7 +91,10 @@ pub enum MouseEventResult {
 
 impl InputMock {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            placeholder_tip: random_tip(),
+            ..Self::default()
+        }
     }
 }
 
@@ -239,6 +246,7 @@ impl InputMock {
         self.last_click_time = None;
         self.last_click_pos = None;
         self.scroll_override = None;
+        self.placeholder_tip = random_tip();
     }
 
     /// Move cursor and clear selection if present
@@ -715,7 +723,7 @@ impl MockComponent for InputMock {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "Type a message...",
+                    &self.placeholder_tip,
                     Style::default().fg(colors::text_muted()),
                 ),
             ])])
@@ -790,6 +798,27 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/browse", "Toggle browse mode"),
     ("/compact", "Force message compaction"),
 ];
+
+/// Random tips to show in the input placeholder
+const INPUT_TIPS: &[&str] = &[
+    "Shift+Enter newline · Enter send",
+    "Ctrl+O browse mode · /new session",
+    "Ctrl+C clear · double-click select",
+    "Ctrl+V paste image · @ mention file",
+    "Ctrl+P/N history · Tab complete",
+    "Ctrl+W delete word · Ctrl+U kill line",
+    "Alt+B/F word jump · mouse drag select",
+];
+
+/// Get a random tip based on current time
+fn random_tip() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let idx = (now as usize) % INPUT_TIPS.len();
+    INPUT_TIPS[idx].to_string()
+}
 
 /// Generic completion list for command and file completions
 pub struct InputComponent {

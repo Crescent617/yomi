@@ -195,6 +195,9 @@ pub async fn run_session_loop(
         .record_session(&ctx.working_dir, &session_id.0)
         .await?;
 
+    println!("Goodbye~ You can resume this session later with:");
+    println!("yomi --resume {}", session_id.0);
+
     Ok(SessionResult {
         new_history_entries: tui_result.input_history,
         should_create_new_session: tui_result.should_create_new_session,
