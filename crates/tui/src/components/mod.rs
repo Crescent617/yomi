@@ -9,6 +9,7 @@ pub mod info_bar;
 pub mod input;
 pub mod input_edit;
 pub mod status_bar;
+pub mod wrap_paragraph;
 
 pub use banner::{BannerComponent, BannerData};
 pub use chat_view::ChatViewComponent;
