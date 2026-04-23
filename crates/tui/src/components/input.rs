@@ -2,7 +2,7 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    event::{Key, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{Key, KeyEvent, KeyModifiers, MouseEventKind},
     props::{AttrValue, Attribute, Props},
     ratatui::{
         layout::Rect,
@@ -22,12 +22,67 @@ use crate::{
     theme::colors,
 };
 
+/// Text selection state for input component
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InputSelection {
+    pub start: usize, // byte position
+    pub end: usize,   // byte position
+}
+
+impl InputSelection {
+    /// Get normalized selection (start <= end)
+    #[must_use]
+    pub fn normalized(&self) -> Self {
+        if self.start <= self.end {
+            *self
+        } else {
+            Self {
+                start: self.end,
+                end: self.start,
+            }
+        }
+    }
+
+    /// Check if selection is empty
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    /// Check if a byte position is within the selection
+    pub fn contains(&self, pos: usize) -> bool {
+        let norm = self.normalized();
+        pos >= norm.start && pos < norm.end
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct InputMock {
     props: Props,
     content: String,
     cursor_pos: usize,
     last_ctrl_c_time: Option<std::time::Instant>,
+    // Text selection state
+    selection: Option<InputSelection>,
+    is_selecting: bool,
+    // Track last click for double-click detection
+    last_click_time: Option<std::time::Instant>,
+    last_click_pos: Option<usize>,
+    // Current display area for mouse coordinate calculation
+    current_area: Option<Rect>,
+    // Manual scroll offset for auto-scroll during selection
+    scroll_override: Option<usize>,
+}
+
+/// Result of handling a mouse event
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventResult {
+    /// Event was not handled
+    NotHandled,
+    /// Event was handled, needs redraw
+    Handled,
+    /// Event was handled, needs redraw and auto-scroll may be needed
+    /// (mouse is at boundary during drag)
+    HandledWithScroll,
 }
 
 impl InputMock {
@@ -143,6 +198,311 @@ impl InputMock {
         self.clear();
         content
     }
+
+    // Selection methods
+
+    /// Start text selection at the given byte position
+    pub fn start_selection(&mut self, pos: usize) {
+        let clamped = pos.min(self.content.len());
+        self.selection = Some(InputSelection {
+            start: clamped,
+            end: clamped,
+        });
+        self.is_selecting = true;
+    }
+
+    /// Update selection end position while dragging
+    pub fn update_selection(&mut self, pos: usize) {
+        if let Some(ref mut sel) = self.selection {
+            sel.end = pos.min(self.content.len());
+        }
+    }
+
+    /// End text selection
+    pub fn end_selection(&mut self) {
+        self.is_selecting = false;
+        self.scroll_override = None;
+    }
+
+    /// Clear the current selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.is_selecting = false;
+    }
+
+    /// Clear all state including selection and click tracking
+    pub fn clear(&mut self) {
+        self.content.clear();
+        self.cursor_pos = 0;
+        self.selection = None;
+        self.is_selecting = false;
+        self.last_click_time = None;
+        self.last_click_pos = None;
+        self.scroll_override = None;
+    }
+
+    /// Move cursor and clear selection if present
+    fn move_and_clear_selection(&mut self, f: impl FnOnce(&mut Self)) {
+        if self.has_selection() {
+            self.clear_selection();
+        }
+        f(self);
+    }
+
+    /// Get the current selection
+    pub fn selection(&self) -> Option<&InputSelection> {
+        self.selection.as_ref()
+    }
+
+    /// Check if there's an active selection (non-empty)
+    pub fn has_selection(&self) -> bool {
+        self.selection.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    /// Get the selected text
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        let norm = sel.normalized();
+        if norm.is_empty() {
+            return None;
+        }
+        Some(self.content[norm.start..norm.end].to_string())
+    }
+
+    /// Copy the current selection to clipboard
+    pub fn copy_selection(&self) -> Option<String> {
+        let text = self.get_selected_text()?;
+        if text.is_empty() {
+            return None;
+        }
+
+        // Copy to clipboard
+        if let Err(e) = crate::utils::clipboard::copy_text(&text) {
+            tracing::debug!("Failed to copy to clipboard: {}", e);
+            return None;
+        }
+
+        Some(text)
+    }
+
+    /// Delete the selected text and clear selection
+    pub fn delete_selection(&mut self) {
+        if let Some(sel) = self.selection {
+            let norm = sel.normalized();
+            if !norm.is_empty() {
+                self.content.drain(norm.start..norm.end);
+                self.cursor_pos = norm.start;
+            }
+            self.clear_selection();
+        }
+    }
+
+    /// Select a word at the given byte position (double-click)
+    fn select_word_at(&mut self, pos: usize) {
+        let clamped = pos.min(self.content.len());
+
+        // Find word boundaries
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+
+        // Find start of word
+        let mut start = clamped;
+        for (idx, c) in self.content[..clamped].char_indices().rev() {
+            if !is_word_char(c) {
+                break;
+            }
+            start = idx;
+        }
+
+        // Find end of word
+        let mut end = clamped;
+        for (idx, c) in self.content[clamped..].char_indices() {
+            if !is_word_char(c) {
+                break;
+            }
+            end = clamped + idx + c.len_utf8();
+        }
+
+        self.selection = Some(InputSelection { start, end });
+        self.is_selecting = true;
+    }
+
+    /// Check if this is a double click (within 300ms and same position)
+    fn is_double_click(&mut self, pos: usize) -> bool {
+        const DOUBLE_CLICK_THRESHOLD: std::time::Duration =
+            std::time::Duration::from_millis(300);
+
+        let now = std::time::Instant::now();
+        let is_double = self
+            .last_click_time
+            .is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK_THRESHOLD)
+            && self.last_click_pos == Some(pos);
+
+        self.last_click_time = Some(now);
+        self.last_click_pos = Some(pos);
+
+        is_double
+    }
+
+    /// Handle mouse event for text selection
+    /// Returns MouseEventResult indicating how the event was handled
+    pub fn handle_mouse_event(
+        &mut self,
+        kind: tuirealm::event::MouseEventKind,
+        mouse_x: u16,
+        mouse_y: u16,
+    ) -> MouseEventResult {
+        use tuirealm::event::MouseEventKind;
+
+        let area = match self.current_area {
+            Some(a) => a,
+            None => return MouseEventResult::NotHandled,
+        };
+
+        if !self.is_mouse_within_area(mouse_x, mouse_y, area) && !self.is_selecting {
+            self.clear_selection();
+            return MouseEventResult::NotHandled;
+        }
+
+        let content_width = (area.width.saturating_sub(2) as usize).max(1);
+        let visible_height = area.height.saturating_sub(2).max(1) as usize;
+        let visual_lines = self.wrap_lines(content_width);
+
+        let (scroll_offset, needs_auto_scroll) =
+            self.calculate_scroll_with_auto_scroll(mouse_y, area, &visual_lines, visible_height);
+
+        let byte_pos = self.mouse_pos_to_byte_pos(mouse_x, mouse_y, area, &visual_lines, scroll_offset);
+
+        match kind {
+            MouseEventKind::Down(_) => {
+                if self.is_double_click(byte_pos) {
+                    self.select_word_at(byte_pos);
+                } else {
+                    self.start_selection(byte_pos);
+                }
+                MouseEventResult::Handled
+            }
+            MouseEventKind::Drag(_) => {
+                if self.is_selecting {
+                    self.update_selection(byte_pos);
+                    if needs_auto_scroll {
+                        return MouseEventResult::HandledWithScroll;
+                    }
+                }
+                MouseEventResult::Handled
+            }
+            MouseEventKind::Up(_) => {
+                if self.is_selecting {
+                    self.end_selection();
+                    let _ = self.copy_selection();
+                }
+                self.scroll_override = None;
+                MouseEventResult::Handled
+            }
+            _ => MouseEventResult::NotHandled,
+        }
+    }
+
+    /// Check if mouse coordinates are within the input area
+    fn is_mouse_within_area(&self, mouse_x: u16, mouse_y: u16, area: Rect) -> bool {
+        mouse_x >= area.x
+            && mouse_x < area.x + area.width
+            && mouse_y >= area.y
+            && mouse_y < area.y + area.height
+    }
+
+    /// Calculate scroll offset, applying auto-scroll if near boundaries during drag
+    fn calculate_scroll_with_auto_scroll(
+        &mut self,
+        mouse_y: u16,
+        area: Rect,
+        visual_lines: &[VisualLine],
+        visible_height: usize,
+    ) -> (usize, bool) {
+        let max_scroll = visual_lines.len().saturating_sub(visible_height);
+
+        let base_scroll = if visual_lines.len() > visible_height {
+            let (cursor_line, _, _) = self.find_cursor_visual_line(visual_lines).unwrap_or((0, 0, 0));
+            cursor_line
+                .saturating_sub(visible_height.saturating_sub(1))
+                .min(max_scroll)
+        } else {
+            0
+        };
+
+        let scroll_offset = self.scroll_override.unwrap_or(base_scroll);
+
+        let top_boundary = area.y + 1;
+        let bottom_boundary = area.y + area.height - 1;
+        let threshold = 1u16;
+
+        let near_top = mouse_y < top_boundary + threshold;
+        let near_bottom = mouse_y >= bottom_boundary.saturating_sub(threshold);
+        let needs_auto_scroll = self.is_selecting && (near_top || near_bottom);
+
+        let effective_scroll = if needs_auto_scroll {
+            let new_scroll = if near_top {
+                scroll_offset.saturating_sub(1)
+            } else {
+                (scroll_offset + 1).min(max_scroll)
+            };
+            self.scroll_override = Some(new_scroll);
+            new_scroll
+        } else {
+            if !self.is_selecting {
+                self.scroll_override = None;
+            }
+            scroll_offset
+        };
+
+        (effective_scroll, needs_auto_scroll)
+    }
+
+    /// Convert mouse coordinates to byte position in content
+    fn mouse_pos_to_byte_pos(
+        &self,
+        mouse_x: u16,
+        mouse_y: u16,
+        area: Rect,
+        visual_lines: &[VisualLine],
+        scroll_offset: usize,
+    ) -> usize {
+        let row_in_view = mouse_y.saturating_sub(area.y).saturating_sub(1) as usize;
+        let line_idx = (scroll_offset + row_in_view).min(visual_lines.len().saturating_sub(1));
+
+        let visual_line = match visual_lines.get(line_idx) {
+            Some(vl) => vl,
+            None => return 0,
+        };
+
+        let prefix_width = visual_line.prefix.width();
+        let content_x = if (mouse_x as usize) < area.x as usize + prefix_width {
+            0
+        } else {
+            (mouse_x as usize) - area.x as usize - prefix_width
+        };
+
+        let line_byte_pos = Self::display_col_to_byte_pos(&visual_line.text, content_x);
+        visual_line.content_start + line_byte_pos
+    }
+
+    /// Convert display column to byte position in the given text
+    fn display_col_to_byte_pos(text: &str, target_col: usize) -> usize {
+        let mut display_col = 0;
+        let mut byte_pos = 0;
+
+        for c in text.chars() {
+            let ch_width = c.width().unwrap_or(0);
+
+            if display_col + ch_width > target_col {
+                return byte_pos;
+            }
+
+            display_col += ch_width;
+            byte_pos += c.len_utf8();
+        }
+
+        byte_pos
+    }
 }
 
 /// A visual line with prefix info for cursor calculation
@@ -251,6 +611,9 @@ impl InputMock {
 
 impl MockComponent for InputMock {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        // Store area for mouse coordinate calculation
+        self.current_area = Some(area);
+
         // Calculate available width for content (accounting for borders)
         let content_width = (area.width.saturating_sub(2) as usize).max(1); // -2 for borders
 
@@ -265,7 +628,10 @@ impl MockComponent for InputMock {
         // Calculate scroll offset to keep cursor visible
         let visible_height = area.height.saturating_sub(2).max(1) as usize; // -2 for top/bottom borders
 
-        let scroll_offset = if visual_lines.len() > visible_height {
+        let scroll_offset = if let Some(override_scroll) = self.scroll_override {
+            // Use manual scroll override (e.g., from auto-scroll during selection)
+            override_scroll.min(visual_lines.len().saturating_sub(visible_height))
+        } else if visual_lines.len() > visible_height {
             // Scroll so cursor is visible (prefer showing cursor near bottom)
             cursor_visual_line
                 .saturating_sub(visible_height.saturating_sub(1))
@@ -274,19 +640,63 @@ impl MockComponent for InputMock {
             0
         };
 
-        // Render visible lines
+        // Render visible lines with selection highlighting
+        let highlight_style = Style::default()
+            .fg(colors::text_primary())
+            .bg(colors::selected_bg());
+        let normal_style = Style::default().fg(colors::text_primary());
+        let prefix_style = Style::default()
+            .fg(colors::accent_user())
+            .add_modifier(Modifier::BOLD);
+
         let all_lines: Vec<Line> = visual_lines
             .iter()
             .map(|vl| {
-                Line::from(vec![
-                    Span::styled(
-                        vl.prefix,
-                        Style::default()
-                            .fg(colors::accent_user())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(vl.text.clone(), Style::default().fg(colors::text_primary())),
-                ])
+                // Build spans for this line, handling selection
+                let mut spans = vec![Span::styled(vl.prefix, prefix_style)];
+
+                if let Some(sel) = self.selection {
+                    let norm = sel.normalized();
+                    let line_start = vl.content_start;
+                    let line_end = vl.content_end;
+
+                    // Check if selection overlaps with this visual line
+                    if norm.start < line_end && norm.end > line_start {
+                        // There is overlap, split into segments
+                        let sel_start_in_line = norm.start.saturating_sub(line_start);
+                        let sel_end_in_line = (norm.end - line_start).min(vl.text.len());
+
+                        if sel_start_in_line > 0 {
+                            // Unselected prefix
+                            spans.push(Span::styled(
+                                vl.text[..sel_start_in_line].to_string(),
+                                normal_style,
+                            ));
+                        }
+                        if sel_end_in_line > sel_start_in_line {
+                            // Selected portion
+                            spans.push(Span::styled(
+                                vl.text[sel_start_in_line..sel_end_in_line].to_string(),
+                                highlight_style,
+                            ));
+                        }
+                        if sel_end_in_line < vl.text.len() {
+                            // Unselected suffix
+                            spans.push(Span::styled(
+                                vl.text[sel_end_in_line..].to_string(),
+                                normal_style,
+                            ));
+                        }
+                    } else {
+                        // No overlap, render normally
+                        spans.push(Span::styled(vl.text.clone(), normal_style));
+                    }
+                } else {
+                    // No selection, render normally
+                    spans.push(Span::styled(vl.text.clone(), normal_style));
+                }
+
+                Line::from(spans)
             })
             .collect();
 
@@ -330,7 +740,7 @@ impl MockComponent for InputMock {
                 .get(cursor_visual_line)
                 .map_or(2, |l| l.prefix.width() as u16)
             + cursor_col as u16;
-        let cursor_y = area.y + 1 + (cursor_visual_line - scroll_offset) as u16;
+        let cursor_y = area.y + 1 + cursor_visual_line.saturating_sub(scroll_offset) as u16;
 
         // Always show cursor when component is active (even if content is empty)
         if cursor_y < area.y + area.height {
@@ -517,6 +927,10 @@ impl InputComponent {
 
     /// Handle text paste by creating a placeholder
     fn handle_text_paste(&mut self, text: String) -> Msg {
+        // If there's a selection, delete it first
+        if self.component.has_selection() {
+            self.component.delete_selection();
+        }
         self.placeholder_counter += 1;
         let placeholder = format!("[Pasted #{} text]", self.placeholder_counter);
         self.pasted_contents.insert(placeholder.clone(), text);
@@ -1182,6 +1596,8 @@ impl InputComponent {
 
     /// Handle input in normal mode - text editing
     fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+        use tuirealm::event::MouseEvent;
+
         // File completion mode - handle special keys first
         if self.file_completion.is_visible() {
             return Some(self.handle_file_completion_input(ev));
@@ -1192,12 +1608,51 @@ impl InputComponent {
             return Some(self.handle_text_paste(text.clone()));
         }
 
+        // Handle mouse events for text selection
+        if let tuirealm::Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            ..
+        }) = ev
+        {
+            let result = self.component.handle_mouse_event(*kind, *column, *row);
+
+            match result {
+                MouseEventResult::NotHandled => {}
+                MouseEventResult::Handled => {
+                    // If selection was copied, show status message
+                    if matches!(kind, tuirealm::event::MouseEventKind::Up(_)) {
+                        if let Some(text) = self.component.get_selected_text() {
+                            let preview = crate::utils::text::truncate_unicode(&text, 30);
+                            let count = text.chars().count();
+                            let msg = if count > 30 {
+                                format!("📋 {preview}... ({count} chars)")
+                            } else {
+                                format!("📋 {preview}")
+                            };
+                            return Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)));
+                        }
+                    }
+                    return Some(Msg::Redraw);
+                }
+                MouseEventResult::HandledWithScroll => {
+                    // Auto-scroll during drag - return Redraw to continue scrolling
+                    return Some(Msg::Redraw);
+                }
+            }
+        }
+
         match *ev {
             // Ctrl+V: paste from clipboard (fallback for systems without bracketed paste)
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('v'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
+                // If there's a selection, delete it first
+                if self.component.has_selection() {
+                    self.component.delete_selection();
+                }
                 // Try to paste image first
                 if let Some(placeholder) = self.try_paste_image() {
                     self.component.insert_str(&placeholder);
@@ -1231,6 +1686,10 @@ impl InputComponent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
+                // If there's a selection, delete it first, then insert the character
+                if self.component.has_selection() {
+                    self.component.delete_selection();
+                }
                 self.component.insert_char(c);
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
@@ -1277,7 +1736,12 @@ impl InputComponent {
                 code: Key::Backspace,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                self.component.backspace();
+                // If there's a selection, delete it; otherwise do normal backspace
+                if self.component.has_selection() {
+                    self.component.delete_selection();
+                } else {
+                    self.component.backspace();
+                }
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
@@ -1285,7 +1749,12 @@ impl InputComponent {
                 code: Key::Delete,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                self.component.delete_char();
+                // If there's a selection, delete it; otherwise do normal delete
+                if self.component.has_selection() {
+                    self.component.delete_selection();
+                } else {
+                    self.component.delete_char();
+                }
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
@@ -1293,14 +1762,14 @@ impl InputComponent {
                 code: Key::Left,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                self.component.move_left();
+                self.component.move_and_clear_selection(|c| c.move_left());
                 None
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Right,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                self.component.move_right();
+                self.component.move_and_clear_selection(|c| c.move_right());
                 None
             }
             // Home or Ctrl+A: move to start of line
@@ -1314,7 +1783,8 @@ impl InputComponent {
                     modifiers: KeyModifiers::CONTROL,
                 },
             ) => {
-                self.component.move_to_start_of_line();
+                self.component
+                    .move_and_clear_selection(|c| c.move_to_start_of_line());
                 None
             }
             // End or Ctrl+E: move to end of line
@@ -1328,7 +1798,8 @@ impl InputComponent {
                     modifiers: KeyModifiers::CONTROL,
                 },
             ) => {
-                self.component.move_to_end_of_line();
+                self.component
+                    .move_and_clear_selection(|c| c.move_to_end_of_line());
                 None
             }
             // Alt+B: move backward one word
@@ -1336,7 +1807,8 @@ impl InputComponent {
                 code: Key::Char('b'),
                 modifiers: KeyModifiers::ALT,
             }) => {
-                self.component.move_word_left();
+                self.component
+                    .move_and_clear_selection(|c| c.move_word_left());
                 None
             }
             // Alt+F: move forward one word
@@ -1344,7 +1816,8 @@ impl InputComponent {
                 code: Key::Char('f'),
                 modifiers: KeyModifiers::ALT,
             }) => {
-                self.component.move_word_right();
+                self.component
+                    .move_and_clear_selection(|c| c.move_word_right());
                 None
             }
             tuirealm::Event::Keyboard(KeyEvent {
@@ -1396,7 +1869,7 @@ impl InputComponent {
                     self.history_prev();
                     Some(Msg::InputChanged(self.component.content().to_string()))
                 } else {
-                    self.component.move_up();
+                    self.component.move_and_clear_selection(|c| c.move_up());
                     None
                 }
             }
@@ -1412,7 +1885,7 @@ impl InputComponent {
                     self.history_next();
                     Some(Msg::InputChanged(self.component.content().to_string()))
                 } else {
-                    self.component.move_down();
+                    self.component.move_and_clear_selection(|c| c.move_down());
                     None
                 }
             }
@@ -1485,5 +1958,102 @@ impl InputComponent {
             }) => Some(Msg::ToggleBrowseMode),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_input_selection_normalized() {
+        let sel = InputSelection { start: 10, end: 5 };
+        let norm = sel.normalized();
+        assert_eq!(norm.start, 5);
+        assert_eq!(norm.end, 10);
+
+        let sel2 = InputSelection { start: 5, end: 10 };
+        let norm2 = sel2.normalized();
+        assert_eq!(norm2.start, 5);
+        assert_eq!(norm2.end, 10);
+    }
+
+    #[test]
+    fn test_input_selection_contains() {
+        let sel = InputSelection { start: 5, end: 10 };
+        assert!(sel.contains(5));
+        assert!(sel.contains(9));
+        assert!(!sel.contains(10));
+        assert!(!sel.contains(4));
+    }
+
+    #[test]
+    fn test_display_col_to_byte_pos_ascii() {
+        let text = "hello world";
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 0), 0);
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 5), 5);
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 100), 11);
+    }
+
+    #[test]
+    fn test_display_col_to_byte_pos_unicode() {
+        // CJK characters are typically 2 display columns wide
+        let text = "你好世界"; // Each char is 2-3 bytes (UTF-8) and 2 display columns
+
+        // At column 0, should be at start
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 0), 0);
+
+        // At column 1 (middle of first char), should still be at first char
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 1), 0);
+
+        // At column 2 (end of first char), should move to second char
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 2), "你".len());
+
+        // At column 4 (end of second char)
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 4), "你好".len());
+    }
+
+    #[test]
+    fn test_display_col_to_byte_pos_mixed() {
+        // Mixed ASCII and Unicode
+        let text = "hi你好";
+        // h(0)i(1)你(2-4)好(5-7)
+        // Display: h(0)i(1)你(2-3)好(4-5)
+
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 0), 0); // Before 'h'
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 1), 1); // After 'h', at 'i'
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 2), 2); // After 'i', at '你'
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 3), 2); // Middle of '你'
+        assert_eq!(InputMock::display_col_to_byte_pos(text, 4), 5); // After '你', at '好'
+    }
+
+    #[test]
+    fn test_select_word_at() {
+        let mut input = InputMock::new();
+        input.insert_str("hello world test");
+
+        // Click on 'w' in "world"
+        input.select_word_at(6);
+        let sel = input.selection().unwrap();
+        assert_eq!(sel.start, 6);
+        assert_eq!(sel.end, 11); // "world" is 5 chars
+
+        // Click on 'o' in "hello"
+        input.select_word_at(4);
+        let sel2 = input.selection().unwrap();
+        assert_eq!(sel2.start, 0);
+        assert_eq!(sel2.end, 5); // "hello" is 5 chars
+    }
+
+    #[test]
+    fn test_delete_selection() {
+        let mut input = InputMock::new();
+        input.insert_str("hello world");
+        input.start_selection(0);
+        input.update_selection(5); // Select "hello"
+        input.delete_selection();
+
+        assert_eq!(input.content(), " world");
+        assert_eq!(input.cursor_pos(), 0);
     }
 }
