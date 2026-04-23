@@ -11,10 +11,11 @@ use tuirealm::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span, Text},
-        widgets::Paragraph,
     },
     Component, Frame, MockComponent, State,
 };
+
+use super::wrap_paragraph::WrapParagraph;
 
 use crate::{
     components::status_bar::StatusMessage,
@@ -153,6 +154,8 @@ pub struct ChatView {
     // Viewport cache: only the currently visible lines (cloned from Arc)
     viewport_lines: Vec<Line<'static>>,
     last_viewport: (usize, usize), // (start_line, end_line)
+    // First visible row within the first viewport line (for accurate mouse coord conversion)
+    viewport_first_row_offset: usize,
     // Line height cache for wrapped lines (cached_width, Vec<height>)
     cached_line_heights: Option<(usize, Vec<usize>)>,
     // Text selection state
@@ -165,6 +168,10 @@ pub struct ChatView {
     current_area: Option<Rect>,
     // Scroll-to-bottom button area for click detection
     scroll_button_area: Option<Rect>,
+    // Cached total visual line count (updated in view)
+    total_visual_lines: usize,
+    // Cached width used for visual line calculation
+    last_width: usize,
 }
 
 impl Default for ChatView {
@@ -191,6 +198,7 @@ impl Default for ChatView {
             msg_cache_dirty: true,
             viewport_lines: Vec::new(),
             last_viewport: (0, 0),
+            viewport_first_row_offset: 0,
             cached_line_heights: None,
             selection: None,
             is_selecting: false,
@@ -198,6 +206,8 @@ impl Default for ChatView {
             last_click_pos: None,
             current_area: None,
             scroll_button_area: None,
+            total_visual_lines: 0,
+            last_width: 0,
         }
     }
 }
@@ -239,6 +249,7 @@ impl ChatView {
         self.viewport_lines.clear();
         self.banner_cache.clear();
         self.last_viewport = (0, 0);
+        self.viewport_first_row_offset = 0;
         self.msg_cache_dirty = true;
         self.banner_dirty = true;
         self.cached_line_heights = None;
@@ -543,22 +554,9 @@ impl ChatView {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        let total_lines = self.all_lines_len();
-        // Use last_visible_height to calculate reasonable max_scroll
-        // Ensure we can always see at least 1 line when at top
-        let visible = self.last_visible_height.saturating_sub(1).max(1);
-        let max_scroll = total_lines.saturating_sub(visible);
-
-        // If already at or near top, don't increase offset further
-        if self.scroll_offset >= max_scroll {
-            self.scroll_offset = max_scroll;
-            self.user_scrolled = true;
-            return;
-        }
-
-        self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
         // User manually scrolled up, pause auto-scroll
         self.user_scrolled = true;
+        self.scroll_offset += amount;
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
@@ -585,7 +583,10 @@ impl ChatView {
     }
 
     pub fn scroll_to_top(&mut self) {
-        self.scroll_offset = self.accurate_lines_len();
+        // scroll_offset is now visual lines from bottom
+        // To scroll to top, we need to set offset to total_visual_lines - visible_height
+        let visible = self.last_visible_height.max(1);
+        self.scroll_offset = self.total_visual_lines.saturating_sub(visible);
         // User manually scrolled, pause auto-scroll
         self.user_scrolled = true;
     }
@@ -605,26 +606,31 @@ impl ChatView {
 
     /// Get scroll progress for browse mode (`current_line`, `total_lines`)
     /// Returns the 1-based current visible start position and total lines
+    /// Note: now uses visual lines (post-wrap) instead of logical lines
     pub fn get_scroll_progress(&self) -> (usize, usize) {
-        let total_lines = self.all_lines_len();
-        if total_lines == 0 {
+        if self.total_visual_lines == 0 {
             return (0, 0);
         }
 
-        // Calculate current visible start line (1-based) based on scroll_offset
+        // Calculate current visible start position (1-based)
         // scroll_offset = 0 means at bottom showing latest content
-        // scroll_offset > 0 means scrolled up by that many lines from bottom
-        let start_line = if self.scroll_offset == 0 {
+        // scroll_offset > 0 means scrolled up by that many visual lines from bottom
+        let start_visual_line = if self.scroll_offset == 0 {
             // At bottom: show the last visible_height lines
-            total_lines
+            self.total_visual_lines
                 .saturating_sub(self.last_visible_height.saturating_sub(1))
                 .max(1)
         } else {
             // Scrolled up: start_line is scroll_offset lines from bottom
-            total_lines.saturating_sub(self.scroll_offset).max(1)
+            self.total_visual_lines
+                .saturating_sub(self.scroll_offset)
+                .max(1)
         };
 
-        (start_line.min(total_lines), total_lines)
+        (
+            start_visual_line.min(self.total_visual_lines),
+            self.total_visual_lines,
+        )
     }
 
     pub fn toggle_expand_all(&mut self) {
@@ -1112,16 +1118,6 @@ impl ChatView {
 impl ChatView {
     const MASCOT_COL_WIDTH: usize = 8;
 
-    /// Sync `msg_cache` length with messages length.
-    fn sync_msg_cache(&mut self) {
-        while self.msg_cache.len() < self.messages.len() {
-            self.msg_cache.push(None);
-        }
-        if self.msg_cache.len() > self.messages.len() {
-            self.msg_cache.truncate(self.messages.len());
-        }
-    }
-
     /// Rebuild banner cache (separate because mascot animates).
     fn rebuild_banner_cache(&mut self) {
         if !self.banner_dirty {
@@ -1174,20 +1170,6 @@ impl ChatView {
         self.msg_cache_dirty = false;
     }
 
-    /// Get total line count (uses cached values, may be stale if dirty).
-    /// Note: This is called from scroll functions. For accurate count, ensure caches are rebuilt first.
-    fn all_lines_len(&self) -> usize {
-        let banner_len = self.banner_cache.len();
-        let msg_len = self.msg_lines.len();
-        // Note: streaming is not included in cached count since it changes frequently
-        banner_len + msg_len
-    }
-
-    /// Get accurate total line count (includes streaming, rebuilds caches if needed).
-    fn accurate_lines_len(&mut self) -> usize {
-        self.all_lines().len()
-    }
-
     /// Get all lines (banner + messages + streaming) for viewport calculation.
     fn all_lines(&mut self) -> Vec<Arc<Line<'static>>> {
         self.rebuild_banner_cache();
@@ -1211,7 +1193,7 @@ impl ChatView {
     }
 
     /// Calculate wrap boundaries using display width (Unicode-aware).
-    /// Returns vector of character indices where each visual row starts.
+    /// Returns vector of byte indices where each visual row starts.
     fn calculate_wrap_boundaries(text: &str, width: usize) -> Vec<usize> {
         if width == 0 || text.is_empty() {
             return vec![0];
@@ -1219,53 +1201,72 @@ impl ChatView {
 
         let mut boundaries = vec![0];
         let mut current_width = 0;
+        let mut byte_idx = 0;
 
-        for (char_count, ch) in text.chars().enumerate() {
+        for ch in text.chars() {
             let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
 
             // Check if adding this character would exceed width
             if current_width + ch_width > width && current_width > 0 {
-                boundaries.push(char_count);
+                boundaries.push(byte_idx);
                 current_width = ch_width;
             } else {
                 current_width += ch_width;
             }
+            byte_idx += ch.len_utf8();
         }
 
         boundaries
     }
 
     /// Convert display column to character index within a visual row.
-    /// Accounts for CJK and other wide characters.
+    /// `row_start` and `row_end` are byte indices.
+    /// Returns character index (0-based).
     fn display_col_to_char_idx(
         text: &str,
-        row_start: usize,
-        row_end: usize,
+        row_start_byte: usize,
+        row_end_byte: usize,
         target_col: usize,
     ) -> usize {
         let mut display_col = 0;
-        let mut char_idx = row_start;
+        let mut char_idx = 0;
 
-        for ch in text
-            .chars()
-            .skip(row_start)
-            .take(row_end.saturating_sub(row_start))
-        {
+        // Convert byte indices to char positions (handle cases where byte indices
+        // might not be at char boundaries by finding the nearest valid positions)
+        let safe_start_byte = row_start_byte.min(text.len());
+        let safe_end_byte = row_end_byte.min(text.len());
+
+        // Use byte-based slicing carefully to avoid panics
+        let start_char_idx = text
+            .get(..safe_start_byte)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        let end_char_idx = text
+            .get(..safe_end_byte)
+            .map(|s| s.chars().count())
+            .unwrap_or_else(|| text.chars().count());
+
+        for (i, ch) in text.chars().enumerate() {
+            if i < start_char_idx {
+                continue;
+            }
+            if i >= end_char_idx {
+                break;
+            }
+
             let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
 
             // Check if target column is within this character's display range
-            // For a character at display_col..display_col+ch_width,
-            // if target_col falls in this range, return current char_idx
             if display_col + ch_width > target_col {
-                return char_idx;
+                return i;
             }
 
             display_col += ch_width;
-            char_idx += 1;
+            char_idx = i + 1;
         }
 
         // Target column is past all characters, return end
-        char_idx.min(row_end)
+        char_idx.min(end_char_idx)
     }
     /// Convert screen coordinates to line/column in visible content.
     /// Uses textwrap to accurately map visual coordinates to character positions.
@@ -1291,6 +1292,8 @@ impl ChatView {
 
         // Calculate which logical line and visual row within that line
         let viewport_start = self.last_viewport.0;
+        // Adjust terminal_row by the first line's offset (since first line may be partially scrolled)
+        let adjusted_terminal_row = terminal_row + self.viewport_first_row_offset;
         let mut current_row = 0;
 
         for (i, line) in self.viewport_lines.iter().enumerate() {
@@ -1300,23 +1303,24 @@ impl ChatView {
             let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
             let wrapped_height = boundaries.len();
 
-            if current_row + wrapped_height > terminal_row {
+            if current_row + wrapped_height > adjusted_terminal_row {
                 // This logical line contains the clicked terminal row
                 let line_idx = viewport_start + i;
-                let visual_row_in_line = terminal_row - current_row;
+                let visual_row_in_line = adjusted_terminal_row - current_row;
 
                 // Calculate character column based on visual row
-                let row_start_char = boundaries.get(visual_row_in_line).copied().unwrap_or(0);
-                let row_end_char = boundaries
+                // boundaries contains byte indices, so these are byte positions
+                let row_start_byte = boundaries.get(visual_row_in_line).copied().unwrap_or(0);
+                let row_end_byte = boundaries
                     .get(visual_row_in_line + 1)
                     .copied()
-                    .unwrap_or(line_text.chars().count());
+                    .unwrap_or_else(|| line_text.len());
 
                 // Convert display column to character index within this visual row
                 let char_col = Self::display_col_to_char_idx(
                     &line_text,
-                    row_start_char,
-                    row_end_char,
+                    row_start_byte,
+                    row_end_byte,
                     terminal_col,
                 );
 
@@ -1584,6 +1588,8 @@ impl ChatView {
             MouseEventKind::Down(_) => {
                 if let Some((line, col)) = self.screen_to_position(x, y, width) {
                     if self.is_double_click(line, col) {
+                        // Rebuild caches before selecting word
+                        self.rebuild_msg_cache();
                         self.select_word_at(line, col);
                     } else {
                         self.start_selection(line, col);
@@ -1605,6 +1611,8 @@ impl ChatView {
             MouseEventKind::Up(_) => {
                 if self.is_selecting {
                     self.end_selection();
+                    // Rebuild caches before copying to ensure we have all lines
+                    self.rebuild_msg_cache();
                     // Auto-copy selection to clipboard when mouse is released
                     match self.copy_selection() {
                         Some(text) => MouseAction::Copied(text),
@@ -1616,211 +1624,6 @@ impl ChatView {
             }
             _ => MouseAction::None,
         }
-    }
-
-    /// Get visible lines for the current viewport, rebuilding cache if needed.
-    fn get_lines(&mut self, visible_height: usize, width: usize) -> Vec<Line<'static>> {
-        self.sync_msg_cache();
-        let all_lines = self.all_lines();
-
-        let (start_line, end_line) = self.calculate_viewport(&all_lines, visible_height, width);
-        self.update_viewport_cache(&all_lines, start_line, end_line);
-
-        // Apply selection highlighting if there's an active selection
-        let mut result = if self.selection.is_some() {
-            self.apply_selection_highlight(start_line)
-        } else {
-            self.viewport_lines.clone()
-        };
-
-        // Pad with empty lines to fill the entire area
-        while result.len() < visible_height {
-            result.push(Line::from(""));
-        }
-        result
-    }
-
-    /// Apply selection highlighting to visible lines.
-    /// This is optimized to only process visible lines.
-    fn apply_selection_highlight(&self, viewport_start: usize) -> Vec<Line<'static>> {
-        use crate::theme::colors;
-
-        let selection = match self.selection {
-            Some(s) => s.normalized(),
-            None => return self.viewport_lines.clone(),
-        };
-
-        let highlight_bg = colors::selected_bg();
-        let highlight_fg = colors::text_primary();
-
-        self.viewport_lines
-            .iter()
-            .enumerate()
-            .map(|(idx, line)| {
-                let global_line_idx = viewport_start + idx;
-
-                // Fast path: line is completely outside selection
-                if global_line_idx < selection.start_line || global_line_idx > selection.end_line {
-                    return line.clone();
-                }
-
-                // Fast path: entire line is selected
-                let is_first_line = global_line_idx == selection.start_line;
-                let is_last_line = global_line_idx == selection.end_line;
-
-                if !is_first_line && !is_last_line {
-                    // Entire line is in the middle of selection - highlight whole line
-                    let highlight_style = Style::default().fg(highlight_fg).bg(highlight_bg);
-                    return Line::from(
-                        line.spans
-                            .iter()
-                            .map(|s| Span::styled(s.content.to_string(), highlight_style))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-
-                // Partial line selection - need character-level processing
-                let mut new_spans = Vec::new();
-                let mut current_char_col: usize = 0;
-
-                let sel_start_col = if is_first_line {
-                    selection.start_col
-                } else {
-                    0
-                };
-                let sel_end_col = if is_last_line {
-                    selection.end_col
-                } else {
-                    usize::MAX
-                };
-
-                for span in &line.spans {
-                    let span_text = span.content.as_ref();
-                    let span_char_count = span_text.chars().count();
-                    let span_start_char = current_char_col;
-                    let span_end_char = current_char_col + span_char_count;
-
-                    // Check overlap with selection
-                    if span_end_char <= sel_start_col || span_start_char >= sel_end_col {
-                        // No overlap
-                        new_spans.push(span.clone());
-                    } else if span_start_char >= sel_start_col && span_end_char <= sel_end_col {
-                        // Entire span is selected
-                        new_spans.push(Span::styled(
-                            span_text.to_string(),
-                            Style::default().fg(highlight_fg).bg(highlight_bg),
-                        ));
-                    } else {
-                        // Partial overlap - split the span
-                        let sel_start_in_span = sel_start_col.saturating_sub(span_start_char);
-                        let sel_end_in_span =
-                            span_char_count.min(sel_end_col.saturating_sub(span_start_char));
-
-                        // Part before selection
-                        if sel_start_in_span > 0 {
-                            let before: String =
-                                span_text.chars().take(sel_start_in_span).collect();
-                            new_spans.push(Span::styled(before, span.style));
-                        }
-
-                        // Selected part
-                        let selected: String = span_text
-                            .chars()
-                            .skip(sel_start_in_span)
-                            .take(sel_end_in_span.saturating_sub(sel_start_in_span))
-                            .collect();
-                        if !selected.is_empty() {
-                            new_spans.push(Span::styled(
-                                selected,
-                                Style::default().fg(highlight_fg).bg(highlight_bg),
-                            ));
-                        }
-
-                        // Part after selection
-                        if sel_end_in_span < span_char_count {
-                            let after: String = span_text.chars().skip(sel_end_in_span).collect();
-                            new_spans.push(Span::styled(after, span.style));
-                        }
-                    }
-
-                    current_char_col += span_char_count;
-                }
-
-                Line::from(new_spans)
-            })
-            .collect()
-    }
-
-    /// Calculate viewport range (`start_line`, `end_line`) based on scroll state.
-    fn calculate_viewport(
-        &self,
-        all_lines: &[Arc<Line<'static>>],
-        visible_height: usize,
-        width: usize,
-    ) -> (usize, usize) {
-        let total_lines = all_lines.len();
-        if total_lines == 0 {
-            return (0, 0);
-        }
-
-        let start_line = if self.scroll_offset == 0 {
-            // At bottom: work backwards to find which lines fit
-            let mut wrapped_lines = 0;
-            let mut start = 0;
-            for (i, line) in all_lines.iter().enumerate().rev() {
-                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
-                let wrapped_height = boundaries.len();
-
-                if wrapped_lines + wrapped_height > visible_height {
-                    start = i + 1;
-                    break;
-                }
-                wrapped_lines += wrapped_height;
-                if i == 0 {
-                    start = 0;
-                    break;
-                }
-            }
-            start
-        } else {
-            // Manual scroll: use simple line-based calculation
-            if total_lines > visible_height + self.scroll_offset {
-                total_lines - visible_height - self.scroll_offset
-            } else {
-                0
-            }
-        };
-
-        // When at bottom, show all lines from start to end
-        // When scrolling, limit to visible_height
-        let end_line = if self.scroll_offset == 0 {
-            total_lines
-        } else {
-            (start_line + visible_height).min(total_lines)
-        };
-        (start_line, end_line)
-    }
-
-    /// Update viewport cache when viewport range or content changes.
-    ///
-    /// NOTE: This always clones the visible lines rather than using a dirty check,
-    /// because content can change without the viewport range changing (e.g., streaming
-    /// text updates). The performance cost is negligible for typical terminal sizes
-    /// (~30-50 lines). If profiling shows this is a bottleneck, consider adding a
-    /// `viewport_dirty` flag to track content changes and skip unnecessary clones.
-    fn update_viewport_cache(
-        &mut self,
-        all_lines: &[Arc<Line<'static>>],
-        start_line: usize,
-        end_line: usize,
-    ) {
-        // Always update because content may have changed even if range is same
-        self.viewport_lines.clear();
-        for arc_line in &all_lines[start_line..end_line] {
-            self.viewport_lines.push((**arc_line).clone());
-        }
-        self.last_viewport = (start_line, end_line);
     }
 
     /// Draw scroll-to-bottom button at the bottom center
@@ -1871,17 +1674,99 @@ impl ChatView {
     }
 }
 
+impl ChatView {
+    /// Get selection as optional tuple for `WrapParagraph` rendering.
+    fn get_selection_for_render(&self) -> Option<((usize, usize), (usize, usize))> {
+        self.selection.map(|s| {
+            let norm = s.normalized();
+            (
+                (norm.start_line, norm.start_col),
+                (norm.end_line, norm.end_col),
+            )
+        })
+    }
+}
+
 impl MockComponent for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let visible_height = area.height as usize;
+        let width = area.width as usize;
         self.last_visible_height = visible_height;
         self.current_area = Some(area);
+        self.last_width = width;
         // Reset scroll button area at start of each frame
         self.scroll_button_area = None;
 
-        let lines = self.get_lines(visible_height, area.width as usize);
-        let paragraph = Paragraph::new(Text::from(lines))
-            .wrap(tuirealm::ratatui::widgets::Wrap { trim: false });
+        // Build text content
+        let all_lines = self.all_lines();
+        let text = Text::from(all_lines.iter().map(|l| (**l).clone()).collect::<Vec<_>>());
+
+        // Calculate and cache total visual lines
+        self.total_visual_lines = WrapParagraph::new(text.clone()).wrapped_line_count(width);
+
+        // Clamp scroll_offset to valid range
+        // scroll_offset is visual lines from bottom, max is total - visible
+        let max_scroll = self.total_visual_lines.saturating_sub(visible_height);
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+
+        // scroll_offset is now visual lines from bottom, convert to scroll from top
+        let visual_scroll = self
+            .total_visual_lines
+            .saturating_sub(visible_height)
+            .saturating_sub(self.scroll_offset);
+
+        // Update viewport_lines and last_viewport for mouse coordinate conversion
+        // Calculate which lines are currently visible based on visual_scroll
+        let mut lines_seen = 0;
+        let mut viewport_start = 0;
+        for line in &all_lines {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let wrapped_height = Self::calculate_wrap_boundaries(&line_text, width).len();
+
+            if lines_seen + wrapped_height > visual_scroll {
+                break;
+            }
+            lines_seen += wrapped_height;
+            viewport_start += 1;
+        }
+
+        // Calculate how many wrap rows into the first visible line we need to skip
+        let first_line_rows_before_scroll = lines_seen;
+        self.viewport_first_row_offset =
+            visual_scroll.saturating_sub(first_line_rows_before_scroll);
+
+        // Collect visible lines (need enough lines to fill the screen)
+        self.viewport_lines.clear();
+        let mut visible_rows_needed = visible_height;
+        for (i, line) in all_lines.iter().enumerate().skip(viewport_start) {
+            if visible_rows_needed == 0 {
+                break;
+            }
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let wrapped_height = Self::calculate_wrap_boundaries(&line_text, width).len();
+
+            self.viewport_lines.push((**line).clone());
+
+            // First line contributes fewer visible rows due to scroll offset
+            let rows_in_this_line = if i == viewport_start {
+                wrapped_height.saturating_sub(self.viewport_first_row_offset)
+            } else {
+                wrapped_height
+            };
+            visible_rows_needed = visible_rows_needed.saturating_sub(rows_in_this_line);
+        }
+        self.last_viewport = (viewport_start, viewport_start + self.viewport_lines.len());
+
+        // Render with WrapParagraph (handles wrap internally)
+        let selection = self.get_selection_for_render();
+        let highlight_style = Style::default()
+            .fg(colors::text_primary())
+            .bg(colors::selected_bg());
+
+        let paragraph = WrapParagraph::new(text)
+            .scroll((visual_scroll as u16, 0))
+            .selection(selection)
+            .highlight_style(highlight_style);
 
         frame.render_widget(paragraph, area);
 
