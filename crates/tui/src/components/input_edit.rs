@@ -209,6 +209,7 @@ pub trait TextInput {
     }
 
     /// Delete from cursor to start of line (Ctrl+U)
+    /// Falls back to backspace when already at start of line
     fn kill_to_start_of_line(&mut self) {
         let pos = self.cursor_pos();
         if pos == 0 {
@@ -216,8 +217,14 @@ pub trait TextInput {
         }
         let text = self.text();
         let line_start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
-        self.text_mut().drain(line_start..pos);
-        self.set_cursor_pos(line_start);
+
+        if line_start == pos {
+            // Already at start of line, fall back to backspace (delete newline)
+            self.backspace();
+        } else {
+            self.text_mut().drain(line_start..pos);
+            self.set_cursor_pos(line_start);
+        }
     }
 
     /// Delete from cursor to end of line (Ctrl+K)
@@ -232,15 +239,32 @@ pub trait TextInput {
     }
 
     /// Delete word backward (Ctrl+W)
+    /// Falls back to backspace when already at start of line
     fn delete_word_backward(&mut self) {
         let pos = self.cursor_pos();
         if pos == 0 {
             return;
         }
+
         let text = self.text();
 
-        // Skip trailing whitespace
+        // Check if we're at the start of a line (after \n or at position 0)
+        let is_at_line_start = pos == 0
+            || text[..pos]
+                .chars()
+                .next_back()
+                .map_or(false, |c| c == '\n');
+
+        if is_at_line_start {
+            // At start of line, fall back to backspace (delete the newline)
+            self.backspace();
+            return;
+        }
+
+        // Otherwise delete word backward
         let mut new_pos = pos;
+
+        // Skip trailing whitespace
         while new_pos > 0 {
             let mut prev = new_pos - 1;
             while prev > 0 && !text.is_char_boundary(prev) {
@@ -448,4 +472,33 @@ mod tests {
         buf.kill_to_start_of_line();
         assert_eq!(buf.content(), "\nworld");
     }
+
+    #[test]
+    fn test_kill_to_start_fallback_to_backspace() {
+        let mut buf = TextBuffer::with_content("line1\nline2");
+
+        // Cursor at start of second line
+        buf.set_cursor_pos(6);
+        assert_eq!(buf.cursor_pos(), 6);
+
+        // kill_to_start_of_line should fall back to backspace (delete newline)
+        buf.kill_to_start_of_line();
+        assert_eq!(buf.content(), "line1line2");
+        assert_eq!(buf.cursor_pos(), 5); // At end of "line1"
+    }
+
+    #[test]
+    fn test_delete_word_backward_at_line_start() {
+        let mut buf = TextBuffer::with_content("line1\nline2");
+
+        // Cursor at start of second line
+        buf.set_cursor_pos(6);
+        assert_eq!(buf.cursor_pos(), 6);
+
+        // delete_word_backward should fall back to backspace (delete newline)
+        buf.delete_word_backward();
+        assert_eq!(buf.content(), "line1line2");
+        assert_eq!(buf.cursor_pos(), 5);
+    }
+
 }
