@@ -33,11 +33,20 @@ brew update && brew install crescent617/tap/yomi
 更多配置选项请参见 [config.md](docs/config.md)。
 
 ```bash
+# model
+export YOMI_CONTEXT_WINDOW=200k
+
 # OpenAI
 export OPENAI_API_KEY=sk-...
 export OPENAI_API_MODEL=gpt-4o  # optional, defaults to gpt-4o
 export OPENAI_API_BASE=https://xxx
-export YOMI_CONTEXT_WINDOW=200k
+
+# Anthropic
+export YOMI_PROVIDER=anthropic
+export ANTHROPIC_AUTH_TOKEN=sk-...
+export ANTHROPIC_BASE_URL=https://xxx
+export ANTHROPIC_MODEL=xxx
+
 ```
 
 ### Usage
