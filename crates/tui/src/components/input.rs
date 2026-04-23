@@ -1694,6 +1694,15 @@ impl InputComponent {
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
+            // Shift+Enter: insert newline
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Enter,
+                modifiers: KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_newline();
+                Some(Msg::InputChanged(self.component.content().to_string()))
+            }
+            // Enter: submit input
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,

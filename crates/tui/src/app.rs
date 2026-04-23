@@ -890,6 +890,15 @@ impl Model {
         // Enable bracketed paste mode for paste event detection
         crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste)?;
 
+        // Enable keyboard enhancement flags to support Shift+Enter and other modified keys
+        // This enables the terminal to report key events with modifiers disambiguated
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        );
+
         // Send initial message if provided (from CLI prompt arg)
         if let Some(initial_msg) = self.state.initial_message.take() {
             let blocks = vec![ContentBlock::Text { text: initial_msg }];
@@ -945,6 +954,12 @@ impl Model {
 
         // Disable bracketed paste mode on exit
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+
+        // Pop keyboard enhancement flags
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::PopKeyboardEnhancementFlags
+        );
 
         Ok(())
     }
