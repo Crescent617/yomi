@@ -416,7 +416,6 @@ async fn main() -> Result<()> {
         break;
     }
 
-    println!("Goodbye!");
     Ok(())
 }
 
