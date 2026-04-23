@@ -53,8 +53,11 @@ impl SqliteTaskStorage {
             .connect(&conn_str)
             .await?;
 
-        // Enable foreign keys
+        // Enable foreign keys and set busy timeout (5 seconds)
         sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA busy_timeout = 5000")
             .execute(&pool)
             .await?;
 
