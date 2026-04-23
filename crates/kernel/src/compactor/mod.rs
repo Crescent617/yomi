@@ -202,16 +202,16 @@ impl Compactor {
             });
         }
 
-        let mut msg_buf = MessageBuffer::from_arc_messages(messages);
-        msg_buf.validate_and_clean();
-        let messages = msg_buf.messages();
-
         let split_point = messages.len() - self.keep_recent;
         let to_summarize = &messages[..split_point];
         let recent: Vec<Message> = messages[split_point..]
             .iter()
             .map(|m| (**m).clone())
             .collect();
+
+        let mut msg_buf = MessageBuffer::from_arc_messages(to_summarize);
+        msg_buf.validate_and_clean();
+        let to_summarize = msg_buf.messages();
 
         // Generate summary using API
         let summary_text = generate_summary_with_api(
