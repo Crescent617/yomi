@@ -1,5 +1,4 @@
 //! Implementation of the `Provider` trait for Anthropic's API
-//! TODO: not implemented fully yet - need to handle thinking content, tool results, and other content types
 use crate::event::ContentChunk;
 use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
@@ -37,10 +36,6 @@ impl AnthropicProvider {
         messages
             .iter()
             .filter_map(|m| {
-                // Skip messages with empty content
-                if m.content.is_empty() {
-                    return None;
-                }
 
                 let role = match m.role {
                     Role::System => return None, // System is handled separately
@@ -48,7 +43,42 @@ impl AnthropicProvider {
                     Role::Assistant => "assistant",
                 };
 
-                let content = Self::convert_content_blocks(&m.content);
+                // Handle tool result messages - wrap content in tool_result blocks
+                let content = if let Some(ref tool_call_id) = m.tool_call_id {
+                    if tool_call_id.is_empty() {
+                        tracing::warn!("Tool result message has empty tool_call_id, treating as regular user message");
+                        Self::convert_content_blocks(&m.content)
+                    } else {
+                        tracing::debug!("Converting tool result message with tool_call_id: {}", tool_call_id);
+                        let text_content = m.text_content();
+                        vec![AnthropicContent::ToolResult {
+                            tool_use_id: tool_call_id.clone(),
+                            content: text_content,
+                        }]
+                    }
+                } else {
+                    let mut content = Self::convert_content_blocks(&m.content);
+
+                    // For assistant messages, add tool_calls as tool_use blocks
+                    if m.role == Role::Assistant {
+                        if let Some(ref tool_calls) = m.tool_calls {
+                            for tool_call in tool_calls {
+                                content.push(AnthropicContent::ToolUse {
+                                    id: tool_call.id.clone(),
+                                    name: tool_call.name.clone(),
+                                    input: tool_call.arguments.clone(),
+                                });
+                            }
+                        }
+                    }
+
+                    content
+                };
+
+                // Skip if still empty after processing
+                if content.is_empty() {
+                    return None;
+                }
 
                 Some(AnthropicMessage {
                     role: role.to_string(),
@@ -94,8 +124,18 @@ impl AnthropicProvider {
                 ContentBlock::Text { text } if !text.is_empty() => {
                     content.push(AnthropicContent::Text { text: text.clone() });
                 }
-                ContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
-                    // Thinking blocks are not sent back to Anthropic
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } if !thinking.is_empty() => {
+                    // Preserve thinking blocks for conversation continuity
+                    content.push(AnthropicContent::Thinking {
+                        thinking: thinking.clone(),
+                        signature: signature.clone().unwrap_or_default(),
+                    });
+                }
+                ContentBlock::RedactedThinking { data } => {
+                    content.push(AnthropicContent::RedactedThinking { data: data.clone() });
                 }
                 ContentBlock::ImageUrl { image_url } => {
                     // Parse data URL to extract media type and base64 data
@@ -110,11 +150,11 @@ impl AnthropicProvider {
                         });
                     }
                 }
+                // ContentBlock::Audio is not supported by Anthropic API, skip it
+                // ContentBlock::Text with empty text is intentionally skipped
                 _ => {}
             }
         }
-
-        // Tool results are handled separately via Message::tool_call_id
 
         content
     }
@@ -164,7 +204,31 @@ impl Provider for AnthropicProvider {
         );
 
         let system = Self::extract_system_message(messages);
+
+        // Debug: log original messages before conversion
+        tracing::debug!(
+            "Anthropic original messages: {:?}",
+            messages
+                .iter()
+                .map(|m| {
+                    (
+                        m.role,
+                        m.tool_call_id.clone(),
+                        m.tool_calls
+                            .as_ref()
+                            .map(|tc| tc.iter().map(|t| t.id.clone()).collect::<Vec<_>>()),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+
         let messages = Self::convert_messages(messages);
+
+        // Debug: log converted messages to verify tool result formatting
+        tracing::debug!(
+            "Anthropic converted messages: {}",
+            serde_json::to_string_pretty(&messages).unwrap_or_default()
+        );
 
         // Build request body
         let mut request_body = AnthropicRequest {
@@ -594,6 +658,8 @@ struct AnthropicError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{AudioData, ToolCall};
+    use chrono::Utc;
 
     #[test]
     fn test_extract_system_message() {
@@ -715,5 +781,305 @@ mod tests {
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].name, "bash");
         assert_eq!(converted[0].description, "Execute bash commands");
+    }
+
+    #[test]
+    fn test_convert_tool_result_message() {
+        // Create a tool result message
+        let messages: Vec<Arc<Message>> = vec![Arc::new(Message {
+            role: Role::Tool,
+            content: vec![ContentBlock::Text {
+                text: "File contents here".to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: Some("tool_123".to_string()),
+            created_at: Utc::now(),
+            token_usage: None,
+        })];
+
+        let converted = AnthropicProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "user");
+        assert_eq!(converted[0].content.len(), 1);
+
+        // Check that it's a ToolResult content block
+        match &converted[0].content[0] {
+            AnthropicContent::ToolResult {
+                tool_use_id,
+                content,
+            } => {
+                assert_eq!(tool_use_id, "tool_123");
+                assert_eq!(content, "File contents here");
+            }
+            _ => panic!(
+                "Expected ToolResult content block, got {:?}",
+                converted[0].content[0]
+            ),
+        }
+
+        // Verify JSON serialization has correct field names
+        let json = serde_json::to_string(&converted[0].content[0]).unwrap();
+        assert!(
+            json.contains("tool_use_id"),
+            "JSON should contain 'tool_use_id' field, got: {json}"
+        );
+        assert!(
+            json.contains("tool_123"),
+            "JSON should contain the tool ID, got: {json}"
+        );
+        assert!(
+            json.contains("\"type\":\"tool_result\""),
+            "JSON should have correct type, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_convert_assistant_with_tool_calls() {
+        // Create an assistant message with tool_calls
+        let messages: Vec<Arc<Message>> = vec![Arc::new(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text {
+                text: "I'll check that file for you.".to_string(),
+            }],
+            tool_calls: Some(vec![ToolCall {
+                id: "tool_456".to_string(),
+                name: "read".to_string(),
+                arguments: serde_json::json!({"path": "/tmp/test.txt"}),
+            }]),
+            tool_call_id: None,
+            created_at: Utc::now(),
+            token_usage: None,
+        })];
+
+        let converted = AnthropicProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "assistant");
+        assert_eq!(converted[0].content.len(), 2); // Text + ToolUse
+
+        // First block should be text
+        match &converted[0].content[0] {
+            AnthropicContent::Text { text } => {
+                assert_eq!(text, "I'll check that file for you.");
+            }
+            _ => panic!("Expected Text content block"),
+        }
+
+        // Second block should be ToolUse
+        match &converted[0].content[1] {
+            AnthropicContent::ToolUse { id, name, input } => {
+                assert_eq!(id, "tool_456");
+                assert_eq!(name, "read");
+                assert_eq!(input, &serde_json::json!({"path": "/tmp/test.txt"}));
+            }
+            _ => panic!("Expected ToolUse content block"),
+        }
+    }
+
+    #[test]
+    fn test_convert_redacted_thinking() {
+        let blocks = vec![ContentBlock::RedactedThinking {
+            data: "redacted_data_123".to_string(),
+        }];
+
+        let converted = AnthropicProvider::convert_content_blocks(&blocks);
+        assert_eq!(converted.len(), 1);
+
+        match &converted[0] {
+            AnthropicContent::RedactedThinking { data } => {
+                assert_eq!(data, "redacted_data_123");
+            }
+            _ => panic!("Expected RedactedThinking content block"),
+        }
+    }
+
+    #[test]
+    fn test_convert_thinking_preserved() {
+        let blocks = vec![ContentBlock::Thinking {
+            thinking: "Let me analyze this...".to_string(),
+            signature: Some("sig_abc".to_string()),
+        }];
+
+        let converted = AnthropicProvider::convert_content_blocks(&blocks);
+        assert_eq!(converted.len(), 1);
+
+        match &converted[0] {
+            AnthropicContent::Thinking {
+                thinking,
+                signature,
+            } => {
+                assert_eq!(thinking, "Let me analyze this...");
+                assert_eq!(signature, "sig_abc");
+            }
+            _ => panic!("Expected Thinking content block, got {:?}", converted[0]),
+        }
+    }
+
+    #[test]
+    fn test_convert_audio_skipped() {
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "Hello".to_string(),
+            },
+            ContentBlock::Audio {
+                audio: AudioData {
+                    data: "base64audio".to_string(),
+                    format: "mp3".to_string(),
+                },
+            },
+        ];
+
+        let converted = AnthropicProvider::convert_content_blocks(&blocks);
+        assert_eq!(converted.len(), 1);
+
+        match &converted[0] {
+            AnthropicContent::Text { text } => assert_eq!(text, "Hello"),
+            _ => panic!("Expected only Text content block, audio should be skipped"),
+        }
+    }
+
+    #[test]
+    fn test_multi_turn_tool_conversation() {
+        // Simulate a full tool use conversation flow
+        let messages: Vec<Arc<Message>> = vec![
+            // User asks a question
+            Arc::new(Message::user("What's the weather?")),
+            // Assistant responds with a tool call
+            Arc::new(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "I'll check the weather for you.".to_string(),
+                }],
+                tool_calls: Some(vec![ToolCall {
+                    id: "weather_1".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "New York"}),
+                }]),
+                tool_call_id: None,
+                created_at: Utc::now(),
+                token_usage: None,
+            }),
+            // Tool result
+            Arc::new(Message {
+                role: Role::Tool,
+                content: vec![ContentBlock::Text {
+                    text: "72°F and sunny".to_string(),
+                }],
+                tool_calls: None,
+                tool_call_id: Some("weather_1".to_string()),
+                created_at: Utc::now(),
+                token_usage: None,
+            }),
+            // Final assistant response
+            Arc::new(Message::assistant("It's 72°F and sunny in New York!")),
+        ];
+
+        let converted = AnthropicProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 4);
+
+        // Check user message
+        assert_eq!(converted[0].role, "user");
+        assert!(matches!(
+            converted[0].content[0],
+            AnthropicContent::Text { .. }
+        ));
+
+        // Check assistant with tool_use
+        assert_eq!(converted[1].role, "assistant");
+        assert_eq!(converted[1].content.len(), 2);
+        assert!(matches!(
+            converted[1].content[0],
+            AnthropicContent::Text { .. }
+        ));
+        assert!(matches!(
+            converted[1].content[1],
+            AnthropicContent::ToolUse { .. }
+        ));
+
+        // Check tool result
+        assert_eq!(converted[2].role, "user");
+        assert!(matches!(
+            converted[2].content[0],
+            AnthropicContent::ToolResult { .. }
+        ));
+
+        // Check final assistant response
+        assert_eq!(converted[3].role, "assistant");
+        assert!(matches!(
+            converted[3].content[0],
+            AnthropicContent::Text { .. }
+        ));
+    }
+
+    #[test]
+    fn test_full_request_serialization() {
+        // Test the full request body serialization to catch any JSON structure issues
+        use std::sync::Arc;
+
+        let messages: Vec<Arc<Message>> = vec![
+            Arc::new(Message::user("What's the weather?")),
+            Arc::new(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "I'll check that for you.".to_string(),
+                }],
+                tool_calls: Some(vec![ToolCall {
+                    id: "toolu_01D7FLrfh4GYq7yT1ULFeyMV".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({"location": "NYC"}),
+                }]),
+                tool_call_id: None,
+                created_at: Utc::now(),
+                token_usage: None,
+            }),
+            Arc::new(Message::tool_result(
+                "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
+                "72°F and sunny",
+            )),
+        ];
+
+        let anthropic_messages = AnthropicProvider::convert_messages(&messages);
+        let request = AnthropicRequest {
+            model: "claude-3-sonnet-20240229".to_string(),
+            max_tokens: 4096,
+            messages: anthropic_messages,
+            system: None,
+            tools: None,
+            stream: true,
+            temperature: None,
+            thinking: None,
+        };
+
+        let json = serde_json::to_string_pretty(&request).unwrap();
+
+        // Debug: print the JSON
+        println!("Request JSON:\n{json}");
+
+        // Verify the JSON structure (with spaces as serde_json pretty-prints)
+        assert!(
+            json.contains("\"type\": \"tool_use\""),
+            "Should contain tool_use block"
+        );
+        assert!(
+            json.contains("\"type\": \"tool_result\""),
+            "Should contain tool_result block"
+        );
+        assert!(
+            json.contains("\"tool_use_id\": \"toolu_01D7FLrfh4GYq7yT1ULFeyMV\""),
+            "Should contain tool_use_id with correct value"
+        );
+        assert!(
+            json.contains("\"id\": \"toolu_01D7FLrfh4GYq7yT1ULFeyMV\""),
+            "Should contain tool_use id"
+        );
+
+        // Ensure no empty tool_use_id
+        assert!(
+            !json.contains("\"tool_use_id\": \"\""),
+            "Should not contain empty tool_use_id"
+        );
+        assert!(
+            !json.contains("\"tool_use_id\": null"),
+            "Should not contain null tool_use_id"
+        );
     }
 }

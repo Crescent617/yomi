@@ -174,7 +174,7 @@ impl<'a> WrapParagraph<'a> {
     /// Simplified "Extract-Then-Style" approach:
     /// 1. Extract the wrap segment text from spans
     /// 2. Apply selection styles to create new spans
-    /// 3. Render using standard render_line
+    /// 3. Render using standard `render_line`
     fn render_line_with_selection(
         &self,
         line: &Line<'_>,

@@ -34,13 +34,9 @@ pub mod env_names {
     pub const MAX_TOKENS: &str = env_name!("MAX_TOKENS");
     pub const TEMPERATURE: &str = env_name!("TEMPERATURE");
 
-    /// Provider-specific prefixes (YOMI_ prefixed)
-    pub const OPENAI_PREFIX: &str = env_name!("OPENAI_");
-    pub const ANTHROPIC_PREFIX: &str = env_name!("ANTHROPIC_");
-
     /// Standard non-prefixed provider-specific env vars
     pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
-    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
     pub const OPENAI_API_MODEL: &str = "OPENAI_API_MODEL";
     pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
     pub const OPENAI_API_BASE: &str = "OPENAI_API_BASE";

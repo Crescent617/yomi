@@ -85,7 +85,7 @@ impl Agent {
         );
         let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
-        let message_buffer = MessageBuffer::from_arc_messages(messages);
+        let message_buffer = MessageBuffer::from_arc_messages(&messages);
 
         let shared = shared.clone();
 

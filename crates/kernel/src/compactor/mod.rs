@@ -9,6 +9,7 @@ mod types;
 use serde::{Deserialize, Serialize};
 pub use types::*;
 
+use crate::agent::MessageBuffer;
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
 use crate::types::{ContentBlock, Message, Role};
 use anyhow::Result;
@@ -200,6 +201,10 @@ impl Compactor {
                 compacted_count: 0,
             });
         }
+
+        let mut msg_buf = MessageBuffer::from_arc_messages(messages);
+        msg_buf.validate_and_clean();
+        let messages = msg_buf.messages();
 
         let split_point = messages.len() - self.keep_recent;
         let to_summarize = &messages[..split_point];
