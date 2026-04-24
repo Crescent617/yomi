@@ -17,9 +17,8 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 /// Regex to match ANSI escape sequences
-static ANSI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])").unwrap()
-});
+static ANSI_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])").unwrap());
 
 /// Strip ANSI escape sequences from text
 #[inline]

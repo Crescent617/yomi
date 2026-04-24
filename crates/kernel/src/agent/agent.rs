@@ -588,14 +588,20 @@ impl Agent {
         let cancel_token = self.cancel_token.runtime_token();
 
         let result = compactor
-            .auto_compact(messages, &*self.shared.provider, &self.shared.model_config, Some(cancel_token))
+            .auto_compact(
+                messages,
+                &*self.shared.provider,
+                &self.shared.model_config,
+                Some(cancel_token),
+            )
             .await;
 
         let compact_result = match result {
             Ok(Some((new_messages, needs_continue))) => {
                 let compacted_count = old_count.saturating_sub(new_messages.len());
 
-                self.apply_compacted_messages(&new_messages, compacted_count).await;
+                self.apply_compacted_messages(&new_messages, compacted_count)
+                    .await;
 
                 let message = if compacted_count > 0 {
                     format!("Compacted {compacted_count} messages")
@@ -646,7 +652,12 @@ impl Agent {
         let cancel_token = self.cancel_token.runtime_token();
 
         let result = compactor
-            .full_compact(messages, &*self.shared.provider, &self.shared.model_config, Some(cancel_token))
+            .full_compact(
+                messages,
+                &*self.shared.provider,
+                &self.shared.model_config,
+                Some(cancel_token),
+            )
             .await;
 
         let compact_result = match result {
@@ -654,7 +665,8 @@ impl Agent {
                 let compacted_count = compact_result.compacted_count;
 
                 // Build new message list
-                let new_messages: Vec<Arc<Message>> = if let Some(summary) = compact_result.summary {
+                let new_messages: Vec<Arc<Message>> = if let Some(summary) = compact_result.summary
+                {
                     let mut msgs: Vec<Arc<Message>> = compact_result
                         .keep_messages
                         .into_iter()
@@ -670,7 +682,8 @@ impl Agent {
                         .collect()
                 };
 
-                self.apply_compacted_messages(&new_messages, compacted_count).await;
+                self.apply_compacted_messages(&new_messages, compacted_count)
+                    .await;
 
                 if compacted_count > 0 {
                     Ok(format!("Compacted {compacted_count} messages"))
@@ -706,7 +719,11 @@ impl Agent {
     }
 
     /// Apply compacted messages: update buffer and persist to storage.
-    async fn apply_compacted_messages(&mut self, new_messages: &[Arc<Message>], compacted_count: usize) {
+    async fn apply_compacted_messages(
+        &mut self,
+        new_messages: &[Arc<Message>],
+        compacted_count: usize,
+    ) {
         if compacted_count > 0 {
             tracing::info!(
                 "Agent {} performed full compaction: {} messages summarized",
@@ -716,12 +733,15 @@ impl Agent {
         }
 
         // Update message buffer
-        self.message_buffer.messages_mut().clone_from(&new_messages.to_vec());
+        self.message_buffer
+            .messages_mut()
+            .clone_from(&new_messages.to_vec());
 
         // Persist compacted state
         if let Some(storage) = &self.shared.storage {
             let sid = crate::types::SessionId(self.session_id.clone());
-            let messages_for_storage: Vec<Message> = new_messages.iter().map(|m| (**m).clone()).collect();
+            let messages_for_storage: Vec<Message> =
+                new_messages.iter().map(|m| (**m).clone()).collect();
             if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
                 tracing::warn!(
                     "Agent {} failed to persist compacted messages: {}",
