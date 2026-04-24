@@ -821,8 +821,6 @@ fn random_tip() -> String {
     INPUT_TIPS[idx].to_string()
 }
 
-
-
 /// Generic completion list for command and file completions
 pub struct InputComponent {
     component: InputMock,
@@ -833,8 +831,8 @@ pub struct InputComponent {
     saved_input: String,          // Buffer for current input when browsing history
     // Command completion
     command_completion: CompletionList<(String, String)>,
-    command_query: String,        // Current query string (text after /)
-    command_start_pos: usize,     // Position of '/' in the input
+    command_query: String,    // Current query string (text after /)
+    command_start_pos: usize, // Position of '/' in the input
     // File completion (@-mention)
     file_completion: FileCompletion,
     // Paste support (images and text)
@@ -908,9 +906,8 @@ impl InputComponent {
             .map(|(i, item)| render_item(item, i, list.selected_index()))
             .collect();
 
-        let widget = tuirealm::ratatui::widgets::Paragraph::new(
-            tuirealm::ratatui::text::Text::from(items),
-        );
+        let widget =
+            tuirealm::ratatui::widgets::Paragraph::new(tuirealm::ratatui::text::Text::from(items));
         frame.render_widget(widget, dropdown_area);
     }
 
@@ -1299,7 +1296,10 @@ impl InputComponent {
     }
 
     /// Handle input when command completion is active
-    fn handle_command_completion_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Msg {
+    fn handle_command_completion_input(
+        &mut self,
+        ev: &tuirealm::Event<crate::msg::UserEvent>,
+    ) -> Msg {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match ev {
@@ -1632,7 +1632,8 @@ impl MockComponent for InputComponent {
                     tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
                 };
                 tuirealm::ratatui::text::Line::from(tuirealm::ratatui::text::Span::styled(
-                    file.as_str(), style,
+                    file.as_str(),
+                    style,
                 ))
             },
         );
