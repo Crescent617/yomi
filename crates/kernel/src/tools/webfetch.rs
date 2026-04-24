@@ -1,9 +1,11 @@
-//! `WebFetch` tool - fetches content from URLs and converts HTML to markdown
+//! `WebFetch` tool - fetches content from URLs and extracts article content
 //!
-//! Based on Claude Code's `WebFetch` tool implementation.
+//! Filters out scripts, styles, navigation, and other noise before converting
+//! to clean text using html2text.
 
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
+use crate::utils::strs::truncate_with_suffix;
 use anyhow::Result;
 use async_trait::async_trait;
 use lru::LruCache;
@@ -24,7 +26,7 @@ const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024;
 // Max URL length
 const MAX_URL_LENGTH: usize = 2000;
 // Max markdown output length
-const MAX_MARKDOWN_LENGTH: usize = 100_000;
+const MAX_RESULT_LENGTH: usize = 10_000;
 // Request timeout
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -60,7 +62,8 @@ fn get_cache() -> &'static FetchCache {
 /// HTTP client with connection pooling for efficient concurrent requests
 static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
-fn get_client() -> &'static reqwest::Client {
+/// Get shared HTTP client instance
+pub fn get_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(FETCH_TIMEOUT)
@@ -70,11 +73,12 @@ fn get_client() -> &'static reqwest::Client {
     })
 }
 
-/// Tool for fetching web content and converting HTML to markdown
+/// Tool for fetching web content and extracting article content
 ///
 /// Features:
 /// - 15-minute LRU cache for repeated URLs
-/// - HTML to Markdown conversion
+/// - Uses readability to extract main content (filters nav, ads, etc.)
+/// - Converts extracted content to Markdown
 /// - Content size limits (10MB max)
 /// - Connection pooling via shared reqwest Client
 pub struct WebFetchTool;
@@ -109,9 +113,11 @@ impl WebFetchTool {
         Ok(parsed.to_string())
     }
 
-    /// Convert HTML to markdown using html2md
-    fn html_to_markdown(html: &str) -> String {
-        html2md::parse_html(html)
+    /// Extract main content from HTML by filtering noise and converting to text
+    ///
+    /// Delegates to the shared `html_extractor` module
+    fn extract_content(html: &str, _url: &str) -> String {
+        super::html_extractor::extract_content(html)
     }
 
     /// Fetch content from URL
@@ -170,23 +176,19 @@ impl WebFetchTool {
         // Convert to string
         let content = String::from_utf8_lossy(&bytes).to_string();
 
-        // Convert HTML to markdown if needed
+        // Extract main content and convert to markdown if HTML
         let processed_content = if content_type.contains("text/html") {
-            Self::html_to_markdown(&content)
+            Self::extract_content(&content, url)
         } else {
             content
         };
 
-        // Truncate if too long
-        let final_content = if processed_content.len() > MAX_MARKDOWN_LENGTH {
-            format!(
-                "{}\n\n[Content truncated - original length: {} characters]",
-                &processed_content[..MAX_MARKDOWN_LENGTH],
-                processed_content.len()
-            )
-        } else {
-            processed_content
-        };
+        // Truncate if too long (UTF-8 safe)
+        let final_content = truncate_with_suffix(
+            &processed_content,
+            MAX_RESULT_LENGTH,
+            &format!("\n\n[Content truncated - original length: {} characters]", processed_content.len()),
+        );
 
         // Cache the result
         let entry = CacheEntry {
@@ -235,7 +237,7 @@ impl Tool for WebFetchTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Fetches content from a URL and converts HTML to markdown. Use this when you need to retrieve and analyze web content."
+        "Fetches content from a URL, extracts the main article content (removing navigation, ads, etc.), and converts to markdown."
     }
 
     fn params(&self) -> Value {
@@ -317,12 +319,75 @@ mod tests {
     }
 
     #[test]
-    fn test_html_to_markdown() {
-        let html = "<h1>Title</h1><p>Paragraph with <b>bold</b> text.</p>";
-        let markdown = WebFetchTool::html_to_markdown(html);
-        assert!(markdown.contains("Title"));
-        assert!(markdown.contains("Paragraph"));
-        assert!(markdown.contains("**bold**"));
+    fn test_extract_content() {
+        let html = r#"<!DOCTYPE html>
+<html>
+<head><title>Test Article</title></head>
+<body>
+    <header><nav>Navigation noise</nav></header>
+    <main>
+        <article>
+            <h1>Test Article Title</h1>
+            <p>This is the main content paragraph with <b>bold</b> text.</p>
+            <p>Another paragraph with important information.</p>
+        </article>
+    </main>
+    <footer>Footer noise</footer>
+</body>
+</html>"#;
+        let markdown = WebFetchTool::extract_content(html, "https://example.com/article");
+
+        // Should extract the main content
+        assert!(markdown.len() > 50, "Content should be extracted");
+
+        // Should NOT contain nav/footer noise
+        assert!(
+            !markdown.contains("Navigation noise"),
+            "Should filter out nav"
+        );
+        assert!(
+            !markdown.contains("Footer noise"),
+            "Should filter out footer"
+        );
+
+        // Should contain the main content
+        assert!(
+            markdown.contains("main content paragraph"),
+            "Should contain main content"
+        );
+    }
+
+    #[test]
+    fn test_extract_content_fallback_when_too_little() {
+        // HTML where readability might extract very little (mostly navigation-like content)
+        let html = r#"<!DOCTYPE html>
+<html>
+<head><title>My Page</title></head>
+<body>
+    <div>
+        <h2>Section A</h2>
+        <p>Content for section A with detailed information.</p>
+    </div>
+    <div>
+        <h2>Section B</h2>
+        <p>Content for section B with more detailed information.</p>
+    </div>
+    <div>
+        <h2>Section C</h2>
+        <p>Content for section C with even more detailed information.</p>
+    </div>
+</body>
+</html>"#;
+        let markdown = WebFetchTool::extract_content(html, "https://example.com/page");
+
+        // Should still have substantial content (fallback to full HTML if needed)
+        assert!(markdown.len() > 100, "Should have substantial content");
+
+        // Should include title since it's meaningful
+        assert!(
+            markdown.contains("My Page") || markdown.contains("Section"),
+            "Should have either title or content"
+        );
     }
 
     #[test]

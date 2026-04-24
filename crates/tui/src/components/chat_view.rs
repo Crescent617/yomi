@@ -30,7 +30,7 @@ use kernel::task::{
 };
 use kernel::tools::{
     BASH_TOOL_NAME, EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME,
-    SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WEBFETCH_TOOL_NAME, WRITE_TOOL_NAME,
+    SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -804,7 +804,7 @@ impl ChatView {
                     ToolStatus::Failed => colors::accent_error(),
                     ToolStatus::Cancelled => colors::text_secondary(),
                 };
-                let icon = toolname_to_icon(tool_name);
+                let icon = tool_icon(tool_name);
 
                 // Build header with execution time (only show if >= 1s)
                 let time_str = elapsed_ms
@@ -1808,9 +1808,7 @@ impl MockComponent for ChatView {
                         self.add_user_message(content_blocks);
                     } else {
                         // Fallback to plain text
-                        self.add_user_message(vec![ContentBlock::Text {
-                            text: blocks_json,
-                        }]);
+                        self.add_user_message(vec![ContentBlock::Text { text: blocks_json }]);
                     }
                 }
             }
@@ -2159,24 +2157,22 @@ fn to_camel_case(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn toolname_to_icon(tool_name: &str) -> &'static str {
+fn tool_icon(tool_name: &str) -> &'static str {
     match tool_name.to_lowercase().as_str() {
-        n if n == SUBAGENT_TOOL_NAME => "󰚩 ",
-        n if n == READ_TOOL_NAME => " ",
-        n if n == WRITE_TOOL_NAME || n == EDIT_TOOL_NAME => " ",
-        n if n == BASH_TOOL_NAME => " ",
-        n if n == GLOB_TOOL_NAME => "󰱼 ",
-        n if n == GREP_TOOL_NAME => " ",
-        n if n == SKILL_TOOL_NAME => "⚡",
-        n if n == WEBFETCH_TOOL_NAME => "󰖟 ",
+        SUBAGENT_TOOL_NAME => "󰚩 ",
+        READ_TOOL_NAME => " ",
+        WRITE_TOOL_NAME | EDIT_TOOL_NAME => " ",
+        BASH_TOOL_NAME => " ",
+        GLOB_TOOL_NAME => "󰱼 ",
+        GREP_TOOL_NAME => "󰑑 ",
+        SKILL_TOOL_NAME => "⚡",
+        WEBFETCH_TOOL_NAME => "󰖟 ",
+        WEBSEARCH_TOOL_NAME => " ",
         // Task tools
-        n if n == TASK_CREATE_TOOL_NAME
-            || n == TASK_GET_TOOL_NAME
-            || n == TASK_LIST_TOOL_NAME
-            || n == TASK_UPDATE_TOOL_NAME =>
-        {
-            " "
-        }
+        TASK_CREATE_TOOL_NAME
+        | TASK_GET_TOOL_NAME
+        | TASK_LIST_TOOL_NAME
+        | TASK_UPDATE_TOOL_NAME => " ",
         _ => " ",
     }
 }

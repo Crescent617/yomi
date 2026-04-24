@@ -35,7 +35,7 @@ clap = { version = "4.6", features = ["derive"] }
 config = "0.15"
 tracing-subscriber = "0.3"
 
-reqwest = { version = "0.13", features = ["stream", "json"] }
+reqwest = { version = "0.13", features = ["stream", "json", "multipart"] }
 eventsource-stream = "0.2"
 sqlx = { version = "0.8", features = [
     "runtime-tokio-rustls",
@@ -70,3 +70,6 @@ image = { version = "0.25", default-features = false }
 regex = "1"
 lru = "0.17"
 html2md = "0.2"
+html2text = "0.17"
+scraper = "0.26"
+urlencoding = "2.1"

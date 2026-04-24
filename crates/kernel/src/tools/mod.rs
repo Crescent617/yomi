@@ -14,6 +14,7 @@ pub(crate) mod file_lock;
 pub mod file_state;
 pub mod glob;
 pub mod grep;
+pub mod html_extractor;
 pub mod line_numbers;
 pub mod parallel;
 pub mod read;
@@ -21,6 +22,7 @@ pub mod registry_factory;
 pub mod skill_load;
 pub mod subagent;
 pub mod webfetch;
+pub mod websearch;
 pub mod write;
 
 pub use base::{FileTool, MAX_FILE_SIZE};
@@ -35,6 +37,7 @@ pub use registry_factory::ToolRegistryFactory;
 pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
+pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
 
 /// Context provided to tools during execution
