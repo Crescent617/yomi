@@ -206,7 +206,11 @@ impl<'a> WrapParagraph<'a> {
         let end_char = full_text[..safe_end].chars().count();
 
         // Calculate selection range within this line (in character indices)
-        let line_sel_start = if global_line_idx == sel_start_line { sel_start_col } else { 0 };
+        let line_sel_start = if global_line_idx == sel_start_line {
+            sel_start_col
+        } else {
+            0
+        };
         let line_sel_end = if global_line_idx == sel_end_line {
             sel_end_col
         } else {

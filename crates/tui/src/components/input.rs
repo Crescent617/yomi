@@ -336,8 +336,7 @@ impl InputMock {
 
     /// Check if this is a double click (within 300ms and same position)
     fn is_double_click(&mut self, pos: usize) -> bool {
-        const DOUBLE_CLICK_THRESHOLD: std::time::Duration =
-            std::time::Duration::from_millis(300);
+        const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(300);
 
         let now = std::time::Instant::now();
         let is_double = self
@@ -366,7 +365,7 @@ impl InputMock {
             None => return MouseEventResult::NotHandled,
         };
 
-        if !self.is_mouse_within_area(mouse_x, mouse_y, area) && !self.is_selecting {
+        if !Self::is_mouse_within_area(mouse_x, mouse_y, area) && !self.is_selecting {
             self.clear_selection();
             return MouseEventResult::NotHandled;
         }
@@ -378,7 +377,8 @@ impl InputMock {
         let (scroll_offset, needs_auto_scroll) =
             self.calculate_scroll_with_auto_scroll(mouse_y, area, &visual_lines, visible_height);
 
-        let byte_pos = self.mouse_pos_to_byte_pos(mouse_x, mouse_y, area, &visual_lines, scroll_offset);
+        let byte_pos =
+            Self::mouse_pos_to_byte_pos(mouse_x, mouse_y, area, &visual_lines, scroll_offset);
 
         match kind {
             MouseEventKind::Down(_) => {
@@ -411,7 +411,7 @@ impl InputMock {
     }
 
     /// Check if mouse coordinates are within the input area
-    fn is_mouse_within_area(&self, mouse_x: u16, mouse_y: u16, area: Rect) -> bool {
+    fn is_mouse_within_area(mouse_x: u16, mouse_y: u16, area: Rect) -> bool {
         mouse_x >= area.x
             && mouse_x < area.x + area.width
             && mouse_y >= area.y
@@ -429,7 +429,9 @@ impl InputMock {
         let max_scroll = visual_lines.len().saturating_sub(visible_height);
 
         let base_scroll = if visual_lines.len() > visible_height {
-            let (cursor_line, _, _) = self.find_cursor_visual_line(visual_lines).unwrap_or((0, 0, 0));
+            let (cursor_line, _, _) = self
+                .find_cursor_visual_line(visual_lines)
+                .unwrap_or((0, 0, 0));
             cursor_line
                 .saturating_sub(visible_height.saturating_sub(1))
                 .min(max_scroll)
@@ -467,7 +469,6 @@ impl InputMock {
 
     /// Convert mouse coordinates to byte position in content
     fn mouse_pos_to_byte_pos(
-        &self,
         mouse_x: u16,
         mouse_y: u16,
         area: Rect,
@@ -1639,10 +1640,7 @@ impl InputComponent {
 
         // Handle mouse events for text selection
         if let tuirealm::Event::Mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            ..
+            kind, column, row, ..
         }) = ev
         {
             let result = self.component.handle_mouse_event(*kind, *column, *row);
@@ -1723,11 +1721,17 @@ impl InputComponent {
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // Shift+Enter: insert newline
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Enter,
-                modifiers: KeyModifiers::SHIFT,
-            }) => {
+            // Shift+Enter or Ctrl+J: insert newline
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Enter,
+                    modifiers: KeyModifiers::SHIFT,
+                }
+                | KeyEvent {
+                    code: Key::Char('j'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.insert_newline();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
@@ -1857,13 +1861,6 @@ impl InputComponent {
                 self.component
                     .move_and_clear_selection(|c| c.move_word_right());
                 None
-            }
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('j'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => {
-                self.component.insert_newline();
-                Some(Msg::InputChanged(self.component.content().to_string()))
             }
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('u'),

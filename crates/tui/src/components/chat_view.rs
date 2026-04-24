@@ -1237,11 +1237,10 @@ impl ChatView {
         let safe_end_byte = row_end_byte.min(text.len());
 
         // Use byte-based slicing carefully to avoid panics
-        let start_char_idx = text
-            .get(..safe_start_byte)
-            .map_or(0, |s| s.chars().count());
+        let start_char_idx = text.get(..safe_start_byte).map_or(0, |s| s.chars().count());
         let end_char_idx = text
-            .get(..safe_end_byte).map_or_else(|| text.chars().count(), |s| s.chars().count());
+            .get(..safe_end_byte)
+            .map_or_else(|| text.chars().count(), |s| s.chars().count());
 
         for (i, ch) in text.chars().enumerate() {
             if i < start_char_idx {
