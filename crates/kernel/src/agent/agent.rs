@@ -32,12 +32,6 @@ pub enum AgentInput {
     Compact,
 }
 
-/// Result of a single streaming round in agent
-enum StreamingResult {
-    Done,
-    Continue,
-}
-
 pub struct Agent {
     id: AgentId,
     shared: Arc<AgentShared>,
@@ -398,21 +392,15 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
-        // Use a loop to handle compaction retries without recursion
-        loop {
-            let result = self.do_streaming_round().await?;
-            match result {
-                StreamingResult::Done => break Ok(()),
-                StreamingResult::Continue => {
-                    // Full compaction occurred, continue to next round
-                    tracing::info!("Agent {} continuing after compaction", self.id);
-                }
-            }
+        // 1. Check and run compaction if needed (at the very beginning)
+        if self.maybe_compact_messages().await {
+            tracing::info!(
+                "Agent {} performed auto-compaction before streaming",
+                self.id
+            );
         }
-    }
 
-    /// Perform a single streaming round
-    async fn do_streaming_round(&mut self) -> Result<StreamingResult, AgentError> {
+        // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
@@ -448,7 +436,7 @@ impl Agent {
             biased;
             () = self.cancel_token.cancelled() => {
                 abort_handle.abort();
-                return self.handle_cancel("stream creation").await.map(|()| StreamingResult::Done);
+                return self.handle_cancel("stream creation").await;
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
@@ -473,18 +461,9 @@ impl Agent {
 
             self.persist_message(&msg).await;
             self.message_buffer.push(msg);
-
-            // Handle compaction if needed
-            let needs_continue = self.maybe_compact_messages().await;
-            if needs_continue {
-                // Full compaction occurred with summary as user message
-                // Request a new response to continue the conversation
-                return Ok(StreamingResult::Continue);
-            }
         }
 
-        self.transition_after_streaming().await?;
-        Ok(StreamingResult::Done)
+        self.transition_after_streaming().await
     }
 
     /// Collect all output from the stream until completion
@@ -566,8 +545,7 @@ impl Agent {
     ///
     /// Supports cancellation via `cancel_token`.
     ///
-    /// Returns (`result_message`, `needs_continue`) where `needs_continue` is true if full compaction occurred
-    /// and the agent should automatically request a new response.
+    /// Returns `result_message` on success.
     ///
     /// # Errors
     ///
@@ -575,9 +553,8 @@ impl Agent {
     /// - No compactor is configured
     /// - Compaction is cancelled
     /// - API call fails during summary generation
-    pub async fn force_compact(&mut self) -> Result<(String, bool), String> {
-        let compactor = self.shared.compactor.clone();
-        let Some(compactor) = compactor else {
+    pub async fn force_compact(&mut self) -> Result<String, String> {
+        let Some(compactor) = self.shared.compactor.as_ref() else {
             return Err("No compactor configured".to_string());
         };
 
@@ -597,7 +574,7 @@ impl Agent {
             .await;
 
         let compact_result = match result {
-            Ok(Some((new_messages, needs_continue))) => {
+            Ok(Some(new_messages)) => {
                 let compacted_count = old_count.saturating_sub(new_messages.len());
 
                 self.apply_compacted_messages(&new_messages, compacted_count)
@@ -608,9 +585,9 @@ impl Agent {
                 } else {
                     "Micro-compaction completed".to_string()
                 };
-                Ok((message, needs_continue))
+                Ok(message)
             }
-            Ok(None) => Ok(("No compaction needed".to_string(), false)),
+            Ok(None) => Ok("No compaction needed".to_string()),
             Err(CompactionError::Cancelled) => {
                 tracing::info!("Agent {} compaction was cancelled", self.id);
                 self.emit_operation_cancelled("compaction").await;
@@ -641,8 +618,7 @@ impl Agent {
     /// - Compaction is cancelled
     /// - API call fails during summary generation
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
-        let compactor = self.shared.compactor.clone();
-        let Some(compactor) = compactor else {
+        let Some(compactor) = self.shared.compactor.as_ref() else {
             return Err("No compactor configured".to_string());
         };
 
@@ -753,21 +729,18 @@ impl Agent {
     }
 
     /// Check and run compaction if needed
-    /// Returns true if full compaction occurred and agent should continue streaming
+    /// Returns true if compaction occurred (including full compaction)
     async fn maybe_compact_messages(&mut self) -> bool {
-        // Clone compactor to avoid borrow issues
-        let compactor = self.shared.compactor.clone();
-        let Some(compactor) = compactor else {
+        let Some(compactor) = self.shared.compactor.as_ref() else {
             return false; // No compactor configured, skip
         };
         let should_compact = compactor.should_compact(self.message_buffer.messages());
         if !should_compact {
             return false;
         }
-
         // force_compact handles its own start/end events
         match self.force_compact().await {
-            Ok((_, needs_continue)) => needs_continue,
+            Ok(_) => true,
             Err(e) => {
                 tracing::warn!("Agent {} auto-compaction failed: {}", self.id, e);
                 false

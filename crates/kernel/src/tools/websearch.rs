@@ -213,7 +213,10 @@ impl WebSearchTool {
         let truncated = truncate_with_suffix(
             &text,
             MAX_CONTENT_LENGTH,
-            &format!("\n\n[Content truncated - original length: {} characters]", text.len()),
+            &format!(
+                "\n\n[Content truncated - original length: {} characters]",
+                text.len()
+            ),
         );
 
         Ok(truncated)
