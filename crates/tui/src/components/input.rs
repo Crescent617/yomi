@@ -1580,7 +1580,7 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::PageDown),
             tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Char('q'),
+                code: Key::Char('q') | Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ToggleBrowseMode),
             // Go to top/bottom (vim-style)
