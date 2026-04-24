@@ -29,7 +29,7 @@ use kernel::task::{
     TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
 };
 use kernel::tools::{
-    BASH_TOOL_NAME, EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME,
+    EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME,
     SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
@@ -854,7 +854,7 @@ impl ChatView {
                 }
 
                 // For bash commands, add timeout/async info with text_secondary style
-                if tool_name == BASH_TOOL_NAME {
+                if tool_name == SHELL_TOOL_NAME {
                     if let Some(ref args) = arguments {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
                             let timeout_secs = value["timeout"].as_u64();
@@ -2162,7 +2162,7 @@ fn tool_icon(tool_name: &str) -> &'static str {
         SUBAGENT_TOOL_NAME => "󰚩 ",
         READ_TOOL_NAME => " ",
         WRITE_TOOL_NAME | EDIT_TOOL_NAME => " ",
-        BASH_TOOL_NAME => " ",
+        SHELL_TOOL_NAME => " ",
         GLOB_TOOL_NAME => "󰱼 ",
         GREP_TOOL_NAME => "󰑑 ",
         SKILL_TOOL_NAME => "⚡",
@@ -2188,7 +2188,7 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let target = match tool_name.to_lowercase().as_str() {
         n if n == READ_TOOL_NAME || n == EDIT_TOOL_NAME => value["path"].as_str().map(String::from),
         n if n == WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
-        n if n == BASH_TOOL_NAME => {
+        n if n == SHELL_TOOL_NAME => {
             let cmd = value["command"].as_str()?;
             // Return command only, timeout will be rendered separately with text_secondary style
             Some(truncate_unicode(cmd, 50))
