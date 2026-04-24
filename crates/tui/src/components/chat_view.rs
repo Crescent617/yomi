@@ -853,14 +853,23 @@ impl ChatView {
                     ));
                 }
 
-                // For bash commands, add timeout info with text_secondary style
+                // For bash commands, add timeout/async info with text_secondary style
                 if tool_name == BASH_TOOL_NAME {
                     if let Some(ref args) = arguments {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
                             let timeout_secs = value["timeout"].as_u64();
                             let background = value["background"].as_bool().unwrap_or(false);
+
+                            // Show async badge when background mode is enabled
+                            if background {
+                                header_spans.push(Span::styled(
+                                    " async".to_string(),
+                                    Style::default().fg(colors::text_secondary()),
+                                ));
+                            }
+
+                            // Show timeout if explicitly set (or non-default for sync mode)
                             if let Some(t) = timeout_secs {
-                                // Only show timeout if explicitly set or background mode
                                 if background || t != 60 {
                                     header_spans.push(Span::styled(
                                         format!(" timeout {t}s"),
@@ -1792,9 +1801,17 @@ impl MockComponent for ChatView {
         match cmd {
             "add_user_message" => {
                 if let AttrValue::String(blocks_json) = value {
-                    let content_blocks: Vec<ContentBlock> =
-                        serde_json::from_str(&blocks_json).unwrap_or_default();
-                    self.add_user_message(content_blocks);
+                    // Try parsing as JSON first (for ContentBlock array)
+                    if let Ok(content_blocks) =
+                        serde_json::from_str::<Vec<ContentBlock>>(&blocks_json)
+                    {
+                        self.add_user_message(content_blocks);
+                    } else {
+                        // Fallback to plain text
+                        self.add_user_message(vec![ContentBlock::Text {
+                            text: blocks_json,
+                        }]);
+                    }
                 }
             }
             "add_error_message" => {
