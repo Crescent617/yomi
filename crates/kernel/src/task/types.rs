@@ -28,8 +28,6 @@ pub struct Task {
     pub subject: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_form: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -55,7 +53,6 @@ impl Task {
             id: id.into(),
             subject: subject.into(),
             description: description.into(),
-            active_form: None,
             owner: None,
             status: TaskStatus::Pending,
             blocks: Vec::new(),
@@ -71,7 +68,6 @@ impl Task {
 pub struct CreateTaskInput {
     pub subject: String,
     pub description: String,
-    pub active_form: Option<String>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
@@ -128,7 +124,6 @@ pub struct GetTaskOutput {
 pub struct TaskUpdates {
     pub subject: Option<String>,
     pub description: Option<String>,
-    pub active_form: Option<String>,
     pub status: Option<TaskStatus>,
     pub owner: Option<String>,
     pub blocks: Option<Vec<String>>,

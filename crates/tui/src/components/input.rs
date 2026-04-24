@@ -370,7 +370,7 @@ impl InputMock {
             return MouseEventResult::NotHandled;
         }
 
-        let content_width = (area.width.saturating_sub(2) as usize).max(1);
+        let content_width = area.width as usize;
         let visible_height = area.height.saturating_sub(2).max(1) as usize;
         let visual_lines = self.wrap_lines(content_width);
 
@@ -623,8 +623,9 @@ impl MockComponent for InputMock {
         // Store area for mouse coordinate calculation
         self.current_area = Some(area);
 
-        // Calculate available width for content (accounting for borders)
-        let content_width = (area.width.saturating_sub(2) as usize).max(1); // -2 for borders
+        // Calculate available width for content
+        // Note: area.width already excludes borders (they're rendered by Paragraph block)
+        let content_width = area.width as usize;
 
         // Get visual lines with wrapping
         let visual_lines = self.wrap_lines(content_width);

@@ -100,11 +100,6 @@ impl TaskStore {
         {
             updated_fields.push("description".to_string());
         }
-        if updates.active_form.is_some()
-            && updates.active_form.as_ref() != existing.active_form.as_ref()
-        {
-            updated_fields.push("active_form".to_string());
-        }
         if updates.status.is_some() && updates.status.as_ref() != Some(&existing.status) {
             updated_fields.push("status".to_string());
         }

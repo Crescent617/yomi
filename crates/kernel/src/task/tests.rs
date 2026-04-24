@@ -15,7 +15,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Test task".to_string(),
             description: "Test description".to_string(),
-            active_form: Some("Testing".to_string()),
             metadata: None,
         };
 
@@ -41,7 +40,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             storage.create_task("session1", input).await.unwrap();
@@ -63,7 +61,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Original subject".to_string(),
             description: "Original description".to_string(),
-            active_form: None,
             metadata: None,
         };
         storage.create_task("session1", input).await.unwrap();
@@ -89,7 +86,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task to delete".to_string(),
             description: "Will be deleted".to_string(),
-            active_form: None,
             metadata: None,
         };
         storage.create_task("session1", input).await.unwrap();
@@ -109,7 +105,6 @@ mod task_tests {
         let input1 = CreateTaskInput {
             subject: "Task 1".to_string(),
             description: "First task".to_string(),
-            active_form: None,
             metadata: None,
         };
         storage.create_task("session1", input1).await.unwrap();
@@ -117,7 +112,6 @@ mod task_tests {
         let input2 = CreateTaskInput {
             subject: "Task 2".to_string(),
             description: "Second task".to_string(),
-            active_form: None,
             metadata: None,
         };
         storage.create_task("session1", input2).await.unwrap();
@@ -166,7 +160,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Event test".to_string(),
             description: "Testing events".to_string(),
-            active_form: None,
             metadata: None,
         };
         store.create_task("session1", input).await.unwrap();
@@ -191,7 +184,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task 1".to_string(),
             description: "First task in session1".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task1 = storage.create_task("session1", input).await.unwrap();
@@ -200,7 +192,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task 2".to_string(),
             description: "Second task in session1".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task2 = storage.create_task("session1", input).await.unwrap();
@@ -210,7 +201,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task 1 in session2".to_string(),
             description: "First task in session2".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task3 = storage.create_task("session2", input).await.unwrap();
@@ -219,7 +209,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task 2 in session2".to_string(),
             description: "Second task in session2".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task4 = storage.create_task("session2", input).await.unwrap();
@@ -229,7 +218,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Task 3".to_string(),
             description: "Third task in session1".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task5 = storage.create_task("session1", input).await.unwrap();
@@ -245,7 +233,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             storage.create_task("session1", input).await.unwrap();
@@ -308,7 +295,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "Test task".to_string(),
             description: "Test description".to_string(),
-            active_form: None,
             metadata: None,
         };
         storage.create_task("session1", input).await.unwrap();
@@ -319,7 +305,6 @@ mod task_tests {
             description: Some("New description".to_string()),
             status: Some(TaskStatus::InProgress),
             owner: Some("test-owner".to_string()),
-            active_form: Some("Testing task".to_string()),
             metadata: Some({
                 let mut m = std::collections::HashMap::new();
                 m.insert("key".to_string(), serde_json::json!("value"));
@@ -338,7 +323,6 @@ mod task_tests {
         assert_eq!(updated.description, "New description");
         assert!(matches!(updated.status, TaskStatus::InProgress));
         assert_eq!(updated.owner, Some("test-owner".to_string()));
-        assert_eq!(updated.active_form, Some("Testing task".to_string()));
     }
 
     #[tokio::test]
@@ -350,7 +334,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             storage.create_task("session1", input).await.unwrap();
@@ -363,7 +346,6 @@ mod task_tests {
         let input = CreateTaskInput {
             subject: "New task".to_string(),
             description: "After reset".to_string(),
-            active_form: None,
             metadata: None,
         };
         let task = storage.create_task("session1", input).await.unwrap();
@@ -395,7 +377,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             storage.create_task("session1", input).await.unwrap();
@@ -453,7 +434,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             store.create_task("session1", input).await.unwrap();
@@ -505,7 +485,6 @@ mod task_tests {
             let input = CreateTaskInput {
                 subject: format!("Task {i}"),
                 description: format!("Description {i}"),
-                active_form: None,
                 metadata: None,
             };
             storage

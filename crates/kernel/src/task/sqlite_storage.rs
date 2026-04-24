@@ -75,7 +75,6 @@ impl SqliteTaskStorage {
                 task_list_id TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 description TEXT NOT NULL,
-                active_form TEXT,
                 owner TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 metadata TEXT,
@@ -145,15 +144,14 @@ impl SqliteTaskStorage {
         // Insert the task
         sqlx::query(
             r"
-            INSERT INTO tasks (task_index, task_list_id, subject, description, active_form, owner, status, metadata, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'pending', ?6, ?7, ?7)
+            INSERT INTO tasks (task_index, task_list_id, subject, description, owner, status, metadata, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, NULL, 'pending', ?5, ?6, ?6)
             ",
         )
         .bind(task_index)
         .bind(task_list_id)
         .bind(&input.subject)
         .bind(&input.description)
-        .bind(&input.active_form)
         .bind(metadata_json)
         .bind(&now)
         .execute(&mut *tx)
@@ -165,7 +163,6 @@ impl SqliteTaskStorage {
             id: task_index.to_string(),
             subject: input.subject,
             description: input.description,
-            active_form: input.active_form,
             owner: None,
             status: TaskStatus::Pending,
             blocks: Vec::new(),
@@ -181,7 +178,7 @@ impl SqliteTaskStorage {
 
         let row = sqlx::query(
             r"
-            SELECT task_index, subject, description, active_form, owner, status, metadata, created_at, updated_at
+            SELECT task_index, subject, description, owner, status, metadata, created_at, updated_at
             FROM tasks
             WHERE task_index = ?1 AND task_list_id = ?2
             ",
@@ -258,7 +255,6 @@ impl SqliteTaskStorage {
             id: row.try_get::<i64, _>("task_index")?.to_string(),
             subject: row.try_get("subject")?,
             description: row.try_get("description")?,
-            active_form: row.try_get("active_form")?,
             owner: row.try_get("owner")?,
             status,
             blocks,
@@ -312,10 +308,6 @@ impl SqliteTaskStorage {
             params_count += 1;
             set_clauses.push(format!("description = ?{params_count}"));
         }
-        if updates.active_form.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("active_form = ?{params_count}"));
-        }
         if updates.owner.is_some() {
             params_count += 1;
             set_clauses.push(format!("owner = ?{params_count}"));
@@ -345,9 +337,6 @@ impl SqliteTaskStorage {
             }
             if let Some(description) = &updates.description {
                 query = query.bind(description);
-            }
-            if let Some(active_form) = &updates.active_form {
-                query = query.bind(active_form);
             }
             if let Some(owner) = &updates.owner {
                 query = query.bind(owner);
@@ -439,7 +428,7 @@ impl SqliteTaskStorage {
     pub async fn list_tasks(&self, task_list_id: &str) -> Result<Vec<Task>> {
         let rows = sqlx::query(
             r"
-            SELECT task_index, subject, description, active_form, owner, status, metadata, created_at, updated_at
+            SELECT task_index, subject, description, owner, status, metadata, created_at, updated_at
             FROM tasks
             WHERE task_list_id = ?1
             ORDER BY task_index ASC

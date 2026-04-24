@@ -49,10 +49,6 @@ impl Tool for TaskUpdateTool {
                     "type": "string",
                     "description": "New description for the task"
                 },
-                "activeForm": {
-                    "type": "string",
-                    "description": "New activeForm for the task"
-                },
                 "status": {
                     "type": "string",
                     "enum": ["pending", "in_progress", "completed", "deleted"],
@@ -147,12 +143,6 @@ impl Tool for TaskUpdateTool {
             if description != existing.description {
                 updates.description = Some(description.to_string());
                 updated_fields.push("description");
-            }
-        }
-        if let Some(active_form) = args["activeForm"].as_str() {
-            if Some(active_form.to_string()) != existing.active_form {
-                updates.active_form = Some(active_form.to_string());
-                updated_fields.push("active_form");
             }
         }
         if let Some(owner) = args["owner"].as_str() {

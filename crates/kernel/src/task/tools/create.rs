@@ -44,10 +44,6 @@ impl Tool for TaskCreateTool {
                     "type": "string",
                     "description": "What needs to be done"
                 },
-                "activeForm": {
-                    "type": "string",
-                    "description": "Present continuous form shown in spinner when in_progress (e.g., 'Fixing authentication bug')"
-                },
                 "metadata": {
                     "type": "object",
                     "description": "Arbitrary metadata to attach to the task"
@@ -68,7 +64,6 @@ impl Tool for TaskCreateTool {
             .ok_or_else(|| anyhow::anyhow!("description is required"))?
             .to_string();
 
-        let active_form = args["activeForm"].as_str().map(|s| s.to_string());
         let metadata = args.get("metadata").and_then(|m| {
             serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(
                 m.clone(),
@@ -79,7 +74,6 @@ impl Tool for TaskCreateTool {
         let input = CreateTaskInput {
             subject,
             description,
-            active_form,
             metadata,
         };
 

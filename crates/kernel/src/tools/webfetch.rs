@@ -187,7 +187,10 @@ impl WebFetchTool {
         let final_content = truncate_with_suffix(
             &processed_content,
             MAX_RESULT_LENGTH,
-            &format!("\n\n[Content truncated - original length: {} characters]", processed_content.len()),
+            &format!(
+                "\n\n[Content truncated - original length: {} characters]",
+                processed_content.len()
+            ),
         );
 
         // Cache the result

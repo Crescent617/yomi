@@ -465,8 +465,16 @@ impl Model {
             );
         }
         // Update InfoBar with content for token counting
-        let attr = if is_thinking { "append_thinking" } else { "append_content" };
-        let _ = self.app.attr(&Id::InfoBar, Attribute::Custom(attr), AttrValue::String(text.to_string()));
+        let attr = if is_thinking {
+            "append_thinking"
+        } else {
+            "append_content"
+        };
+        let _ = self.app.attr(
+            &Id::InfoBar,
+            Attribute::Custom(attr),
+            AttrValue::String(text.to_string()),
+        );
         self.state.should_redraw = true;
     }
 

@@ -234,7 +234,7 @@ impl Compactor {
     }
 
     /// Auto-compact: try micro first, then full if needed
-    /// Returns (`new_messages`, `needs_continue`) where `needs_continue` is true if full compaction occurred
+    /// Returns `new_messages` if compaction was performed, `None` otherwise
     /// Supports cancellation via `cancel_token`
     pub async fn auto_compact(
         &self,
@@ -242,7 +242,7 @@ impl Compactor {
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Option<(Vec<Arc<Message>>, bool)>, CompactionError> {
+    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
         // Check if we need to compact
         if !self.should_compact(messages) {
             return Ok(None);
@@ -252,7 +252,7 @@ impl Compactor {
         if let Some(compacted) = self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
             if !self.should_compact(&compacted) {
-                return Ok(Some((compacted, false))); // Micro-compaction only, no need to continue
+                return Ok(Some(compacted)); // Micro-compaction only
             }
 
             // Micro-compaction wasn't enough, do full compaction
@@ -277,7 +277,7 @@ impl Compactor {
                     .collect()
             };
 
-            return Ok(Some((new_messages, true))); // Full compaction, need to continue
+            return Ok(Some(new_messages)); // Full compaction
         }
 
         // Micro-compaction didn't help, do full compaction
@@ -302,7 +302,7 @@ impl Compactor {
                 .collect()
         };
 
-        Ok(Some((new_messages, true))) // Full compaction, need to continue
+        Ok(Some(new_messages)) // Full compaction
     }
 }
 

@@ -2158,7 +2158,7 @@ fn to_camel_case(s: &str) -> String {
 }
 
 fn tool_icon(tool_name: &str) -> &'static str {
-    match tool_name.to_lowercase().as_str() {
+    match tool_name {
         SUBAGENT_TOOL_NAME => "󰚩 ",
         READ_TOOL_NAME => " ",
         WRITE_TOOL_NAME | EDIT_TOOL_NAME => " ",
