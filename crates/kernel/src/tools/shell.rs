@@ -26,14 +26,14 @@ fn strip_ansi(text: &str) -> String {
     ANSI_REGEX.replace_all(text, "").to_string()
 }
 
-pub const BASH_TOOL_NAME: &str = "bash";
+pub const SHELL_TOOL_NAME: &str = "shell";
 
 #[derive(Clone)]
-pub struct BashToolCtx {
+pub struct ShellToolCtx {
     input_tx: Option<mpsc::Sender<AgentInput>>,
 }
 
-impl BashToolCtx {
+impl ShellToolCtx {
     pub fn new(
         _agent_id: AgentId,
         input_tx: Option<mpsc::Sender<AgentInput>>,
@@ -43,12 +43,12 @@ impl BashToolCtx {
     }
 }
 
-pub struct BashTool {
+pub struct ShellTool {
     working_dir: std::path::PathBuf,
-    ctx: Option<BashToolCtx>,
+    ctx: Option<ShellToolCtx>,
 }
 
-impl BashTool {
+impl ShellTool {
     pub fn new(working_dir: impl Into<std::path::PathBuf>) -> Self {
         Self {
             working_dir: working_dir.into(),
@@ -57,7 +57,7 @@ impl BashTool {
     }
 
     #[must_use]
-    pub fn with_ctx(mut self, ctx: BashToolCtx) -> Self {
+    pub fn with_ctx(mut self, ctx: ShellToolCtx) -> Self {
         self.ctx = Some(ctx);
         self
     }
@@ -72,13 +72,17 @@ impl BashTool {
 }
 
 #[async_trait]
-impl Tool for BashTool {
+impl Tool for ShellTool {
     fn name(&self) -> &'static str {
-        BASH_TOOL_NAME
+        SHELL_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {
-        "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
+        if cfg!(target_os = "windows") {
+            "Execute a shell command using cmd.exe. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
+        } else {
+            "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
+        }
     }
 
     fn params(&self) -> Value {
@@ -87,7 +91,7 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The bash command to execute"
+                    "description": "The shell command to execute"
                 },
                 "timeout": {
                     "type": "integer",
@@ -121,11 +125,22 @@ impl Tool for BashTool {
     }
 }
 
-impl BashTool {
+impl ShellTool {
+    /// Get the appropriate shell command for the current platform
+    #[inline]
+    fn shell_command() -> (String, String) {
+        if cfg!(target_os = "windows") {
+            ("cmd.exe".to_string(), "/C".to_string())
+        } else {
+            ("bash".to_string(), "-c".to_string())
+        }
+    }
+
     /// Execute command synchronously and return output directly
     async fn exec_sync(&self, command: &str, timeout_secs: Option<u64>) -> Result<ToolOutput> {
-        let child = Command::new("bash")
-            .arg("-c")
+        let (shell, arg) = Self::shell_command();
+        let child = Command::new(&shell)
+            .arg(&arg)
             .arg(command)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
@@ -189,8 +204,9 @@ impl BashTool {
         let output_path_str = output_path.to_string_lossy().to_string();
 
         // Start the process and get PID immediately
-        let child = Command::new("bash")
-            .arg("-c")
+        let (shell, arg) = Self::shell_command();
+        let child = Command::new(&shell)
+            .arg(&arg)
             .arg(command)
             .current_dir(&self.working_dir)
             .stdout(std::process::Stdio::piped())

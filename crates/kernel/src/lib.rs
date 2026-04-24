@@ -55,7 +55,7 @@ pub use types::*;
 #[cfg(feature = "providers")]
 pub use providers::{AnthropicProvider, OpenAIProvider};
 pub use tools::{
-    execute_tools_parallel, BashTool, EditTool, GlobTool, GrepTool, ReadTool, SkillTool,
+    execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
     SubagentTool, WriteTool,
 };
 

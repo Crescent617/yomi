@@ -1,6 +1,6 @@
 use super::level::Level;
 use crate::task::{TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME};
-use crate::tools::{BASH_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME};
+use crate::tools::{SHELL_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME};
 use serde_json::Value;
 
 /// 判定工具危险级别（无状态，可全局共享）
@@ -13,7 +13,7 @@ impl ToolLevelResolver {
             // 只读工具 - Safe
             READ_TOOL_NAME | GLOB_TOOL_NAME | GREP_TOOL_NAME | TASK_LIST_TOOL_NAME
             | TASK_GET_TOOL_NAME => Level::Safe,
-            BASH_TOOL_NAME => Self::resolve_bash_level(args),
+            SHELL_TOOL_NAME => Self::resolve_bash_level(args),
             _ => Level::Caution,
         }
     }

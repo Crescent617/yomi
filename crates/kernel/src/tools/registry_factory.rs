@@ -7,7 +7,7 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::tools::{
-    BashTool, BashToolCtx, EditTool, GlobTool, GrepTool, ReadTool, SkillTool, SubagentTool,
+    EditTool, GlobTool, GrepTool, ReadTool, ShellTool, ShellToolCtx, SkillTool, SubagentTool,
     ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
@@ -53,12 +53,12 @@ impl ToolRegistryFactory {
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
 
         // Register Bash tool
-        let bash_ctx = BashToolCtx::new(
+        let bash_ctx = ShellToolCtx::new(
             agent_id.clone(),
             input_tx.cloned(),
             working_dir.to_path_buf(),
         );
-        let bash_tool = BashTool::new(working_dir).with_ctx(bash_ctx);
+        let bash_tool = ShellTool::new(working_dir).with_ctx(bash_ctx);
         registry.register(bash_tool);
 
         // Register Read tool with file state store

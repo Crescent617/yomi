@@ -1,6 +1,6 @@
 use super::level::{exceeds_threshold, Level};
 use crate::event::{AgentEvent, Event};
-use crate::tools::{BASH_TOOL_NAME, EDIT_TOOL_NAME, READ_TOOL_NAME};
+use crate::tools::{SHELL_TOOL_NAME, EDIT_TOOL_NAME, READ_TOOL_NAME};
 use crate::types::{AgentId, ToolCall};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -237,7 +237,7 @@ impl Checker {
 
         // 提取工具参数用于显示
         let tool_args = match tool_call.name.as_str() {
-            BASH_TOOL_NAME => tool_call
+            SHELL_TOOL_NAME => tool_call
                 .arguments
                 .get("command")
                 .and_then(|v| v.as_str())

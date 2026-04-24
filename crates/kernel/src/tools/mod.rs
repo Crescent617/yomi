@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod base;
-pub mod bash;
 pub mod edit;
 pub mod edit_utils;
 pub(crate) mod file_lock;
@@ -19,6 +18,7 @@ pub mod line_numbers;
 pub mod parallel;
 pub mod read;
 pub mod registry_factory;
+pub mod shell;
 pub mod skill_load;
 pub mod subagent;
 pub mod webfetch;
@@ -27,13 +27,13 @@ pub mod write;
 
 pub use base::{FileTool, MAX_FILE_SIZE};
 
-pub use bash::{BashTool, BashToolCtx, BASH_TOOL_NAME};
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use parallel::execute_tools_parallel;
 pub use read::{ReadTool, READ_TOOL_NAME};
 pub use registry_factory::ToolRegistryFactory;
+pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
