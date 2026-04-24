@@ -28,6 +28,8 @@ pub struct FileCompletion {
     total_files_scanned: usize,
     /// Whether scan hit `MAX_FILES_TO_SCAN` limit
     files_truncated: bool,
+    /// Whether completion is currently active (independent of list visibility)
+    active: bool,
 }
 
 impl Default for FileCompletion {
@@ -48,6 +50,7 @@ impl FileCompletion {
             cache_dirty: true,
             total_files_scanned: 0,
             files_truncated: false,
+            active: false,
         }
     }
 
@@ -58,23 +61,24 @@ impl FileCompletion {
     }
 
     /// Start file completion at the given cursor position
-    /// Returns true if completion was started
-    pub fn start(&mut self, cursor_pos: usize) -> bool {
+    pub fn start(&mut self, cursor_pos: usize) {
         self.query.clear();
         self.query_start_pos = cursor_pos;
+        self.active = true;
         self.ensure_cache();
         self.refresh_list();
-        self.is_active()
+        // Set completion list visible since we're now active
+        // visibility will be checked via is_visible() which checks active && !is_empty()
     }
 
     /// Check if file completion is currently active
     pub fn is_active(&self) -> bool {
-        self.completion.is_visible()
+        self.active
     }
 
-    /// Check if completion is visible (alias for `is_active`)
+    /// Check if completion should be visible (active and has items)
     pub fn is_visible(&self) -> bool {
-        self.is_active()
+        self.active && !self.completion.is_empty()
     }
 
     /// Get the currently selected file path
@@ -109,6 +113,13 @@ impl FileCompletion {
                 self.prev();
                 true
             }
+            '\x08' => {
+                // Backspace: remove last char from query and refresh
+                self.query.pop();
+                self.refresh_list();
+                // Keep completion active even if query is empty
+                true
+            }
             ' ' if self.query.is_empty() => {
                 // Space without query - cancel completion
                 self.cancel();
@@ -128,16 +139,18 @@ impl FileCompletion {
         self.completion.get_selected().cloned().map(|selected| {
             let start = self.query_start_pos;
             let end = self.query_start_pos + self.query.len();
-            self.completion.hide();
+            self.active = false;
             self.query.clear();
+            self.completion.hide();
             (selected, start, end)
         })
     }
 
     /// Cancel file completion
     pub fn cancel(&mut self) {
-        self.completion.hide();
+        self.active = false;
         self.query.clear();
+        self.completion.hide();
     }
 
     /// Hide the completion list (alias for cancel)
@@ -180,6 +193,21 @@ impl FileCompletion {
         self.completion.len() == 0
     }
 
+    /// Get current scroll offset (for sticky scrolling)
+    pub fn scroll_offset(&self) -> usize {
+        self.completion.scroll_offset()
+    }
+
+    /// Ensure selected item is visible within the given max visible count
+    pub fn ensure_visible(&mut self, max_visible: usize) {
+        self.completion.ensure_visible(max_visible);
+    }
+
+    /// Get mutable access to the underlying completion list
+    pub fn completion_list_mut(&mut self) -> &mut CompletionList<String> {
+        &mut self.completion
+    }
+
     /// Refresh the file list based on current query
     fn refresh_list(&mut self) {
         let filtered = if self.query.is_empty() {
@@ -189,11 +217,34 @@ impl FileCompletion {
                 .cloned()
                 .collect()
         } else {
-            let mut filtered = Self::fuzzy_filter(&self.all_files, &self.query);
-            filtered.truncate(MAX_FILES_TO_DISPLAY);
+            let query_lower = self.query.to_lowercase();
+            let mut filtered: Vec<(String, i32)> = self
+                .all_files
+                .iter()
+                .filter_map(|file| {
+                    let file_lower = file.to_lowercase();
+                    // Use fuzzy match first, fallback to substring match
+                    if let Some(score) = Self::fuzzy_match(file, &query_lower) {
+                        Some((file.clone(), score))
+                    } else if file_lower.contains(&query_lower) {
+                        // Fallback: simple substring match with lower score
+                        let pos = file_lower.find(&query_lower).unwrap_or(0);
+                        Some((file.clone(), 10 - pos as i32))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            // Sort by score descending
+            filtered.sort_by(|a, b| b.1.cmp(&a.1));
             filtered
+                .into_iter()
+                .map(|(file, _)| file)
+                .take(MAX_FILES_TO_DISPLAY)
+                .collect()
         };
-        self.completion.show(filtered);
+        // Use set_items to avoid changing visibility - visibility is controlled by active flag
+        self.completion.set_items(filtered);
     }
 
     /// Ensure file cache is populated (lazy loading)
@@ -333,30 +384,6 @@ impl FileCompletion {
                 }
             }
         }
-    }
-
-    /// Fuzzy filter files based on query (similar to fzf)
-    fn fuzzy_filter(files: &[String], query: &str) -> Vec<String> {
-        if query.is_empty() {
-            return files.iter().take(MAX_FILES_TO_DISPLAY).cloned().collect();
-        }
-        let query_lower = query.to_lowercase();
-        let mut scored: Vec<(usize, i32, usize)> = files
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, file)| {
-                Self::fuzzy_match(file, &query_lower).map(|score| (idx, score, file.len()))
-            })
-            .collect();
-        // Sort by score (descending), then by length (ascending - shorter first)
-        scored.sort_by(|a, b| match b.1.cmp(&a.1) {
-            std::cmp::Ordering::Equal => a.2.cmp(&b.2),
-            other => other,
-        });
-        scored
-            .into_iter()
-            .map(|(idx, _, _)| files[idx].clone())
-            .collect()
     }
 
     /// Case-insensitive fuzzy matching

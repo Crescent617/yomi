@@ -821,6 +821,8 @@ fn random_tip() -> String {
     INPUT_TIPS[idx].to_string()
 }
 
+
+
 /// Generic completion list for command and file completions
 pub struct InputComponent {
     component: InputMock,
@@ -831,6 +833,8 @@ pub struct InputComponent {
     saved_input: String,          // Buffer for current input when browsing history
     // Command completion
     command_completion: CompletionList<(String, String)>,
+    command_query: String,        // Current query string (text after /)
+    command_start_pos: usize,     // Position of '/' in the input
     // File completion (@-mention)
     file_completion: FileCompletion,
     // Paste support (images and text)
@@ -854,11 +858,60 @@ impl InputComponent {
             history_index: None,
             saved_input: String::new(),
             command_completion: CompletionList::new(),
+            command_query: String::new(),
+            command_start_pos: 0,
             file_completion: FileCompletion::new(),
             placeholder_counter: 0,
             image_paths: std::collections::HashMap::new(),
             pasted_contents: std::collections::HashMap::new(),
         }
+    }
+
+    /// Generic helper to render a completion list dropdown
+    fn render_completion_dropdown<T>(
+        list: &mut CompletionList<T>,
+        frame: &mut Frame,
+        area: Rect,
+        max_visible: usize,
+        footer_lines: u16,
+        render_item: impl Fn(&T, usize, usize) -> tuirealm::ratatui::text::Line,
+    ) {
+        // Note: visibility is controlled by the caller (e.g., FileCompletion::is_visible)
+        // We only check if the list has items to render
+        if list.is_empty() {
+            return;
+        }
+
+        // Ensure selected item is visible (sticky window behavior)
+        list.ensure_visible(max_visible);
+        let scroll_offset = list.scroll_offset();
+
+        let visible_count = list.len().min(max_visible);
+        let height = visible_count as u16 + footer_lines;
+        let dropdown_area = Rect {
+            x: area.x,
+            y: area.y.saturating_sub(height),
+            width: area.width,
+            height,
+        };
+
+        // Clear the area first
+        frame.render_widget(tuirealm::ratatui::widgets::Clear, dropdown_area);
+
+        // Render items with scrolling
+        let items: Vec<tuirealm::ratatui::text::Line> = list
+            .items()
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(max_visible)
+            .map(|(i, item)| render_item(item, i, list.selected_index()))
+            .collect();
+
+        let widget = tuirealm::ratatui::widgets::Paragraph::new(
+            tuirealm::ratatui::text::Text::from(items),
+        );
+        frame.render_widget(widget, dropdown_area);
     }
 
     /// Set the working directory for file completion
@@ -1138,18 +1191,39 @@ impl InputComponent {
         }
     }
 
+    /// Start command completion at the given cursor position
+    fn start_command_completion(&mut self, cursor_pos: usize) {
+        self.command_query.clear();
+        self.command_start_pos = cursor_pos;
+        self.refresh_command_list();
+    }
+
+    /// Refresh command list based on current query
+    fn refresh_command_list(&mut self) {
+        let query = &self.command_query;
+        let filtered: Vec<(String, String)> = SLASH_COMMANDS
+            .iter()
+            .filter(|(cmd, _)| {
+                if query.is_empty() {
+                    true
+                } else {
+                    cmd.to_lowercase().contains(&query.to_lowercase())
+                }
+            })
+            .map(|(cmd, desc)| ((*cmd).to_string(), (*desc).to_string()))
+            .collect();
+        self.command_completion.show(filtered);
+    }
+
     /// Update command completion state based on current input
     fn update_completion(&mut self) {
         let content = self.component.content();
-        if content.starts_with('/') {
-            let filtered: Vec<(String, String)> = SLASH_COMMANDS
-                .iter()
-                .filter(|(cmd, _)| cmd.starts_with(content))
-                .map(|(cmd, desc)| ((*cmd).to_string(), (*desc).to_string()))
-                .collect();
-            self.command_completion.show(filtered);
-        } else {
+        if content.starts_with('/') && !self.command_completion.is_visible() {
+            // Start fresh completion when '/' is typed
+            self.start_command_completion(1);
+        } else if !content.starts_with('/') {
             self.command_completion.hide();
+            self.command_query.clear();
         }
     }
 
@@ -1166,10 +1240,18 @@ impl InputComponent {
     /// Accept the selected completion
     fn accept_completion(&mut self) {
         if let Some((cmd, _)) = self.command_completion.get_selected() {
-            self.component.clear();
+            // Delete the entire query including the leading '/'
+            // (command_start_pos is position after '/', so we go back one more)
+            let end = self.component.cursor_pos();
+            let start = self.command_start_pos.saturating_sub(1);
+            for _ in 0..(end - start) {
+                self.component.backspace();
+            }
+            // Insert the selected command followed by a space
             self.component.insert_str(cmd);
             self.component.insert_char(' ');
             self.command_completion.hide();
+            self.command_query.clear();
         }
     }
 
@@ -1198,8 +1280,9 @@ impl InputComponent {
             for _ in 0..(end - start) {
                 self.component.backspace();
             }
-            // Insert the selected file path
+            // Insert the selected file path followed by a space
             self.component.insert_str(&selected);
+            self.component.insert_char(' ');
             // accept() already hides the completion
         }
     }
@@ -1207,6 +1290,120 @@ impl InputComponent {
     /// Cancel file completion
     fn cancel_file_completion(&mut self) {
         self.file_completion.cancel();
+    }
+
+    /// Cancel command completion
+    fn cancel_command_completion(&mut self) {
+        self.command_completion.hide();
+        self.command_query.clear();
+    }
+
+    /// Handle input when command completion is active
+    fn handle_command_completion_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Msg {
+        use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+
+        match ev {
+            // Enter or Tab: accept completion
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Enter | Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.accept_completion();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Shift+Tab, Up arrow or Ctrl+P: navigate up
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::BackTab,
+                    modifiers: KeyModifiers::SHIFT,
+                }
+                | KeyEvent {
+                    code: Key::Up,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.completion_prev();
+                Msg::Redraw
+            }
+            // Escape or Ctrl+C: cancel completion
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.cancel_command_completion();
+                // Also clear the input when Ctrl+C is pressed during completion
+                if matches!(
+                    ev,
+                    tuirealm::Event::Keyboard(KeyEvent {
+                        code: Key::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                    })
+                ) {
+                    self.component.clear();
+                }
+                Msg::Redraw
+            }
+            // Down arrow or Ctrl+N: navigate down
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Down,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.completion_next();
+                Msg::Redraw
+            }
+            // Space: cancel completion and insert space
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(' '),
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_command_completion();
+                self.component.insert_char(' ');
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Regular character: add to query and refresh
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_char(*c);
+                self.command_query.push(*c);
+                self.refresh_command_list();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Backspace: remove from query and refresh
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Backspace,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.backspace();
+                let cursor_pos = self.component.cursor_pos();
+                // Cancel completion if cursor moved before / symbol
+                if cursor_pos < self.command_start_pos {
+                    self.cancel_command_completion();
+                } else {
+                    self.command_query.pop();
+                    self.refresh_command_list();
+                }
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            _ => Msg::Redraw,
+        }
     }
 
     /// Handle input when file completion is active
@@ -1240,12 +1437,28 @@ impl InputComponent {
                 self.file_completion_prev();
                 Msg::Redraw
             }
-            // Escape: cancel completion
-            tuirealm::Event::Keyboard(KeyEvent {
-                code: Key::Esc,
-                modifiers: KeyModifiers::NONE,
-            }) => {
+            // Escape or Ctrl+C: cancel completion
+            tuirealm::Event::Keyboard(
+                KeyEvent {
+                    code: Key::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.cancel_file_completion();
+                // Also clear the input when Ctrl+C is pressed during completion
+                if matches!(
+                    ev,
+                    tuirealm::Event::Keyboard(KeyEvent {
+                        code: Key::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                    })
+                ) {
+                    self.component.clear();
+                }
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
@@ -1288,7 +1501,10 @@ impl InputComponent {
             }) => {
                 self.component.backspace();
                 let cursor_pos = self.component.cursor_pos();
-                if !self.file_completion.handle_input('\x08', cursor_pos) {
+                // Cancel completion if cursor moved before @ symbol or handle_input returns false
+                if cursor_pos < self.file_completion.query_start_pos()
+                    || !self.file_completion.handle_input('\x08', cursor_pos)
+                {
                     self.cancel_file_completion();
                 }
                 Msg::InputChanged(self.component.content().to_string())
@@ -1368,68 +1584,61 @@ impl InputComponent {
 
 impl MockComponent for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        // Render completion dropdown above input if visible
-        if self.command_completion.is_visible() && !self.command_completion.items().is_empty() {
-            const MAX_VISIBLE_ITEMS: usize = 6;
-            let total_items = self.command_completion.len();
+        // Render command completion using generic helper
+        Self::render_completion_dropdown(
+            &mut self.command_completion,
+            frame,
+            area,
+            6, // MAX_VISIBLE_ITEMS
+            0, // No footer
+            |(cmd, desc), i, selected_idx| {
+                let is_selected = i == selected_idx;
+                let cmd_style = if is_selected {
+                    tuirealm::ratatui::style::Style::default()
+                        .fg(colors::accent_system())
+                        .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                } else {
+                    tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                };
+                let desc_style = if is_selected {
+                    tuirealm::ratatui::style::Style::default()
+                        .fg(colors::text_muted())
+                        .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                } else {
+                    tuirealm::ratatui::style::Style::default().fg(colors::text_muted())
+                };
+                tuirealm::ratatui::text::Line::from(vec![
+                    tuirealm::ratatui::text::Span::styled(cmd.as_str(), cmd_style),
+                    tuirealm::ratatui::text::Span::styled("  ", desc_style),
+                    tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
+                ])
+            },
+        );
 
-            // Ensure selected item is visible (sticky window behavior)
-            self.command_completion.ensure_visible(MAX_VISIBLE_ITEMS);
-            let scroll_offset = self.command_completion.scroll_offset();
+        // Render file completion dropdown (reserves footer space for status line)
+        Self::render_completion_dropdown(
+            self.file_completion.completion_list_mut(),
+            frame,
+            area,
+            8, // MAX_VISIBLE_FILES
+            1, // Reserve space for status line above input
+            |file, i, selected_idx| {
+                let is_selected = i == selected_idx;
+                let style = if is_selected {
+                    tuirealm::ratatui::style::Style::default()
+                        .fg(colors::accent_system())
+                        .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                } else {
+                    tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                };
+                tuirealm::ratatui::text::Line::from(tuirealm::ratatui::text::Span::styled(
+                    file.as_str(), style,
+                ))
+            },
+        );
 
-            let visible_count = total_items.min(MAX_VISIBLE_ITEMS);
-            let completion_height = visible_count as u16;
-            let completion_area = Rect {
-                x: area.x,
-                y: area.y.saturating_sub(completion_height),
-                width: area.width,
-                height: completion_height,
-            };
-
-            // Clear the area first
-            frame.render_widget(tuirealm::ratatui::widgets::Clear, completion_area);
-
-            // Render completion items with command and description (with scrolling)
-            let items: Vec<tuirealm::ratatui::text::Line> = self
-                .command_completion
-                .items()
-                .iter()
-                .enumerate()
-                .skip(scroll_offset)
-                .take(MAX_VISIBLE_ITEMS)
-                .map(|(i, (cmd, desc))| {
-                    let is_selected = i == self.command_completion.selected_index();
-                    let cmd_style = if is_selected {
-                        tuirealm::ratatui::style::Style::default()
-                            .fg(colors::accent_system())
-                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
-                    } else {
-                        tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
-                    };
-                    let desc_style = if is_selected {
-                        tuirealm::ratatui::style::Style::default()
-                            .fg(colors::text_muted())
-                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
-                    } else {
-                        tuirealm::ratatui::style::Style::default().fg(colors::text_muted())
-                    };
-                    tuirealm::ratatui::text::Line::from(vec![
-                        tuirealm::ratatui::text::Span::styled(cmd.as_str(), cmd_style),
-                        tuirealm::ratatui::text::Span::styled("  ", desc_style),
-                        tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
-                    ])
-                })
-                .collect();
-
-            let completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
-                tuirealm::ratatui::text::Text::from(items),
-            );
-            frame.render_widget(completion_widget, completion_area);
-        }
-
-        // Render file completion dropdown if visible
-        if self.file_completion.is_visible() && !self.file_completion.items().is_empty() {
-            // Status line at bottom
+        // Render file completion status line (after dropdown, at the reserved footer position)
+        if self.file_completion.is_visible() && !self.file_completion.is_empty() {
             let status_text = if self.file_completion.was_truncated() {
                 format!(
                     " {} / {}+ files",
@@ -1443,60 +1652,24 @@ impl MockComponent for InputComponent {
                     self.file_completion.total_scanned()
                 )
             };
-            let display_count = self.file_completion.len().min(8);
-            let file_completion_height = (display_count + 1) as u16; // +1 for status line
-            let file_completion_area = Rect {
+            let status_height = 1u16;
+            let status_area = Rect {
                 x: area.x,
-                y: area.y.saturating_sub(file_completion_height),
+                y: area.y.saturating_sub(status_height),
                 width: area.width,
-                height: file_completion_height,
+                height: status_height,
             };
 
-            // Clear the area first
-            frame.render_widget(tuirealm::ratatui::widgets::Clear, file_completion_area);
-
-            // Build file items
-            let mut items: Vec<tuirealm::ratatui::text::Line> = self
-                .file_completion
-                .items()
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(i, file)| {
-                    let is_selected = i == self.file_completion.selected_index();
-                    let is_dir = file.ends_with('/');
-                    let file_style = if is_selected {
-                        // Selected: accent_system fg with bold (same as command completion)
-                        tuirealm::ratatui::style::Style::default()
-                            .fg(colors::accent_system())
-                            .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
-                    } else {
-                        // Not selected
-                        if is_dir {
-                            tuirealm::ratatui::style::Style::default().fg(colors::accent_system())
-                        } else {
-                            tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
-                        }
-                    };
-                    tuirealm::ratatui::text::Line::from(tuirealm::ratatui::text::Span::styled(
-                        file.as_str(),
-                        file_style,
-                    ))
-                })
-                .collect();
-
-            // Add status line at the bottom
             let status_style = tuirealm::ratatui::style::Style::default()
                 .fg(colors::text_muted())
                 .add_modifier(tuirealm::ratatui::style::Modifier::DIM);
-            items.push(tuirealm::ratatui::text::Line::from(
+            let status_line = tuirealm::ratatui::text::Line::from(
                 tuirealm::ratatui::text::Span::styled(status_text, status_style),
-            ));
-
-            let file_completion_widget = tuirealm::ratatui::widgets::Paragraph::new(
-                tuirealm::ratatui::text::Text::from(items),
             );
-            frame.render_widget(file_completion_widget, file_completion_area);
+            let status_widget = tuirealm::ratatui::widgets::Paragraph::new(
+                tuirealm::ratatui::text::Text::from(vec![status_line]),
+            );
+            frame.render_widget(status_widget, status_area);
         }
 
         self.component.view(frame, area);
@@ -1579,6 +1752,7 @@ impl InputComponent {
                 code: Key::Char('d'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::PageDown),
+            // ESC or 'q' to exit browse mode
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('q') | Key::Esc,
                 modifiers: KeyModifiers::NONE,
@@ -1628,9 +1802,14 @@ impl InputComponent {
     fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::MouseEvent;
 
-        // File completion mode - handle special keys first
-        if self.file_completion.is_visible() {
+        // File completion mode - handle special keys first (use is_active, not is_visible)
+        if self.file_completion.is_active() {
             return Some(self.handle_file_completion_input(ev));
+        }
+
+        // Command completion mode - handle special keys
+        if self.command_completion.is_visible() {
+            return Some(self.handle_command_completion_input(ev));
         }
 
         // Handle paste event first (needs to borrow text)

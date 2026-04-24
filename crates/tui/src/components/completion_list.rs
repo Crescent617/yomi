@@ -41,6 +41,15 @@ impl<T> CompletionList<T> {
         self.scroll_offset = 0;
     }
 
+    /// Set items without changing visibility
+    /// Used when visibility is controlled externally
+    pub fn set_items(&mut self, items: Vec<T>) {
+        self.items = items;
+        // Reset selection when items change
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
     /// Hide the completion list and clear items
     pub fn hide(&mut self) {
         self.visible = false;
