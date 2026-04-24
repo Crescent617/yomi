@@ -250,9 +250,7 @@ pub trait TextInput {
 
         // Check if we're at the start of a line (after \n or at position 0)
         let is_at_line_start = pos == 0
-            || (text[..pos]
-                .chars()
-                .next_back() == Some('\n'));
+            || text[..pos].ends_with('\n');
 
         if is_at_line_start {
             // At start of line, fall back to backspace (delete the newline)

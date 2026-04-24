@@ -15,7 +15,7 @@ use crate::types::{ContentBlock, Message, Role};
 use anyhow::Result;
 use futures::TryStreamExt;
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 /// Errors that can occur during compaction
 #[derive(Debug, thiserror::Error)]
@@ -186,13 +186,13 @@ impl Compactor {
 
     /// Perform full compaction: generate summary using API
     /// Returns a summary message and the recent messages to keep
-    /// Supports cancellation via `cancel_rx`
+    /// Supports cancellation via `cancel_token`
     pub async fn full_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
-        cancel_rx: Option<&mut oneshot::Receiver<()>>,
+        cancel_token: Option<CancellationToken>,
     ) -> Result<CompactionResult, CompactionError> {
         if messages.len() <= self.keep_recent {
             return Ok(CompactionResult {
@@ -219,12 +219,12 @@ impl Compactor {
             provider,
             model_config,
             self.summary_max_tokens,
-            cancel_rx,
+            cancel_token,
         )
         .await?;
 
-        // Create summary message
-        let summary_message = Message::system(summary_text);
+        // Create summary message as user role so it survives session restore
+        let summary_message = Message::user(summary_text);
 
         Ok(CompactionResult {
             summary: Some(summary_message),
@@ -234,15 +234,15 @@ impl Compactor {
     }
 
     /// Auto-compact: try micro first, then full if needed
-    /// Returns compacted messages if compaction was performed
-    /// Supports cancellation via `cancel_rx`
+    /// Returns (`new_messages`, `needs_continue`) where `needs_continue` is true if full compaction occurred
+    /// Supports cancellation via `cancel_token`
     pub async fn auto_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
-        cancel_rx: Option<&mut oneshot::Receiver<()>>,
-    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
+        cancel_token: Option<CancellationToken>,
+    ) -> Result<Option<(Vec<Arc<Message>>, bool)>, CompactionError> {
         // Check if we need to compact
         if !self.should_compact(messages) {
             return Ok(None);
@@ -252,18 +252,22 @@ impl Compactor {
         if let Some(compacted) = self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
             if !self.should_compact(&compacted) {
-                return Ok(Some(compacted));
+                return Ok(Some((compacted, false))); // Micro-compaction only, no need to continue
             }
 
             // Micro-compaction wasn't enough, do full compaction
             let result = self
-                .full_compact(&compacted, provider, model_config, cancel_rx)
+                .full_compact(&compacted, provider, model_config, cancel_token.clone())
                 .await?;
 
-            // Build new message list
+            // Build new message list: keep_recent first, then summary as user message at the end
             let new_messages = if let Some(ref summary) = result.summary {
-                let mut msgs = vec![Arc::new(summary.clone())];
-                msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
+                let mut msgs: Vec<Arc<Message>> = result
+                    .keep_messages
+                    .iter()
+                    .map(|m| Arc::new(m.clone()))
+                    .collect();
+                msgs.push(Arc::new(summary.clone()));
                 msgs
             } else {
                 result
@@ -273,18 +277,22 @@ impl Compactor {
                     .collect()
             };
 
-            return Ok(Some(new_messages));
+            return Ok(Some((new_messages, true))); // Full compaction, need to continue
         }
 
         // Micro-compaction didn't help, do full compaction
         let result = self
-            .full_compact(messages, provider, model_config, cancel_rx)
+            .full_compact(messages, provider, model_config, cancel_token)
             .await?;
 
-        // Build new message list
+        // Build new message list: keep_recent first, then summary as user message at the end
         let new_messages = if let Some(ref summary) = result.summary {
-            let mut msgs = vec![Arc::new(summary.clone())];
-            msgs.extend(result.keep_messages.iter().map(|m| Arc::new(m.clone())));
+            let mut msgs: Vec<Arc<Message>> = result
+                .keep_messages
+                .iter()
+                .map(|m| Arc::new(m.clone()))
+                .collect();
+            msgs.push(Arc::new(summary.clone()));
             msgs
         } else {
             result
@@ -294,7 +302,7 @@ impl Compactor {
                 .collect()
         };
 
-        Ok(Some(new_messages))
+        Ok(Some((new_messages, true))) // Full compaction, need to continue
     }
 }
 
@@ -305,7 +313,7 @@ async fn generate_summary_with_api(
     provider: &dyn Provider,
     model_config: &ModelConfig,
     max_tokens: u32,
-    mut cancel_rx: Option<&mut oneshot::Receiver<()>>,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<String, CompactionError> {
     // Build messages for summary generation
     let mut summary_messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(SUMMARY_PROMPT))];
@@ -335,14 +343,8 @@ async fn generate_summary_with_api(
     let mut summary = String::with_capacity(max_tokens as usize * 4); // Rough estimate of chars per token
     loop {
         // Check if cancelled (non-blocking check)
-        if let Some(ref mut rx) = cancel_rx {
-            match rx.try_recv() {
-                Ok(()) => return Err(CompactionError::Cancelled),
-                Err(
-                    tokio::sync::oneshot::error::TryRecvError::Closed
-                    | tokio::sync::oneshot::error::TryRecvError::Empty,
-                ) => {}
-            }
+        if cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
+            return Err(CompactionError::Cancelled);
         }
 
         match tokio::time::timeout(std::time::Duration::from_millis(100), stream.try_next()).await {

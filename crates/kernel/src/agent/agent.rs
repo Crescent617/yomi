@@ -32,6 +32,12 @@ pub enum AgentInput {
     Compact,
 }
 
+/// Result of a single streaming round in agent
+enum StreamingResult {
+    Done,
+    Continue,
+}
+
 pub struct Agent {
     id: AgentId,
     shared: Arc<AgentShared>,
@@ -378,10 +384,10 @@ impl Agent {
             }
             Some(AgentInput::Compact) => {
                 tracing::info!("Agent {} received compact request", self.id);
-                if let Err(e) = self.force_compact().await {
-                    tracing::warn!("Agent {} force_compact failed: {}", self.id, e);
+                if let Err(e) = self.force_full_compact().await {
+                    tracing::warn!("Agent {} force_full_compact failed: {}", self.id, e);
                 }
-                // Stay in WaitingForInput state
+                // User-initiated compact doesn't auto-continue, stay in WaitingForInput
                 Ok(())
             }
             None => {
@@ -392,6 +398,21 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
+        // Use a loop to handle compaction retries without recursion
+        loop {
+            let result = self.do_streaming_round().await?;
+            match result {
+                StreamingResult::Done => break Ok(()),
+                StreamingResult::Continue => {
+                    // Full compaction occurred, continue to next round
+                    tracing::info!("Agent {} continuing after compaction", self.id);
+                }
+            }
+        }
+    }
+
+    /// Perform a single streaming round
+    async fn do_streaming_round(&mut self) -> Result<StreamingResult, AgentError> {
         let tools = self.tool_registry.definitions();
         tracing::info!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
@@ -427,7 +448,7 @@ impl Agent {
             biased;
             () = self.cancel_token.cancelled() => {
                 abort_handle.abort();
-                return self.handle_cancel("stream creation").await;
+                return self.handle_cancel("stream creation").await.map(|()| StreamingResult::Done);
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
@@ -454,10 +475,16 @@ impl Agent {
             self.message_buffer.push(msg);
 
             // Handle compaction if needed
-            self.maybe_compact_messages().await;
+            let needs_continue = self.maybe_compact_messages().await;
+            if needs_continue {
+                // Full compaction occurred with summary as user message
+                // Request a new response to continue the conversation
+                return Ok(StreamingResult::Continue);
+            }
         }
 
-        self.transition_after_streaming().await
+        self.transition_after_streaming().await?;
+        Ok(StreamingResult::Done)
     }
 
     /// Collect all output from the stream until completion
@@ -539,133 +566,193 @@ impl Agent {
     ///
     /// Supports cancellation via `cancel_token`.
     ///
+    /// Returns (`result_message`, `needs_continue`) where `needs_continue` is true if full compaction occurred
+    /// and the agent should automatically request a new response.
+    ///
     /// # Errors
     ///
     /// Returns `Err` if:
     /// - No compactor is configured
     /// - Compaction is cancelled
     /// - API call fails during summary generation
-    pub async fn force_compact(&mut self) -> Result<String, String> {
-        // Clone compactor to avoid borrow issues
+    pub async fn force_compact(&mut self) -> Result<(String, bool), String> {
         let compactor = self.shared.compactor.clone();
         let Some(compactor) = compactor else {
             return Err("No compactor configured".to_string());
         };
 
-        // Emit start event
-        let agent_id = self.id.clone();
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
-            agent_id: agent_id.clone(),
-            active: true,
-        })) {
-            tracing::warn!("Failed to send compacting start event: {}", e);
-        }
-
-        // Create cancellation channel for compaction
-        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
-
-        // Spawn a task to watch for cancellation
-        let cancel_token = self.cancel_token.runtime_token();
-        let cancel_watch = tokio::spawn(async move {
-            cancel_token.cancelled().await;
-            let _ = cancel_tx.send(());
-        });
+        self.emit_compaction_event(true).await;
 
         let messages = self.message_buffer.messages();
+        let old_count = messages.len();
+        let cancel_token = self.cancel_token.runtime_token();
 
-        // Run compaction with cancellation support
         let result = compactor
-            .auto_compact(
-                messages,
-                &*self.shared.provider,
-                &self.shared.model_config,
-                Some(&mut cancel_rx),
-            )
+            .auto_compact(messages, &*self.shared.provider, &self.shared.model_config, Some(cancel_token))
             .await;
 
-        // Abort the cancellation watcher
-        cancel_watch.abort();
-
-        // Handle result and update messages
         let compact_result = match result {
-            Ok(Some(new_messages)) => {
-                let old_count = messages.len();
-                let new_count = new_messages.len();
-                let compacted_count = old_count.saturating_sub(new_count);
-                let is_full = compacted_count > 0;
+            Ok(Some((new_messages, needs_continue))) => {
+                let compacted_count = old_count.saturating_sub(new_messages.len());
 
-                if is_full {
-                    tracing::info!(
-                        "Agent {} performed full compaction: {} messages summarized",
-                        agent_id,
-                        compacted_count
-                    );
+                self.apply_compacted_messages(&new_messages, compacted_count).await;
+
+                let message = if compacted_count > 0 {
+                    format!("Compacted {compacted_count} messages")
                 } else {
-                    tracing::info!("Agent {} performed micro-compaction", agent_id);
-                }
-
-                // Update message buffer with compacted messages
-                self.message_buffer.messages_mut().clone_from(&new_messages);
-
-                // Persist compacted state
-                if let Some(storage) = &self.shared.storage {
-                    let sid = crate::types::SessionId(self.session_id.clone());
-                    let messages_for_storage: Vec<Message> =
-                        new_messages.iter().map(|m| (**m).clone()).collect();
-                    if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
-                        tracing::warn!(
-                            "Agent {} failed to persist compacted messages: {}",
-                            agent_id,
-                            e
-                        );
-                    }
-                }
-
-                if is_full {
-                    Ok(format!("Compacted {compacted_count} messages"))
-                } else {
-                    Ok("Micro-compaction completed".to_string())
-                }
+                    "Micro-compaction completed".to_string()
+                };
+                Ok((message, needs_continue))
             }
-            Ok(None) => Ok("No compaction needed".to_string()),
+            Ok(None) => Ok(("No compaction needed".to_string(), false)),
             Err(CompactionError::Cancelled) => {
-                tracing::info!("Agent {} compaction was cancelled", agent_id);
+                tracing::info!("Agent {} compaction was cancelled", self.id);
                 self.emit_operation_cancelled("compaction").await;
                 Err("Compaction was cancelled".to_string())
             }
             Err(CompactionError::Api(e)) => {
-                tracing::warn!("Agent {} compaction failed: {}", agent_id, e);
+                tracing::warn!("Agent {} compaction failed: {}", self.id, e);
                 self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
                     .await;
                 Err(format!("Compaction failed: {e}"))
             }
         };
 
-        // Emit end event
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
-            agent_id: self.id.clone(),
-            active: false,
-        })) {
-            tracing::warn!("Failed to send compacting end event: {}", e);
-        }
-
+        self.emit_compaction_event(false).await;
         compact_result
     }
 
+    /// Force full compaction regardless of threshold (skip micro-compaction).
+    ///
+    /// Supports cancellation via `cancel_token`.
+    ///
+    /// Returns `result_message` on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if:
+    /// - No compactor is configured
+    /// - Compaction is cancelled
+    /// - API call fails during summary generation
+    pub async fn force_full_compact(&mut self) -> Result<String, String> {
+        let compactor = self.shared.compactor.clone();
+        let Some(compactor) = compactor else {
+            return Err("No compactor configured".to_string());
+        };
+
+        self.emit_compaction_event(true).await;
+
+        let messages = self.message_buffer.messages();
+        let cancel_token = self.cancel_token.runtime_token();
+
+        let result = compactor
+            .full_compact(messages, &*self.shared.provider, &self.shared.model_config, Some(cancel_token))
+            .await;
+
+        let compact_result = match result {
+            Ok(compact_result) => {
+                let compacted_count = compact_result.compacted_count;
+
+                // Build new message list
+                let new_messages: Vec<Arc<Message>> = if let Some(summary) = compact_result.summary {
+                    let mut msgs: Vec<Arc<Message>> = compact_result
+                        .keep_messages
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect();
+                    msgs.push(Arc::new(summary));
+                    msgs
+                } else {
+                    compact_result
+                        .keep_messages
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect()
+                };
+
+                self.apply_compacted_messages(&new_messages, compacted_count).await;
+
+                if compacted_count > 0 {
+                    Ok(format!("Compacted {compacted_count} messages"))
+                } else {
+                    Ok("No compaction needed".to_string())
+                }
+            }
+            Err(CompactionError::Cancelled) => {
+                tracing::info!("Agent {} full compaction was cancelled", self.id);
+                self.emit_operation_cancelled("compaction").await;
+                Err("Compaction was cancelled".to_string())
+            }
+            Err(CompactionError::Api(e)) => {
+                tracing::warn!("Agent {} full compaction failed: {}", self.id, e);
+                self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
+                    .await;
+                Err(format!("Compaction failed: {e}"))
+            }
+        };
+
+        self.emit_compaction_event(false).await;
+        compact_result
+    }
+
+    /// Emit compaction start/end event.
+    async fn emit_compaction_event(&self, active: bool) {
+        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
+            agent_id: self.id.clone(),
+            active,
+        })) {
+            tracing::warn!("Failed to send compacting event (active={}): {}", active, e);
+        }
+    }
+
+    /// Apply compacted messages: update buffer and persist to storage.
+    async fn apply_compacted_messages(&mut self, new_messages: &[Arc<Message>], compacted_count: usize) {
+        if compacted_count > 0 {
+            tracing::info!(
+                "Agent {} performed full compaction: {} messages summarized",
+                self.id,
+                compacted_count
+            );
+        }
+
+        // Update message buffer
+        self.message_buffer.messages_mut().clone_from(&new_messages.to_vec());
+
+        // Persist compacted state
+        if let Some(storage) = &self.shared.storage {
+            let sid = crate::types::SessionId(self.session_id.clone());
+            let messages_for_storage: Vec<Message> = new_messages.iter().map(|m| (**m).clone()).collect();
+            if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
+                tracing::warn!(
+                    "Agent {} failed to persist compacted messages: {}",
+                    self.id,
+                    e
+                );
+            }
+        }
+    }
+
     /// Check and run compaction if needed
-    async fn maybe_compact_messages(&mut self) {
+    /// Returns true if full compaction occurred and agent should continue streaming
+    async fn maybe_compact_messages(&mut self) -> bool {
         // Clone compactor to avoid borrow issues
         let compactor = self.shared.compactor.clone();
         let Some(compactor) = compactor else {
-            return; // No compactor configured, skip
+            return false; // No compactor configured, skip
         };
         let should_compact = compactor.should_compact(self.message_buffer.messages());
         if !should_compact {
-            return;
+            return false;
         }
 
         // force_compact handles its own start/end events
-        let _ = self.force_compact().await;
+        match self.force_compact().await {
+            Ok((_, needs_continue)) => needs_continue,
+            Err(e) => {
+                tracing::warn!("Agent {} auto-compaction failed: {}", self.id, e);
+                false
+            }
+        }
     }
 
     /// Transition to appropriate state after streaming completes
