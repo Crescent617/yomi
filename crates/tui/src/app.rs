@@ -44,6 +44,15 @@ pub enum AppMode {
     Browse,
 }
 
+/// Streaming end status for cleanup
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingStatus {
+    Completed,
+    Cancelled,
+    Failed,
+    MaxIterations,
+}
+
 /// TUI Model holding application state
 /// Application state flags grouped to reduce struct bool count
 #[derive(Debug, Default)]
@@ -335,6 +344,182 @@ impl Model {
         self.thinking_start_time = None;
     }
 
+    /// Start streaming - initialize UI components for streaming state
+    fn start_streaming(&mut self) {
+        self.state.is_streaming = true;
+        self.clear_streaming_state();
+        // Start ChatView streaming
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("start_streaming"),
+            AttrValue::Flag(true),
+        );
+        // Start InfoBar streaming
+        let _ = self.app.attr(
+            &Id::InfoBar,
+            Attribute::Custom("start_streaming"),
+            AttrValue::Flag(true),
+        );
+        self.state.should_redraw = true;
+    }
+
+    /// Stop streaming with given status - cleanup UI and save content
+    fn stop_streaming(&mut self, status: StreamingStatus) {
+        self.state.is_streaming = false;
+
+        match status {
+            StreamingStatus::Completed => {
+                let _ = self.app.attr(
+                    &Id::InfoBar,
+                    Attribute::Custom("stop_streaming"),
+                    AttrValue::Flag(true),
+                );
+                let _ = self.app.attr(
+                    &Id::StatusBar,
+                    Attribute::Custom("clear_message"),
+                    AttrValue::Flag(true),
+                );
+            }
+            StreamingStatus::Cancelled => {
+                let _ = self.save_partial_content();
+                let _ = self.app.attr(
+                    &Id::ChatView,
+                    Attribute::Custom("cancel_streaming"),
+                    AttrValue::Flag(true),
+                );
+                let _ = self.app.attr(
+                    &Id::InfoBar,
+                    Attribute::Custom("cancel_streaming"),
+                    AttrValue::Flag(true),
+                );
+            }
+            StreamingStatus::Failed => {
+                let _ = self.save_partial_content();
+                let _ = self.app.attr(
+                    &Id::InfoBar,
+                    Attribute::Custom("stop_streaming"),
+                    AttrValue::Flag(true),
+                );
+                let _ = self.app.attr(
+                    &Id::ChatView,
+                    Attribute::Custom("clear_streaming"),
+                    AttrValue::Flag(true),
+                );
+                let _ = self.app.attr(
+                    &Id::ChatView,
+                    Attribute::Custom("cancel_streaming"),
+                    AttrValue::Flag(true),
+                );
+            }
+            StreamingStatus::MaxIterations => {
+                let _ = self.save_partial_content();
+                let _ = self.app.attr(
+                    &Id::InfoBar,
+                    Attribute::Custom("stop_streaming"),
+                    AttrValue::Flag(true),
+                );
+            }
+        }
+        self.clear_streaming_state();
+        self.state.should_redraw = true;
+    }
+
+    /// Scroll chat view to bottom
+    fn scroll_chat_to_bottom(&mut self) {
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("scroll_to_bottom"),
+            AttrValue::Flag(true),
+        );
+    }
+
+    /// Show error message in chat view
+    fn show_error_message(&mut self, message: impl Into<String>) {
+        let msg = message.into();
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("add_error_message"),
+            AttrValue::String(msg),
+        );
+        self.scroll_chat_to_bottom();
+    }
+
+    /// Append streaming content to `ChatView` and `InfoBar`
+    fn append_streaming_content(&mut self, text: &str, is_thinking: bool) {
+        if is_thinking {
+            if self.thinking_start_time.is_none() {
+                self.thinking_start_time = Some(Instant::now());
+            }
+            self.current_thinking.push_str(text);
+            let _ = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom("append_thinking"),
+                AttrValue::String(text.to_string()),
+            );
+        } else {
+            self.current_content.push_str(text);
+            let _ = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom("append_content"),
+                AttrValue::String(text.to_string()),
+            );
+        }
+        // Update InfoBar with content for token counting
+        let attr = if is_thinking { "append_thinking" } else { "append_content" };
+        let _ = self.app.attr(&Id::InfoBar, Attribute::Custom(attr), AttrValue::String(text.to_string()));
+        self.state.should_redraw = true;
+    }
+
+    /// Save assistant message to chat history and clear streaming
+    fn finalize_assistant_message(&mut self) {
+        // Save if there's either content or thinking
+        if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
+            let elapsed_ms = self
+                .thinking_start_time
+                .map(|start| start.elapsed().as_millis() as u64);
+
+            let combined = if self.current_thinking.is_empty() {
+                if let Some(ms) = elapsed_ms {
+                    format!("{}\x00\x00{}", self.current_content, ms)
+                } else {
+                    self.current_content.clone()
+                }
+            } else {
+                format!(
+                    "{}\x00{}\x00{}",
+                    self.current_content,
+                    self.current_thinking,
+                    elapsed_ms.unwrap_or(0)
+                )
+            };
+            let _ = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom("add_assistant_with_thinking"),
+                AttrValue::String(combined),
+            );
+        }
+        // Clear streaming UI
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("clear_streaming"),
+            AttrValue::Flag(true),
+        );
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom("cancel_streaming"),
+            AttrValue::Flag(true),
+        );
+    }
+
+    /// Show status message in status bar
+    fn show_status_message(&mut self, message: &StatusMessage) {
+        let _ = self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("show_message"),
+            message.to_attr_value(),
+        );
+    }
+
     pub fn view(&mut self) {
         // Pre-fetch content to calculate height without borrowing self in closure
         let input_content = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
@@ -458,126 +643,21 @@ impl Model {
                     self.state.is_streaming = true;
                     match content {
                         kernel::event::ContentChunk::Text(text) => {
-                            self.current_content.push_str(&text);
-                            self.app.attr(
-                                &Id::ChatView,
-                                Attribute::Custom("append_content"),
-                                AttrValue::String(text.clone()),
-                            )?;
-                            // Update InfoBar with content for token counting
-                            self.app.attr(
-                                &Id::InfoBar,
-                                Attribute::Custom("append_content"),
-                                AttrValue::String(text),
-                            )?;
+                            self.append_streaming_content(&text, false);
                         }
                         kernel::event::ContentChunk::Thinking { thinking, .. } => {
-                            // Track thinking start time
-                            if self.thinking_start_time.is_none() {
-                                self.thinking_start_time = Some(Instant::now());
-                            }
-                            self.current_thinking.push_str(&thinking);
-                            // Show thinking in streaming view
-                            self.app.attr(
-                                &Id::ChatView,
-                                Attribute::Custom("append_thinking"),
-                                AttrValue::String(thinking.clone()),
-                            )?;
-                            // Update InfoBar with thinking for token counting
-                            self.app.attr(
-                                &Id::InfoBar,
-                                Attribute::Custom("append_thinking"),
-                                AttrValue::String(thinking),
-                            )?;
+                            self.append_streaming_content(&thinking, true);
                         }
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
-                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
-                    self.state.is_streaming = false;
-
-                    // Stop status bar
-                    self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom("stop_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    // Clear any retry/status messages from status bar
-                    self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("clear_message"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    // Add completed assistant message to history
-                    // Save if there's either content or thinking
-                    if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
-                        // Calculate thinking elapsed time
-                        let elapsed_ms = self
-                            .thinking_start_time
-                            .map(|start| start.elapsed().as_millis() as u64);
-
-                        // Combine content, thinking and elapsed with null separator
-                        let combined = if self.current_thinking.is_empty() {
-                            if let Some(ms) = elapsed_ms {
-                                format!("{}\x00\x00{}", self.current_content, ms)
-                            } else {
-                                self.current_content.clone()
-                            }
-                        } else {
-                            format!(
-                                "{}\x00{}\x00{}",
-                                self.current_content,
-                                self.current_thinking,
-                                elapsed_ms.unwrap_or(0)
-                            )
-                        };
-                        self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom("add_assistant_with_thinking"),
-                            AttrValue::String(combined),
-                        )?;
-                    }
-                    // Clear tracking
-                    self.current_content.clear();
-                    self.current_thinking.clear();
-                    self.thinking_start_time = None;
-
-                    // Clear streaming message to avoid duplication with history
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("clear_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("cancel_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.state.should_redraw = true;
+                    self.finalize_assistant_message();
+                    self.stop_streaming(StreamingStatus::Completed);
+                    self.scroll_chat_to_bottom();
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
-                    // Clear previous streaming content
-                    self.state.is_streaming = true;
-                    self.current_content.clear();
-                    self.current_thinking.clear();
-                    self.thinking_start_time = None;
-                    // Note: Status bar already started in InputSubmit
-                    // Start ChatView streaming
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("start_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.state.should_redraw = true;
+                    self.start_streaming();
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
@@ -671,78 +751,14 @@ impl Model {
                     self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
-                    self.state.is_streaming = false;
-
-                    // Save partial content and clear state
-                    let _ = self.save_partial_content();
-                    self.clear_streaming_state();
-
-                    // Cancel streaming in ChatView and InfoBar
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("cancel_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom("cancel_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    // Show cancel message in chat view
+                    self.stop_streaming(StreamingStatus::Cancelled);
                     let cancel_msg = operation
                         .map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("add_error_message"),
-                        AttrValue::String(cancel_msg),
-                    )?;
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.state.should_redraw = true;
+                    self.show_error_message(cancel_msg);
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
-                    self.state.is_streaming = false;
-
-                    // Stop status bar
-                    self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom("stop_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    // Save partial content and clear state
-                    let _ = self.save_partial_content();
-                    self.clear_streaming_state();
-
-                    // Clear streaming (both clear_streaming and cancel_streaming are needed for proper cleanup)
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("clear_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("cancel_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-
-                    // Display error message to user
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("add_error_message"),
-                        AttrValue::String(format!("Agent error: {error}")),
-                    )?;
-
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.state.should_redraw = true;
+                    self.stop_streaming(StreamingStatus::Failed);
+                    self.show_error_message(format!("Agent error: {error}"));
                 }
                 // Error events - recoverable or non-recoverable
                 AppEvent::Agent(kernel::event::AgentEvent::Error {
@@ -755,24 +771,10 @@ impl Model {
                     if is_recoverable {
                         // Recoverable error: show in status bar with warning color
                         let message = format!("{phase_str} error (will retry): {error}");
-                        self.app.attr(
-                            &Id::StatusBar,
-                            Attribute::Custom("show_message"),
-                            StatusMessage::warn(message, 3000).to_attr_value(),
-                        )?;
+                        self.show_status_message(&StatusMessage::warn(message, 3000));
                     } else {
                         // Non-recoverable error: add to chat view as error message
-                        let message = format!("{phase_str} error: {error}");
-                        self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom("add_error_message"),
-                            AttrValue::String(message),
-                        )?;
-                        self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom("scroll_to_bottom"),
-                            AttrValue::Flag(true),
-                        )?;
+                        self.show_error_message(format!("{phase_str} error: {error}"));
                     }
                     self.state.should_redraw = true;
                 }
@@ -784,40 +786,16 @@ impl Model {
                     ..
                 }) => {
                     let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
-                    self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("show_message"),
-                        StatusMessage::info(message, 0).to_attr_value(), // 0 = no timeout, persists until cleared
-                    )?;
+                    // 0 = no timeout, persists until cleared
+                    self.show_status_message(&StatusMessage::info(message, 0));
                     self.state.should_redraw = true;
                 }
                 // Max iterations reached - show in chat view
                 AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached {
                     count, ..
                 }) => {
-                    self.state.is_streaming = false;
-
-                    // Save partial content and clear state
-                    let _ = self.save_partial_content();
-                    self.clear_streaming_state();
-
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("add_error_message"),
-                        AttrValue::String(format!("Reached maximum iterations ({count})")),
-                    )?;
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
-                        AttrValue::Flag(true),
-                    )?;
-                    // Stop the infobar spinner
-                    self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom("stop_streaming"),
-                        AttrValue::Flag(true),
-                    )?;
-                    self.state.should_redraw = true;
+                    self.stop_streaming(StreamingStatus::MaxIterations);
+                    self.show_error_message(format!("Reached maximum iterations ({count})"));
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed
@@ -913,7 +891,7 @@ impl Model {
                 Attribute::Custom("add_user_message"),
                 AttrValue::String(blocks_json),
             );
-            // Start streaming indicator
+            // Start streaming indicator (InfoBar only - ChatView will be started by ModelEvent::Request)
             let _ = self.app.attr(
                 &Id::InfoBar,
                 Attribute::Custom("start_streaming"),
@@ -1001,13 +979,9 @@ impl Update<Msg> for Model {
                         Attribute::Custom("add_user_message"),
                         AttrValue::String(blocks_json),
                     );
-                    // Scroll to bottom after adding user message
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
-                        AttrValue::Flag(true),
-                    );
+                    self.scroll_chat_to_bottom();
                     // Start streaming status immediately when sending request
+                    // (ChatView streaming will be started by ModelEvent::Request)
                     let _ = self.app.attr(
                         &Id::InfoBar,
                         Attribute::Custom("start_streaming"),
@@ -1062,11 +1036,7 @@ impl Update<Msg> for Model {
                     None
                 }
                 Msg::ShowStatusMessage(msg) => {
-                    let _ = self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("show_message"),
-                        msg.to_attr_value(),
-                    );
+                    self.show_status_message(&msg);
                     None
                 }
                 // Mode switching
@@ -1088,14 +1058,9 @@ impl Update<Msg> for Model {
                                 AttrValue::Number(1),
                             );
                             // Show help message for browse mode shortcuts (0 = no timeout)
-                            let _ = self.app.attr(
-                                &Id::StatusBar,
-                                Attribute::Custom("show_message"),
-                                StatusMessage::tip(
-                                    "C-o toggle, C-e expand, j/k/g/G scroll, q exit",
-                                )
-                                .to_attr_value(),
-                            );
+                            self.show_status_message(&StatusMessage::tip(
+                                "C-o toggle, C-e expand, j/k/g/G scroll, q exit",
+                            ));
                             // Initialize scroll progress
                             self.update_scroll_progress();
                         }
@@ -1298,11 +1263,7 @@ impl Update<Msg> for Model {
                     } else {
                         "YOLO mode disabled"
                     };
-                    let _ = self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("show_message"),
-                        StatusMessage::info(msg, 5000).to_attr_value(),
-                    );
+                    self.show_status_message(&StatusMessage::info(msg, 5000));
 
                     // Send command to kernel
                     let _ = self.ctrl_tx.try_send(ControlCommand::SetLevel(new_level));
@@ -1316,12 +1277,7 @@ impl Update<Msg> for Model {
                 Msg::CommandCompact => {
                     // Send compact request
                     let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
-                    // Show status message
-                    let _ = self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom("show_message"),
-                        StatusMessage::info("Compacting messages...", 3000).to_attr_value(),
-                    );
+                    self.show_status_message(&StatusMessage::info("Compacting messages...", 3000));
                     None
                 }
                 _ => None,
