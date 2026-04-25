@@ -4,16 +4,11 @@
 //! 1. Micro-compaction: Clear old tool result content (fast, no API call)
 //! 2. Full summarization: Use API to generate conversation summary
 
-mod types;
-
-use serde::{Deserialize, Serialize};
-pub use types::*;
-
-use crate::agent::MessageBuffer;
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
 use crate::types::{ContentBlock, Message, Role};
 use anyhow::Result;
 use futures::TryStreamExt;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -184,153 +179,113 @@ impl Compactor {
         }
     }
 
-    /// Perform full compaction: generate summary using API
-    /// Returns a summary message and the recent messages to keep
-    /// Supports cancellation via `cancel_token`
+    /// Perform full compaction: generate summary using API.
+    ///
+    /// Returns messages in order: `system_msgs` + [summary] + recent
+    /// System messages are preserved at the beginning and not included in summarization.
+    ///
+    /// Supports cancellation via `cancel_token`.
     pub async fn full_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<CompactionResult, CompactionError> {
-        if messages.len() <= self.keep_recent {
-            return Ok(CompactionResult {
-                summary: None,
-                keep_messages: messages.iter().map(|m| (**m).clone()).collect(),
-                compacted_count: 0,
-            });
+    ) -> Result<Vec<Message>, CompactionError> {
+        // Separate system messages from the rest
+        let (system_msgs, non_system): (Vec<_>, Vec<_>) = messages
+            .iter()
+            .cloned()
+            .partition(|m| m.role == Role::System);
+
+        if non_system.len() <= self.keep_recent {
+            // Not enough non-system messages to compact, keep everything as-is
+            return Ok(messages.iter().map(|m| (**m).clone()).collect());
         }
 
-        let split_point = messages.len() - self.keep_recent;
-        let to_summarize = &messages[..split_point];
-        let recent: Vec<Message> = messages[split_point..]
+        let split_point = non_system.len() - self.keep_recent;
+        let to_summarize = &non_system[..split_point];
+        let recent: Vec<Message> = non_system[split_point..]
             .iter()
             .map(|m| (**m).clone())
             .collect();
 
-        let mut msg_buf = MessageBuffer::from_arc_messages(to_summarize);
-        msg_buf.validate_and_clean();
-        let to_summarize = msg_buf.messages();
-
         // Generate summary using API
-        let summary_text = generate_summary_with_api(
-            to_summarize,
-            provider,
-            model_config,
-            self.summary_max_tokens,
-            cancel_token,
-        )
-        .await?;
+        let summary_text =
+            generate_summary(to_summarize, provider, model_config, cancel_token).await?;
 
         // Create summary message as user role so it survives session restore
-        let summary_message = Message::user(summary_text);
+        let summary = Message::user(summary_text);
 
-        Ok(CompactionResult {
-            summary: Some(summary_message),
-            keep_messages: recent,
-            compacted_count: to_summarize.len(),
-        })
+        // Reconstruct: system_msgs + summary + recent
+        let result: Vec<Message> = system_msgs
+            .into_iter()
+            .map(|m| (*m).clone())
+            .chain(std::iter::once(summary))
+            .chain(recent.into_iter())
+            .collect();
+
+        Ok(result)
     }
 
-    /// Auto-compact: try micro first, then full if needed
-    /// Returns `new_messages` if compaction was performed, `None` otherwise
-    /// Supports cancellation via `cancel_token`
+    /// Auto-compact: try micro first, then full if needed.
+    ///
+    /// Returns `Some(new_messages)` if compaction was performed, `None` otherwise.
+    /// Supports cancellation via `cancel_token`.
     pub async fn auto_compact(
         &self,
         messages: &[Arc<Message>],
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
-        // Check if we need to compact
+    ) -> Result<Option<Vec<Message>>, CompactionError> {
         if !self.should_compact(messages) {
             return Ok(None);
         }
 
         // Try micro-compaction first
-        if let Some(compacted) = self.micro_compact(messages) {
-            // Check if micro-compaction was sufficient
-            if !self.should_compact(&compacted) {
-                return Ok(Some(compacted)); // Micro-compaction only
-            }
+        let after_micro = self.micro_compact(messages);
+        let to_compact = after_micro.as_deref().unwrap_or(messages);
 
-            // Micro-compaction wasn't enough, do full compaction
-            let result = self
-                .full_compact(&compacted, provider, model_config, cancel_token.clone())
-                .await?;
-
-            // Build new message list: keep_recent first, then summary as user message at the end
-            let new_messages = if let Some(ref summary) = result.summary {
-                let mut msgs: Vec<Arc<Message>> = result
-                    .keep_messages
-                    .iter()
-                    .map(|m| Arc::new(m.clone()))
-                    .collect();
-                msgs.push(Arc::new(summary.clone()));
-                msgs
-            } else {
-                result
-                    .keep_messages
-                    .iter()
-                    .map(|m| Arc::new(m.clone()))
-                    .collect()
-            };
-
-            return Ok(Some(new_messages)); // Full compaction
+        // Check if micro-compaction was sufficient
+        if !self.should_compact(to_compact) {
+            // Micro-compaction was enough, return it if we did it
+            return Ok(after_micro.map(|msgs| msgs.into_iter().map(|m| (*m).clone()).collect()));
         }
 
-        // Micro-compaction didn't help, do full compaction
+        // Need full compaction
         let result = self
-            .full_compact(messages, provider, model_config, cancel_token)
+            .full_compact(to_compact, provider, model_config, cancel_token)
             .await?;
 
-        // Build new message list: keep_recent first, then summary as user message at the end
-        let new_messages = if let Some(ref summary) = result.summary {
-            let mut msgs: Vec<Arc<Message>> = result
-                .keep_messages
-                .iter()
-                .map(|m| Arc::new(m.clone()))
-                .collect();
-            msgs.push(Arc::new(summary.clone()));
-            msgs
-        } else {
-            result
-                .keep_messages
-                .iter()
-                .map(|m| Arc::new(m.clone()))
-                .collect()
-        };
-
-        Ok(Some(new_messages)) // Full compaction
+        Ok(Some(result))
     }
 }
 
-/// Generate summary using API call
-/// Returns Err if cancelled or API fails
-async fn generate_summary_with_api(
+/// Generate summary using API call.
+/// Returns Err if cancelled or API fails.
+async fn generate_summary(
     messages: &[Arc<Message>],
     provider: &dyn Provider,
     model_config: &ModelConfig,
-    max_tokens: u32,
     cancel_token: Option<CancellationToken>,
 ) -> Result<String, CompactionError> {
+    use crate::agent::MessageBuffer;
+
+    let mut msg_buf = MessageBuffer::from_arc_messages(messages);
+    msg_buf.validate_and_clean();
+    let messages = msg_buf.messages();
+
     // Build messages for summary generation
     let mut summary_messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(SUMMARY_PROMPT))];
-
-    // Add conversation to summarize
-    for msg in messages {
-        summary_messages.push(Arc::clone(msg));
-    }
-
-    // Add final instruction
+    summary_messages.extend(messages.iter().cloned());
     summary_messages.push(Arc::new(Message::user(
         "Please provide a comprehensive summary of our conversation above.",
     )));
 
     // Create a config with limited max_tokens for summary
     let summary_config = ModelConfig {
-        max_tokens: Some(max_tokens),
+        max_tokens: Some(SUMMARY_MAX_TOKENS),
         ..model_config.clone()
     };
 
@@ -340,7 +295,7 @@ async fn generate_summary_with_api(
         .await?;
 
     // Collect response with cancellation check
-    let mut summary = String::with_capacity(max_tokens as usize * 4); // Rough estimate of chars per token
+    let mut summary = String::with_capacity(SUMMARY_MAX_TOKENS as usize);
     loop {
         // Check if cancelled (non-blocking check)
         if cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
@@ -353,7 +308,7 @@ async fn generate_summary_with_api(
                     summary.push_str(&text);
                 }
                 ModelStreamItem::Complete => break,
-                _ => {} // Ignore other item types
+                _ => {}
             },
             Ok(Ok(None)) => break,
             Ok(Err(e)) => return Err(e.into()),

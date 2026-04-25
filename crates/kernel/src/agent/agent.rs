@@ -3,7 +3,7 @@ use super::{
     AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
     CancelToken,
 };
-use crate::compactor::{self, CompactionError};
+use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
@@ -518,7 +518,7 @@ impl Agent {
                             state.handle_token_usage(prompt_tokens, completion_tokens);
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
-                                .map_or(compactor::DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
+                                .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 prompt_tokens,
@@ -543,138 +543,77 @@ impl Agent {
     }
 
     /// Force compaction regardless of threshold.
-    ///
-    /// Supports cancellation via `cancel_token`.
-    ///
-    /// Returns `result_message` on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if:
-    /// - No compactor is configured
-    /// - Compaction is cancelled
-    /// - API call fails during summary generation
     pub async fn force_compact(&mut self) -> Result<String, String> {
-        let Some(compactor) = self.shared.compactor.as_ref() else {
-            return Err("No compactor configured".to_string());
-        };
+        let compactor = self
+            .shared
+            .compactor
+            .as_ref()
+            .ok_or("No compactor configured")?;
+        let old_count = self.message_buffer.len();
 
         self.emit_compaction_event(true).await;
 
-        let messages = self.message_buffer.messages();
-        let old_count = messages.len();
-        let cancel_token = self.cancel_token.runtime_token();
-
         let result = compactor
             .auto_compact(
-                messages,
+                self.message_buffer.messages(),
                 &*self.shared.provider,
                 &self.shared.model_config,
-                Some(cancel_token),
+                Some(self.cancel_token.runtime_token()),
             )
             .await;
 
+        self.handle_compaction_result(result, old_count).await
+    }
+
+    /// Force full compaction (skip micro-compaction).
+    pub async fn force_full_compact(&mut self) -> Result<String, String> {
+        let compactor = self
+            .shared
+            .compactor
+            .as_ref()
+            .ok_or("No compactor configured")?;
+        let old_count = self.message_buffer.len();
+
+        self.emit_compaction_event(true).await;
+
+        let result = compactor
+            .full_compact(
+                self.message_buffer.messages(),
+                &*self.shared.provider,
+                &self.shared.model_config,
+                Some(self.cancel_token.runtime_token()),
+            )
+            .await
+            .map(Some);
+
+        self.handle_compaction_result(result, old_count).await
+    }
+
+    /// Handle compaction result, update state, and return user message.
+    async fn handle_compaction_result(
+        &mut self,
+        result: Result<Option<Vec<Message>>, CompactionError>,
+        old_count: usize,
+    ) -> Result<String, String> {
         let compact_result = match result {
-            Ok(Some(new_messages)) => {
-                let compacted_count = old_count.saturating_sub(new_messages.len());
+            Ok(None) => Ok("No compaction needed".to_string()),
+            Ok(Some(messages)) => {
+                let compacted_count = old_count.saturating_sub(messages.len());
+                self.apply_compacted_messages(messages).await;
 
-                self.apply_compacted_messages(&new_messages, compacted_count)
-                    .await;
-
-                let message = if compacted_count > 0 {
+                Ok(if compacted_count > 0 {
                     format!("Compacted {compacted_count} messages")
                 } else {
                     "Micro-compaction completed".to_string()
-                };
-                Ok(message)
+                })
             }
-            Ok(None) => Ok("No compaction needed".to_string()),
             Err(CompactionError::Cancelled) => {
-                tracing::info!("Agent {} compaction was cancelled", self.id);
+                tracing::info!("Agent {} compaction cancelled", self.id);
                 self.emit_operation_cancelled("compaction").await;
                 Err("Compaction was cancelled".to_string())
             }
             Err(CompactionError::Api(e)) => {
                 tracing::warn!("Agent {} compaction failed: {}", self.id, e);
-                self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
-                    .await;
-                Err(format!("Compaction failed: {e}"))
-            }
-        };
-
-        self.emit_compaction_event(false).await;
-        compact_result
-    }
-
-    /// Force full compaction regardless of threshold (skip micro-compaction).
-    ///
-    /// Supports cancellation via `cancel_token`.
-    ///
-    /// Returns `result_message` on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if:
-    /// - No compactor is configured
-    /// - Compaction is cancelled
-    /// - API call fails during summary generation
-    pub async fn force_full_compact(&mut self) -> Result<String, String> {
-        let Some(compactor) = self.shared.compactor.as_ref() else {
-            return Err("No compactor configured".to_string());
-        };
-
-        self.emit_compaction_event(true).await;
-
-        let messages = self.message_buffer.messages();
-        let cancel_token = self.cancel_token.runtime_token();
-
-        let result = compactor
-            .full_compact(
-                messages,
-                &*self.shared.provider,
-                &self.shared.model_config,
-                Some(cancel_token),
-            )
-            .await;
-
-        let compact_result = match result {
-            Ok(compact_result) => {
-                let compacted_count = compact_result.compacted_count;
-
-                // Build new message list
-                let new_messages: Vec<Arc<Message>> = if let Some(summary) = compact_result.summary
-                {
-                    let mut msgs: Vec<Arc<Message>> = compact_result
-                        .keep_messages
-                        .into_iter()
-                        .map(Arc::new)
-                        .collect();
-                    msgs.push(Arc::new(summary));
-                    msgs
-                } else {
-                    compact_result
-                        .keep_messages
-                        .into_iter()
-                        .map(Arc::new)
-                        .collect()
-                };
-
-                self.apply_compacted_messages(&new_messages, compacted_count)
-                    .await;
-
-                if compacted_count > 0 {
-                    Ok(format!("Compacted {compacted_count} messages"))
-                } else {
-                    Ok("No compaction needed".to_string())
-                }
-            }
-            Err(CompactionError::Cancelled) => {
-                tracing::info!("Agent {} full compaction was cancelled", self.id);
-                self.emit_operation_cancelled("compaction").await;
-                Err("Compaction was cancelled".to_string())
-            }
-            Err(CompactionError::Api(e)) => {
-                tracing::warn!("Agent {} full compaction failed: {}", self.id, e);
                 self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
                     .await;
                 Err(format!("Compaction failed: {e}"))
@@ -696,30 +635,24 @@ impl Agent {
     }
 
     /// Apply compacted messages: update buffer and persist to storage.
-    async fn apply_compacted_messages(
-        &mut self,
-        new_messages: &[Arc<Message>],
-        compacted_count: usize,
-    ) {
+    async fn apply_compacted_messages(&mut self, messages: Vec<Message>) {
+        let compacted_count = self.message_buffer.len().saturating_sub(messages.len());
         if compacted_count > 0 {
             tracing::info!(
-                "Agent {} performed full compaction: {} messages summarized",
+                "Agent {} compacted {} messages -> {} messages",
                 self.id,
-                compacted_count
+                self.message_buffer.len(),
+                messages.len()
             );
         }
 
         // Update message buffer
-        self.message_buffer
-            .messages_mut()
-            .clone_from(&new_messages.to_vec());
+        *self.message_buffer.messages_mut() = messages.iter().cloned().map(Arc::new).collect();
 
         // Persist compacted state
         if let Some(storage) = &self.shared.storage {
             let sid = crate::types::SessionId(self.session_id.clone());
-            let messages_for_storage: Vec<Message> =
-                new_messages.iter().map(|m| (**m).clone()).collect();
-            if let Err(e) = storage.set_messages(&sid, &messages_for_storage).await {
+            if let Err(e) = storage.set_messages(&sid, &messages).await {
                 tracing::warn!(
                     "Agent {} failed to persist compacted messages: {}",
                     self.id,

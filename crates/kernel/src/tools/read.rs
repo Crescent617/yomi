@@ -1,10 +1,10 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::file_lock::{lock_shared_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
-use crate::utils::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
+use crate::utils::line_numbers::format_file_lines;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
