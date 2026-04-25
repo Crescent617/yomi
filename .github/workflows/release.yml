@@ -13,8 +13,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Fix aws-lc-sys compiler bug detection in cross environment
-  AWS_LC_SYS_NO_ASM: 1
+  # Use Node.js 24 for actions (suppress deprecation warning)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
