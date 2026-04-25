@@ -4,15 +4,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    event::{Key, KeyEvent, KeyModifiers, MouseEventKind},
-    props::{AttrValue, Attribute, Props},
+    component::{AppComponent, Component},
+    event::{Event, Key, KeyEvent, KeyModifiers, MouseEventKind},
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
+        Frame,
     },
-    Component, Frame, MockComponent, State, StateValue,
+    state::{State, StateValue},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -618,7 +620,7 @@ impl InputMock {
     }
 }
 
-impl MockComponent for InputMock {
+impl Component for InputMock {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         // Store area for mouse coordinate calculation
         self.current_area = Some(area);
@@ -758,8 +760,8 @@ impl MockComponent for InputMock {
         }
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.props.get(attr).map(|v| v.into())
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -767,24 +769,24 @@ impl MockComponent for InputMock {
     }
 
     fn state(&self) -> State {
-        State::One(StateValue::String(self.content.clone()))
+        State::Single(StateValue::String(self.content.clone()))
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
         match cmd {
             Cmd::Move(tuirealm::command::Direction::Left) => {
                 self.move_left();
-                CmdResult::None
+                CmdResult::NoChange
             }
             Cmd::Move(tuirealm::command::Direction::Right) => {
                 self.move_right();
-                CmdResult::None
+                CmdResult::NoChange
             }
             Cmd::Submit => {
                 let content = self.submit();
-                CmdResult::Submit(State::One(StateValue::String(content)))
+                CmdResult::Submit(State::Single(StateValue::String(content)))
             }
-            _ => CmdResult::None,
+            _ => CmdResult::NoChange,
         }
     }
 }
@@ -1298,15 +1300,12 @@ impl InputComponent {
     }
 
     /// Handle input when command completion is active
-    fn handle_command_completion_input(
-        &mut self,
-        ev: &tuirealm::Event<crate::msg::UserEvent>,
-    ) -> Msg {
+    fn handle_command_completion_input(&mut self, ev: &Event<crate::msg::UserEvent>) -> Msg {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match ev {
             // Enter or Tab: accept completion
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Enter | Key::Tab,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1314,7 +1313,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Shift+Tab, Up arrow or Ctrl+P: navigate up
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::BackTab,
                     modifiers: KeyModifiers::SHIFT,
@@ -1332,7 +1331,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Escape or Ctrl+C: cancel completion
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Esc,
                     modifiers: KeyModifiers::NONE,
@@ -1346,7 +1345,7 @@ impl InputComponent {
                 // Also clear the input when Ctrl+C is pressed during completion
                 if matches!(
                     ev,
-                    tuirealm::Event::Keyboard(KeyEvent {
+                    Event::Keyboard(KeyEvent {
                         code: Key::Char('c'),
                         modifiers: KeyModifiers::CONTROL,
                     })
@@ -1356,7 +1355,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Down,
                     modifiers: KeyModifiers::NONE,
@@ -1370,7 +1369,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Space: cancel completion and insert space
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char(' '),
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1379,7 +1378,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Regular character: add to query and refresh
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
@@ -1389,7 +1388,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Backspace: remove from query and refresh
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Backspace,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1409,12 +1408,12 @@ impl InputComponent {
     }
 
     /// Handle input when file completion is active
-    fn handle_file_completion_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Msg {
+    fn handle_file_completion_input(&mut self, ev: &Event<crate::msg::UserEvent>) -> Msg {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match ev {
             // Enter or Tab: accept completion
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Enter | Key::Tab,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1422,7 +1421,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Shift+Tab, Up arrow or Ctrl+P: navigate up
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::BackTab,
                     modifiers: KeyModifiers::SHIFT,
@@ -1440,7 +1439,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Escape or Ctrl+C: cancel completion
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Esc,
                     modifiers: KeyModifiers::NONE,
@@ -1454,7 +1453,7 @@ impl InputComponent {
                 // Also clear the input when Ctrl+C is pressed during completion
                 if matches!(
                     ev,
-                    tuirealm::Event::Keyboard(KeyEvent {
+                    Event::Keyboard(KeyEvent {
                         code: Key::Char('c'),
                         modifiers: KeyModifiers::CONTROL,
                     })
@@ -1464,7 +1463,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Down,
                     modifiers: KeyModifiers::NONE,
@@ -1478,7 +1477,7 @@ impl InputComponent {
                 Msg::Redraw
             }
             // Space: cancel completion and insert space
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char(' '),
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1487,7 +1486,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Regular character: let FileCompletion handle it
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
@@ -1497,7 +1496,7 @@ impl InputComponent {
                 Msg::InputChanged(self.component.content().to_string())
             }
             // Backspace: let FileCompletion handle it
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Backspace,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1584,7 +1583,7 @@ impl InputComponent {
     }
 }
 
-impl MockComponent for InputComponent {
+impl Component for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         // Render command completion using generic helper
         Self::render_completion_dropdown(
@@ -1678,7 +1677,7 @@ impl MockComponent for InputComponent {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -1717,15 +1716,15 @@ impl MockComponent for InputComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for InputComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        self.handle_input(&ev)
+impl AppComponent<Msg, crate::msg::UserEvent> for InputComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
+        self.handle_input(ev)
     }
 }
 
 impl InputComponent {
     /// Handle all input events - mode-aware handling
-    fn handle_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+    fn handle_input(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Browse mode: navigation shortcuts take priority
         if self.mode == crate::app::AppMode::Browse {
             return self.handle_browse_input(ev);
@@ -1736,41 +1735,41 @@ impl InputComponent {
     }
 
     /// Handle input in browse mode - navigation keys
-    fn handle_browse_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+    fn handle_browse_input(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         match *ev {
             // Browse mode navigation
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('j'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ScrollDown),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('k'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ScrollUp),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('u'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::PageHalfUp),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('d'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::PageHalfDown),
             // ESC or 'q' to exit browse mode
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('q') | Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::ToggleBrowseMode),
             // Go to top/bottom (vim-style)
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('g'),
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::GoToTop),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('G'),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => Some(Msg::GoToBottom),
             // Toggle expand all with Ctrl+E in browse mode
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('e'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleExpandAll),
@@ -1802,7 +1801,7 @@ impl InputComponent {
     }
 
     /// Handle input in normal mode - text editing
-    fn handle_normal_input(&mut self, ev: &tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+    fn handle_normal_input(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::MouseEvent;
 
         // File completion mode - handle special keys first (use is_active, not is_visible)
@@ -1816,12 +1815,12 @@ impl InputComponent {
         }
 
         // Handle paste event first (needs to borrow text)
-        if let tuirealm::Event::Paste(text) = ev {
+        if let Event::Paste(text) = ev {
             return Some(self.handle_text_paste(text.clone()));
         }
 
         // Handle mouse events for text selection
-        if let tuirealm::Event::Mouse(MouseEvent {
+        if let Event::Mouse(MouseEvent {
             kind, column, row, ..
         }) = ev
         {
@@ -1854,7 +1853,7 @@ impl InputComponent {
 
         match *ev {
             // Ctrl+V: paste from clipboard (fallback for systems without bracketed paste)
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('v'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -1883,7 +1882,7 @@ impl InputComponent {
                 None
             }
             // @: start file completion (must be before generic Char handler)
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('@'),
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1891,7 +1890,7 @@ impl InputComponent {
                 self.start_file_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
@@ -1904,7 +1903,7 @@ impl InputComponent {
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             // Shift+Enter or Ctrl+J: insert newline
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Enter,
                     modifiers: KeyModifiers::SHIFT,
@@ -1918,7 +1917,7 @@ impl InputComponent {
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             // Enter: submit input
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1956,7 +1955,7 @@ impl InputComponent {
                     None
                 }
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Backspace,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1969,7 +1968,7 @@ impl InputComponent {
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Delete,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1982,14 +1981,14 @@ impl InputComponent {
                 self.update_completion();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Left,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.move_and_clear_selection(|c| c.move_left());
                 None
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Right,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -1997,7 +1996,7 @@ impl InputComponent {
                 None
             }
             // Home or Ctrl+A: move to start of line
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::Home,
                     modifiers: KeyModifiers::NONE,
@@ -2012,7 +2011,7 @@ impl InputComponent {
                 None
             }
             // End or Ctrl+E: move to end of line
-            tuirealm::Event::Keyboard(
+            Event::Keyboard(
                 KeyEvent {
                     code: Key::End,
                     modifiers: KeyModifiers::NONE,
@@ -2027,7 +2026,7 @@ impl InputComponent {
                 None
             }
             // Alt+B: move backward one word
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('b'),
                 modifiers: KeyModifiers::ALT,
             }) => {
@@ -2036,7 +2035,7 @@ impl InputComponent {
                 None
             }
             // Alt+F: move forward one word
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('f'),
                 modifiers: KeyModifiers::ALT,
             }) => {
@@ -2044,14 +2043,14 @@ impl InputComponent {
                     .move_and_clear_selection(|c| c.move_word_right());
                 None
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('u'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
                 self.component.kill_to_start_of_line();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('w'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -2060,7 +2059,7 @@ impl InputComponent {
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
             // Tab: accept completion or insert spaces
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Tab,
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
@@ -2075,7 +2074,7 @@ impl InputComponent {
                 }
             }
             // Up arrow: navigate completion or history
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Up,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -2091,7 +2090,7 @@ impl InputComponent {
                 }
             }
             // Down arrow: navigate completion or history
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Down,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -2107,7 +2106,7 @@ impl InputComponent {
                 }
             }
             // Ctrl+P: navigate completion or history
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -2120,7 +2119,7 @@ impl InputComponent {
                 }
             }
             // Ctrl+N: navigate completion or history
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -2132,11 +2131,11 @@ impl InputComponent {
                     Some(Msg::InputChanged(self.component.content().to_string()))
                 }
             }
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => Some(Msg::CancelRequest),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
@@ -2152,29 +2151,29 @@ impl InputComponent {
                 }
             }
             // PageUp/PageDown always scroll chat view
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::PageUp,
                 modifiers: KeyModifiers::NONE,
             })
-            | tuirealm::Event::Mouse(MouseEvent {
+            | Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
                 ..
             }) => Some(Msg::ScrollUp),
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::PageDown,
                 modifiers: KeyModifiers::NONE,
             })
-            | tuirealm::Event::Mouse(MouseEvent {
+            | Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 ..
             }) => Some(Msg::ScrollDown),
             // Toggle browse mode with Ctrl+O
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
             // Suspend process to background with Ctrl+Z
-            tuirealm::Event::Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Char('z'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::Suspend),

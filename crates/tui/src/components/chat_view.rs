@@ -6,13 +6,16 @@ use std::sync::Arc;
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, Props},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span, Text},
+        Frame,
     },
-    Component, Frame, MockComponent, State,
+    state::{State, StateValue},
 };
 
 use super::wrap_paragraph::WrapParagraph;
@@ -1674,7 +1677,7 @@ impl ChatView {
     }
 }
 
-impl MockComponent for ChatView {
+impl Component for ChatView {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let visible_height = area.height as usize;
         let width = area.width as usize;
@@ -1763,13 +1766,18 @@ impl MockComponent for ChatView {
         }
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         match attr {
             Attribute::Custom("scroll_progress") => {
                 let (current, total) = self.get_scroll_progress();
-                Some(AttrValue::String(format!("{current}\x00{total}")))
+                Some(QueryResult::Owned(AttrValue::String(format!(
+                    "{current}\x00{total}"
+                ))))
             }
-            _ => self.props.get(attr),
+            _ => self
+                .props
+                .get(attr)
+                .map(|v| QueryResult::Borrowed(v.into())),
         }
     }
 
@@ -1961,7 +1969,7 @@ impl MockComponent for ChatView {
             || State::None,
             |banner| {
                 let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
-                State::One(tuirealm::StateValue::String(banner_str))
+                State::Single(StateValue::String(banner_str))
             },
         )
     }
@@ -1970,13 +1978,13 @@ impl MockComponent for ChatView {
         match cmd {
             Cmd::Move(tuirealm::command::Direction::Up) => {
                 self.scroll_up(1);
-                CmdResult::None
+                CmdResult::NoChange
             }
             Cmd::Move(tuirealm::command::Direction::Down) => {
                 self.scroll_down(1);
-                CmdResult::None
+                CmdResult::NoChange
             }
-            _ => CmdResult::None,
+            _ => CmdResult::NoChange,
         }
     }
 }
@@ -2039,12 +2047,12 @@ impl ChatViewComponent {
     }
 }
 
-impl MockComponent for ChatViewComponent {
+impl Component for ChatViewComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -2053,7 +2061,6 @@ impl MockComponent for ChatViewComponent {
         match attr {
             Attribute::Custom("init_history") => {
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
-                    use tuirealm::props::PropBoundExt;
                     let any = payload.as_any();
                     if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {
                         self.init_history(messages);
@@ -2073,25 +2080,25 @@ impl MockComponent for ChatViewComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::MouseEvent;
         use tuirealm::event::MouseEventKind;
 
-        match ev {
-            tuirealm::Event::Tick => {
+        match *ev {
+            Event::Tick => {
                 self.component.tick();
                 Some(Msg::Redraw)
             }
             // Handle mouse scroll events for chat view scrolling
-            tuirealm::Event::Mouse(MouseEvent {
+            Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollUp,
                 ..
             }) => {
                 self.component.scroll_up(ChatView::MOUSE_SCROLL_LINES);
                 Some(Msg::Redraw)
             }
-            tuirealm::Event::Mouse(MouseEvent {
+            Event::Mouse(MouseEvent {
                 kind: MouseEventKind::ScrollDown,
                 ..
             }) => {
@@ -2099,7 +2106,7 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
                 Some(Msg::Redraw)
             }
             // Handle mouse events for text selection and scroll button
-            tuirealm::Event::Mouse(MouseEvent {
+            Event::Mouse(MouseEvent {
                 kind, column, row, ..
             }) => {
                 let action = self.component.handle_mouse_event(kind, column, row);

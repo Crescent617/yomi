@@ -5,13 +5,16 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, Props},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
         style::{Modifier, Style},
         widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+        Frame,
     },
-    Component, Frame, MockComponent, State, StateValue,
+    state::{State, StateValue},
 };
 
 use unicode_width::UnicodeWidthStr;
@@ -260,15 +263,15 @@ impl Default for CommandPalette {
     }
 }
 
-impl MockComponent for CommandPalette {
+impl Component for CommandPalette {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         if self.visible {
             self.render_palette(frame, area);
         }
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
+        self.props.get(attr).map(|v| v.into())
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -295,7 +298,7 @@ impl MockComponent for CommandPalette {
 
     fn state(&self) -> State {
         if let Some(id) = self.current_selection() {
-            State::One(StateValue::String(id))
+            State::Single(StateValue::String(id))
         } else {
             State::None
         }
@@ -303,24 +306,24 @@ impl MockComponent for CommandPalette {
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
         if !self.visible {
-            return CmdResult::None;
+            return CmdResult::NoChange;
         }
 
         match cmd {
             Cmd::Move(tuirealm::command::Direction::Up) => {
                 self.select_up();
-                CmdResult::Changed(State::One(StateValue::Usize(self.selected)))
+                CmdResult::Changed(State::Single(StateValue::Usize(self.selected)))
             }
             Cmd::Move(tuirealm::command::Direction::Down) => {
                 self.select_down();
-                CmdResult::Changed(State::One(StateValue::Usize(self.selected)))
+                CmdResult::Changed(State::Single(StateValue::Usize(self.selected)))
             }
             Cmd::Submit => {
                 if let Some(id) = self.current_selection() {
                     self.hide();
-                    CmdResult::Submit(State::One(StateValue::String(id)))
+                    CmdResult::Submit(State::Single(StateValue::String(id)))
                 } else {
-                    CmdResult::None
+                    CmdResult::NoChange
                 }
             }
             Cmd::Cancel => {
@@ -329,13 +332,13 @@ impl MockComponent for CommandPalette {
             }
             Cmd::Type(c) => {
                 self.insert_char(c);
-                CmdResult::Changed(State::One(StateValue::String(self.input.content().to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(self.input.content().to_string())))
             }
             Cmd::Delete => {
                 self.backspace();
-                CmdResult::Changed(State::One(StateValue::String(self.input.content().to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(self.input.content().to_string())))
             }
-            _ => CmdResult::None,
+            _ => CmdResult::NoChange,
         }
     }
 }
@@ -371,12 +374,12 @@ impl Default for CommandPaletteComponent {
     }
 }
 
-impl MockComponent for CommandPaletteComponent {
+impl Component for CommandPaletteComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
         self.component.query(attr)
     }
 
@@ -393,16 +396,16 @@ impl MockComponent for CommandPaletteComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for CommandPaletteComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+impl AppComponent<Msg, crate::msg::UserEvent> for CommandPaletteComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
-        use tuirealm::Event::Keyboard;
+        use Event::Keyboard;
 
         if !self.component.is_visible() {
             return None;
         }
 
-        match ev {
+        match *ev {
             Keyboard(KeyEvent {
                 code: Key::Up,
                 modifiers: KeyModifiers::NONE,
