@@ -17,10 +17,6 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
 
-          # macOS
-          - target: x86_64-apple-darwin
-            os: macos-latest
-
           - target: aarch64-apple-darwin
             os: macos-latest
 
