@@ -101,6 +101,7 @@ impl Agent {
             args.parent_session_id.as_deref(),
             args.enable_sub_agents,
             shared.skill_folders.clone(),
+            args.file_state_store.clone(),
         );
 
         // Create permission checker and responder from shared state

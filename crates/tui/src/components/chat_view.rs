@@ -481,10 +481,6 @@ impl ChatView {
     }
 
     pub fn stop_streaming(&mut self) {
-        self.is_streaming = false;
-    }
-
-    pub fn clear_streaming(&mut self) {
         self.streaming_content.clear();
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
@@ -1110,7 +1106,7 @@ impl ChatView {
 
 impl ChatView {
     const MASCOT_COL_WIDTH: usize = 8;
-    const MOUSE_SCROLL_LINES: usize = 3;
+    const MOUSE_SCROLL_LINES: usize = 1;
 
     /// Rebuild banner cache (separate because mascot animates).
     fn rebuild_banner_cache(&mut self) {
@@ -1831,7 +1827,6 @@ impl Component for ChatView {
             }
             "start_streaming" => self.start_streaming(),
             "stop_streaming" => self.stop_streaming(),
-            "clear_streaming" => self.clear_streaming(),
             "cancel_streaming" => self.cancel_streaming(),
             "cancel_streaming_with_content" => {
                 if let AttrValue::String(combined) = value {

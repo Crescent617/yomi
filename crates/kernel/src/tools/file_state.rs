@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -7,6 +8,19 @@ use std::sync::{Arc, RwLock};
 pub struct FileStateStore {
     /// Map of file path to last known modification time
     mtimes: Arc<RwLock<HashMap<PathBuf, u64>>>,
+}
+
+/// Serializable representation of file state for persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStateEntry {
+    pub path: PathBuf,
+    pub mtime: u64,
+}
+
+/// Serializable collection of file states
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStateSnapshot {
+    pub entries: Vec<FileStateEntry>,
 }
 
 impl FileStateStore {
@@ -55,6 +69,40 @@ impl FileStateStore {
     /// Returns true if file was not recorded or mtime differs
     pub fn is_stale(&self, path: &Path, current_mtime: u64) -> bool {
         self.get_mtime(path) != Some(current_mtime)
+    }
+
+    /// Create a serializable snapshot of the current file states
+    pub fn snapshot(&self) -> FileStateSnapshot {
+        let entries = self
+            .mtimes
+            .read()
+            .map(|mtimes| {
+                mtimes
+                    .iter()
+                    .map(|(path, mtime)| FileStateEntry {
+                        path: path.clone(),
+                        mtime: *mtime,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        FileStateSnapshot { entries }
+    }
+
+    /// Create a `FileStateStore` from a snapshot
+    pub fn from_snapshot(snapshot: FileStateSnapshot) -> Self {
+        let mut mtimes = HashMap::new();
+        for entry in snapshot.entries {
+            mtimes.insert(entry.path, entry.mtime);
+        }
+        Self {
+            mtimes: Arc::new(RwLock::new(mtimes)),
+        }
+    }
+
+    /// Check if the store is empty
+    pub fn is_empty(&self) -> bool {
+        self.mtimes.read().map(|m| m.is_empty()).unwrap_or(true)
     }
 }
 

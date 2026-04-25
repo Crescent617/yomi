@@ -35,6 +35,8 @@ pub struct AgentSpawnArgs {
     pub working_dir: std::path::PathBuf,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
+    /// Optional file state store (for restoring from previous session)
+    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -49,6 +51,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("enable_sub_agents", &self.enable_sub_agents)
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
+            .field("file_state_store", &self.file_state_store.is_some())
             .finish()
     }
 }
@@ -66,6 +69,7 @@ impl AgentSpawnArgs {
             enable_sub_agents: true,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             cancel_token: None,
+            file_state_store: None,
         }
     }
 
@@ -121,6 +125,16 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_cancel_token(mut self, token: super::CancelToken) -> Self {
         self.cancel_token = Some(token);
+        self
+    }
+
+    /// Set file state store (for restoring from previous session)
+    #[must_use]
+    pub fn with_file_state_store(
+        mut self,
+        store: Arc<crate::tools::file_state::FileStateStore>,
+    ) -> Self {
+        self.file_state_store = Some(store);
         self
     }
 }
