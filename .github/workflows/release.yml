@@ -68,11 +68,7 @@ jobs:
           mkdir -p "$OUT"
           cp "$BIN" "$OUT/"
 
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            zip -r "$OUT.zip" "$OUT"
-          else
-            tar czf "$OUT.tar.gz" "$OUT"
-          fi
+          tar czf "$OUT.tar.gz" "$OUT"
 
       - uses: actions/upload-artifact@v4
         with:
