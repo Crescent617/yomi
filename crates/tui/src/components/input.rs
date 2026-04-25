@@ -810,6 +810,7 @@ const INPUT_TIPS: &[&str] = &[
     "Ctrl+P/N history · Tab complete",
     "Ctrl+W delete word · Ctrl+U kill line",
     "Alt+B/F word jump · mouse drag select",
+    "Ctrl+Z suspend · fg to resume",
 ];
 
 /// Get a random tip based on current time
@@ -2172,6 +2173,11 @@ impl InputComponent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
+            // Suspend process to background with Ctrl+Z
+            tuirealm::Event::Keyboard(KeyEvent {
+                code: Key::Char('z'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => Some(Msg::Suspend),
             _ => None,
         }
     }

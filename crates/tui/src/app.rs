@@ -40,8 +40,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppMode {
     #[default]
-    Normal,
-    Browse,
+    Normal = 0,
+    Browse = 1,
 }
 
 /// Streaming end status for cleanup
@@ -150,6 +150,102 @@ impl Model {
     /// Get new history entries collected during this session
     pub fn get_new_history_entries(&self) -> Vec<String> {
         self.input_history[self.initial_history_len..].to_vec()
+    }
+
+    /// Suspend process to background (Ctrl-Z)
+    /// Restores terminal state, sends SIGSTOP to self, then reinitializes terminal on resume
+    #[cfg(unix)]
+    fn suspend_process(&mut self) {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::getpid;
+        use std::io::Write;
+
+        // Restore terminal state before suspending
+        let _ = self.terminal.leave_alternate_screen();
+        let _ = self.terminal.disable_raw_mode();
+        let _ = self.terminal.disable_mouse_capture();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::PopKeyboardEnhancementFlags
+        );
+
+        // Show cursor and print newline for clean shell prompt
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
+        let _ = std::io::stdout().flush();
+
+        // Send SIGSTOP to self - this suspends the process
+        // The process will resume here when user runs `fg`
+        let pid = getpid();
+        if let Err(e) = kill(pid, Signal::SIGSTOP) {
+            tracing::error!("Failed to send SIGSTOP: {}", e);
+        }
+
+        // Re-initialize terminal after resume (when `fg` is executed)
+        // Small delay to let terminal stabilize
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let _ = self.terminal.enable_raw_mode();
+        let _ = self.terminal.enter_alternate_screen();
+        let _ = self.terminal.enable_mouse_capture();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::cursor::Hide,
+            crossterm::event::EnableBracketedPaste,
+            crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        );
+
+        // Force a full terminal refresh by toggling to the opposite mode then back
+        // This mimics what the user workaround does (toggle mode on then off)
+        let current_mode = self.mode;
+        let alt_mode = if current_mode == AppMode::Normal {
+            AppMode::Browse
+        } else {
+            AppMode::Normal
+        };
+        
+        // First: switch to opposite mode
+        self.mode = alt_mode;
+        let _ = self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_mode"),
+            AttrValue::Number(alt_mode as isize),
+        );
+        let _ = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("mode"),
+            AttrValue::Number(alt_mode as isize),
+        );
+        
+        // Render intermediate mode
+        self.state.should_redraw = true;
+        self.view();
+        
+        // Then: switch back to original mode
+        self.mode = current_mode;
+        let _ = self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom("set_mode"),
+            AttrValue::Number(current_mode as isize),
+        );
+        let _ = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom("mode"),
+            AttrValue::Number(current_mode as isize),
+        );
+        
+        // Final render
+        self.state.should_redraw = true;
+        self.view();
+    }
+
+    #[cfg(not(unix))]
+    fn suspend_process(&mut self) {
+        // Ctrl-Z not supported on non-Unix platforms
+        tracing::warn!("Suspend not supported on this platform");
     }
 
     /// Initialize input history in the `InputBox` component
@@ -1294,6 +1390,11 @@ impl Update<Msg> for Model {
                     // Send compact request
                     let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
                     self.show_status_message(&StatusMessage::info("Compacting messages...", 3000));
+                    None
+                }
+                Msg::Suspend => {
+                    // Suspend process to background (Ctrl-Z)
+                    self.suspend_process();
                     None
                 }
                 _ => None,

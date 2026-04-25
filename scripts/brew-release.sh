@@ -53,6 +53,7 @@ declare -A SHA256S
 PLATFORMS=(
     "aarch64-apple-darwin"
     "x86_64-apple-darwin"
+    "x86_64-unknown-linux-gnu"
 )
 
 log "Fetching release assets from GitHub..."
@@ -128,7 +129,7 @@ generate_formula > "$FORMULA_PATH"
 
 # Show diff
 log "Formula changes:"
-git -C "$TAP_DIR" diff HEAD || true
+git --no-pager -C "$TAP_DIR" diff HEAD || true
 
 # Commit and push
 cd "$TAP_DIR"

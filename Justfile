@@ -40,5 +40,5 @@ info *ARGS:
 build-release:
     cargo build --release
 
-brew-release-osx:
+brew-release:
     ./scripts/brew-release.sh

@@ -29,5 +29,9 @@ tempfile = { workspace = true }
 image = { workspace = true, features = ["png"] }
 base64 = { workspace = true }
 
+# Unix signal handling for Ctrl-Z (suspend)
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }
+
 [lints]
 workspace = true
