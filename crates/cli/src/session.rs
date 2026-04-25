@@ -52,7 +52,9 @@ pub async fn resolve_session(
     let empty_file_state = Arc::new(FileStateStore::new());
 
     if !is_first_session {
-        return coordinator.create_session(mk_config(), empty_file_state).await;
+        return coordinator
+            .create_session(mk_config(), empty_file_state)
+            .await;
     }
 
     match session_arg {
@@ -81,7 +83,9 @@ pub async fn resolve_session(
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    coordinator.create_session(mk_config(), empty_file_state).await
+                    coordinator
+                        .create_session(mk_config(), empty_file_state)
+                        .await
                 }
             }
         }
@@ -107,17 +111,25 @@ pub async fn resolve_session(
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        coordinator.create_session(mk_config(), empty_file_state).await
+                        coordinator
+                            .create_session(mk_config(), empty_file_state)
+                            .await
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                coordinator.create_session(mk_config(), empty_file_state).await
+                coordinator
+                    .create_session(mk_config(), empty_file_state)
+                    .await
             }
         },
         // No --session: create new session
-        SessionArg::New => coordinator.create_session(mk_config(), empty_file_state).await,
+        SessionArg::New => {
+            coordinator
+                .create_session(mk_config(), empty_file_state)
+                .await
+        }
     }
 }
 
@@ -229,7 +241,10 @@ pub async fn run_session_loop(
             .await
             .filter(|s| !s.entries.is_empty());
         if file_state.is_some() {
-            tracing::info!("Saved file state with {} entries", file_state.as_ref().unwrap().entries.len());
+            tracing::info!(
+                "Saved file state with {} entries",
+                file_state.as_ref().unwrap().entries.len()
+            );
         }
         app_storage
             .save_session(&ctx.working_dir, &session_id.0, file_state.as_ref())

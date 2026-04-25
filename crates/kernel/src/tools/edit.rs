@@ -1,10 +1,10 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
-use crate::utils::diff::generate_diff;
-use crate::utils::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
+use crate::utils::diff::generate_diff;
+use crate::utils::line_numbers::format_file_lines;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;

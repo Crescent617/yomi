@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod base;
+pub mod edit;
 pub(crate) mod file_lock;
 pub mod file_state;
-pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod parallel;
