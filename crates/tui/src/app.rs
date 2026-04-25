@@ -13,12 +13,14 @@ pub struct TuiResult {
 }
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tuirealm::SubEventClause;
 use tuirealm::{
-    application::PollStrategy,
+    application::{Application, PollStrategy},
+    listener::EventListenerCfg,
+    props::{AttrValue, Attribute},
     ratatui::layout::{Constraint, Direction, Layout},
-    terminal::{CrosstermTerminalAdapter, TerminalBridge},
-    Application, AttrValue, Attribute, EventListenerCfg, Sub, SubClause, Update,
+    state::{State, StateValue},
+    subscription::{EventClause, Sub, SubClause},
+    terminal::{CrosstermTerminalAdapter, TerminalAdapter},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -75,7 +77,7 @@ pub struct Model {
     pub app: Application<Id, Msg, UserEvent>,
     /// Application state flags
     pub state: AppState,
-    pub terminal: TerminalBridge<CrosstermTerminalAdapter>,
+    pub terminal: CrosstermTerminalAdapter,
     /// Channel to receive events from kernel
     pub event_rx: mpsc::Receiver<AppEvent>,
     /// Channel to send input to kernel (supports multi-modal content blocks)
@@ -118,7 +120,7 @@ impl Model {
         permission_level: Level,
         initial_message: Option<String>,
     ) -> Result<Self> {
-        let terminal = TerminalBridge::init_crossterm()?;
+        let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app()?;
 
         Ok(Self {
@@ -206,7 +208,7 @@ impl Model {
         } else {
             AppMode::Normal
         };
-        
+
         // First: switch to opposite mode
         self.mode = alt_mode;
         let _ = self.app.attr(
@@ -219,11 +221,11 @@ impl Model {
             Attribute::Custom("mode"),
             AttrValue::Number(alt_mode as isize),
         );
-        
+
         // Render intermediate mode
         self.state.should_redraw = true;
         self.view();
-        
+
         // Then: switch back to original mode
         self.mode = current_mode;
         let _ = self.app.attr(
@@ -236,7 +238,7 @@ impl Model {
             Attribute::Custom("mode"),
             AttrValue::Number(current_mode as isize),
         );
-        
+
         // Final render
         self.state.should_redraw = true;
         self.view();
@@ -360,15 +362,17 @@ impl Model {
     /// Update scroll progress in status bar (for browse mode)
     fn update_scroll_progress(&mut self) {
         // Query scroll progress from ChatView
-        if let Ok(Some(AttrValue::String(progress_str))) = self
+        if let Ok(Some(query_result)) = self
             .app
             .query(&Id::ChatView, Attribute::Custom("scroll_progress"))
         {
-            let _ = self.app.attr(
-                &Id::StatusBar,
-                Attribute::Custom("set_scroll_progress"),
-                AttrValue::String(progress_str),
-            );
+            if let AttrValue::String(progress_str) = query_result.into_attr() {
+                let _ = self.app.attr(
+                    &Id::StatusBar,
+                    Attribute::Custom("set_scroll_progress"),
+                    AttrValue::String(progress_str),
+                );
+            }
         }
     }
 
@@ -626,13 +630,12 @@ impl Model {
 
     pub fn view(&mut self) {
         // Pre-fetch content to calculate height without borrowing self in closure
-        let input_content = if let Ok(tuirealm::State::One(tuirealm::StateValue::String(content))) =
-            self.app.state(&Id::InputBox)
-        {
-            content
-        } else {
-            String::new()
-        };
+        let input_content =
+            if let Ok(State::Single(StateValue::String(content))) = self.app.state(&Id::InputBox) {
+                content
+            } else {
+                String::new()
+            };
 
         let _ = self.terminal.draw(|f| {
             // Calculate input height inside draw closure to access terminal area
@@ -689,7 +692,6 @@ impl Model {
         let mut app = Application::init(
             EventListenerCfg::default()
                 .crossterm_input_listener(Duration::from_millis(10), 10)
-                .poll_timeout(Duration::from_millis(10))
                 .tick_interval(Duration::from_millis(100)),
         );
 
@@ -698,8 +700,8 @@ impl Model {
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
             vec![
-                Sub::new(SubEventClause::Tick, SubClause::Always),
-                Sub::new(SubEventClause::Any, SubClause::Always),
+                Sub::new(EventClause::Tick, SubClause::Always),
+                Sub::new(EventClause::Any, SubClause::Always),
             ],
         )?;
 
@@ -708,8 +710,8 @@ impl Model {
             Id::InfoBar,
             Box::new(InfoBarComponent::new()),
             vec![
-                Sub::new(SubEventClause::Tick, SubClause::Always),
-                Sub::new(SubEventClause::Any, SubClause::Always),
+                Sub::new(EventClause::Tick, SubClause::Always),
+                Sub::new(EventClause::Any, SubClause::Always),
             ],
         )?;
 
@@ -721,8 +723,8 @@ impl Model {
             Id::StatusBar,
             Box::new(StatusBarComponent::new()),
             vec![
-                Sub::new(SubEventClause::Tick, SubClause::Always),
-                Sub::new(SubEventClause::Any, SubClause::Always),
+                Sub::new(EventClause::Tick, SubClause::Always),
+                Sub::new(EventClause::Any, SubClause::Always),
             ],
         )?;
 
@@ -730,7 +732,7 @@ impl Model {
         app.mount(
             Id::Dialog,
             Box::new(SelectDialogComponent::new("Dialog")),
-            vec![Sub::new(SubEventClause::Any, SubClause::Always)],
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
         // Set focus to input box
@@ -1008,7 +1010,7 @@ impl Model {
             self.process_kernel_events()?;
 
             // Tick the application
-            match self.app.tick(PollStrategy::Once) {
+            match self.app.tick(PollStrategy::Once(Duration::from_millis(10))) {
                 Ok(messages) if !messages.is_empty() => {
                     self.state.should_redraw = true;
                     for msg in messages {
@@ -1047,8 +1049,8 @@ impl Model {
     }
 }
 
-impl Update<Msg> for Model {
-    fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
+impl Model {
+    pub fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
             self.state.should_redraw = true;
 

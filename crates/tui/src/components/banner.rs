@@ -4,12 +4,15 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, Props},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
         text::{Line, Span},
+        Frame,
     },
-    Component, Frame, MockComponent, State,
+    state::State,
 };
 
 use crate::{msg::Msg, theme::colors};
@@ -188,7 +191,7 @@ impl BannerComponent {
     }
 }
 
-impl MockComponent for BannerComponent {
+impl Component for BannerComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let banner_data = BannerData {
             working_dir: self.working_dir.clone(),
@@ -228,8 +231,8 @@ impl MockComponent for BannerComponent {
         frame.render_widget(info_paragraph, info_area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.props.get(attr).map(|v| v.into())
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -255,14 +258,14 @@ impl MockComponent for BannerComponent {
     }
 
     fn perform(&mut self, _cmd: Cmd) -> CmdResult {
-        CmdResult::None
+        CmdResult::NoChange
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for BannerComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+impl AppComponent<Msg, crate::msg::UserEvent> for BannerComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         // Handle tick events for blinking animation
-        if ev == tuirealm::Event::Tick && self.tick() {
+        if *ev == Event::Tick && self.tick() {
             // Animation state changed, trigger redraw
             return Some(Msg::Redraw);
         }

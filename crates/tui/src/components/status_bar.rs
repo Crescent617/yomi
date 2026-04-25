@@ -5,14 +5,17 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute, PropPayload, Props},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, PropPayload, Props, QueryResult},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
+        Frame,
     },
-    Component, Frame, MockComponent, State,
+    state::State,
 };
 
 use crate::{msg::Msg, theme::colors, utils::strs};
@@ -276,7 +279,7 @@ impl StatusBar {
     }
 }
 
-impl MockComponent for StatusBar {
+impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         // Check for message timeout
         self.check_timeout();
@@ -308,8 +311,10 @@ impl MockComponent for StatusBar {
         frame.render_widget(Paragraph::new(right_line), chunks[2]);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.props
+            .get(attr)
+            .map(|v| QueryResult::Borrowed(v.into()))
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -325,7 +330,6 @@ impl MockComponent for StatusBar {
             Attribute::Custom("show_message") => {
                 // Use downcast from PropPayload::Any
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
-                    use tuirealm::props::PropBoundExt;
                     let any = payload.as_any();
                     if let Some(msg) = any.downcast_ref::<StatusMessage>() {
                         self.show_message(msg.clone());
@@ -390,7 +394,7 @@ impl MockComponent for StatusBar {
     }
 
     fn perform(&mut self, _cmd: Cmd) -> CmdResult {
-        CmdResult::None
+        CmdResult::NoChange
     }
 }
 
@@ -413,12 +417,12 @@ impl StatusBarComponent {
     }
 }
 
-impl MockComponent for StatusBarComponent {
+impl Component for StatusBarComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -435,10 +439,10 @@ impl MockComponent for StatusBarComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for StatusBarComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        match ev {
-            tuirealm::Event::Tick => {
+impl AppComponent<Msg, crate::msg::UserEvent> for StatusBarComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match *ev {
+            Event::Tick => {
                 self.component.tick();
                 Some(Msg::Redraw)
             }

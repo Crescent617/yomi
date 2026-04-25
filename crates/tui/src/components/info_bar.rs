@@ -4,14 +4,17 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult},
-    props::{AttrValue, Attribute},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, QueryResult},
     ratatui::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
+        Frame,
     },
-    Component, Frame, MockComponent, State,
+    state::State,
 };
 
 use crate::{msg::Msg, theme::colors};
@@ -170,14 +173,14 @@ impl InfoBar {
     }
 }
 
-impl MockComponent for InfoBar {
+impl Component for InfoBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         let line = self.render();
         let paragraph = Paragraph::new(line);
         frame.render_widget(paragraph, area);
     }
 
-    fn query(&self, _attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, _attr: Attribute) -> Option<QueryResult<'_>> {
         None
     }
 
@@ -220,7 +223,7 @@ impl MockComponent for InfoBar {
     }
 
     fn perform(&mut self, _cmd: Cmd) -> CmdResult {
-        CmdResult::None
+        CmdResult::NoChange
     }
 }
 
@@ -243,12 +246,12 @@ impl InfoBarComponent {
     }
 }
 
-impl MockComponent for InfoBarComponent {
+impl Component for InfoBarComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -265,10 +268,10 @@ impl MockComponent for InfoBarComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for InfoBarComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
-        match ev {
-            tuirealm::Event::Tick => {
+impl AppComponent<Msg, crate::msg::UserEvent> for InfoBarComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match *ev {
+            Event::Tick => {
                 self.component.tick();
                 Some(Msg::Redraw)
             }

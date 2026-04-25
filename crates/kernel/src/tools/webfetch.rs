@@ -34,7 +34,6 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 struct CacheEntry {
     content: String,
-    content_type: String,
     bytes: usize,
     fetched_at: Instant,
 }
@@ -121,17 +120,13 @@ impl WebFetchTool {
     }
 
     /// Fetch content from URL
-    async fn fetch_content(&self, url: &str) -> Result<(String, String, usize), String> {
+    async fn fetch_content(&self, url: &str) -> Result<(String, usize), String> {
         // Check cache first
         {
             let mut cache = get_cache().lock().await;
             if let Some(entry) = cache.get(url) {
                 if !entry.is_expired() {
-                    return Ok((
-                        entry.content.clone(),
-                        entry.content_type.clone(),
-                        entry.bytes,
-                    ));
+                    return Ok((entry.content.clone(), entry.bytes));
                 }
                 // Remove expired entry
                 cache.pop(url);
@@ -170,14 +165,10 @@ impl WebFetchTool {
             ));
         }
 
-        // Get content type
-        let content_type = get_content_type(&bytes);
-
         // Convert to string
         let content = String::from_utf8_lossy(&bytes).to_string();
 
-        // Extract main content and convert to markdown if HTML
-        let processed_content = if content_type.contains("text/html") {
+        let processed_content = if content.trim().starts_with('<') {
             Self::extract_content(&content, url)
         } else {
             content
@@ -196,7 +187,6 @@ impl WebFetchTool {
         // Cache the result
         let entry = CacheEntry {
             content: final_content.clone(),
-            content_type: content_type.clone(),
             bytes: bytes.len(),
             fetched_at: Instant::now(),
         };
@@ -205,26 +195,8 @@ impl WebFetchTool {
             cache.put(url.to_string(), entry);
         }
 
-        Ok((final_content, content_type, bytes.len()))
+        Ok((final_content, bytes.len()))
     }
-}
-
-/// Detect content type from bytes or default to text/plain
-fn get_content_type(bytes: &[u8]) -> String {
-    // Simple content type detection based on magic bytes
-    let starts_with_tag =
-        |tag: &[u8]| bytes.len() >= tag.len() && bytes[..tag.len()].eq_ignore_ascii_case(tag);
-    if starts_with_tag(b"<!DOCTYPE")
-        || starts_with_tag(b"<html")
-        || starts_with_tag(b"<head")
-        || starts_with_tag(b"<body")
-    {
-        return "text/html".to_string();
-    }
-    if bytes.starts_with(b"{") || bytes.starts_with(b"[") {
-        return "application/json".to_string();
-    }
-    "text/plain".to_string()
 }
 
 impl Default for WebFetchTool {
@@ -268,15 +240,13 @@ impl Tool for WebFetchTool {
         };
 
         // Fetch content
-        let (content, content_type, bytes) = match self.fetch_content(&validated_url).await {
+        let (content, bytes) = match self.fetch_content(&validated_url).await {
             Ok(result) => result,
             Err(e) => return Ok(ToolOutput::error(e)),
         };
 
         // Format output
-        let output = format!(
-            "Fetched: {validated_url}\nContent-Type: {content_type}\nSize: {bytes} bytes\n\n{content}"
-        );
+        let output = format!("Fetched: {validated_url}\nSize: {bytes} bytes\n\n{content}");
 
         Ok(ToolOutput::text(output))
     }
@@ -397,7 +367,6 @@ mod tests {
     fn test_cache_entry_expiration() {
         let entry = CacheEntry {
             content: "test".to_string(),
-            content_type: "text/plain".to_string(),
             bytes: 4,
             fetched_at: Instant::now()
                 .checked_sub(CACHE_TTL + Duration::from_secs(1))
@@ -407,22 +376,9 @@ mod tests {
 
         let fresh = CacheEntry {
             content: "test".to_string(),
-            content_type: "text/plain".to_string(),
             bytes: 4,
             fetched_at: Instant::now(),
         };
         assert!(!fresh.is_expired());
-    }
-
-    #[test]
-    fn test_content_type_detection() {
-        assert_eq!(get_content_type(b"<!DOCTYPE html><html>"), "text/html");
-        assert_eq!(get_content_type(b"<html lang=\"en\">"), "text/html");
-        assert_eq!(
-            get_content_type(b"{\"key\": \"value\"}"),
-            "application/json"
-        );
-        assert_eq!(get_content_type(b"[1, 2, 3]"), "application/json");
-        assert_eq!(get_content_type(b"plain text"), "text/plain");
     }
 }

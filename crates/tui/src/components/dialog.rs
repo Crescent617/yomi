@@ -5,13 +5,16 @@
 
 use tuirealm::{
     command::{Cmd, CmdResult, Direction as CmdDirection},
-    props::{AttrValue, Attribute, Props},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
         style::{Modifier, Style},
         widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+        Frame,
     },
-    Component, Frame, MockComponent, State,
+    state::{State, StateValue},
 };
 
 use crate::{msg::Msg, theme::colors};
@@ -192,15 +195,15 @@ impl SelectDialog {
     }
 }
 
-impl MockComponent for SelectDialog {
+impl Component for SelectDialog {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         if self.active {
             self.render_dialog(frame, area);
         }
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
-        self.props.get(attr)
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.props.get(attr).map(|v| v.into())
     }
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
@@ -236,43 +239,41 @@ impl MockComponent for SelectDialog {
     }
 
     fn state(&self) -> State {
-        use tuirealm::StateValue;
         if let Some(idx) = self.current_selection() {
             // Use String to represent the selected index
-            State::One(StateValue::String(idx.to_string()))
+            State::Single(StateValue::String(idx.to_string()))
         } else {
             State::None
         }
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
-        use tuirealm::StateValue;
         if !self.active {
-            return CmdResult::None;
+            return CmdResult::NoChange;
         }
 
         match cmd {
             Cmd::Move(CmdDirection::Up) => {
                 self.select_up();
-                CmdResult::Changed(State::One(StateValue::String(self.selected.to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(self.selected.to_string())))
             }
             Cmd::Move(CmdDirection::Down) => {
                 self.select_down();
-                CmdResult::Changed(State::One(StateValue::String(self.selected.to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(self.selected.to_string())))
             }
             Cmd::Submit => {
                 if let Some(idx) = self.current_selection() {
                     self.hide();
-                    CmdResult::Submit(State::One(StateValue::String(idx.to_string())))
+                    CmdResult::Submit(State::Single(StateValue::String(idx.to_string())))
                 } else {
-                    CmdResult::None
+                    CmdResult::NoChange
                 }
             }
             Cmd::Cancel => {
                 self.hide();
                 CmdResult::Submit(State::None)
             }
-            _ => CmdResult::None,
+            _ => CmdResult::NoChange,
         }
     }
 }
@@ -303,12 +304,12 @@ impl SelectDialogComponent {
     }
 }
 
-impl MockComponent for SelectDialogComponent {
+impl Component for SelectDialogComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         self.component.view(frame, area);
     }
 
-    fn query(&self, attr: Attribute) -> Option<AttrValue> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -325,10 +326,9 @@ impl MockComponent for SelectDialogComponent {
     }
 }
 
-impl Component<Msg, crate::msg::UserEvent> for SelectDialogComponent {
-    fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
+impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
-        use tuirealm::Event::Keyboard;
 
         tracing::trace!(
             "Dialog received event: {:?}, active={}",
@@ -340,22 +340,22 @@ impl Component<Msg, crate::msg::UserEvent> for SelectDialogComponent {
             return None;
         }
 
-        match ev {
-            Keyboard(KeyEvent {
+        match *ev {
+            Event::Keyboard(KeyEvent {
                 code: Key::Up,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.select_up();
                 Some(Msg::Redraw)
             }
-            Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Down,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.select_down();
                 Some(Msg::Redraw)
             }
-            Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -370,7 +370,7 @@ impl Component<Msg, crate::msg::UserEvent> for SelectDialogComponent {
                     None
                 }
             }
-            Keyboard(KeyEvent {
+            Event::Keyboard(KeyEvent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => {
