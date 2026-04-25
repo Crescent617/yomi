@@ -27,7 +27,6 @@ use storage::AppStorage;
 #[derive(Parser)]
 #[command(name = "yomi")]
 #[command(about = "AI coding assistant CLI")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     #[command(flatten)]
     tui: TuiArgs,
@@ -64,9 +63,8 @@ struct TuiArgs {
 enum Commands {
     /// Start TUI session (default when no subcommand provided)
     Tui(TuiArgs),
-
-    /// Manage sessions
     Sessions(SessionsArgs),
+    Version,
 }
 
 #[derive(Parser)]
@@ -117,6 +115,10 @@ async fn main() -> Result<()> {
     match args.command {
         Some(Commands::Tui(tui_args)) => run_tui_command(tui_args).await,
         Some(Commands::Sessions(sessions_args)) => run_sessions_command(sessions_args).await,
+        Some(Commands::Version) => {
+            println!("v{}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         None => {
             // No subcommand: treat as tui with top-level args
             run_tui_command(args.tui).await
