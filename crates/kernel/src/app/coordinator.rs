@@ -43,13 +43,18 @@ impl Coordinator {
         }
     }
 
-    pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
+    pub async fn create_session(
+        &self,
+        config: SessionConfig,
+        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
+    ) -> Result<SessionId> {
         let id = self.storage.create_session().await?;
         let mut session = Session::new(
             id.clone(),
             config,
             self.storage.clone(),
             Arc::clone(&self.agent_shared),
+            file_state_store,
         );
         session.init().await?;
         let session_id = session.id().clone();
@@ -66,6 +71,7 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
         config: SessionConfig,
+        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
     ) -> Result<SessionId> {
         // Verify session exists in storage
         let session_record = self
@@ -81,6 +87,7 @@ impl Coordinator {
             config,
             self.storage.clone(),
             Arc::clone(&self.agent_shared),
+            file_state_store,
         );
         session.init().await?;
 
@@ -203,5 +210,15 @@ impl Coordinator {
             tracing::info!("Compaction requested for session {}", session_id.0);
         }
         result
+    }
+
+    /// Get file state snapshot for a session
+    pub async fn get_file_state_snapshot(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<crate::tools::file_state::FileStateSnapshot> {
+        let session = self.get_session(session_id).await?;
+        let snapshot = session.read().await.file_state_snapshot();
+        Some(snapshot)
     }
 }

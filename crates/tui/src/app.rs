@@ -10,6 +10,8 @@ pub struct TuiResult {
     pub input_history: Vec<String>,
     /// Whether to create a new session after exiting
     pub should_create_new_session: bool,
+    /// Whether any user message was sent during this session
+    pub has_user_message: bool,
 }
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -70,6 +72,8 @@ pub struct AppState {
     pub should_create_new_session: bool,
     /// Initial message to send on startup (from CLI prompt arg)
     pub initial_message: Option<String>,
+    /// Whether any user message was sent during this session
+    pub has_user_message: bool,
 }
 
 pub struct Model {
@@ -131,6 +135,7 @@ impl Model {
                 is_streaming: false,
                 should_create_new_session: false,
                 initial_message,
+                has_user_message: false,
             },
             terminal,
             event_rx,
@@ -479,43 +484,24 @@ impl Model {
                     Attribute::Custom("clear_message"),
                     AttrValue::Flag(true),
                 );
-            }
-            StreamingStatus::Cancelled => {
-                let _ = self.save_partial_content();
                 let _ = self.app.attr(
                     &Id::ChatView,
-                    Attribute::Custom("cancel_streaming"),
-                    AttrValue::Flag(true),
-                );
-                let _ = self.app.attr(
-                    &Id::InfoBar,
-                    Attribute::Custom("cancel_streaming"),
-                    AttrValue::Flag(true),
-                );
-            }
-            StreamingStatus::Failed => {
-                let _ = self.save_partial_content();
-                let _ = self.app.attr(
-                    &Id::InfoBar,
                     Attribute::Custom("stop_streaming"),
                     AttrValue::Flag(true),
                 );
+            }
+            StreamingStatus::Cancelled
+            | StreamingStatus::Failed
+            | StreamingStatus::MaxIterations => {
+                let _ = self.save_partial_content();
                 let _ = self.app.attr(
-                    &Id::ChatView,
-                    Attribute::Custom("clear_streaming"),
+                    &Id::InfoBar,
+                    Attribute::Custom("cancel_streaming"),
                     AttrValue::Flag(true),
                 );
                 let _ = self.app.attr(
                     &Id::ChatView,
                     Attribute::Custom("cancel_streaming"),
-                    AttrValue::Flag(true),
-                );
-            }
-            StreamingStatus::MaxIterations => {
-                let _ = self.save_partial_content();
-                let _ = self.app.attr(
-                    &Id::InfoBar,
-                    Attribute::Custom("stop_streaming"),
                     AttrValue::Flag(true),
                 );
             }
@@ -607,11 +593,6 @@ impl Model {
             );
         }
         // Clear streaming UI
-        let _ = self.app.attr(
-            &Id::ChatView,
-            Attribute::Custom("clear_streaming"),
-            AttrValue::Flag(true),
-        );
         let _ = self.app.attr(
             &Id::ChatView,
             Attribute::Custom("cancel_streaming"),
@@ -963,6 +944,7 @@ impl Model {
         Ok(TuiResult {
             input_history: self.get_new_history_entries(),
             should_create_new_session: self.state.should_create_new_session,
+            has_user_message: self.state.has_user_message,
         })
     }
 
@@ -1078,6 +1060,8 @@ impl Model {
                         self.input_history.push(text_content.clone());
                         let _ = self.init_input_history();
                     }
+                    // Mark that user has sent a message
+                    self.state.has_user_message = true;
                     // Add user message to chat view with content blocks
                     let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
                     let _ = self.app.attr(

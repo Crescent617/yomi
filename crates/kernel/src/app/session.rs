@@ -18,6 +18,8 @@ pub struct Session {
     event_rx: Option<mpsc::Receiver<Event>>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
+    /// File state store for tracking file modification times
+    file_state_store: Arc<crate::tools::file_state::FileStateStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,7 @@ impl Session {
         config: SessionConfig,
         storage: Arc<dyn Storage>,
         agent_shared: Arc<AgentShared>,
+        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
     ) -> Self {
         Self {
             id,
@@ -42,6 +45,7 @@ impl Session {
             main_agent: None,
             event_rx: None,
             permission_state: None,
+            file_state_store,
         }
     }
 
@@ -73,7 +77,8 @@ impl Session {
                 .with_history(history)
                 .with_max_iterations(self.config.agent.max_iterations)
                 .with_working_dir(self.config.project_path.clone())
-                .with_subagent(self.config.agent.enable_subagent);
+                .with_subagent(self.config.agent.enable_subagent)
+                .with_file_state_store(Arc::clone(&self.file_state_store));
 
         // Create AgentShared with permission state
         let shared = Arc::new(AgentShared::new(
@@ -189,5 +194,10 @@ impl Session {
             }
             None => Err(anyhow::anyhow!("Session not initialized")),
         }
+    }
+
+    /// Get a snapshot of the file state store
+    pub fn file_state_snapshot(&self) -> crate::tools::file_state::FileStateSnapshot {
+        self.file_state_store.snapshot()
     }
 }

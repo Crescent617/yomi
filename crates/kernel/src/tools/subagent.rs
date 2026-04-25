@@ -116,6 +116,7 @@ You are a specialist agent handling a specific task delegated by the parent agen
     fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
         // Subagent doesn't need input_tx since it doesn't receive AgentInput.
         // BashTool's async mode will fail gracefully with a clear error message.
+        // Subagents get a fresh file state store (not shared with parent).
         crate::tools::ToolRegistryFactory::create(
             &self.parent_id,
             &self.shared,
@@ -127,6 +128,7 @@ You are a specialist agent handling a specific task delegated by the parent agen
             Some(&self.parent_session_id),
             false, // Disable nested subagents to prevent infinite recursion
             self.shared.skill_folders.clone(),
+            None, // Fresh file state store for subagent
         )
     }
 }

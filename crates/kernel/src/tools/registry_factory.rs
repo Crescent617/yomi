@@ -36,6 +36,7 @@ impl ToolRegistryFactory {
     /// * `parent_session_id` - Parent session ID for task store sharing (subagents)
     /// * `enable_sub_agents` - Whether to enable the subagent tool
     /// * `skill_folders` - Folders to search for skills (for `skill_load` tool)
+    /// * `file_state_store` - Optional file state store (creates new if None)
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         agent_id: &AgentId,
@@ -48,9 +49,11 @@ impl ToolRegistryFactory {
         parent_session_id: Option<&str>,
         enable_sub_agents: bool,
         skill_folders: Vec<std::path::PathBuf>,
+        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
     ) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
-        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+        let file_state_store = file_state_store
+            .unwrap_or_else(|| Arc::new(crate::tools::file_state::FileStateStore::new()));
 
         // Register Bash tool
         let bash_ctx = ShellToolCtx::new(
