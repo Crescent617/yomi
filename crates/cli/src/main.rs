@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use kernel::{
     agent::AgentConfig,
     compactor,
@@ -15,7 +15,6 @@ use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
 use kernel::{Coordinator, SessionConfig};
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -24,6 +23,63 @@ mod storage;
 
 use session::{resolve_session, run_session_loop, SessionArg, SessionContext};
 use storage::AppStorage;
+
+#[derive(Parser)]
+#[command(name = "yomi")]
+#[command(about = "AI coding assistant CLI")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+struct Args {
+    #[command(flatten)]
+    tui: TuiArgs,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Default, Parser)]
+struct TuiArgs {
+    /// Initial prompt to send on startup (non-interactive mode if provided)
+    #[arg(short, long, value_name = "PROMPT")]
+    prompt: Option<String>,
+
+    /// Working directory
+    #[arg(short, long)]
+    directory: Option<PathBuf>,
+
+    /// Config file path
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Skip all confirmations (YOLO mode)
+    #[arg(short, long)]
+    yolo: bool,
+
+    /// Resume a session: --resume (last session) or --resume <id> (specific)
+    #[arg(long, value_name = "SESSION_ID")]
+    #[allow(clippy::option_option)]
+    resume: Option<Option<String>>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start TUI session (default when no subcommand provided)
+    Tui(TuiArgs),
+
+    /// Manage sessions
+    Sessions(SessionsArgs),
+}
+
+#[derive(Parser)]
+struct SessionsArgs {
+    #[command(subcommand)]
+    command: SessionsCommands,
+}
+
+#[derive(Subcommand)]
+enum SessionsCommands {
+    /// List all sessions
+    List,
+}
 
 /// Claude Code settings.json structure (partial)
 #[derive(Debug, Deserialize, Default)]
@@ -53,45 +109,77 @@ impl ClaudeSettings {
     }
 }
 
-#[derive(Parser)]
-#[command(name = "yomi")]
-#[command(about = "AI coding assistant CLI")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-struct Args {
-    /// Initial prompt to send on startup (non-interactive mode if provided)
-    #[arg(value_name = "PROMPT")]
-    prompt: Option<String>,
-
-    /// Working directory
-    #[arg(short, long)]
-    directory: Option<PathBuf>,
-
-    /// Config file path
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-
-    /// Skip all confirmations (YOLO mode)
-    #[arg(short, long)]
-    yolo: bool,
-
-    /// Auto-approve level for tool permissions (safe | caution | dangerous)
-    #[arg(long, value_name = "LEVEL")]
-    auto_approve: Option<String>,
-
-    /// Resume a session: --session/--resume (last session) or --session/--resume <id> (specific)
-    #[allow(clippy::option_option)]
-    #[arg(long, value_name = "SESSION_ID", visible_alias = "resume")]
-    session: Option<Option<String>>,
-
-    /// List all sessions
-    #[arg(long)]
-    list: bool,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Check if a subcommand was provided
+    match args.command {
+        Some(Commands::Tui(tui_args)) => run_tui_command(tui_args).await,
+        Some(Commands::Sessions(sessions_args)) => run_sessions_command(sessions_args).await,
+        None => {
+            // No subcommand: treat as tui with top-level args
+            run_tui_command(args.tui).await
+        }
+    }
+}
+
+async fn run_sessions_command(args: SessionsArgs) -> Result<()> {
+    // Get data directory from config or default
+    let data_dir =
+        std::env::var("YOMI_DATA_DIR").map_or_else(|_| expand_tilde("~/.yomi"), PathBuf::from);
+
+    // Create storage
+    let storage = Arc::new(FsStorage::new(data_dir.join("sessions"))?);
+
+    match args.command {
+        SessionsCommands::List => {
+            use kernel::storage::Storage;
+            let sessions = storage.list_sessions().await?;
+            for session in sessions.iter().take(50) {
+                let age = chrono::Utc::now() - session.updated_at;
+                let age_str = if age.num_days() > 0 {
+                    format!("{}d ago", age.num_days())
+                } else if age.num_hours() > 0 {
+                    format!("{}h ago", age.num_hours())
+                } else if age.num_minutes() > 0 {
+                    format!("{}m ago", age.num_minutes())
+                } else {
+                    "just now".to_string()
+                };
+
+                // Get first user message preview (unicode-safe truncation, no newlines)
+                let preview = if let Ok(messages) = storage
+                    .get_messages(&kernel::types::SessionId(session.id.clone()))
+                    .await
+                {
+                    messages
+                        .iter()
+                        .find(|m| m.role == kernel::types::Role::User)
+                        .map_or("(no user message)".to_string(), |m| {
+                            let text = m.text_content().replace('\n', " ");
+                            if text.chars().count() > 60 {
+                                format!("{}...", text.chars().take(60).collect::<String>())
+                            } else {
+                                text
+                            }
+                        })
+                } else {
+                    "(error loading messages)".to_string()
+                };
+
+                println!(
+                    "{} | {} messages | {} | {}",
+                    session.id, session.message_count, age_str, preview
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_tui_command(args: TuiArgs) -> Result<()> {
     let working_dir = args
         .directory
         .unwrap_or_else(|| std::env::current_dir().unwrap());
@@ -119,15 +207,6 @@ async fn main() -> Result<()> {
     };
 
     // Apply CLI overrides to config (after loading, before using)
-    if let Some(level_str) = args.auto_approve {
-        if let Ok(level) = Level::from_str(&level_str) {
-            config.auto_approve = level;
-            tracing::info!("Auto-approve level set to: {}", level);
-        } else {
-            tracing::warn!("Invalid auto-approve level: {}", level_str);
-        }
-    }
-
     if args.yolo {
         config.auto_approve = Level::Dangerous;
         tracing::warn!("YOLO mode enabled - all confirmations skipped!");
@@ -247,55 +326,6 @@ async fn main() -> Result<()> {
     // Create storage
     let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
 
-    // Handle --list command
-    if args.list {
-        use kernel::storage::Storage;
-        let sessions = storage.list_sessions().await?;
-        if sessions.is_empty() {
-            println!("No sessions found.");
-        } else {
-            println!("Sessions (showing first 50):");
-            for session in sessions.iter().take(50) {
-                let age = chrono::Utc::now() - session.updated_at;
-                let age_str = if age.num_days() > 0 {
-                    format!("{}d ago", age.num_days())
-                } else if age.num_hours() > 0 {
-                    format!("{}h ago", age.num_hours())
-                } else if age.num_minutes() > 0 {
-                    format!("{}m ago", age.num_minutes())
-                } else {
-                    "just now".to_string()
-                };
-
-                // Get first user message preview (unicode-safe truncation)
-                let preview = if let Ok(messages) = storage
-                    .get_messages(&kernel::types::SessionId(session.id.clone()))
-                    .await
-                {
-                    messages
-                        .iter()
-                        .find(|m| m.role == kernel::types::Role::User)
-                        .map_or("(no user message)".to_string(), |m| {
-                            let text = m.text_content();
-                            if text.chars().count() > 60 {
-                                format!("{}...", text.chars().take(60).collect::<String>())
-                            } else {
-                                text.clone()
-                            }
-                        })
-                } else {
-                    "(error loading messages)".to_string()
-                };
-
-                println!(
-                    "  {} - {} messages - {} - {}",
-                    session.id, session.message_count, age_str, preview
-                );
-            }
-        }
-        return Ok(());
-    }
-
     // Create provider based on configuration
     let provider: Arc<dyn kernel::Provider> = match config.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
@@ -367,9 +397,9 @@ async fn main() -> Result<()> {
         .unwrap_or_default();
 
     // Convert session arg for easier matching
-    let session_arg = match args.session {
-        Some(Some(ref id)) => SessionArg::Specific(id.clone()),
+    let session_arg = match args.resume {
         Some(None) => SessionArg::Last,
+        Some(Some(id)) => SessionArg::Specific(id),
         None => SessionArg::New,
     };
 
