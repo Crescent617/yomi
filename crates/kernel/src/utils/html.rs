@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_extract_content_removes_scripts() {
-        let html = r#"
+        let html = r"
             <html>
             <head><script>alert('xss');</script></head>
             <body>
@@ -227,7 +227,7 @@ mod tests {
                 <script>var x = 1;</script>
             </body>
             </html>
-        "#;
+        ";
         let result = extract_content(html);
         assert!(!result.contains("alert"));
         assert!(!result.contains("var x"));
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_extract_content_prefers_main() {
-        let html = r#"
+        let html = r"
             <html>
             <body>
                 <header>Site header</header>
@@ -259,7 +259,7 @@ mod tests {
                 <footer>Site footer</footer>
             </body>
             </html>
-        "#;
+        ";
         let result = extract_content(html);
         assert!(result.contains("The real content"));
         assert!(!result.contains("Site header"));

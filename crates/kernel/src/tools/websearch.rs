@@ -170,9 +170,9 @@ impl WebSearchTool {
 
     /// Extract main content from HTML by filtering noise and converting to text
     ///
-    /// Delegates to the shared `html_extractor` module
+    /// Delegates to the shared `html` utility module
     fn extract_content(html: &str, _url: &str) -> String {
-        super::html_extractor::extract_content(html)
+        crate::utils::html::extract_content(html)
     }
 
     /// Fetch content from a URL
