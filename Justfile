@@ -39,3 +39,6 @@ info *ARGS:
 
 build-release:
     cargo build --release
+
+brew-release-osx:
+    ./scripts/brew-release.sh
