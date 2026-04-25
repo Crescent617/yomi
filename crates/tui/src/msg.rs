@@ -68,6 +68,9 @@ pub enum Msg {
     CommandYolo,    // /yolo - toggle yolo mode
     CommandBrowse,  // /browse - toggle browse mode
     CommandCompact, // /compact - force message compaction
+
+    // Suspend process to background (Ctrl-Z)
+    Suspend,
 }
 
 impl From<AppEvent> for Msg {
