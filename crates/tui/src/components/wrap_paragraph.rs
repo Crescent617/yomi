@@ -437,7 +437,7 @@ fn render_text(
     style: Style,
 ) -> u16 {
     let mut x = x_start;
-    let max_x = x_start + max_width;
+    let max_x = x_start.saturating_add(max_width);
 
     for ch in text.chars() {
         if x >= max_x {
@@ -455,13 +455,16 @@ fn render_text(
             continue;
         }
 
+        // Check if wide character would overflow (needs ch_width cells but only 1 available)
+        if x.saturating_add(ch_width) > max_x {
+            break;
+        }
+
         buf[(x, y)].set_char(ch).set_style(style);
 
         // Fill wide character continuation cells
         for offset in 1..ch_width {
-            if x + offset < max_x {
-                buf[(x + offset, y)].set_char(' ').set_style(style);
-            }
+            buf[(x + offset, y)].set_char(' ').set_style(style);
         }
 
         x += ch_width;
