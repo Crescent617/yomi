@@ -1109,8 +1109,12 @@ impl Update<Msg> for Model {
                     }
                     None
                 }
-                Msg::PageUp => {
-                    let height = self.terminal.raw().size().map_or(20, |s| s.height as usize);
+                Msg::PageHalfUp => {
+                    let height = self
+                        .terminal
+                        .raw()
+                        .size()
+                        .map_or(20, |s| (s.height / 2) as usize);
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("page_up"),
@@ -1122,8 +1126,12 @@ impl Update<Msg> for Model {
                     }
                     None
                 }
-                Msg::PageDown => {
-                    let height = self.terminal.raw().size().map_or(20, |s| s.height as usize);
+                Msg::PageHalfDown => {
+                    let height = self
+                        .terminal
+                        .raw()
+                        .size()
+                        .map_or(20, |s| (s.height / 2) as usize);
                     let _ = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom("page_down"),

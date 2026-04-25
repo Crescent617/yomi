@@ -24,38 +24,40 @@ fi
 ARCH=$(uname -m)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
-# Map platform to Homebrew bottle tag
+# Map platform to Rust target triple
 if [ "$OS" = "darwin" ]; then
     if [ "$ARCH" = "arm64" ]; then
-        BOTTLE_TAG="arm64_sequoia"
+        TARGET="aarch64-apple-darwin"
     else
-        BOTTLE_TAG="ventura"
+        TARGET="x86_64-apple-darwin"
     fi
 else
-    BOTTLE_TAG="x86_64_linux"
+    TARGET="x86_64-unknown-linux-gnu"
 fi
 
-echo -e "${GREEN}=== Publishing yomi ${VERSION} for ${BOTTLE_TAG} ===${NC}"
+echo -e "${GREEN}=== Publishing yomi ${VERSION} for ${TARGET} ===${NC}"
 
 # Step 1: Build release
 echo -e "${YELLOW}[1/6] Building release binary...${NC}"
 just build-release
 
-# Step 2: Create bottle structure
-echo -e "${YELLOW}[2/6] Creating bottle...${NC}"
-BOTTLE_DIR=$(mktemp -d)
-mkdir -p "${BOTTLE_DIR}/${FORMULA_NAME}/${VERSION}/bin"
-cp "target/release/${FORMULA_NAME}" "${BOTTLE_DIR}/${FORMULA_NAME}/${VERSION}/bin/"
+# Step 2: Create archive structure (matching GitHub workflow format)
+echo -e "${YELLOW}[2/6] Creating archive...${NC}"
+ARCHIVE_DIR=$(mktemp -d)
 
-BOTTLE_FILENAME="${FORMULA_NAME}-${VERSION}.${BOTTLE_TAG}.bottle.tar.gz"
-cd "${BOTTLE_DIR}"
-tar czf "${BOTTLE_FILENAME}" .
+OUT_NAME="${FORMULA_NAME}-${VERSION}-${TARGET}"
+mkdir -p "${ARCHIVE_DIR}/${OUT_NAME}"
+cp "target/release/${FORMULA_NAME}" "${ARCHIVE_DIR}/${OUT_NAME}/"
+
+ARCHIVE_FILENAME="${OUT_NAME}.tar.gz"
+cd "${ARCHIVE_DIR}"
+tar czf "${ARCHIVE_FILENAME}" "${OUT_NAME}"
 cd - > /dev/null
 
 # Step 3: Calculate SHA256
 echo -e "${YELLOW}[3/6] Calculating checksums...${NC}"
-BOTTLE_SHA256=$(shasum -a 256 "${BOTTLE_DIR}/${BOTTLE_FILENAME}" | cut -d' ' -f1)
-echo "Bottle SHA256: ${BOTTLE_SHA256}"
+ARCHIVE_SHA256=$(shasum -a 256 "${ARCHIVE_DIR}/${ARCHIVE_FILENAME}" | cut -d' ' -f1)
+echo "Archive SHA256: ${ARCHIVE_SHA256}"
 
 # Create source tarball for formula
 SOURCE_TARBALL="/tmp/${FORMULA_NAME}-${VERSION}.tar.gz"
@@ -79,7 +81,11 @@ class Yomi < Formula
 
   bottle do
     root_url "https://github.com/Crescent617/yomi/releases/download/v${VERSION}"
-    sha256 ${BOTTLE_TAG}: "${BOTTLE_SHA256}"
+    if Hardware::CPU.arm?
+      sha256 arm64_sequoia: "${ARCHIVE_SHA256}"
+    else
+      sha256 ventura: "${ARCHIVE_SHA256}"
+    end
   end
 
   depends_on "rust" => :build
@@ -94,8 +100,8 @@ class Yomi < Formula
 end
 EOF
 
-# Step 5: Upload bottle to GitHub Release
-echo -e "${YELLOW}[5/6] Uploading bottle to GitHub Release...${NC}"
+# Step 5: Upload archive to GitHub Release
+echo -e "${YELLOW}[5/6] Uploading archive to GitHub Release...${NC}"
 
 # Check if release exists
 if ! gh release view "v${VERSION}" --repo Crescent617/yomi > /dev/null 2>&1; then
@@ -103,14 +109,14 @@ if ! gh release view "v${VERSION}" --repo Crescent617/yomi > /dev/null 2>&1; the
     gh release create "v${VERSION}" --title "yomi v${VERSION}" --notes "Release v${VERSION}"
 fi
 
-# Upload or replace bottle
-if gh release view "v${VERSION}" --repo Crescent617/yomi --json assets | grep -q "${BOTTLE_FILENAME}"; then
-    echo -e "${YELLOW}Deleting existing bottle...${NC}"
-    gh release delete-asset "v${VERSION}" "${BOTTLE_FILENAME}" --repo Crescent617/yomi --yes
+# Upload or replace archive
+if gh release view "v${VERSION}" --repo Crescent617/yomi --json assets | grep -q "${ARCHIVE_FILENAME}"; then
+    echo -e "${YELLOW}Deleting existing archive...${NC}"
+    gh release delete-asset "v${VERSION}" "${ARCHIVE_FILENAME}" --repo Crescent617/yomi --yes
 fi
 
-gh release upload "v${VERSION}" "${BOTTLE_DIR}/${BOTTLE_FILENAME}" --repo Crescent617/yomi
-echo -e "${GREEN}Bottle uploaded successfully!${NC}"
+gh release upload "v${VERSION}" "${ARCHIVE_DIR}/${ARCHIVE_FILENAME}" --repo Crescent617/yomi
+echo -e "${GREEN}Archive uploaded successfully!${NC}"
 
 # Step 6: Push formula
 echo -e "${YELLOW}[6/6] Pushing formula...${NC}"
@@ -126,11 +132,11 @@ fi
 cd - > /dev/null
 
 # Cleanup
-rm -rf "${BOTTLE_DIR}"
+rm -rf "${ARCHIVE_DIR}"
 
 echo -e "${GREEN}=== Done! ===${NC}"
 echo ""
-echo "Bottle will be available in 1-5 minutes after CDN propagation."
+echo "Archive will be available in 1-5 minutes after CDN propagation."
 echo "Test with: brew update && brew install crescent617/tap/yomi"
 echo ""
 echo "If download fails immediately, wait a few minutes and try again."

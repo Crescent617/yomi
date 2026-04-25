@@ -1749,11 +1749,11 @@ impl InputComponent {
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('u'),
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::PageUp),
+            }) => Some(Msg::PageHalfUp),
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('d'),
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::PageDown),
+            }) => Some(Msg::PageHalfDown),
             // ESC or 'q' to exit browse mode
             tuirealm::Event::Keyboard(KeyEvent {
                 code: Key::Char('q') | Key::Esc,

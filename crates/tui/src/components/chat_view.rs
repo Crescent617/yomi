@@ -560,16 +560,7 @@ impl ChatView {
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
-        // Accelerate scrolling when offset is large to quickly return to bottom
-        let accelerated = if self.scroll_offset > 100 {
-            amount.saturating_mul(5) // 5x speed when far from bottom
-        } else if self.scroll_offset > 50 {
-            amount.saturating_mul(3) // 3x speed when moderately far
-        } else {
-            amount
-        };
-
-        self.scroll_offset = self.scroll_offset.saturating_sub(accelerated);
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
         // If scrolled to bottom, resume auto-scroll
         if self.scroll_offset == 0 {
             self.user_scrolled = false;
@@ -690,16 +681,6 @@ impl ChatView {
             }
             self.invalidate_all_caches();
         }
-    }
-
-    pub fn page_up(&mut self, page_height: usize) {
-        let amount = page_height.saturating_sub(2); // Leave some context
-        self.scroll_up(amount);
-    }
-
-    pub fn page_down(&mut self, page_height: usize) {
-        let amount = page_height.saturating_sub(2); // Leave some context
-        self.scroll_down(amount);
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -1126,6 +1107,7 @@ impl ChatView {
 
 impl ChatView {
     const MASCOT_COL_WIDTH: usize = 8;
+    const MOUSE_SCROLL_LINES: usize = 3;
 
     /// Rebuild banner cache (separate because mascot animates).
     fn rebuild_banner_cache(&mut self) {
@@ -1903,8 +1885,8 @@ impl MockComponent for ChatView {
                     self.append_streaming_thinking(&text);
                 }
             }
-            "scroll_up" => self.scroll_up(3),
-            "scroll_down" => self.scroll_down(3),
+            "scroll_up" => self.scroll_up(Self::MOUSE_SCROLL_LINES),
+            "scroll_down" => self.scroll_down(Self::MOUSE_SCROLL_LINES),
             "scroll_to_bottom" => self.scroll_to_bottom(),
             "scroll_to_top" => self.scroll_to_top(),
             "toggle_thinking" => self.toggle_last_thinking(),
@@ -1957,8 +1939,8 @@ impl MockComponent for ChatView {
             "page_up" | "page_down" => {
                 if let AttrValue::Number(height) = value {
                     match cmd {
-                        "page_up" => self.page_up(height as usize),
-                        "page_down" => self.page_down(height as usize),
+                        "page_up" => self.scroll_up(height as usize),
+                        "page_down" => self.scroll_down(height as usize),
                         _ => {}
                     }
                 }
@@ -2094,10 +2076,26 @@ impl MockComponent for ChatViewComponent {
 impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
     fn on(&mut self, ev: tuirealm::Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::MouseEvent;
+        use tuirealm::event::MouseEventKind;
 
         match ev {
             tuirealm::Event::Tick => {
                 self.component.tick();
+                Some(Msg::Redraw)
+            }
+            // Handle mouse scroll events for chat view scrolling
+            tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                ..
+            }) => {
+                self.component.scroll_up(ChatView::MOUSE_SCROLL_LINES);
+                Some(Msg::Redraw)
+            }
+            tuirealm::Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                ..
+            }) => {
+                self.component.scroll_down(ChatView::MOUSE_SCROLL_LINES);
                 Some(Msg::Redraw)
             }
             // Handle mouse events for text selection and scroll button
@@ -2119,11 +2117,7 @@ impl Component<Msg, crate::msg::UserEvent> for ChatViewComponent {
                         Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)))
                     }
                     MouseAction::None => {
-                        if matches!(
-                            kind,
-                            tuirealm::event::MouseEventKind::Down(_)
-                                | tuirealm::event::MouseEventKind::Drag(_)
-                        ) {
+                        if matches!(kind, MouseEventKind::Down(_) | MouseEventKind::Drag(_)) {
                             // Selection in progress, just redraw
                             Some(Msg::Redraw)
                         } else {
