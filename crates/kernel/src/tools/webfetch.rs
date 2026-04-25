@@ -114,9 +114,9 @@ impl WebFetchTool {
 
     /// Extract main content from HTML by filtering noise and converting to text
     ///
-    /// Delegates to the shared `html_extractor` module
+    /// Delegates to the shared `html` utility module
     fn extract_content(html: &str, _url: &str) -> String {
-        super::html_extractor::extract_content(html)
+        crate::utils::html::extract_content(html)
     }
 
     /// Fetch content from URL
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_extract_content() {
-        let html = r#"<!DOCTYPE html>
+        let html = r"<!DOCTYPE html>
 <html>
 <head><title>Test Article</title></head>
 <body>
@@ -307,7 +307,7 @@ mod tests {
     </main>
     <footer>Footer noise</footer>
 </body>
-</html>"#;
+</html>";
         let markdown = WebFetchTool::extract_content(html, "https://example.com/article");
 
         // Should extract the main content
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_extract_content_fallback_when_too_little() {
         // HTML where readability might extract very little (mostly navigation-like content)
-        let html = r#"<!DOCTYPE html>
+        let html = r"<!DOCTYPE html>
 <html>
 <head><title>My Page</title></head>
 <body>
@@ -350,7 +350,7 @@ mod tests {
         <p>Content for section C with even more detailed information.</p>
     </div>
 </body>
-</html>"#;
+</html>";
         let markdown = WebFetchTool::extract_content(html, "https://example.com/page");
 
         // Should still have substantial content (fallback to full HTML if needed)

@@ -1,8 +1,8 @@
 use crate::tools::base::{FileTool, MAX_FILE_SIZE};
-use crate::tools::edit_utils::{find_actual_string, generate_diff};
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
-use crate::tools::line_numbers::format_file_lines;
+use crate::utils::diff::generate_diff;
+use crate::utils::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
@@ -49,6 +49,18 @@ impl EditTool {
         None
     }
 }
+/// Find the actual string in file content.
+///
+/// Returns `Some(search_string)` if found, None otherwise.
+/// This is a simple wrapper that may be extended for quote normalization in the future.
+fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
+    if file_content.contains(search_string) {
+        Some(search_string.to_string())
+    } else {
+        None
+    }
+}
+
 impl FileTool for EditTool {
     fn base_dir(&self) -> &Path {
         &self.base_dir

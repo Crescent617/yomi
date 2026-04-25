@@ -7,14 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod base;
-pub mod edit;
-pub mod edit_utils;
 pub(crate) mod file_lock;
 pub mod file_state;
+pub mod edit;
 pub mod glob;
 pub mod grep;
-pub mod html_extractor;
-pub mod line_numbers;
 pub mod parallel;
 pub mod read;
 pub mod registry_factory;

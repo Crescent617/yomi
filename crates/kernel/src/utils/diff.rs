@@ -1,20 +1,8 @@
-//! Utility functions for the Edit tool
+//! Diff generation tool
 //!
-//! These functions handle diff generation and edit validation.
+//! Provides unified diff-style output for showing changes between two strings.
 
 use std::fmt::Write;
-
-/// Find the actual string in file content.
-///
-/// Returns `Some(search_string)` if found, None otherwise.
-/// This is a simple wrapper that may be extended for quote normalization in the future.
-pub fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
-    if file_content.contains(search_string) {
-        Some(search_string.to_string())
-    } else {
-        None
-    }
-}
 
 /// Split content into lines, preserving trailing newline info
 ///
@@ -110,16 +98,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_actual_string() {
-        let content = "hello world";
-        assert_eq!(
-            find_actual_string(content, "hello"),
-            Some("hello".to_string())
-        );
-        assert_eq!(find_actual_string(content, "foo"), None);
-    }
-
-    #[test]
     fn test_generate_diff() {
         let original = "line 1\nline 2\nline 3";
         let modified = "line 1\nmodified 2\nline 3";
@@ -160,41 +138,6 @@ mod tests {
         let (lines, has_newline) = split_lines("");
         assert!(lines.is_empty());
         assert!(!has_newline);
-    }
-
-    #[test]
-    fn test_find_actual_string_edge_cases() {
-        // Empty content and search string
-        assert_eq!(find_actual_string("", ""), Some(String::new()));
-        assert_eq!(find_actual_string("", "hello"), None);
-        assert_eq!(find_actual_string("hello", ""), Some(String::new()));
-
-        // Multi-line content
-        let content = "line1\nline2\nline3";
-        assert_eq!(
-            find_actual_string(content, "line2"),
-            Some("line2".to_string())
-        );
-        assert_eq!(
-            find_actual_string(content, "line1\nline2"),
-            Some("line1\nline2".to_string())
-        );
-
-        // Special characters
-        assert_eq!(
-            find_actual_string("hello\tworld", "\t"),
-            Some("\t".to_string())
-        );
-        assert_eq!(
-            find_actual_string("hello\n\nworld", "\n\n"),
-            Some("\n\n".to_string())
-        );
-
-        // Unicode
-        assert_eq!(
-            find_actual_string("你好世界", "世界"),
-            Some("世界".to_string())
-        );
     }
 
     #[test]

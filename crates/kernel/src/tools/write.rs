@@ -1,8 +1,8 @@
 use crate::tools::base::FileTool;
-use crate::tools::edit_utils::generate_diff;
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
-use crate::tools::line_numbers::format_file_lines;
+use crate::utils::diff::generate_diff;
+use crate::utils::line_numbers::format_file_lines;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
