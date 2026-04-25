@@ -1,6 +1,6 @@
 use super::level::Level;
 use crate::task::{TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME};
-use crate::tools::{SHELL_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME};
+use crate::tools::{GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use serde_json::Value;
 
 /// 判定工具危险级别（无状态，可全局共享）

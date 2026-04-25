@@ -1,6 +1,6 @@
 use super::level::{exceeds_threshold, Level};
 use crate::event::{AgentEvent, Event};
-use crate::tools::{SHELL_TOOL_NAME, EDIT_TOOL_NAME, READ_TOOL_NAME};
+use crate::tools::{EDIT_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use crate::types::{AgentId, ToolCall};
 use anyhow::Result;
 use std::collections::HashMap;

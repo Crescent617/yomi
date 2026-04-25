@@ -50,8 +50,8 @@ pub enum Msg {
 
     // Browse mode (readonly like less)
     ToggleBrowseMode,
-    PageUp,
-    PageDown,
+    PageHalfUp,
+    PageHalfDown,
     GoToTop,    // 'g' - go to first line
     GoToBottom, // 'G' - go to last line
 
