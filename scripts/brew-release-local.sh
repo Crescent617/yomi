@@ -14,10 +14,10 @@ HOMEBREW_TAP_PATH="${HOME}/repos/homebrew-tap"
 
 # Get version from argument or Cargo.toml
 if [ -z "$1" ]; then
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
-    echo -e "${YELLOW}No version specified, using Cargo.toml version: ${VERSION}${NC}"
+  VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+  echo -e "${YELLOW}No version specified, using Cargo.toml version: ${VERSION}${NC}"
 else
-    VERSION="$1"
+  VERSION="$1"
 fi
 
 # Detect platform
@@ -26,13 +26,14 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 # Map platform to Rust target triple
 if [ "$OS" = "darwin" ]; then
-    if [ "$ARCH" = "arm64" ]; then
-        TARGET="aarch64-apple-darwin"
-    else
-        TARGET="x86_64-apple-darwin"
-    fi
+  if [ "$ARCH" = "arm64" ]; then
+    TARGET="aarch64-apple-darwin"
+  else
+    TARGET="x86_64-apple-darwin"
+  fi
 else
-    TARGET="x86_64-unknown-linux-gnu"
+  echo -e "${RED}Unsupported OS: ${OS}${NC}"
+  exit 1
 fi
 
 echo -e "${GREEN}=== Publishing yomi ${VERSION} for ${TARGET} ===${NC}"
@@ -52,7 +53,7 @@ cp "target/release/${FORMULA_NAME}" "${ARCHIVE_DIR}/${OUT_NAME}/"
 ARCHIVE_FILENAME="${OUT_NAME}.tar.gz"
 cd "${ARCHIVE_DIR}"
 tar czf "${ARCHIVE_FILENAME}" "${OUT_NAME}"
-cd - > /dev/null
+cd - >/dev/null
 
 # Step 3: Calculate SHA256
 echo -e "${YELLOW}[3/6] Calculating checksums...${NC}"
@@ -69,7 +70,7 @@ echo "Source SHA256: ${SOURCE_SHA256}"
 echo -e "${YELLOW}[4/6] Updating formula...${NC}"
 FORMULA_PATH="${HOMEBREW_TAP_PATH}/Formula/${FORMULA_NAME}.rb"
 
-cat > "${FORMULA_PATH}" << EOF
+cat >"${FORMULA_PATH}" <<EOF
 class Yomi < Formula
   desc "AI coding assistant CLI built in Rust"
   homepage "https://github.com/Crescent617/yomi"
@@ -104,15 +105,15 @@ EOF
 echo -e "${YELLOW}[5/6] Uploading archive to GitHub Release...${NC}"
 
 # Check if release exists
-if ! gh release view "v${VERSION}" --repo Crescent617/yomi > /dev/null 2>&1; then
-    echo -e "${YELLOW}Creating new release v${VERSION}...${NC}"
-    gh release create "v${VERSION}" --title "yomi v${VERSION}" --notes "Release v${VERSION}"
+if ! gh release view "v${VERSION}" --repo Crescent617/yomi >/dev/null 2>&1; then
+  echo -e "${YELLOW}Creating new release v${VERSION}...${NC}"
+  gh release create "v${VERSION}" --title "yomi v${VERSION}" --notes "Release v${VERSION}"
 fi
 
 # Upload or replace archive
 if gh release view "v${VERSION}" --repo Crescent617/yomi --json assets | grep -q "${ARCHIVE_FILENAME}"; then
-    echo -e "${YELLOW}Deleting existing archive...${NC}"
-    gh release delete-asset "v${VERSION}" "${ARCHIVE_FILENAME}" --repo Crescent617/yomi --yes
+  echo -e "${YELLOW}Deleting existing archive...${NC}"
+  gh release delete-asset "v${VERSION}" "${ARCHIVE_FILENAME}" --repo Crescent617/yomi --yes
 fi
 
 gh release upload "v${VERSION}" "${ARCHIVE_DIR}/${ARCHIVE_FILENAME}" --repo Crescent617/yomi
@@ -123,13 +124,13 @@ echo -e "${YELLOW}[6/6] Pushing formula...${NC}"
 cd "${HOMEBREW_TAP_PATH}"
 git add "Formula/${FORMULA_NAME}.rb"
 if git diff --cached --quiet; then
-    echo -e "${YELLOW}No changes to commit${NC}"
+  echo -e "${YELLOW}No changes to commit${NC}"
 else
-    git commit -m "Update yomi to ${VERSION}"
-    git push
-    echo -e "${GREEN}Formula pushed!${NC}"
+  git commit -m "Update yomi to ${VERSION}"
+  git push
+  echo -e "${GREEN}Formula pushed!${NC}"
 fi
-cd - > /dev/null
+cd - >/dev/null
 
 # Cleanup
 rm -rf "${ARCHIVE_DIR}"

@@ -53,7 +53,6 @@ declare -A SHA256S
 PLATFORMS=(
     "aarch64-apple-darwin"
     "x86_64-apple-darwin"
-    "x86_64-unknown-linux-gnu"
 )
 
 log "Fetching release assets from GitHub..."
