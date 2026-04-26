@@ -52,7 +52,6 @@ done
 declare -A SHA256S
 PLATFORMS=(
     "aarch64-apple-darwin"
-    "x86_64-apple-darwin"
     "x86_64-unknown-linux-gnu"
 )
 
@@ -86,10 +85,6 @@ class Yomi < Formula
     on_arm do
       url "https://github.com/${REPO}/releases/download/v${VERSION}/yomi-${VERSION}-aarch64-apple-darwin.tar.gz"
       sha256 "${SHA256S[aarch64-apple-darwin]}"
-    end
-    on_intel do
-      url "https://github.com/${REPO}/releases/download/v${VERSION}/yomi-${VERSION}-x86_64-apple-darwin.tar.gz"
-      sha256 "${SHA256S[x86_64-apple-darwin]}"
     end
   end
 
