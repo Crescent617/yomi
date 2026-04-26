@@ -25,8 +25,7 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::colors,
-    utils::text::{char_idx_to_byte_idx, substring_by_chars, truncate_by_chars},
-    utils::{strs, text::preprocess},
+    utils::text::{char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars},
 };
 use kernel::task::{
     TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
@@ -792,7 +791,7 @@ impl ChatView {
                     .map(|ms| format!(" {:.1}s", ms as f64 / 1000.0))
                     .unwrap_or_default();
 
-                // Peek args in folded mode (max 30 chars, compact whitespace)
+                // Peek args in folded mode (max 150 chars, compact whitespace)
                 let peek_args = if *folded {
                     arguments.as_ref().and_then(|args| {
                         // Compact whitespace: replace newlines/tabs with single space
@@ -800,7 +799,7 @@ impl ChatView {
                         if compact.is_empty() {
                             None
                         } else {
-                            let peek = strs::truncate_with_suffix(compact, 150, "...");
+                            let peek = truncate_by_chars(compact, 150);
                             Some(peek)
                         }
                     })
@@ -893,7 +892,7 @@ impl ChatView {
                         if trimmed.is_empty() {
                             None
                         } else {
-                            let peek = strs::truncate_with_suffix(trimmed, 200, "...");
+                            let peek = truncate_by_chars(trimmed, 200);
                             Some(peek.split_whitespace().collect::<Vec<_>>().join(" "))
                         }
                     });
@@ -999,7 +998,7 @@ impl ChatView {
                                         .add_modifier(Modifier::BOLD),
                                 ),
                             ])));
-                            let url_display = strs::truncate_with_suffix(url, 100, "...");
+                            let url_display = truncate_by_chars(url, 100);
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled("│   ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
