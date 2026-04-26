@@ -4,17 +4,16 @@
 [![Release](https://github.com/crescent617/yomi/actions/workflows/release.yml/badge.svg)](https://github.com/crescent617/yomi/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A simple AI coding assistant CLI built in Rust, featuring an async agent loop, sub-agent support, and an elegant TUI interface.
+> A minimalist AI coding assistant CLI built in Rust.
 
 ![demo](docs/demo.png)
 
 ## Features
 
-### Intelligent Agent System
-- **Async Agent Loop** - Event-driven architecture for efficient task processing
-- **State Machine** - Robust state management with proper transitions (Idle → Streaming → ExecutingTool → WaitingForInput)
-- **Cancel Token** - Graceful cancellation support for long-running tasks with cascading cancellation to sub-agents
-- **Context Management** - Rich execution context with message history and tool registry
+- TUI: minimalist terminal interface for seamless interaction
+- Tools: built-in file operations (read/write/edit), glob/grep, shell command execution, and more
+- Configurable: context window, agent tools, and LLM provider settings
+- Confirmation: all operations require user confirmation to prevent unintended changes except in YOLO mode
 
 ## Quick Start
 

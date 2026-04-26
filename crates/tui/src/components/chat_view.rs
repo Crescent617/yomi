@@ -2174,38 +2174,21 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let args = args?;
     let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
 
-    let target = match tool_name.to_lowercase().as_str() {
-        n if n == READ_TOOL_NAME || n == EDIT_TOOL_NAME => value["path"].as_str().map(String::from),
-        n if n == WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
-        n if n == SHELL_TOOL_NAME => {
-            let cmd = value["command"].as_str()?;
-            // Return command only, timeout will be rendered separately with text_secondary style
-            Some(truncate_by_chars(cmd, 50))
-        }
-        n if n == GLOB_TOOL_NAME || n == GREP_TOOL_NAME => {
-            value["pattern"].as_str().map(String::from)
-        }
-        n if n == WEBFETCH_TOOL_NAME => value["url"].as_str().map(|url| {
-            // Truncate long URLs for display
-            truncate_by_chars(url, MAX_LEN)
-        }),
-        n if n == SKILL_TOOL_NAME => {
-            // Prefer 'name', fallback to 'path'
-            value["name"]
-                .as_str()
-                .map(|s| truncate_by_chars(s, MAX_LEN))
-                .or_else(|| {
-                    value["path"]
-                        .as_str()
-                        .map(|s| truncate_by_chars(s, MAX_LEN))
-                })
-        }
-        n if n == SUBAGENT_TOOL_NAME => value["prompt"]
+    let f = |s: &str| truncate_by_chars(s, MAX_LEN);
+
+    let target = match tool_name {
+        READ_TOOL_NAME | EDIT_TOOL_NAME => value["path"].as_str().map(String::from),
+        WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
+        SHELL_TOOL_NAME => value["command"].as_str().map(f),
+        GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(String::from),
+        WEBFETCH_TOOL_NAME => value["url"].as_str().map(f),
+        SKILL_TOOL_NAME => value["name"]
             .as_str()
-            .map(|p| truncate_by_chars(p, MAX_LEN)),
+            .map(f)
+            .or_else(|| value["path"].as_str().map(f)),
+        SUBAGENT_TOOL_NAME => value["prompt"].as_str().map(f),
         _ => None,
     };
 
-    // Apply unicode-safe truncation to all results
     target.map(|t| truncate_by_chars(&t, MAX_LEN))
 }

@@ -226,4 +226,9 @@ impl Coordinator {
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.storage.delete_session(session_id).await
     }
+
+    /// Get messages for a session from storage
+    pub async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<crate::types::Message>> {
+        self.storage.get_messages(session_id).await
+    }
 }

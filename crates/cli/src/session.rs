@@ -232,8 +232,12 @@ pub async fn run_session_loop(
     )
     .await?;
 
-    // Only record session if there was actual conversation
-    let has_conversation = tui_result.has_user_message;
+    // Only record session if the session has actual messages in storage
+    let session_messages = coordinator
+        .get_session_messages(&session_id)
+        .await
+        .unwrap_or_default();
+    let has_conversation = !session_messages.is_empty();
     if has_conversation {
         // Get file state snapshot and save with session
         let file_state = coordinator
