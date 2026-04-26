@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.20"
+version = "0.1.21"
 edition = "2021"
 authors = ["Huaru Li <crescent617@outlook.com>"]
 license = "MIT"
@@ -69,7 +69,6 @@ ignore = "0.4"
 image = { version = "0.25", default-features = false }
 regex = "1"
 lru = "0.17"
-html2md = "0.2"
 html2text = "0.17"
 scraper = "0.26"
 urlencoding = "2.1"

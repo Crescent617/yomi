@@ -71,6 +71,11 @@ pub enum Msg {
 
     // Suspend process to background (Ctrl-Z)
     Suspend,
+
+    // History picker (C-r)
+    ShowHistoryPicker,      // Show fuzzy history search
+    HistorySelected(String), // User selected a history item
+    CloseHistoryPicker,     // Close history picker without selection
 }
 
 impl From<AppEvent> for Msg {

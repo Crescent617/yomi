@@ -33,8 +33,8 @@ use kernel::types::{ContentBlock, Message};
 use crate::{
     components::{
         status_bar::{get_random_tip, StatusMessage},
-        ChatViewComponent, InfoBarComponent, InputComponent, SelectDialogComponent,
-        StatusBarComponent,
+        ChatViewComponent, FuzzyPickerComponent, InfoBarComponent, InputComponent,
+        PickerConfig, SelectDialogComponent, StatusBarComponent, history_items,
     },
     id::Id,
     msg::{Msg, UserEvent},
@@ -666,6 +666,9 @@ impl Model {
 
             // Render dialog on top if active (uses full screen for centering)
             self.app.view(&Id::Dialog, f, f.area());
+
+            // Render history picker on top if active
+            self.app.view(&Id::HistoryPicker, f, f.area());
         });
     }
 
@@ -713,6 +716,18 @@ impl Model {
         app.mount(
             Id::Dialog,
             Box::new(SelectDialogComponent::new("Dialog")),
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
+        )?;
+
+        // Mount history picker component (hidden by default, for C-r history search)
+        let history_picker = FuzzyPickerComponent::new(
+            PickerConfig::new("History")
+                .with_placeholder("Search history...")
+                .with_max_height(12),
+        );
+        app.mount(
+            Id::HistoryPicker,
+            Box::new(history_picker),
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
@@ -1381,6 +1396,51 @@ impl Model {
                 Msg::Suspend => {
                     // Suspend process to background (Ctrl-Z)
                     self.suspend_process();
+                    None
+                }
+                // History picker messages
+                Msg::ShowHistoryPicker => {
+                    // Convert history to picker items (most recent first)
+                    let items = history_items(&self.input_history);
+                    // Show the picker with history items
+                    let _ = self.app.attr(
+                        &Id::HistoryPicker,
+                        Attribute::Custom("items"),
+                        AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
+                    );
+                    let _ = self.app.attr(
+                        &Id::HistoryPicker,
+                        Attribute::Custom("show"),
+                        AttrValue::Flag(true),
+                    );
+                    // Give focus to history picker
+                    let _ = self.app.active(&Id::HistoryPicker);
+                    None
+                }
+                Msg::HistorySelected(idx_str) => {
+                    // Extract the actual index from "history_{idx}"
+                    if let Some(idx_part) = idx_str.strip_prefix("history_") {
+                        if let Ok(idx) = idx_part.parse::<usize>() {
+                            if idx < self.input_history.len() {
+                                let selected_text = self.input_history[idx].clone();
+                                // Set the input box content using custom attribute
+                                let _ = self.app.attr(
+                                    &Id::InputBox,
+                                    Attribute::Custom("set_content"),
+                                    AttrValue::String(selected_text),
+                                );
+                            }
+                        }
+                    }
+                    // Return focus to input box and trigger redraw
+                    let _ = self.app.active(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::CloseHistoryPicker => {
+                    // Return focus to input box and trigger redraw
+                    let _ = self.app.active(&Id::InputBox);
+                    self.state.should_redraw = true;
                     None
                 }
                 _ => None,

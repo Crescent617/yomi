@@ -816,7 +816,7 @@ const INPUT_TIPS: &[&str] = &[
     "Ctrl+O browse mode · /new session",
     "Ctrl+C clear · double-click select",
     "Ctrl+V paste image · @ mention file",
-    "Ctrl+P/N history · Tab complete",
+    "Ctrl+P/N history · Ctrl+R search",
     "Ctrl+W delete word · Ctrl+U kill line",
     "Alt+B/F word jump · mouse drag select",
     "Ctrl+Z suspend · fg to resume",
@@ -1710,6 +1710,12 @@ impl Component for InputComponent {
                     self.set_working_dir(path);
                 }
             }
+            Attribute::Custom("set_content") => {
+                if let AttrValue::String(content) = value {
+                    self.component.clear();
+                    self.component.insert_str(&content);
+                }
+            }
             _ => self.component.attr(attr, value),
         }
     }
@@ -2179,6 +2185,11 @@ impl InputComponent {
                 code: Key::Char('o'),
                 modifiers: KeyModifiers::CONTROL,
             }) => Some(Msg::ToggleBrowseMode),
+            // History search with Ctrl+R (telescope-style fuzzy finder)
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => Some(Msg::ShowHistoryPicker),
             // Suspend process to background with Ctrl+Z
             Event::Keyboard(KeyEvent {
                 code: Key::Char('z'),
