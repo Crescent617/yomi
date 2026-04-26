@@ -87,8 +87,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let mk_agent_config = || AgentConfig {
         model: config.model.clone(),
         skills: skills.clone(),
-        compactor: config.agent.compactor.clone(),
-        ..Default::default()
+        ..config.agent.clone()
     };
 
     let context_window = mk_agent_config().compactor.context_window;

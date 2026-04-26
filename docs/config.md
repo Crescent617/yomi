@@ -27,7 +27,6 @@ enable_subagent = true
 [agent.compactor]
 context_window = 128000
 
-sandbox = false
 yolo = false
 auto_approve = "safe"  # safe | caution | dangerous
 data_dir = "~/.yomi"
@@ -66,7 +65,6 @@ load_claude_plugins = true
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `YOMI_DATA_DIR` | 数据目录 | `~/.yomi` |
-| `YOMI_SANDBOX` | 沙箱模式 | `false` |
 | `YOMI_YOLO` | 自动批准所有操作 | `false` |
 | `YOMI_AUTO_APPROVE` | 自动批准级别 | `safe` |
 | `YOMI_MAX_ITERATIONS` | 最大迭代次数 | `100` |
