@@ -32,10 +32,10 @@ pub async fn list(global: GlobalArgs) -> Result<()> {
 
         let preview =
             if let Ok(messages) = storage.get_messages(&SessionId(session.id.clone())).await {
-                messages.iter().find(|m| m.role == Role::User).map_or(
+                messages.iter().rev().find(|m| m.role == Role::User).map_or(
                     "(no user message)".to_string(),
                     |m| {
-                        let text = m.text_content().replace('\n', " ");
+                        let text = m.text_content().replace('\n', " ").trim_start().to_string();
                         if text.chars().count() > 50 {
                             format!("{}...", text.chars().take(50).collect::<String>())
                         } else {
