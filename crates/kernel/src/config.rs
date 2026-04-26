@@ -1,7 +1,6 @@
 use crate::agent::AgentConfig;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
-use crate::storage::StorageConfig;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -149,7 +148,6 @@ impl std::fmt::Display for ModelProvider {
 pub struct Config {
     pub provider: ModelProvider,
     pub model: ModelConfig,
-    pub storage: StorageConfig,
     pub agent: AgentConfig,
     pub yolo: bool,
     pub auto_approve: Level,
@@ -167,7 +165,6 @@ impl Default for Config {
         Self {
             provider: ModelProvider::default(),
             model: ModelConfig::default(),
-            storage: StorageConfig::with_data_dir(&data_dir),
             agent: AgentConfig::default(),
             yolo: false,
             auto_approve: Level::default(),
@@ -261,7 +258,6 @@ impl Config {
         // Data directory (expands ~ to home)
         if let Some(dir) = env_var(env_names::DATA_DIR) {
             self.data_dir = expand_tilde(dir);
-            self.storage.url = self.data_dir.to_string_lossy().to_string();
         }
 
         // Skill folders (comma-separated)
@@ -316,7 +312,6 @@ impl Config {
     /// Set the data directory
     #[must_use]
     pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
-        self.storage.url = data_dir.to_string_lossy().to_string();
         self.data_dir = data_dir;
         self
     }
@@ -514,7 +509,6 @@ mod tests {
         let config = Config::default();
         let home = std::env::var("HOME").unwrap_or_default();
         assert_eq!(config.data_dir, PathBuf::from(format!("{home}/.yomi")));
-        assert!(!config.storage.url.starts_with('~'));
     }
 
     #[test]

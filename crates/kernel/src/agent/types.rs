@@ -1,7 +1,6 @@
 use crate::compactor::Compactor;
 use crate::providers::{ModelConfig, ProviderError};
 use crate::skill::Skill;
-use crate::storage::StorageConfig;
 use crate::types::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +11,6 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub model: ModelConfig,
-    pub storage: StorageConfig,
     pub max_iterations: usize,
     pub enable_subagent: bool,
     pub system_prompt: String,
@@ -143,7 +141,6 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model: ModelConfig::default(),
-            storage: StorageConfig::default(),
             max_iterations: 100,
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
