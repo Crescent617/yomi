@@ -27,9 +27,9 @@ enum Commands {
     /// Start TUI session (default when no subcommand provided)
     Tui(tui::TuiArgs),
     /// Manage sessions
-    Sessions(SessionsArgs),
+    Session(SessionArgs),
     /// Manage skills
-    Skills(SkillsArgs),
+    Skill(SkillArgs),
     /// Manage configuration
     Config(ConfigArgs),
     /// Show version
@@ -37,7 +37,7 @@ enum Commands {
 }
 
 #[derive(Parser)]
-struct SessionsArgs {
+struct SessionArgs {
     #[command(flatten)]
     global: GlobalArgs,
 
@@ -52,7 +52,7 @@ enum SessionsCommands {
 }
 
 #[derive(Parser)]
-struct SkillsArgs {
+struct SkillArgs {
     #[command(flatten)]
     global: GlobalArgs,
 
@@ -99,8 +99,8 @@ async fn main() -> Result<()> {
 
     match args.command {
         Some(Commands::Tui(tui_args)) => tui::run(tui_args).await,
-        Some(Commands::Sessions(args)) => run_sessions(args).await,
-        Some(Commands::Skills(args)) => run_skills(args).await,
+        Some(Commands::Session(args)) => run_session(args).await,
+        Some(Commands::Skill(args)) => run_skill(args).await,
         Some(Commands::Config(args)) => run_config(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
@@ -110,13 +110,13 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_sessions(args: SessionsArgs) -> Result<()> {
+async fn run_session(args: SessionArgs) -> Result<()> {
     match args.command {
         SessionsCommands::List => commands::sessions::list(args.global).await,
     }
 }
 
-async fn run_skills(args: SkillsArgs) -> Result<()> {
+async fn run_skill(args: SkillArgs) -> Result<()> {
     match args.command {
         SkillsCommands::List => commands::skills::list(args.global).await,
     }

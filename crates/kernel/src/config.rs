@@ -43,7 +43,6 @@ pub mod env_names {
     pub const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 
     /// Application settings
-    pub const SANDBOX: &str = env_name!("SANDBOX");
     pub const YOLO: &str = env_name!("YOLO");
     pub const DATA_DIR: &str = env_name!("DATA_DIR");
     pub const MAX_ITERATIONS: &str = env_name!("MAX_ITERATIONS");
@@ -152,7 +151,6 @@ pub struct Config {
     pub model: ModelConfig,
     pub storage: StorageConfig,
     pub agent: AgentConfig,
-    pub sandbox: bool,
     pub yolo: bool,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
@@ -171,7 +169,6 @@ impl Default for Config {
             model: ModelConfig::default(),
             storage: StorageConfig::with_data_dir(&data_dir),
             agent: AgentConfig::default(),
-            sandbox: false,
             yolo: false,
             auto_approve: Level::default(),
             data_dir,
@@ -254,7 +251,6 @@ impl Config {
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
             self.model.thinking.effort = Some(effort);
         }
-        self.sandbox = env_bool(env_names::SANDBOX);
         self.yolo = env_bool(env_names::YOLO);
 
         // Enable sub-agents (default true unless explicitly set to "false")
