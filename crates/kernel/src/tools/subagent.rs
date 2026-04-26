@@ -474,14 +474,32 @@ impl SubagentTool {
         match result {
             Ok((_, metrics)) => {
                 let total = metrics.total_prompt_tokens + metrics.total_completion_tokens;
-                Self::send_progress(
-                    parent_event_tx,
-                    parent_id.clone(),
-                    tool_id,
-                    format!("completed · {} tokens", format_tokens(total)),
-                    Some(total),
-                );
-                (metrics.output_text, SubAgentStatus::Completed)
+                let status = if metrics.completed {
+                    Self::send_progress(
+                        parent_event_tx,
+                        parent_id.clone(),
+                        tool_id,
+                        format!("completed · {} tokens", format_tokens(total)),
+                        Some(total),
+                    );
+                    SubAgentStatus::Completed
+                } else {
+                    // Max iterations reached without completing
+                    Self::send_progress(
+                        parent_event_tx,
+                        parent_id.clone(),
+                        tool_id,
+                        format!("partial (max iter) · {} tokens", format_tokens(total)),
+                        Some(total),
+                    );
+                    SubAgentStatus::Failed(format!(
+                        "Task did not complete within {} iterations. \
+                        Consider: 1) Breaking the task into smaller sub-tasks, \
+                        or 2) Adjusting the iteration limit if needed.",
+                        metrics.iteration_count
+                    ))
+                };
+                (metrics.output_text, status)
             }
             Err(e) => {
                 let error_str = e.to_string();

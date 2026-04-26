@@ -23,6 +23,9 @@ pub async fn load(cwd: &Path) -> anyhow::Result<MemoryFiles> {
     let agents_md = cwd.join("AGENTS.md");
     let claude_md = cwd.join("CLAUDE.md");
 
+    // Try AGENTS.md first, fall back to CLAUDE.md
+    // Note: Only one file is loaded to avoid conflicting instructions.
+    // AGENTS.md takes precedence as it's the newer, more generic standard.
     if let Ok(content) = fs::read_to_string(&agents_md).await {
         files.push(MemoryFile {
             path: agents_md,

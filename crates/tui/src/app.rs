@@ -609,6 +609,25 @@ impl Model {
         );
     }
 
+    /// Handle streaming error by stopping streaming and showing error message
+    fn handle_streaming_error(
+        &mut self,
+        status: StreamingStatus,
+        error_message: impl Into<String>,
+    ) {
+        self.stop_streaming(status);
+        self.show_error_message(error_message);
+        // Explicitly set should_redraw to ensure UI updates
+        self.state.should_redraw = true;
+    }
+
+    /// Handle streaming cancellation with optional operation context
+    fn handle_streaming_cancelled(&mut self, operation: Option<&str>) {
+        let message =
+            operation.map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
+        self.handle_streaming_error(StreamingStatus::Cancelled, message);
+    }
+
     pub fn view(&mut self) {
         // Pre-fetch content to calculate height without borrowing self in closure
         let input_content =
@@ -768,6 +787,13 @@ impl Model {
                     self.stop_streaming(StreamingStatus::Completed);
                     self.scroll_chat_to_bottom();
                 }
+                AppEvent::Model(kernel::event::ModelEvent::Error { error, .. }) => {
+                    // Model-level error: stop streaming and show error
+                    self.handle_streaming_error(
+                        StreamingStatus::Failed,
+                        format!("Model error: {error}"),
+                    );
+                }
                 AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
                     self.start_streaming();
                 }
@@ -863,14 +889,13 @@ impl Model {
                     self.state.should_redraw = true;
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
-                    self.stop_streaming(StreamingStatus::Cancelled);
-                    let cancel_msg = operation
-                        .map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
-                    self.show_error_message(cancel_msg);
+                    self.handle_streaming_cancelled(operation.as_deref());
                 }
                 AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
-                    self.stop_streaming(StreamingStatus::Failed);
-                    self.show_error_message(format!("Agent error: {error}"));
+                    self.handle_streaming_error(
+                        StreamingStatus::Failed,
+                        format!("Agent error: {error}"),
+                    );
                 }
                 // Error events - recoverable or non-recoverable
                 AppEvent::Agent(kernel::event::AgentEvent::Error {
@@ -884,11 +909,14 @@ impl Model {
                         // Recoverable error: show in status bar with warning color
                         let message = format!("{phase_str} error (will retry): {error}");
                         self.show_notification(&Notification::warn(message, 3000));
+                        self.state.should_redraw = true;
                     } else {
-                        // Non-recoverable error: add to chat view as error message
-                        self.show_error_message(format!("{phase_str} error: {error}"));
+                        // Non-recoverable error: stop streaming and add to chat view
+                        self.handle_streaming_error(
+                            StreamingStatus::Failed,
+                            format!("{phase_str} error: {error}"),
+                        );
                     }
-                    self.state.should_redraw = true;
                 }
                 // Retrying event - show in status bar
                 AppEvent::Agent(kernel::event::AgentEvent::Retrying {
@@ -906,8 +934,10 @@ impl Model {
                 AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached {
                     count, ..
                 }) => {
-                    self.stop_streaming(StreamingStatus::MaxIterations);
-                    self.show_error_message(format!("Reached maximum iterations ({count})"));
+                    self.handle_streaming_error(
+                        StreamingStatus::MaxIterations,
+                        format!("Reached maximum iterations ({count})"),
+                    );
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed

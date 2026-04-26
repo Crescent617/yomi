@@ -193,6 +193,7 @@ impl Agent {
                     }))
                     .await;
                 self.context.transition_to(AgentState::WaitingForInput);
+                continue;
             }
 
             // Note: cancel is handled during streaming via select!, not here
@@ -334,14 +335,13 @@ impl Agent {
         match self.input_rx.recv().await {
             Some(AgentInput::User(content)) => {
                 self.cancel_token.reset_if_cancelled();
-                let text_content = content
+                let text_content: String = content
                     .iter()
                     .filter_map(|block| match block {
                         ContentBlock::Text { text } => Some(text.as_str()),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join("");
+                    .collect();
                 let _ = self
                     .event_tx
                     .send(Event::User(crate::event::UserEvent::Message {
