@@ -252,6 +252,10 @@ pub async fn run_session_loop(
         println!("Goodbye~ You can resume this session later with:");
         println!("yomi --resume {}", session_id.0);
     } else {
+        // Delete empty session (no conversation)
+        if let Err(e) = coordinator.delete_session(&session_id).await {
+            tracing::warn!("Failed to delete empty session: {}", e);
+        }
         println!("Goodbye~");
     }
 

@@ -221,4 +221,9 @@ impl Coordinator {
         let snapshot = session.read().await.file_state_snapshot();
         Some(snapshot)
     }
+
+    /// Delete a session from storage
+    pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
+        self.storage.delete_session(session_id).await
+    }
 }

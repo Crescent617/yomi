@@ -310,8 +310,8 @@ impl Component for InfoBar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Min(20),    // Left: spinner/tokens/time
-                Constraint::Length(40), // Right: notification (fixed width)
+                Constraint::Min(20), // Left: spinner/tokens/time
+                Constraint::Min(40), // Right: notification (fixed width)
             ])
             .split(area);
 
