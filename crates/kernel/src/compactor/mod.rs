@@ -57,7 +57,11 @@ fn estimate_tokens_for_message(msg: &Message) -> u32 {
             _ => 0,
         })
         .sum();
-    ((content_len / 4) + 10) as u32 // +10 for overhead
+    // Use saturating arithmetic to prevent overflow
+    content_len
+        .saturating_div(4)
+        .saturating_add(10)
+        .min(u32::MAX as usize) as u32
 }
 
 /// Estimate total tokens for messages and set usage on the last message.
@@ -236,8 +240,9 @@ impl Compactor {
         // Create summary message as user role so it survives session restore
         let summary = Message::user(summary_text);
         // Reconstruct: summary + recent (system_msgs NOT included)
-        let mut result: Vec<Arc<Message>> =
-            std::iter::once(Arc::new(summary)).chain(recent.into_iter()).collect();
+        let mut result: Vec<Arc<Message>> = std::iter::once(Arc::new(summary))
+            .chain(recent.into_iter())
+            .collect();
 
         // Estimate total tokens and set on the last message for accurate future calculations
         set_token_usage_on_last(&mut result);

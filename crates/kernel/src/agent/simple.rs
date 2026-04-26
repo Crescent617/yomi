@@ -44,6 +44,8 @@ pub struct ExecuteMetrics {
     pub total_completion_tokens: u32,
     /// Assistant output text (for progress reporting)
     pub output_text: String,
+    /// Whether the task completed (false if `max_iterations` reached)
+    pub completed: bool,
 }
 
 /// Minimal agent for executing a single task
@@ -147,12 +149,14 @@ impl SimpleAgent {
         let mut metrics = ExecuteMetrics::default();
 
         // Execute iterations
-        for _iteration in 0..self.max_iterations {
+        let mut task_completed = false;
+        for iteration in 0..self.max_iterations {
             if cancel_token.is_cancelled() {
                 return Err(cancelled_error("execution cancelled"));
             }
 
-            metrics.iteration_count += 1;
+            // iteration is 0-based, so add 1 to get actual count
+            metrics.iteration_count = iteration + 1;
             on_event(Event::Model(ModelEvent::Request {
                 agent_id: self.agent_id.clone(),
                 message_count: messages.len(),
@@ -164,6 +168,7 @@ impl SimpleAgent {
                 .await?;
 
             // Update token usage if available
+            // Note: We use the latest values since prompt_tokens includes full history
             if let Some((prompt, completion)) = token_usage {
                 metrics.total_prompt_tokens = prompt;
                 metrics.total_completion_tokens = completion;
@@ -194,6 +199,7 @@ impl SimpleAgent {
 
             if !has_tool_calls {
                 // Done - no tool calls
+                task_completed = true;
                 break;
             }
 
@@ -233,6 +239,18 @@ impl SimpleAgent {
             for (tool_call_id, error_msg) in permission_result.denied {
                 messages.push(Arc::new(Message::tool_result(tool_call_id, error_msg)));
             }
+        }
+
+        // Set completion status (false if max_iterations reached without finishing)
+        metrics.completed = task_completed;
+
+        // Add clear marker to output if task did not complete
+        if !task_completed {
+            metrics.output_text.push_str(&format!(
+                "\n\n[Task incomplete: reached {} iteration limit. \
+                 Consider breaking into smaller sub-tasks]",
+                metrics.iteration_count
+            ));
         }
 
         Ok((messages, metrics))

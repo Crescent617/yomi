@@ -355,9 +355,16 @@ impl AppComponent<Msg, crate::msg::UserEvent> for HelpDialog {
                 Some(Msg::Redraw)
             }
             // Close dialog: q, Esc, or Ctrl+C
-            Event::Keyboard(KeyEvent {
-code: Key::Char('q') | Key::Esc, modifiers: KeyModifiers::NONE } | KeyEvent {
-code: Key::Char('c'), modifiers: KeyModifiers::CONTROL }) => {
+            Event::Keyboard(
+                KeyEvent {
+                    code: Key::Char('q') | Key::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.hide();
                 Some(Msg::CloseHelpDialog)
             }
