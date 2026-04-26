@@ -1,6 +1,6 @@
 //! Messages for TUI application
 
-use crate::components::status_bar::StatusMessage;
+use crate::components::info_bar::Notification;
 use kernel::event::Event as AppEvent;
 use kernel::types::ContentBlock;
 
@@ -45,8 +45,8 @@ pub enum Msg {
     // Request control
     CancelRequest,
 
-    // Status bar message with level and duration
-    ShowStatusMessage(StatusMessage),
+    // Notification message with level and duration (shown in InfoBar)
+    Notification(Notification),
 
     // Browse mode (readonly like less)
     ToggleBrowseMode,
@@ -73,9 +73,9 @@ pub enum Msg {
     Suspend,
 
     // History picker (C-r)
-    ShowHistoryPicker,      // Show fuzzy history search
+    ShowHistoryPicker,       // Show fuzzy history search
     HistorySelected(String), // User selected a history item
-    CloseHistoryPicker,     // Close history picker without selection
+    CloseHistoryPicker,      // Close history picker without selection
 }
 
 impl From<AppEvent> for Msg {

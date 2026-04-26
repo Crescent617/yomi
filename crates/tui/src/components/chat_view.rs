@@ -21,7 +21,7 @@ use tuirealm::{
 use super::wrap_paragraph::WrapParagraph;
 
 use crate::{
-    components::status_bar::StatusMessage,
+    components::info_bar::Notification,
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::colors,
@@ -2109,14 +2109,8 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
                     MouseAction::ScrollToBottom => Some(Msg::Redraw),
                     MouseAction::Copied(text) => {
                         // Show status message with copied text preview (limit display width)
-                        let preview = truncate_unicode(&text, 30);
-                        let count = text.chars().count();
-                        let msg = if count > 30 {
-                            format!("📋 {preview}... ({count} chars)")
-                        } else {
-                            format!("📋 {preview}")
-                        };
-                        Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)))
+                        let msg = format!("📋 {text}");
+                        Some(Msg::Notification(Notification::info(msg, 2000)))
                     }
                     MouseAction::None => {
                         if matches!(kind, MouseEventKind::Down(_) | MouseEventKind::Drag(_)) {

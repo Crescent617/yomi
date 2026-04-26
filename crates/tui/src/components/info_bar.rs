@@ -1,15 +1,15 @@
-//! Info bar component for displaying streaming progress
+//! Info bar component for displaying streaming progress and notifications
 //!
-//! Shows spinner, token count, and elapsed time above the input box.
+//! Shows spinner, token count, elapsed time on the left, and notifications on the right.
 
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
     event::Event,
-    props::{AttrValue, Attribute, QueryResult},
+    props::{AttrValue, Attribute, PropPayload, QueryResult},
     ratatui::{
-        layout::Rect,
-        style::{Modifier, Style},
+        layout::{Constraint, Direction, Layout, Rect},
+        style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
         Frame,
@@ -19,6 +19,69 @@ use tuirealm::{
 
 use crate::{msg::Msg, theme::colors};
 use kernel::utils::tokens;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Notification level for info bar messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NotificationLevel {
+    #[default]
+    Unknown,
+    Info,
+    Warn,
+    Error,
+    Success,
+}
+
+impl NotificationLevel {
+    fn color(self) -> Color {
+        match self {
+            NotificationLevel::Unknown | NotificationLevel::Info => colors::text_secondary(),
+            NotificationLevel::Warn => colors::accent_warning(),
+            NotificationLevel::Error => colors::accent_error(),
+            NotificationLevel::Success => colors::accent_success(),
+        }
+    }
+}
+
+/// Notification message for info bar
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    pub content: String,
+    pub level: NotificationLevel,
+    /// Duration in milliseconds, 0 = no timeout
+    pub duration_ms: u64,
+}
+
+impl Notification {
+    pub fn new(content: impl Into<String>, level: NotificationLevel, duration_ms: u64) -> Self {
+        Self {
+            content: content.into(),
+            level,
+            duration_ms,
+        }
+    }
+
+    pub fn info(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, NotificationLevel::Info, duration_ms)
+    }
+
+    pub fn warn(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, NotificationLevel::Warn, duration_ms)
+    }
+
+    pub fn error(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, NotificationLevel::Error, duration_ms)
+    }
+
+    pub fn success(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, NotificationLevel::Success, duration_ms)
+    }
+
+    /// Convert to `AttrValue` using `PropPayload::Any` for downcast
+    pub fn to_attr_value(&self) -> AttrValue {
+        AttrValue::Payload(PropPayload::Any(Box::new(self.clone())))
+    }
+}
 
 /// Status state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -85,13 +148,17 @@ impl InfoBarState {
     }
 }
 
-/// Info bar component showing streaming progress
+/// Info bar component showing streaming progress and notifications
+/// Layout: [LEFT: spinner/tokens/time] [RIGHT: notifications]
 #[derive(Debug, Default)]
 pub struct InfoBar {
     state: InfoBarState,
     tick_frame: usize,
     token_count: f64,
     start_time: Option<std::time::Instant>,
+    /// Current notification with level
+    notification: Option<Notification>,
+    notification_timeout: Option<std::time::Instant>,
 }
 
 impl InfoBar {
@@ -126,6 +193,31 @@ impl InfoBar {
         }
     }
 
+    /// Show a notification with level and timeout
+    pub fn show_notification(&mut self, notification: Notification) {
+        if notification.duration_ms == 0 {
+            // No timeout - persistent notification
+            self.notification = Some(notification);
+            self.notification_timeout = None;
+        } else {
+            self.notification_timeout = Some(
+                std::time::Instant::now()
+                    + std::time::Duration::from_millis(notification.duration_ms),
+            );
+            self.notification = Some(notification);
+        }
+    }
+
+    /// Check timeout and clear expired notification
+    pub fn check_timeout(&mut self) {
+        if let Some(timeout) = self.notification_timeout {
+            if std::time::Instant::now() > timeout {
+                self.notification = None;
+                self.notification_timeout = None;
+            }
+        }
+    }
+
     /// Format elapsed time for display (e.g., " · 1.5s" or " · 2m30s")
     fn format_elapsed(&self) -> Option<String> {
         let start = self.start_time?;
@@ -140,7 +232,8 @@ impl InfoBar {
         Some(time_str)
     }
 
-    fn render(&self) -> Line<'static> {
+    /// Render the left section (spinner, tokens, elapsed time)
+    fn render_left_section(&self) -> Line<'static> {
         // Show when streaming, compacting, or has tokens
         if self.state == InfoBarState::Idle && self.token_count == 0.0 {
             return Line::from("");
@@ -171,13 +264,79 @@ impl InfoBar {
 
         Line::from(spans)
     }
+
+    /// Render the right section (notification)
+    fn render_right_section(&self, width: usize) -> Line<'static> {
+        let (text, level) = self
+            .notification
+            .as_ref()
+            .map_or(("", NotificationLevel::Unknown), |n| {
+                (n.content.as_str(), n.level)
+            });
+
+        if text.is_empty() {
+            return Line::from("");
+        }
+
+        // Use display width (accounts for CJK characters being 2 columns)
+        let text_width = text.width_cjk();
+
+        // Truncate if too long, right-aligned
+        let display = if text_width > width {
+            // For truncation, we need to handle by char count since
+            // truncate_with_suffix works on byte length
+            let mut truncated = String::new();
+            let mut current_width = 0;
+            for ch in text.chars() {
+                let ch_width = ch.width_cjk().unwrap_or(0);
+                if current_width + ch_width + 3 > width {
+                    // +3 for "..."
+                    break;
+                }
+                truncated.push(ch);
+                current_width += ch_width;
+            }
+            format!("{truncated}...")
+        } else {
+            let padding = width.saturating_sub(text_width);
+            format!("{:>padding$}{}", "", text, padding = padding)
+        };
+
+        let span = Span::styled(
+            display,
+            Style::default()
+                .fg(level.color())
+                .add_modifier(Modifier::ITALIC),
+        );
+
+        Line::from(vec![span])
+    }
 }
 
 impl Component for InfoBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let line = self.render();
-        let paragraph = Paragraph::new(line);
-        frame.render_widget(paragraph, area);
+        // Check for notification timeout
+        self.check_timeout();
+
+        // Split area into two sections: [left info] [right notification]
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(20),    // Left: spinner/tokens/time
+                Constraint::Length(40), // Right: notification (fixed width)
+            ])
+            .split(area);
+
+        // Render left section
+        let left_line = self.render_left_section();
+        let left_paragraph = Paragraph::new(left_line);
+        frame.render_widget(left_paragraph, chunks[0]);
+
+        // Render right section (notification)
+        let right_width = chunks[1].width as usize;
+        let right_line = self.render_right_section(right_width);
+        let right_paragraph = Paragraph::new(right_line);
+        frame.render_widget(right_paragraph, chunks[1]);
     }
 
     fn query(&self, _attr: Attribute) -> Option<QueryResult<'_>> {
@@ -213,6 +372,20 @@ impl Component for InfoBar {
             }
             Attribute::Custom("tick") => {
                 self.tick();
+                self.check_timeout();
+            }
+            Attribute::Custom("show_notification") => {
+                // Use downcast from PropPayload::Any
+                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
+                    let any = payload.as_any();
+                    if let Some(notification) = any.downcast_ref::<Notification>() {
+                        self.show_notification(notification.clone());
+                    }
+                }
+            }
+            Attribute::Custom("clear_notification") => {
+                self.notification = None;
+                self.notification_timeout = None;
             }
             _ => {}
         }

@@ -32,9 +32,9 @@ use kernel::types::{ContentBlock, Message};
 
 use crate::{
     components::{
-        status_bar::{get_random_tip, StatusMessage},
-        ChatViewComponent, FuzzyPickerComponent, InfoBarComponent, InputComponent,
-        PickerConfig, SelectDialogComponent, StatusBarComponent, history_items,
+        history_items, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
+        ChatViewComponent, FuzzyPickerComponent, InfoBarComponent, InputComponent, PickerConfig,
+        SelectDialogComponent, StatusBarComponent,
     },
     id::Id,
     msg::{Msg, UserEvent},
@@ -332,8 +332,8 @@ impl Model {
         let tip = get_random_tip();
         self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("show_message"),
-            StatusMessage::tip(format!("💡 {tip}")).to_attr_value(),
+            Attribute::Custom("show_tip"),
+            Tip::new(format!("💡 {tip}"), 10000).to_attr_value(),
         )?;
 
         Ok(())
@@ -600,12 +600,12 @@ impl Model {
         );
     }
 
-    /// Show status message in status bar
-    fn show_status_message(&mut self, message: &StatusMessage) {
+    /// Show notification in info bar
+    fn show_notification(&mut self, notification: &Notification) {
         let _ = self.app.attr(
-            &Id::StatusBar,
-            Attribute::Custom("show_message"),
-            message.to_attr_value(),
+            &Id::InfoBar,
+            Attribute::Custom("show_notification"),
+            notification.to_attr_value(),
         );
     }
 
@@ -873,7 +873,7 @@ impl Model {
                     if is_recoverable {
                         // Recoverable error: show in status bar with warning color
                         let message = format!("{phase_str} error (will retry): {error}");
-                        self.show_status_message(&StatusMessage::warn(message, 3000));
+                        self.show_notification(&Notification::warn(message, 3000));
                     } else {
                         // Non-recoverable error: add to chat view as error message
                         self.show_error_message(format!("{phase_str} error: {error}"));
@@ -889,7 +889,7 @@ impl Model {
                 }) => {
                     let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
                     // 0 = no timeout, persists until cleared
-                    self.show_status_message(&StatusMessage::info(message, 0));
+                    self.show_notification(&Notification::info(message, 0));
                     self.state.should_redraw = true;
                 }
                 // Max iterations reached - show in chat view
@@ -1140,8 +1140,8 @@ impl Model {
                     self.state.should_redraw = true;
                     None
                 }
-                Msg::ShowStatusMessage(msg) => {
-                    self.show_status_message(&msg);
+                Msg::Notification(msg) => {
+                    self.show_notification(&msg);
                     None
                 }
                 // Mode switching
@@ -1162,10 +1162,13 @@ impl Model {
                                 Attribute::Custom("mode"),
                                 AttrValue::Number(1),
                             );
-                            // Show help message for browse mode shortcuts (0 = no timeout)
-                            self.show_status_message(&StatusMessage::tip(
-                                "C-o toggle, C-e expand, j/k/g/G scroll, q exit",
-                            ));
+                            // Show help message for browse mode shortcuts
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom("show_tip"),
+                                Tip::new("C-o toggle, C-e expand, j/k/g/G scroll, q exit", 0)
+                                    .to_attr_value(),
+                            );
                             // Initialize scroll progress
                             self.update_scroll_progress();
                         }
@@ -1190,10 +1193,10 @@ impl Model {
                                 Attribute::Custom("mode"),
                                 AttrValue::Number(0),
                             );
-                            // Clear any status message
+                            // Clear tip
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("clear_message"),
+                                Attribute::Custom("clear_tip"),
                                 AttrValue::Flag(true),
                             );
                             // Clear scroll progress (restore context usage display)
@@ -1288,16 +1291,11 @@ impl Model {
                                     Attribute::Custom("set_permission_level"),
                                     AttrValue::Number(2),
                                 );
-                                // Show status message
-                                let _ = self.app.attr(
-                                    &Id::StatusBar,
-                                    Attribute::Custom("show_message"),
-                                    StatusMessage::info(
-                                        "YOLO mode enabled - all tools will be auto-approved",
-                                        5000,
-                                    )
-                                    .to_attr_value(),
-                                );
+                                // Show notification
+                                self.show_notification(&Notification::info(
+                                    "YOLO mode enabled - all tools will be auto-approved",
+                                    5000,
+                                ));
                                 // Send command to kernel to update permission level
                                 let _ = self
                                     .ctrl_tx
@@ -1376,7 +1374,7 @@ impl Model {
                     } else {
                         "YOLO mode disabled"
                     };
-                    self.show_status_message(&StatusMessage::info(msg, 5000));
+                    self.show_notification(&Notification::info(msg, 5000));
 
                     // Send command to kernel
                     let _ = self.ctrl_tx.try_send(ControlCommand::SetLevel(new_level));
@@ -1390,7 +1388,7 @@ impl Model {
                 Msg::CommandCompact => {
                     // Send compact request
                     let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
-                    self.show_status_message(&StatusMessage::info("Compacting messages...", 3000));
+                    self.show_notification(&Notification::info("Compacting messages...", 3000));
                     None
                 }
                 Msg::Suspend => {
