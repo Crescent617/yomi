@@ -239,7 +239,7 @@ pub async fn run_session_loop(
         let file_state = coordinator
             .get_file_state_snapshot(&session_id)
             .await
-            .filter(|s| !s.entries.is_empty());
+            .filter(|s| !s.is_empty());
         if file_state.is_some() {
             tracing::info!(
                 "Saved file state with {} entries",

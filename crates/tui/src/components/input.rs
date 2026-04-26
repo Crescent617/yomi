@@ -128,8 +128,8 @@ impl InputMock {
         let line_start = self.content[..self.cursor_pos]
             .rfind('\n')
             .map_or(0, |i| i + 1);
-        // Calculate column position
-        let col = self.cursor_pos - line_start;
+        // Calculate column position in characters (not bytes)
+        let col_chars = self.content[line_start..self.cursor_pos].chars().count();
 
         if line_start > 0 {
             // Find the start of previous line
@@ -138,9 +138,12 @@ impl InputMock {
                 .map_or(0, |i| i + 1);
             // Find the end of previous line
             let prev_line_end = line_start - 1;
-            // Move to same column, or end of line if shorter
-            let prev_line_len = prev_line_end - prev_line_start;
-            self.cursor_pos = prev_line_start + col.min(prev_line_len);
+            // Move to same column (by char count), or end of line if shorter
+            let prev_line: String = self.content[prev_line_start..prev_line_end]
+                .chars()
+                .take(col_chars)
+                .collect();
+            self.cursor_pos = prev_line_start + prev_line.len();
         }
     }
 
@@ -150,21 +153,24 @@ impl InputMock {
         let line_end = self.content[self.cursor_pos..]
             .find('\n')
             .map_or(self.content.len(), |i| self.cursor_pos + i);
-        // Calculate column position
+        // Calculate column position in characters (not bytes)
         let line_start = self.content[..self.cursor_pos]
             .rfind('\n')
             .map_or(0, |i| i + 1);
-        let col = self.cursor_pos - line_start;
+        let col_chars = self.content[line_start..self.cursor_pos].chars().count();
 
         if line_end < self.content.len() {
             // Find the end of next line
             let next_line_end = self.content[line_end + 1..]
                 .find('\n')
                 .map_or(self.content.len(), |i| line_end + 1 + i);
-            // Move to same column, or end of line if shorter
+            // Move to same column (by char count), or end of line if shorter
             let next_line_start = line_end + 1;
-            let next_line_len = next_line_end - next_line_start;
-            self.cursor_pos = next_line_start + col.min(next_line_len);
+            let next_line: String = self.content[next_line_start..next_line_end]
+                .chars()
+                .take(col_chars)
+                .collect();
+            self.cursor_pos = next_line_start + next_line.len();
         }
     }
 
@@ -676,7 +682,8 @@ impl Component for InputMock {
                     if norm.start < line_end && norm.end > line_start {
                         // There is overlap, split into segments
                         let sel_start_in_line = norm.start.saturating_sub(line_start);
-                        let sel_end_in_line = (norm.end - line_start).min(vl.text.len());
+                        let sel_end_in_line =
+                            norm.end.saturating_sub(line_start).min(vl.text.len());
 
                         if sel_start_in_line > 0 {
                             // Unselected prefix

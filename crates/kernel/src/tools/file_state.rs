@@ -23,6 +23,13 @@ pub struct FileStateSnapshot {
     pub entries: Vec<FileStateEntry>,
 }
 
+impl FileStateSnapshot {
+    /// Check if the snapshot has no entries
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 impl FileStateStore {
     /// Create a new empty store
     pub fn new() -> Self {
@@ -73,19 +80,19 @@ impl FileStateStore {
 
     /// Create a serializable snapshot of the current file states
     pub fn snapshot(&self) -> FileStateSnapshot {
-        let entries = self
-            .mtimes
-            .read()
-            .map(|mtimes| {
-                mtimes
-                    .iter()
-                    .map(|(path, mtime)| FileStateEntry {
-                        path: path.clone(),
-                        mtime: *mtime,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let entries = match self.mtimes.read() {
+            Ok(mtimes) => mtimes
+                .iter()
+                .map(|(path, mtime)| FileStateEntry {
+                    path: path.clone(),
+                    mtime: *mtime,
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!("Failed to read file state lock: {e}");
+                Vec::new()
+            }
+        };
         FileStateSnapshot { entries }
     }
 

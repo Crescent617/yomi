@@ -156,7 +156,7 @@ impl<'a> WrapParagraph<'a> {
 
             // Calculate overlap
             let overlap_start = start_byte.saturating_sub(span_start);
-            let overlap_end = (end_byte - span_start).min(span_len);
+            let overlap_end = end_byte.saturating_sub(span_start).min(span_len);
 
             if overlap_start < overlap_end {
                 let extracted = &span_text[overlap_start..overlap_end];
@@ -246,13 +246,15 @@ impl<'a> WrapParagraph<'a> {
 
             // Calculate overlap with wrap segment (in chars)
             let wrap_start_in_span = start_char.saturating_sub(span_start_char);
-            let wrap_end_in_span = (end_char - span_start_char).min(span_char_count);
+            let wrap_end_in_span = end_char
+                .saturating_sub(span_start_char)
+                .min(span_char_count);
 
             // Extract text for this wrap segment portion
             let wrap_text: String = span_text
                 .chars()
                 .skip(wrap_start_in_span)
-                .take(wrap_end_in_span - wrap_start_in_span)
+                .take(wrap_end_in_span.saturating_sub(wrap_start_in_span))
                 .collect();
 
             // Calculate where this portion starts in global line chars
@@ -261,7 +263,9 @@ impl<'a> WrapParagraph<'a> {
 
             // Calculate selection overlap within this extracted text
             let sel_start_rel = seg_sel_start.saturating_sub(this_start_global);
-            let sel_end_rel = (seg_sel_end - this_start_global).min(wrap_text.chars().count());
+            let sel_end_rel = seg_sel_end
+                .saturating_sub(this_start_global)
+                .min(wrap_text.chars().count());
 
             if sel_start_rel >= sel_end_rel {
                 // No selection in this span portion
@@ -272,7 +276,7 @@ impl<'a> WrapParagraph<'a> {
                 let selected: String = wrap_text
                     .chars()
                     .skip(sel_start_rel)
-                    .take(sel_end_rel - sel_start_rel)
+                    .take(sel_end_rel.saturating_sub(sel_start_rel))
                     .collect();
                 let after: String = wrap_text.chars().skip(sel_end_rel).collect();
 

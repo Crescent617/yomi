@@ -1,74 +1,46 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use kernel::{
-    agent::AgentConfig,
-    compactor,
-    config::{env_names, Config, ModelProvider},
-    expand_tilde,
-    misc::plugin::{EnabledPlugins, PluginLoader},
-    permissions::Level,
-    skill::SkillLoader,
-    storage::{FsStorage, Storage},
-    utils::strs,
-};
-use kernel::{AnthropicProvider, OpenAIProvider, TaskStore};
-use kernel::{Coordinator, SessionConfig};
-use serde::Deserialize;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod args;
+mod commands;
+mod misc;
 mod session;
 mod storage;
+mod utils;
 
-use session::{resolve_session, run_session_loop, SessionArg, SessionContext};
-use storage::AppStorage;
+use args::GlobalArgs;
+use commands::tui;
 
 #[derive(Parser)]
 #[command(name = "yomi")]
 #[command(about = "AI coding assistant CLI")]
 struct Args {
     #[command(flatten)]
-    tui: TuiArgs,
+    tui: tui::TuiArgs,
 
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
-#[derive(Default, Parser)]
-struct TuiArgs {
-    /// Initial prompt to send on startup (non-interactive mode if provided)
-    #[arg(short, long, value_name = "PROMPT")]
-    prompt: Option<String>,
-
-    /// Working directory
-    #[arg(short, long)]
-    directory: Option<PathBuf>,
-
-    /// Config file path
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-
-    /// Skip all confirmations (YOLO mode)
-    #[arg(short, long)]
-    yolo: bool,
-
-    /// Resume a session: --resume (last session) or --resume <id> (specific)
-    #[arg(long, value_name = "SESSION_ID")]
-    #[allow(clippy::option_option)]
-    resume: Option<Option<String>>,
-}
-
 #[derive(Subcommand)]
 enum Commands {
     /// Start TUI session (default when no subcommand provided)
-    Tui(TuiArgs),
+    Tui(tui::TuiArgs),
+    /// Manage sessions
     Sessions(SessionsArgs),
+    /// Manage skills
+    Skills(SkillsArgs),
+    /// Manage configuration
+    Config(ConfigArgs),
+    /// Show version
     Version,
 }
 
 #[derive(Parser)]
 struct SessionsArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
     #[command(subcommand)]
     command: SessionsCommands,
 }
@@ -79,425 +51,81 @@ enum SessionsCommands {
     List,
 }
 
-/// Claude Code settings.json structure (partial)
-#[derive(Debug, Deserialize, Default)]
-struct ClaudeSettings {
-    #[serde(default, rename = "enabledPlugins")]
-    enabled_plugins: EnabledPlugins,
+#[derive(Parser)]
+struct SkillsArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[command(subcommand)]
+    command: SkillsCommands,
 }
 
-impl ClaudeSettings {
-    /// Load settings from ~/.claude/settings.json if it exists
-    fn load() -> Self {
-        let settings_path = expand_tilde("~/.claude/settings.json");
-        if !settings_path.exists() {
-            return Self::default();
-        }
+#[derive(Subcommand)]
+enum SkillsCommands {
+    /// List all available skills
+    List,
+}
 
-        match std::fs::read_to_string(&settings_path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-                tracing::warn!("Failed to parse {}: {}", settings_path.display(), e);
-                Self::default()
-            }),
-            Err(e) => {
-                tracing::debug!("Failed to read {}: {}", settings_path.display(), e);
-                Self::default()
-            }
-        }
-    }
+#[derive(Parser)]
+struct ConfigArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    #[command(subcommand)]
+    command: ConfigCommands,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Show current configuration
+    Show,
+    /// Get a configuration value
+    Get {
+        /// The configuration key to get (e.g., provider, `model.api_key`)
+        key: String,
+    },
+    /// Set a configuration value
+    Set {
+        /// The configuration key to set (e.g., provider, `model.api_key`)
+        key: String,
+        /// The value to set
+        value: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Check if a subcommand was provided
     match args.command {
-        Some(Commands::Tui(tui_args)) => run_tui_command(tui_args).await,
-        Some(Commands::Sessions(sessions_args)) => run_sessions_command(sessions_args).await,
+        Some(Commands::Tui(tui_args)) => tui::run(tui_args).await,
+        Some(Commands::Sessions(args)) => run_sessions(args).await,
+        Some(Commands::Skills(args)) => run_skills(args).await,
+        Some(Commands::Config(args)) => run_config(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        None => {
-            // No subcommand: treat as tui with top-level args
-            run_tui_command(args.tui).await
-        }
+        None => tui::run(args.tui).await,
     }
 }
 
-async fn run_sessions_command(args: SessionsArgs) -> Result<()> {
-    // Get data directory from config or default
-    let data_dir =
-        std::env::var("YOMI_DATA_DIR").map_or_else(|_| expand_tilde("~/.yomi"), PathBuf::from);
-
-    // Create storage
-    let storage = Arc::new(FsStorage::new(data_dir.join("sessions"))?);
-
+async fn run_sessions(args: SessionsArgs) -> Result<()> {
     match args.command {
-        SessionsCommands::List => {
-            use kernel::storage::Storage;
-            let sessions = storage.list_sessions().await?;
-            for session in sessions.iter().take(50) {
-                let age = chrono::Utc::now() - session.updated_at;
-                let age_str = if age.num_days() > 0 {
-                    format!("{}d ago", age.num_days())
-                } else if age.num_hours() > 0 {
-                    format!("{}h ago", age.num_hours())
-                } else if age.num_minutes() > 0 {
-                    format!("{}m ago", age.num_minutes())
-                } else {
-                    "just now".to_string()
-                };
-
-                // Get first user message preview (unicode-safe truncation, no newlines)
-                let preview = if let Ok(messages) = storage
-                    .get_messages(&kernel::types::SessionId(session.id.clone()))
-                    .await
-                {
-                    messages
-                        .iter()
-                        .find(|m| m.role == kernel::types::Role::User)
-                        .map_or("(no user message)".to_string(), |m| {
-                            let text = m.text_content().replace('\n', " ");
-                            if text.chars().count() > 60 {
-                                format!("{}...", text.chars().take(60).collect::<String>())
-                            } else {
-                                text
-                            }
-                        })
-                } else {
-                    "(error loading messages)".to_string()
-                };
-
-                println!(
-                    "{} | {} messages | {} | {}",
-                    session.id, session.message_count, age_str, preview
-                );
-            }
-        }
+        SessionsCommands::List => commands::sessions::list(args.global).await,
     }
-
-    Ok(())
 }
 
-async fn run_tui_command(args: TuiArgs) -> Result<()> {
-    let working_dir = args
-        .directory
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let working_dir = working_dir.canonicalize()?;
-
-    // Load configuration with priority: env vars > config file > defaults
-    let mut config = if let Some(config_path) = args.config {
-        Config::from_file(&config_path)?
-    } else {
-        // Try default config locations, fallback to env-only config
-        let default_paths = [
-            expand_tilde("~/.yomi/config.toml"),
-            expand_tilde("~/.config/yomi/config.toml"),
-            working_dir.join("yomi.toml"),
-        ];
-        let mut loaded = None;
-        for path in &default_paths {
-            if path.exists() {
-                tracing::debug!("Loading config from: {}", path.display());
-                loaded = Some(Config::from_file(path)?);
-                break;
-            }
-        }
-        loaded.unwrap_or_else(Config::from_env)
-    };
-
-    // Apply CLI overrides to config (after loading, before using)
-    if args.yolo {
-        config.auto_approve = Level::Dangerous;
-        tracing::warn!("YOLO mode enabled - all confirmations skipped!");
+async fn run_skills(args: SkillsArgs) -> Result<()> {
+    match args.command {
+        SkillsCommands::List => commands::skills::list(args.global).await,
     }
-
-    // Create data directory
-    tokio::fs::create_dir_all(&config.data_dir).await?;
-
-    // Initialize AppStorage for session index and input history
-    let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
-
-    // Initialize logging with file output and env filter
-    init_logging(&config)?;
-
-    // Load skills from configured folders
-    // Default skill folders if no folders configured via env
-    let skill_folders = if config.skill_folders.is_empty() {
-        &vec![
-            ".agents/skills".into(),
-            "~/.yomi/skills".into(),
-            "~/.agents/skills".into(),
-            "~/.claude/skills".into(),
-        ]
-    } else {
-        &config.skill_folders
-    };
-
-    tracing::debug!("Loading skills from folders: {:?}", skill_folders);
-
-    let mut skills: Vec<Arc<kernel::skill::Skill>> = {
-        let loader = SkillLoader::new(skill_folders.iter().map(expand_tilde).collect());
-        loader.load_all().unwrap_or_else(|e| {
-            eprintln!("Warning: Failed to load skills: {e}");
-            Vec::new()
-        })
-    };
-
-    // Load plugins and their skills (if enabled)
-    if config.load_claude_plugins {
-        let plugin_dirs = if config.plugin_dirs.is_empty() {
-            vec![expand_tilde("~/.claude/plugins/cache")]
-        } else {
-            config.plugin_dirs.clone()
-        };
-
-        tracing::debug!("Loading plugins from directories: {:?}", plugin_dirs);
-
-        // Load Claude settings to get enabled plugins filter
-        let claude_settings = ClaudeSettings::load();
-        let has_enabled_filter = !claude_settings.enabled_plugins.is_empty();
-
-        let plugins = {
-            let loader = PluginLoader::new(plugin_dirs)
-                .with_enabled_plugins(claude_settings.enabled_plugins);
-            loader.load_all().unwrap_or_else(|e| {
-                tracing::warn!("Failed to load plugins: {e}");
-                Vec::new()
-            })
-        };
-
-        if has_enabled_filter {
-            tracing::debug!("Applied enabledPlugins filter from ~/.claude/settings.json");
-        }
-
-        // Log loaded plugins and load their skills
-        if !plugins.is_empty() {
-            tracing::debug!("Loaded {} plugin(s)", plugins.len());
-            for plugin in &plugins {
-                tracing::debug!("  - {} (from {})", plugin.name, plugin.path.display());
-                match SkillLoader::load_from_plugin(plugin) {
-                    Ok(plugin_skills) => {
-                        for skill in plugin_skills {
-                            tracing::debug!("    - skill: {}", skill.name);
-                            skills.push(skill);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to load skills from plugin {}: {e}", plugin.name);
-                    }
-                }
-            }
-        }
-    } else {
-        tracing::info!("Claude plugins loading is disabled");
-    }
-
-    // Deduplicate skills by name (regular skills take precedence over plugin skills)
-    // We keep the first occurrence since regular skills are loaded before plugin skills
-    let mut seen_names = std::collections::HashSet::new();
-    skills.retain(|skill| {
-        if seen_names.contains(&skill.name) {
-            tracing::debug!(
-                "Duplicate skill name '{}' found, keeping first instance.",
-                skill.name
-            );
-            false
-        } else {
-            seen_names.insert(skill.name.clone());
-            true
-        }
-    });
-
-    // Log loaded skills
-    if !skills.is_empty() {
-        tracing::info!("Loaded {} skill(s)", skills.len());
-        for skill in &skills {
-            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
-        }
-    }
-
-    // Validate API key
-    if !config.has_api_key() {
-        eprintln!("Error: API key not configured.");
-        std::process::exit(1);
-    }
-
-    // Create storage
-    let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
-
-    // Create provider based on configuration
-    let provider: Arc<dyn kernel::Provider> = match config.provider {
-        ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
-        ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
-    };
-
-    // Create task store for all agents
-    let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
-
-    // Load project memory (CLAUDE.md/AGENTS.md)
-    let project_memory = kernel::project_memory::load(&working_dir).await?;
-
-    let coordinator = Arc::new(Coordinator::new(
-        storage.clone(),
-        provider,
-        config.model.clone(),
-        Some(task_store),
-        project_memory,
-        Some(compactor::Compactor::default()),
-        skill_folders.iter().map(expand_tilde).collect(),
-    ));
-
-    // Prepare banner data (before skills is moved)
-    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
-
-    // Build agent config (cloneable for session creation)
-    let mk_agent_config = || AgentConfig {
-        model: config.model.clone(),
-        skills: skills.clone(),
-        compactor: config.agent.compactor.clone(),
-        ..Default::default()
-    };
-
-    // Extract context_window from default config
-    let context_window = mk_agent_config().compactor.context_window;
-
-    // Helper to create session config
-    let mk_config = || SessionConfig {
-        agent: mk_agent_config(),
-        project_path: working_dir.clone(),
-        auto_approve_level: config.auto_approve,
-    };
-
-    // Print startup info once
-    println!("Provider: {}", config.provider);
-    println!("Model: {}", config.model.model_id);
-    println!("Endpoint: {}", config.model.endpoint);
-    let api_key = config.api_key();
-    let key_preview = if api_key.len() > 8 {
-        strs::truncate_with_suffix(api_key, 11, "...")
-    } else {
-        "not set".to_string()
-    };
-    println!("API Key: {key_preview}\n");
-
-    // Session context for reuse
-    let session_ctx = SessionContext {
-        working_dir: working_dir.clone(),
-        skill_names: skill_names.clone(),
-        auto_approve: config.auto_approve,
-        context_window,
-    };
-
-    // Main loop: create session, run TUI, optionally create new session
-    let mut is_first_session = true;
-    let mut input_history = app_storage
-        .load_input_history(&working_dir)
-        .await
-        .unwrap_or_default();
-
-    // Convert session arg for easier matching
-    let session_arg = match args.resume {
-        Some(None) => SessionArg::Last,
-        Some(Some(id)) => SessionArg::Specific(id),
-        None => SessionArg::New,
-    };
-
-    loop {
-        // Resolve session (create new or restore)
-        let session_id = resolve_session(
-            &session_arg,
-            is_first_session,
-            &coordinator,
-            &app_storage,
-            &working_dir,
-            mk_config,
-        )
-        .await?;
-
-        // Load session messages for display
-        let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
-
-        // Run session lifecycle
-        let result = run_session_loop(
-            coordinator.clone(),
-            session_id,
-            session_ctx.clone(),
-            app_storage.clone(),
-            input_history.clone(),
-            session_messages,
-            is_first_session,
-            args.prompt.clone(),
-        )
-        .await?;
-
-        // Save new history entries
-        for entry in &result.new_history_entries {
-            app_storage.add_input_entry(&working_dir, entry).await?;
-        }
-        input_history.extend(result.new_history_entries);
-
-        // Check if we should create a new session
-        if result.should_create_new_session {
-            is_first_session = false;
-            continue;
-        }
-
-        break;
-    }
-
-    Ok(())
 }
 
-/// Initialize logging with console and file output
-///
-/// Environment variables:
-/// - `RUST_LOG`: Set log level (e.g., "debug", "info", "warn", "error")
-/// - `YOMI_LOG_DIR`: Log directory (default: "~/.yomi/logs")
-fn init_logging(config: &Config) -> Result<()> {
-    // Get log directory from env or default to ~/.yomi/logs
-    let log_dir = std::env::var(env_names::LOG_DIR)
-        .map_or_else(|_| config.data_dir.join("logs"), PathBuf::from);
-
-    // Ensure log directory exists
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
-
-    // Create rolling file appender - single file yomi.log with rotation
-    // Max 10MB per file, keep 5 backups (yomi.log.1, yomi.log.2, etc.)
-    let log_path = log_dir.join("yomi.log");
-    let file_appender = tracing_rolling_file::RollingFileAppenderBase::builder()
-        .filename(log_path.to_string_lossy().to_string())
-        .condition_max_file_size(10 * 1024 * 1024) // 10MB
-        .max_filecount(5)
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {e}"))?;
-
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-    // Leak the guard to keep it alive for the program duration
-    Box::leak(Box::new(_guard));
-
-    // Build env filter - try RUST_LOG first, then default to info
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .context("Failed to create env filter")?;
-
-    // Initialize subscriber with file layer only (TUI uses stdout for display)
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                .with_target(true)
-                .with_thread_ids(true),
-        )
-        .init();
-
-    tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
-
-    Ok(())
+async fn run_config(args: ConfigArgs) -> Result<()> {
+    match args.command {
+        ConfigCommands::Show => commands::config::show(args.global),
+        ConfigCommands::Get { key } => commands::config::get(args.global, &key),
+        ConfigCommands::Set { key, value } => commands::config::set(args.global, &key, value),
+    }
 }
