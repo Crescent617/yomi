@@ -1,16 +1,16 @@
 //! Status bar component for TUI
 //!
 //! Shows current mode at the bottom (vim-style) with three sections:
-//! [LEFT: mode] [CENTER: temporary messages] [RIGHT: reserved]
+//! [LEFT: mode] [CENTER: tips] [RIGHT: context usage / scroll progress]
 
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
     event::Event,
-    props::{AttrValue, Attribute, PropPayload, Props, QueryResult},
+    props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
         Frame,
@@ -18,100 +18,30 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors, utils::strs};
-use kernel::{const_concat, env_names, permissions::Level};
+use crate::{msg::Msg, theme::colors};
+use kernel::{permissions::Level, utils::strs};
 
-/// Tips shown on startup
-pub const TIPS: &[&str] = &[
-    "Press Ctrl+O to enter browse mode",
-    "Press Ctrl+C twice to exit",
-    "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
-    "Use Ctrl+V to paste image in clipboard",
-    "Type /new to start a new session",
-    "Type /yolo to toggle YOLO mode",
-    const_concat!(
-        "Use env var ",
-        env_names::CONTEXT_WINDOW,
-        " to set llm context window"
-    ),
-];
-
-/// Message notification level for status bar
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MessageLevel {
-    #[default]
-    Unknown,
-    Info,
-    Warn,
-    Error,
-    Success,
-}
-
-impl MessageLevel {
-    fn color(self) -> Color {
-        use crate::theme::colors;
-        match self {
-            MessageLevel::Unknown => colors::text_secondary(),
-            MessageLevel::Info => colors::accent_system(),
-            MessageLevel::Warn => colors::accent_warning(),
-            MessageLevel::Error => colors::accent_error(),
-            MessageLevel::Success => colors::accent_success(),
-        }
-    }
-}
-
-/// Payload for status bar messages
+/// Tip message for status bar (center section)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StatusMessage {
+pub struct Tip {
     pub content: String,
-    pub level: MessageLevel,
     /// Duration in milliseconds, 0 = no timeout
     pub duration_ms: u64,
 }
 
-impl StatusMessage {
-    pub fn new(content: impl Into<String>, level: MessageLevel, duration_ms: u64) -> Self {
+impl Tip {
+    pub fn new(content: impl Into<String>, duration_ms: u64) -> Self {
         Self {
             content: content.into(),
-            level,
             duration_ms,
         }
     }
 
-    pub fn info(content: impl Into<String>, duration_ms: u64) -> Self {
-        Self::new(content, MessageLevel::Info, duration_ms)
-    }
-
-    pub fn warn(content: impl Into<String>, duration_ms: u64) -> Self {
-        Self::new(content, MessageLevel::Warn, duration_ms)
-    }
-
-    pub fn error(content: impl Into<String>, duration_ms: u64) -> Self {
-        Self::new(content, MessageLevel::Error, duration_ms)
-    }
-
-    pub fn tip(content: impl Into<String>) -> Self {
-        Self::new(content, MessageLevel::Unknown, 10000) // 10s timeout for tips
-    }
-
-    pub fn success(content: impl Into<String>, duration_ms: u64) -> Self {
-        Self::new(content, MessageLevel::Success, duration_ms)
-    }
-
     /// Convert to `AttrValue` using `PropPayload::Any` for downcast
-    pub fn to_attr_value(&self) -> AttrValue {
+    pub fn to_attr_value(&self) -> tuirealm::props::AttrValue {
+        use tuirealm::props::{AttrValue, PropPayload};
         AttrValue::Payload(PropPayload::Any(Box::new(self.clone())))
     }
-}
-
-/// Get a random tip
-pub fn get_random_tip() -> &'static str {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    TIPS[(now as usize) % TIPS.len()]
 }
 
 /// Application mode for status bar display
@@ -123,14 +53,14 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center message] [right: ctx win usage or scroll progress]
+/// Layout: [mode] [center: tip] [right: ctx win usage or scroll progress]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
     mode: AppMode,
-    /// Current message with level (replaces `center_message`)
-    message: Option<StatusMessage>,
-    message_timeout: Option<std::time::Instant>,
+    /// Current tip (center section)
+    tip: Option<Tip>,
+    tip_timeout: Option<std::time::Instant>,
     /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
     /// Permission level for displaying YOLO mode
@@ -148,25 +78,25 @@ impl StatusBar {
         self.mode = mode;
     }
 
-    /// Show a message with level and timeout
-    pub fn show_message(&mut self, msg: StatusMessage) {
-        if msg.duration_ms == 0 {
-            // No timeout - for tips
-            self.message = Some(msg);
-            self.message_timeout = None;
+    /// Show a tip with timeout
+    pub fn show_tip(&mut self, tip: Tip) {
+        if tip.duration_ms == 0 {
+            // No timeout - persistent tip
+            self.tip = Some(tip);
+            self.tip_timeout = None;
         } else {
-            self.message_timeout =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(msg.duration_ms));
-            self.message = Some(msg);
+            self.tip_timeout =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(tip.duration_ms));
+            self.tip = Some(tip);
         }
     }
 
-    /// Check timeout and clear expired message
+    /// Check timeout and clear expired tip
     pub fn check_timeout(&mut self) {
-        if let Some(timeout) = self.message_timeout {
+        if let Some(timeout) = self.tip_timeout {
             if std::time::Instant::now() > timeout {
-                self.message = None;
-                self.message_timeout = None;
+                self.tip = None;
+                self.tip_timeout = None;
             }
         }
     }
@@ -217,12 +147,11 @@ impl StatusBar {
     }
 
     fn render_center_section(&self, width: usize) -> Span<'static> {
-        let (text, level) = self
-            .message
-            .as_ref()
-            .map_or(("", MessageLevel::Unknown), |m| {
-                (m.content.as_str(), m.level)
-            });
+        let text = self.tip.as_ref().map_or("", |t| t.content.as_str());
+
+        if text.is_empty() {
+            return Span::styled("", Style::default());
+        }
 
         // Center the message, truncate if too long
         let display = if text.chars().count() > width {
@@ -236,7 +165,7 @@ impl StatusBar {
         Span::styled(
             display,
             Style::default()
-                .fg(level.color())
+                .fg(colors::text_secondary())
                 .add_modifier(Modifier::ITALIC),
         )
     }
@@ -281,16 +210,16 @@ impl StatusBar {
 
 impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        // Check for message timeout
+        // Check for tip timeout
         self.check_timeout();
 
-        // Split area into three sections: [mode] [center] [right]
+        // Split area into three sections: [mode] [center: tip] [right]
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(10), // Mode section (" NORMAL ")
-                Constraint::Min(10),    // Center message section
-                Constraint::Length(14), // Right section: scroll progress [current/total]
+                Constraint::Min(10),    // Center: tip
+                Constraint::Length(14), // Right section: context usage or scroll progress
             ])
             .split(area);
 
@@ -299,7 +228,7 @@ impl Component for StatusBar {
         let mode_line = Line::from(vec![mode_span]);
         frame.render_widget(Paragraph::new(mode_line), chunks[0]);
 
-        // Render center message section
+        // Render center tip section
         let center_width = chunks[1].width as usize;
         let center_span = self.render_center_section(center_width);
         let center_line = Line::from(vec![center_span]);
@@ -327,21 +256,22 @@ impl Component for StatusBar {
                     };
                 }
             }
-            Attribute::Custom("show_message") => {
-                // Use downcast from PropPayload::Any
-                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
-                    let any = payload.as_any();
-                    if let Some(msg) = any.downcast_ref::<StatusMessage>() {
-                        self.show_message(msg.clone());
-                    }
-                }
-            }
             Attribute::Custom("tick") => {
                 self.check_timeout();
             }
-            Attribute::Custom("clear_message") => {
-                self.message = None;
-                self.message_timeout = None;
+            Attribute::Custom("show_tip") => {
+                // Use downcast from PropPayload::Any
+                use tuirealm::props::PropPayload;
+                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
+                    let any = payload.as_any();
+                    if let Some(tip) = any.downcast_ref::<Tip>() {
+                        self.show_tip(tip.clone());
+                    }
+                }
+            }
+            Attribute::Custom("clear_tip") => {
+                self.tip = None;
+                self.tip_timeout = None;
             }
             Attribute::Custom("set_ctx_usage") => {
                 // Parse "tokens\x00context_window" format

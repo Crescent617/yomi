@@ -19,9 +19,7 @@ use tuirealm::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    components::{
-        input_edit::TextInput, status_bar::StatusMessage, CompletionList, FileCompletion,
-    },
+    components::{info_bar::Notification, input_edit::TextInput, CompletionList, FileCompletion},
     msg::Msg,
     theme::colors,
 };
@@ -1845,14 +1843,10 @@ impl InputComponent {
                     // If selection was copied, show status message
                     if matches!(kind, tuirealm::event::MouseEventKind::Up(_)) {
                         if let Some(text) = self.component.get_selected_text() {
-                            let preview = crate::utils::text::truncate_unicode(&text, 30);
-                            let count = text.chars().count();
-                            let msg = if count > 30 {
-                                format!("📋 {preview}... ({count} chars)")
-                            } else {
-                                format!("📋 {preview}")
-                            };
-                            return Some(Msg::ShowStatusMessage(StatusMessage::success(msg, 2000)));
+                            return Some(Msg::Notification(Notification::info(
+                                format!("📋 {text}"),
+                                2000,
+                            )));
                         }
                     }
                     return Some(Msg::Redraw);
@@ -2156,9 +2150,9 @@ impl InputComponent {
                     Some(Msg::Quit)
                 } else {
                     // First Ctrl+C: show hint in status bar for 1 second
-                    Some(Msg::ShowStatusMessage(StatusMessage::new(
+                    Some(Msg::Notification(Notification::new(
                         "Press Ctrl+C again to exit",
-                        crate::components::status_bar::MessageLevel::Unknown,
+                        crate::components::info_bar::NotificationLevel::Unknown,
                         1000, // 1000ms = 1 second, matches double-press detection
                     )))
                 }

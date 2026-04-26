@@ -75,14 +75,14 @@ impl Default for ThemeConfig {
             // Accent colors - Purple theme
             accent_user: hex("#C4C6CF"),
             user_msg_bg: hex("#2A2A35"),
-            accent_system: hex("#64C8FF"),
+            accent_system: hex("#64C8DF"),
             accent_success: hex("#64DC8C"),
-            accent_warning: hex("#FFC864"),
-            accent_error: hex("#FF6464"),
+            accent_warning: hex("#DFC864"),
+            accent_error: hex("#EF7494"),
 
             // Code colors
             code_bg: Color::Reset,
-            code_fg: hex("#8CDCF0"),
+            code_fg: hex("#8CDCE0"),
             code_border: hex("#707080"),
 
             // UI elements

@@ -7,6 +7,7 @@
 //! - File picker
 //! - Any list that needs filtering
 
+use kernel::utils::strs::truncate_with_suffix;
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
@@ -21,8 +22,11 @@ use tuirealm::{
     state::{State, StateValue},
 };
 
+use crate::{
+    components::input_edit::{TextBuffer, TextInput},
+    theme::colors,
+};
 use unicode_width::UnicodeWidthStr;
-use crate::{components::input_edit::{TextBuffer, TextInput}, theme::colors};
 
 /// An item in the fuzzy picker
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +45,7 @@ impl PickerItem {
         }
     }
 
+    #[must_use]
     pub fn with_meta(mut self, meta: impl Into<String>) -> Self {
         self.meta = Some(meta.into());
         self
@@ -75,16 +80,19 @@ impl PickerConfig {
         }
     }
 
+    #[must_use]
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
     }
 
+    #[must_use]
     pub fn with_max_height(mut self, height: u16) -> Self {
         self.max_list_height = height;
         self
     }
 
+    #[must_use]
     pub fn with_width_percent(mut self, percent: f32) -> Self {
         self.width_percent = percent.clamp(0.1, 1.0);
         self
@@ -118,6 +126,7 @@ impl FuzzyPicker {
         }
     }
 
+    #[must_use]
     pub fn with_items(mut self, items: Vec<PickerItem>) -> Self {
         self.items = items;
         self.filtered = (0..self.items.len()).collect();
@@ -149,7 +158,9 @@ impl FuzzyPicker {
     /// Get the currently selected item's id
     pub fn current_selection(&self) -> Option<String> {
         if self.visible && !self.filtered.is_empty() {
-            self.filtered.get(self.selected).map(|idx| self.items[*idx].id.clone())
+            self.filtered
+                .get(self.selected)
+                .map(|idx| self.items[*idx].id.clone())
         } else {
             None
         }
@@ -158,7 +169,9 @@ impl FuzzyPicker {
     /// Get the currently selected item
     pub fn current_item(&self) -> Option<&PickerItem> {
         if self.visible && !self.filtered.is_empty() {
-            self.filtered.get(self.selected).map(|idx| &self.items[*idx])
+            self.filtered
+                .get(self.selected)
+                .map(|idx| &self.items[*idx])
         } else {
             None
         }
@@ -232,9 +245,10 @@ impl FuzzyPicker {
                 } else {
                     item.label.to_lowercase().contains(&search_lower)
                         || item.id.to_lowercase().contains(&search_lower)
-                        || item.meta.as_ref().is_some_and(|m| {
-                            m.to_lowercase().contains(&search_lower)
-                        })
+                        || item
+                            .meta
+                            .as_ref()
+                            .is_some_and(|m| m.to_lowercase().contains(&search_lower))
                 }
             })
             .map(|(idx, _)| idx)
@@ -256,7 +270,8 @@ impl FuzzyPicker {
     }
 
     fn render_picker(&self, frame: &mut Frame, area: Rect) {
-        let palette_width = (f32::from(area.width) * self.config.width_percent).clamp(40.0, 80.0) as u16;
+        let palette_width =
+            (f32::from(area.width) * self.config.width_percent).clamp(40.0, 80.0) as u16;
         let search_height = 3u16;
         let list_height = (self.filtered.len() as u16).min(self.config.max_list_height);
         let palette_height = search_height + list_height + 2;
@@ -341,7 +356,8 @@ impl FuzzyPicker {
 
                     let mut content = format!("{}{}", prefix, item.label);
                     if let Some(meta) = &item.meta {
-                        content.push_str(&format!("  {}", meta));
+                        use std::fmt::Write;
+                        write!(content, "  {meta}").ok();
                     }
 
                     let style = if is_selected {
@@ -384,7 +400,7 @@ impl Component for FuzzyPicker {
         }
     }
 
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.props.get(attr).map(|v| v.into())
     }
 
@@ -458,11 +474,15 @@ impl Component for FuzzyPicker {
             }
             Cmd::Type(c) => {
                 self.insert_char(c);
-                CmdResult::Changed(State::Single(StateValue::String(self.input.content().to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(
+                    self.input.content().to_string(),
+                )))
             }
             Cmd::Delete => {
                 self.backspace();
-                CmdResult::Changed(State::Single(StateValue::String(self.input.content().to_string())))
+                CmdResult::Changed(State::Single(StateValue::String(
+                    self.input.content().to_string(),
+                )))
             }
             _ => CmdResult::NoChange,
         }
@@ -482,6 +502,7 @@ impl FuzzyPickerComponent {
         }
     }
 
+    #[must_use]
     pub fn with_items(mut self, items: Vec<PickerItem>) -> Self {
         self.component = self.component.with_items(items);
         self
@@ -513,7 +534,7 @@ impl Component for FuzzyPickerComponent {
         self.component.view(frame, area);
     }
 
-    fn query<'a>(&'a self, attr: Attribute) -> Option<QueryResult<'a>> {
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         self.component.query(attr)
     }
 
@@ -650,7 +671,7 @@ impl AppComponent<crate::msg::Msg, crate::msg::UserEvent> for FuzzyPickerCompone
 }
 
 /// Generic message type for picker results
-/// Used with AppComponent to send messages back to the app
+/// Used with `AppComponent` to send messages back to the app
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerResult {
     Selected(String), // Selected item ID
@@ -665,14 +686,10 @@ pub fn history_items(history: &[String]) -> Vec<PickerItem> {
         .map(|(idx, text)| {
             // Replace newlines with spaces and trim leading whitespace for preview
             let text_single_line = text.replace('\n', " ").trim_start().to_string();
-            let preview = if text_single_line.chars().count() > 60 {
-                // Safe Unicode-aware truncation: take characters, not bytes
-                let truncated: String = text_single_line.chars().take(57).collect();
-                format!("{}...", truncated)
-            } else {
-                text_single_line
-            };
-            PickerItem::new(format!("history_{}", idx), preview)
+            PickerItem::new(
+                format!("history_{idx}"),
+                truncate_with_suffix(text_single_line.as_ref(), 50, "..."),
+            )
         })
         .rev() // Most recent first
         .collect()
