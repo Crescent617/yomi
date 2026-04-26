@@ -16,7 +16,7 @@ use tuirealm::{
     ratatui::{
         layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
         style::{Modifier, Style},
-        widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
         Frame,
     },
     state::{State, StateValue},
@@ -272,9 +272,10 @@ impl FuzzyPicker {
     fn render_picker(&self, frame: &mut Frame, area: Rect) {
         let palette_width =
             (f32::from(area.width) * self.config.width_percent).clamp(40.0, 80.0) as u16;
+        let palette_width = palette_width.min(area.width.saturating_sub(4)); // Ensure fits with padding
         let search_height = 3u16;
         let list_height = (self.filtered.len() as u16).min(self.config.max_list_height);
-        let palette_height = search_height + list_height + 2;
+        let palette_height = (search_height + list_height + 2).min(area.height.saturating_sub(4));
 
         let palette_area = Rect {
             x: area.x + (area.width - palette_width) / 2,
@@ -286,8 +287,9 @@ impl FuzzyPicker {
         frame.render_widget(Clear, palette_area);
 
         let block = Block::default()
-            .title(self.config.title.clone())
+            .title(self.config.title.as_str())
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(colors::accent_system())
             .title_style(
                 Style::default()

@@ -246,11 +246,14 @@ impl SimpleAgent {
 
         // Add clear marker to output if task did not complete
         if !task_completed {
-            metrics.output_text.push_str(&format!(
+            use std::fmt::Write;
+            write!(
+                metrics.output_text,
                 "\n\n[Task incomplete: reached {} iteration limit. \
                  Consider breaking into smaller sub-tasks]",
                 metrics.iteration_count
-            ));
+            )
+            .ok();
         }
 
         Ok((messages, metrics))

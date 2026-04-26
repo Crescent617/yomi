@@ -9,10 +9,11 @@ use tuirealm::{
     event::Event,
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+        layout::{Margin, Rect},
         style::{Modifier, Style},
         widgets::{
-            Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+            Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+            ScrollbarState,
         },
         Frame,
     },
@@ -55,8 +56,6 @@ pub struct HelpDialog {
     active: bool,
     /// Current scroll offset (line number at top)
     scroll_offset: usize,
-    /// Footer text shown at the bottom
-    footer_text: String,
 }
 
 impl HelpDialog {
@@ -67,7 +66,6 @@ impl HelpDialog {
             sections: Vec::new(),
             active: false,
             scroll_offset: 0,
-            footer_text: "Press q, Esc, or Ctrl+C to close".to_string(),
         }
     }
 
@@ -124,7 +122,9 @@ impl HelpDialog {
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
         // Calculate dialog size (centered, 70% width, 80% height)
         let dialog_width = (f32::from(area.width) * 0.7).clamp(50.0, 100.0) as u16;
+        let dialog_width = dialog_width.min(area.width.saturating_sub(4));
         let dialog_height = (f32::from(area.height) * 0.8).clamp(15.0, 40.0) as u16;
+        let dialog_height = dialog_height.min(area.height.saturating_sub(4));
 
         let dialog_area = Rect {
             x: area.x + (area.width - dialog_width) / 2,
@@ -136,21 +136,11 @@ impl HelpDialog {
         // Clear the background behind dialog
         frame.render_widget(Clear, dialog_area);
 
-        // Create layout for content and footer
-        let inner = dialog_area.inner(Margin {
-            horizontal: 1,
-            vertical: 1,
-        });
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
-            .split(inner);
-
         // Create block with title
         let block = Block::default()
             .title(self.title.as_str())
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(colors::accent_system())
             .title_style(
                 Style::default()
@@ -158,25 +148,25 @@ impl HelpDialog {
                     .add_modifier(Modifier::BOLD),
             );
 
+        // Create layout for content
+        let inner = dialog_area.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
+
         // Build and render content
         let content = self.build_content();
         let scroll_y = self.scroll_offset.min(u16::MAX as usize) as u16;
         let content_para = Paragraph::new(content)
             .style(Style::default().fg(colors::text_primary()))
             .scroll((scroll_y, 0));
-        frame.render_widget(content_para, chunks[0]);
-
-        // Render footer
-        let footer_para = Paragraph::new(self.footer_text.as_str())
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(colors::text_muted()));
-        frame.render_widget(footer_para, chunks[1]);
+        frame.render_widget(content_para, inner);
 
         // Render the border block last (on top)
         frame.render_widget(block, dialog_area);
 
         // Render scrollbar if content is scrollable
-        let visible_lines = chunks[0].height as usize;
+        let visible_lines = inner.height as usize;
         let total = self.total_lines();
         if total > visible_lines {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -185,7 +175,7 @@ impl HelpDialog {
             let mut scrollbar_state = ScrollbarState::new(total).position(self.scroll_offset);
             frame.render_stateful_widget(
                 scrollbar,
-                chunks[0].inner(Margin {
+                inner.inner(Margin {
                     horizontal: 0,
                     vertical: 0,
                 }),
