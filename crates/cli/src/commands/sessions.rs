@@ -47,26 +47,22 @@ pub async fn list(global: GlobalArgs) -> Result<()> {
                 "(error loading messages)".to_string()
             };
 
-        let msg_count = format!("{}", session.message_count);
-        rows.push((session.id.clone(), msg_count, age_str, preview));
+        rows.push((session.id.clone(), age_str, preview));
     }
 
     let id_width = rows.iter().map(|r| r.0.len()).max().unwrap_or(10).max(10);
-    let msg_width = rows.iter().map(|r| r.1.len()).max().unwrap_or(5).max(5);
-    let age_width = rows.iter().map(|r| r.2.len()).max().unwrap_or(5).max(5);
+    let age_width = rows.iter().map(|r| r.1.len()).max().unwrap_or(5).max(5);
 
     println!(
-        "{:<id_width$}  {:>msg_width$}  {:<age_width$}  PREVIEW",
+        "{:<id_width$}  {:<age_width$}  PREVIEW",
         "SESSION ID",
-        "MSGS",
         "AGE",
         id_width = id_width,
-        msg_width = msg_width,
         age_width = age_width
     );
 
-    for (id, msgs, age, preview) in rows {
-        println!("{id:<id_width$}  {msgs:>msg_width$}  {age:<age_width$}  {preview}");
+    for (id, age, preview) in rows {
+        println!("{id:<id_width$}  {age:<age_width$}  {preview}");
     }
 
     Ok(())

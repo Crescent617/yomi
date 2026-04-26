@@ -228,7 +228,10 @@ impl Coordinator {
     }
 
     /// Get messages for a session from storage
-    pub async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<crate::types::Message>> {
+    pub async fn get_session_messages(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<crate::types::Message>> {
         self.storage.get_messages(session_id).await
     }
 }

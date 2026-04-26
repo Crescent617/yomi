@@ -1,7 +1,8 @@
 use crate::storage::Storage;
-use crate::types::{Message, SessionEvent, SessionEventRecord, SessionId, SessionRecord};
+use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::future::join_all;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -36,32 +37,8 @@ impl FsStorage {
         self.base_dir.join(format!("{}.jsonl", session_id.0))
     }
 
-    /// Atomic append write to JSONL
-    async fn append_event(&self, session_id: &SessionId, event: SessionEvent) -> Result<()> {
-        let record = SessionEventRecord {
-            timestamp: chrono::Utc::now(),
-            event,
-        };
-
-        let line = serde_json::to_string(&record)?;
-        let path = self.session_file_path(session_id);
-
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .context("Failed to open session file")?;
-
-        file.write_all(line.as_bytes()).await?;
-        file.write_all(b"\n").await?;
-        file.flush().await?;
-
-        Ok(())
-    }
-
-    /// Read all events for a session
-    async fn read_events(&self, session_id: &SessionId) -> Result<Vec<SessionEventRecord>> {
+    /// Read all messages from session file
+    async fn read_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
         let path = self.session_file_path(session_id);
 
         if !path.exists() {
@@ -69,49 +46,19 @@ impl FsStorage {
         }
 
         let content = fs::read_to_string(&path).await?;
-        let mut events = Vec::new();
+        let mut messages = Vec::new();
 
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            let record: SessionEventRecord =
-                serde_json::from_str(line).context("Failed to parse session event")?;
-            events.push(record);
-        }
-
-        Ok(events)
-    }
-
-    /// Rebuild session record from events
-    fn rebuild_session(events: &[SessionEventRecord]) -> Option<SessionRecord> {
-        let mut session: Option<SessionRecord> = None;
-
-        for record in events {
-            match &record.event {
-                SessionEvent::Created {
-                    session_id,
-                    created_at,
-                } => {
-                    session = Some(SessionRecord {
-                        id: session_id.clone(),
-                        created_at: *created_at,
-                        updated_at: *created_at,
-                    });
-                }
-                SessionEvent::MessageAdded { timestamp, .. }
-                | SessionEvent::Forked { timestamp, .. }
-                | SessionEvent::Completed {
-                    completed_at: timestamp,
-                } => {
-                    if let Some(ref mut s) = session {
-                        s.updated_at = *timestamp;
-                    }
-                }
+            // Skip lines that fail to parse (e.g., old event types)
+            if let Ok(msg) = serde_json::from_str::<Message>(line) {
+                messages.push(msg);
             }
         }
 
-        session
+        Ok(messages)
     }
 }
 
@@ -119,44 +66,62 @@ impl FsStorage {
 impl Storage for FsStorage {
     async fn create_session(&self) -> Result<SessionId> {
         let session_id = SessionId::new();
-        let event = SessionEvent::created(session_id.clone());
-        self.append_event(&session_id, event).await?;
+        let path = self.session_file_path(&session_id);
+        // Create empty file
+        fs::File::create(&path).await?;
         Ok(session_id)
     }
 
     async fn fork_session(&self, parent_id: &SessionId) -> Result<SessionId> {
-        let parent_events = self.read_events(parent_id).await?;
+        let parent_path = self.session_file_path(parent_id);
         let new_id = SessionId::new();
+        let new_path = self.session_file_path(&new_id);
 
-        // Copy all parent events
-        let path = self.session_file_path(&new_id);
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .await?;
-
-        for record in &parent_events {
-            let line = serde_json::to_string(record)?;
-            file.write_all(line.as_bytes()).await?;
-            file.write_all(b"\n").await?;
-        }
-
-        // Add fork event
-        let fork_event = SessionEvent::Forked {
-            parent_id: parent_id.clone(),
-            new_session_id: new_id.clone(),
-            timestamp: chrono::Utc::now(),
-        };
-        self.append_event(&new_id, fork_event).await?;
+        // Copy file directly
+        fs::copy(&parent_path, &new_path)
+            .await
+            .with_context(|| format!("Failed to fork session: parent {} not found", parent_id.0))?;
 
         Ok(new_id)
     }
 
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>> {
-        let events = self.read_events(id).await?;
-        Ok(Self::rebuild_session(&events))
+        let path = self.session_file_path(id);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let meta = fs::metadata(&path).await?;
+        let now = chrono::Utc::now();
+
+        // created() can fail on some filesystems (ext3, tmpfs, etc.)
+        let created_at = meta
+            .created()
+            .ok()
+            .and_then(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+            })
+            .flatten()
+            .unwrap_or(now);
+
+        let updated_at = meta
+            .modified()
+            .ok()
+            .and_then(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+            })
+            .flatten()
+            .unwrap_or(now);
+
+        Ok(Some(SessionRecord {
+            id: id.clone(),
+            created_at,
+            updated_at,
+        }))
     }
 
     async fn delete_session(&self, id: &SessionId) -> Result<()> {
@@ -168,44 +133,32 @@ impl Storage for FsStorage {
     }
 
     async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
+        let path = self.session_file_path(session_id);
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .context("Failed to open session file")?;
+
         for message in messages {
-            let event = SessionEvent::message_added(message.clone());
-            self.append_event(session_id, event).await?;
+            let line = serde_json::to_string(message)?;
+            file.write_all(line.as_bytes()).await?;
+            file.write_all(b"\n").await?;
         }
+        file.flush().await?;
+
         Ok(())
     }
 
     async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
-        let events = self.read_events(session_id).await?;
-        let messages: Vec<Message> = events
-            .into_iter()
-            .filter_map(|record| match record.event {
-                SessionEvent::MessageAdded { message, .. } => Some(message),
-                _ => None,
-            })
-            .collect();
-        Ok(messages)
+        self.read_messages(session_id).await
     }
 
     async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
-        // Full compaction: replace all messages atomically
         let path = self.session_file_path(session_id);
         let temp_path = path.with_extension("tmp");
-
-        // Get existing events (keep non-message events like Created, Forked, etc.)
-        let existing_events = self.read_events(session_id).await?;
-        let mut new_events: Vec<SessionEventRecord> = existing_events
-            .into_iter()
-            .filter(|r| !matches!(r.event, SessionEvent::MessageAdded { .. }))
-            .collect();
-
-        // Add new messages
-        for message in messages {
-            new_events.push(SessionEventRecord {
-                timestamp: chrono::Utc::now(),
-                event: SessionEvent::message_added(message.clone()),
-            });
-        }
 
         // Write to temp file then rename (atomic)
         let mut file = fs::OpenOptions::new()
@@ -215,8 +168,8 @@ impl Storage for FsStorage {
             .open(&temp_path)
             .await?;
 
-        for record in &new_events {
-            let line = serde_json::to_string(record)?;
+        for message in messages {
+            let line = serde_json::to_string(message)?;
             file.write_all(line.as_bytes()).await?;
             file.write_all(b"\n").await?;
         }
@@ -230,39 +183,48 @@ impl Storage for FsStorage {
     }
 
     async fn list_sessions(&self) -> Result<Vec<crate::storage::SessionInfo>> {
-        let mut sessions = Vec::new();
         let mut entries = fs::read_dir(&self.base_dir).await?;
+        let mut paths = Vec::new();
 
+        // Collect all jsonl file paths
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-                continue;
-            }
-
-            // Extract session ID from filename
-            let filename = path.file_stem().and_then(|s| s.to_str());
-            if filename.is_none() {
-                continue;
-            }
-
-            // Read events to get session info
-            let session_id = SessionId(filename.unwrap().to_string());
-            let events = self.read_events(&session_id).await?;
-
-            if let Some(record) = Self::rebuild_session(&events) {
-                let message_count = events
-                    .iter()
-                    .filter(|r| matches!(r.event, SessionEvent::MessageAdded { .. }))
-                    .count();
-
-                sessions.push(crate::storage::SessionInfo {
-                    id: record.id.0,
-                    created_at: record.created_at,
-                    updated_at: record.updated_at,
-                    message_count,
-                });
+            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                paths.push(path);
             }
         }
+
+        // Concurrently fetch metadata for all files
+        let metadata_futs: Vec<_> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let id = path.file_stem().and_then(|s| s.to_str())?.to_string();
+                Some(async move {
+                    let meta = fs::metadata(&path).await.ok()?;
+                    let ctime = meta.created().ok()?;
+                    let mtime = meta.modified().ok()?;
+                    let created_at = chrono::DateTime::from_timestamp(
+                        ctime.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64,
+                        0,
+                    )?;
+                    let updated_at = chrono::DateTime::from_timestamp(
+                        mtime.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64,
+                        0,
+                    )?;
+                    Some(crate::storage::SessionInfo {
+                        id,
+                        created_at,
+                        updated_at,
+                    })
+                })
+            })
+            .collect();
+
+        let mut sessions: Vec<_> = join_all(metadata_futs)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
 
         // Sort by updated_at descending (most recent first)
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
