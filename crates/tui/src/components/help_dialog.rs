@@ -36,6 +36,7 @@ impl HelpSection {
         }
     }
 
+    #[must_use]
     pub fn add_binding(mut self, key: impl Into<String>, desc: impl Into<String>) -> Self {
         self.bindings.push((key.into(), desc.into()));
         self
@@ -108,11 +109,12 @@ impl HelpDialog {
 
     /// Build the help text content
     fn build_content(&self) -> String {
+        use std::fmt::Write;
         let mut content = String::new();
         for section in &self.sections {
-            content.push_str(&format!("{}\n", section.title));
+            writeln!(content, "{}", section.title).unwrap();
             for (key, desc) in &section.bindings {
-                content.push_str(&format!("  {key:<20} {desc}\n"));
+                writeln!(content, "  {key:<20} {desc}").unwrap();
             }
             content.push('\n');
         }
@@ -354,13 +356,8 @@ impl AppComponent<Msg, crate::msg::UserEvent> for HelpDialog {
             }
             // Close dialog: q, Esc, or Ctrl+C
             Event::Keyboard(KeyEvent {
-                code: Key::Char('q') | Key::Esc,
-                modifiers: KeyModifiers::NONE,
-            })
-            | Event::Keyboard(KeyEvent {
-                code: Key::Char('c'),
-                modifiers: KeyModifiers::CONTROL,
-            }) => {
+code: Key::Char('q') | Key::Esc, modifiers: KeyModifiers::NONE } | KeyEvent {
+code: Key::Char('c'), modifiers: KeyModifiers::CONTROL }) => {
                 self.hide();
                 Some(Msg::CloseHelpDialog)
             }

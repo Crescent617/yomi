@@ -35,7 +35,8 @@ pub enum NotificationLevel {
 impl NotificationLevel {
     fn color(self) -> Color {
         match self {
-            NotificationLevel::Unknown | NotificationLevel::Info => colors::text_secondary(),
+            NotificationLevel::Unknown => colors::text_secondary(),
+            NotificationLevel::Info => colors::accent_info(),
             NotificationLevel::Warn => colors::accent_warning(),
             NotificationLevel::Error => colors::accent_error(),
             NotificationLevel::Success => colors::accent_success(),
