@@ -807,6 +807,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
     ("/compact", "Force message compaction"),
+    ("/help", "Show keyboard shortcuts help"),
 ];
 
 /// Random tips to show in the input placeholder
@@ -1809,6 +1810,7 @@ impl InputComponent {
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
             "/compact" => Some(Msg::CommandCompact),
+            "/help" => Some(Msg::CommandHelp),
             _ => None, // Unknown command: treat as regular message
         }
     }
