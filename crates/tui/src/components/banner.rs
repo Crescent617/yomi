@@ -15,7 +15,7 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors};
+use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
 
 /// Mascot ASCII art frames
 const MASCOT_FRAMES: &[(&str, u8)] = &[
@@ -147,12 +147,7 @@ impl BannerData {
             let mut result = grouped.join(", ");
 
             if result.len() > MAX_DISPLAY_LEN {
-                // Find a good cut point
-                let mut cut_len = MAX_DISPLAY_LEN;
-                while cut_len > 0 && !result.is_char_boundary(cut_len) {
-                    cut_len -= 1;
-                }
-                result = format!("{}...", &result[..cut_len]);
+                result = truncate_by_width(&result, MAX_DISPLAY_LEN, "...");
             }
 
             result

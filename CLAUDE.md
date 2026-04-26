@@ -43,4 +43,4 @@ cargo fmt -- --check
 - **Cancellation**: tokio's `CancellationToken` propagates through agent hierarchy
 - **Storage**: SQLite for tasks/messages, filesystem for sessions
 - **Plugin Loading**: `PluginLoader` loads `.js` plugins from Claude's plugin cache
-- **Unicode Handling**: careful handling of Unicode in TUI
+- **Unicode Handling**: must carefully handling of unicode width in TUI

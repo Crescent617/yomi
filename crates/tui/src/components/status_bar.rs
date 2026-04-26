@@ -18,8 +18,9 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors};
-use kernel::{permissions::Level, utils::strs};
+use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
+use kernel::permissions::Level;
+use unicode_width::UnicodeWidthStr;
 
 /// Tip message for status bar (center section)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,11 +154,11 @@ impl StatusBar {
             return Span::styled("", Style::default());
         }
 
-        // Center the message, truncate if too long
-        let display = if text.chars().count() > width {
-            strs::truncate_with_suffix(text, width, "...")
+        // Center the message, truncate if too long (using display width for CJK)
+        let text_width = text.width_cjk();
+        let display = if text_width > width {
+            truncate_by_width(text, width, "...")
         } else {
-            let text_width = text.chars().count();
             let padding = (width.saturating_sub(text_width)) / 2;
             format!("{:>padding$}{}", "", text, padding = padding)
         };

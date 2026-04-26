@@ -22,6 +22,7 @@ use crate::{
     components::{info_bar::Notification, input_edit::TextInput, CompletionList, FileCompletion},
     msg::Msg,
     theme::colors,
+    utils::text::truncate_by_chars,
 };
 
 /// Text selection state for input component
@@ -1045,8 +1046,9 @@ impl InputComponent {
                     tracing::debug!("Block {}: Text ({} chars)", i, text.len());
                 }
                 kernel::types::ContentBlock::ImageUrl { image_url } => {
-                    let preview = if image_url.url.len() > 60 {
-                        format!("{}...({} chars)", &image_url.url[..50], image_url.url.len())
+                    let preview = if image_url.url.chars().count() > 60 {
+                        let truncated = truncate_by_chars(&image_url.url, 50);
+                        format!("{truncated}...({} chars)", image_url.url.chars().count())
                     } else {
                         image_url.url.clone()
                     };

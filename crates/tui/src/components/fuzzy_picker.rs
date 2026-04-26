@@ -7,7 +7,7 @@
 //! - File picker
 //! - Any list that needs filtering
 
-use kernel::utils::strs::truncate_with_suffix;
+use crate::utils::text::truncate_by_chars;
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
@@ -688,7 +688,7 @@ pub fn history_items(history: &[String]) -> Vec<PickerItem> {
             let text_single_line = text.replace('\n', " ").trim_start().to_string();
             PickerItem::new(
                 format!("history_{idx}"),
-                truncate_with_suffix(text_single_line.as_ref(), 50, "..."),
+                truncate_by_chars(&text_single_line, 50),
             )
         })
         .rev() // Most recent first
