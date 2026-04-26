@@ -592,16 +592,21 @@ impl Agent {
     /// Handle compaction result, update state, and return user message.
     async fn handle_compaction_result(
         &mut self,
-        result: Result<Option<Vec<Message>>, CompactionError>,
+        result: Result<Option<Vec<Arc<Message>>>, CompactionError>,
         old_count: usize,
     ) -> Result<String, String> {
         let compact_result = match result {
             Ok(None) => Ok("No compaction needed".to_string()),
             Ok(Some(messages)) => {
-                let compacted_count = old_count.saturating_sub(messages.len());
                 self.apply_compacted_messages(messages).await;
+                let new_count = self.message_buffer.len();
+                let compacted_count = old_count.saturating_sub(new_count);
 
                 Ok(if compacted_count > 0 {
+                    info!(
+                        "Agent {} compaction completed: {} -> {} messages (compacted {})",
+                        self.id, old_count, new_count, compacted_count
+                    );
                     format!("Compacted {compacted_count} messages")
                 } else {
                     "Micro-compaction completed".to_string()
@@ -635,24 +640,29 @@ impl Agent {
     }
 
     /// Apply compacted messages: update buffer and persist to storage.
-    async fn apply_compacted_messages(&mut self, messages: Vec<Message>) {
-        let compacted_count = self.message_buffer.len().saturating_sub(messages.len());
-        if compacted_count > 0 {
-            tracing::info!(
-                "Agent {} compacted {} messages -> {} messages",
-                self.id,
-                self.message_buffer.len(),
-                messages.len()
-            );
-        }
+    /// Note: Preserves the system message at the beginning of the buffer.
+    async fn apply_compacted_messages(&mut self, messages: Vec<Arc<Message>>) {
+        // Reconstruct buffer: keep system messages + compacted messages (filter out any system msgs from compactor)
+        let new_messages: Vec<Arc<Message>> = self
+            .message_buffer
+            .messages()
+            .iter()
+            .filter(|m| m.role == Role::System)
+            .take(1) // Only keep the first system message (the original prompt)
+            .cloned()
+            .chain(messages.iter().filter(|m| m.role != Role::System).cloned())
+            .collect();
+        *self.message_buffer.messages_mut() = new_messages;
 
-        // Update message buffer
-        *self.message_buffer.messages_mut() = messages.iter().cloned().map(Arc::new).collect();
-
-        // Persist compacted state
+        // Persist compacted messages (without system messages)
         if let Some(storage) = &self.shared.storage {
             let sid = crate::types::SessionId(self.session_id.clone());
-            if let Err(e) = storage.set_messages(&sid, &messages).await {
+            let to_persist: Vec<Message> = messages
+                .into_iter()
+                .filter(|m| m.role != Role::System)
+                .map(|m| (*m).clone())
+                .collect();
+            if let Err(e) = storage.set_messages(&sid, &to_persist).await {
                 tracing::warn!(
                     "Agent {} failed to persist compacted messages: {}",
                     self.id,

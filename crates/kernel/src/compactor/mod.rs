@@ -12,6 +12,17 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+/// Default token threshold to trigger compaction (80% of context window)
+pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
+/// Default context window size
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
+/// Number of recent messages to keep during compaction
+const KEEP_RECENT_MESSAGES: usize = 6;
+/// Max tokens for summary generation
+const SUMMARY_MAX_TOKENS: u32 = 4000;
+
+/// Summary prompt for full compaction
+const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
 /// Errors that can occur during compaction
 #[derive(Debug, thiserror::Error)]
 pub enum CompactionError {
@@ -49,17 +60,24 @@ fn estimate_tokens_for_message(msg: &Message) -> u32 {
     ((content_len / 4) + 10) as u32 // +10 for overhead
 }
 
-/// Default token threshold to trigger compaction (80% of context window)
-pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
-/// Default context window size
-pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
-/// Number of recent messages to keep during compaction
-const KEEP_RECENT_MESSAGES: usize = 6;
-/// Max tokens for summary generation
-const SUMMARY_MAX_TOKENS: u32 = 4000;
+/// Estimate total tokens for messages and set usage on the last message.
+/// This allows `calculate_tokens` to use this as a baseline for future calculations.
+fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
+    if messages.is_empty() {
+        return;
+    }
 
-/// Summary prompt for full compaction
-const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");
+    let total_tokens = estimate_tokens_for_arc_messages(messages);
+
+    // Get the last message and set its token_usage
+    if let Some(last) = messages.last_mut() {
+        Arc::make_mut(last).token_usage = Some(crate::types::MessageTokenUsage {
+            prompt_tokens: total_tokens,
+            completion_tokens: 0,
+            total_tokens,
+        });
+    }
+}
 
 /// Compactor for managing conversation context
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +191,8 @@ impl Compactor {
         }
 
         if modified {
+            // Estimate total tokens and set on the last message for accurate future calculations
+            set_token_usage_on_last(&mut result);
             Some(result)
         } else {
             None
@@ -181,8 +201,9 @@ impl Compactor {
 
     /// Perform full compaction: generate summary using API.
     ///
-    /// Returns messages in order: `system_msgs` + [summary] + recent
-    /// System messages are preserved at the beginning and not included in summarization.
+    /// Returns messages in order: [summary] + recent
+    /// Note: System messages are NOT included in the returned result - they are
+    /// recreated by the agent on session restore to avoid duplication.
     ///
     /// Supports cancellation via `cancel_token`.
     pub async fn full_compact(
@@ -191,24 +212,22 @@ impl Compactor {
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Vec<Message>, CompactionError> {
+    ) -> Result<Vec<Arc<Message>>, CompactionError> {
         // Separate system messages from the rest
-        let (system_msgs, non_system): (Vec<_>, Vec<_>) = messages
+        let (_system_msgs, non_system): (Vec<_>, Vec<_>) = messages
             .iter()
             .cloned()
             .partition(|m| m.role == Role::System);
 
         if non_system.len() <= self.keep_recent {
             // Not enough non-system messages to compact, keep everything as-is
-            return Ok(messages.iter().map(|m| (**m).clone()).collect());
+            // Note: We still filter out system messages here
+            return Ok(non_system);
         }
 
         let split_point = non_system.len() - self.keep_recent;
         let to_summarize = &non_system[..split_point];
-        let recent: Vec<Message> = non_system[split_point..]
-            .iter()
-            .map(|m| (**m).clone())
-            .collect();
+        let recent: Vec<Arc<Message>> = non_system[split_point..].to_vec();
 
         // Generate summary using API
         let summary_text =
@@ -216,15 +235,12 @@ impl Compactor {
 
         // Create summary message as user role so it survives session restore
         let summary = Message::user(summary_text);
+        // Reconstruct: summary + recent (system_msgs NOT included)
+        let mut result: Vec<Arc<Message>> =
+            std::iter::once(Arc::new(summary)).chain(recent.into_iter()).collect();
 
-        // Reconstruct: system_msgs + summary + recent
-        let result: Vec<Message> = system_msgs
-            .into_iter()
-            .map(|m| (*m).clone())
-            .chain(std::iter::once(summary))
-            .chain(recent.into_iter())
-            .collect();
-
+        // Estimate total tokens and set on the last message for accurate future calculations
+        set_token_usage_on_last(&mut result);
         Ok(result)
     }
 
@@ -238,27 +254,28 @@ impl Compactor {
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Option<Vec<Message>>, CompactionError> {
+    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
         if !self.should_compact(messages) {
             return Ok(None);
         }
 
         // Try micro-compaction first
-        let after_micro = self.micro_compact(messages);
-        let to_compact = after_micro.as_deref().unwrap_or(messages);
-
-        // Check if micro-compaction was sufficient
-        if !self.should_compact(to_compact) {
-            // Micro-compaction was enough, return it if we did it
-            return Ok(after_micro.map(|msgs| msgs.into_iter().map(|m| (*m).clone()).collect()));
+        if let Some(after_micro) = self.micro_compact(messages) {
+            // Check if micro-compaction was sufficient
+            if !self.should_compact(&after_micro) {
+                return Ok(Some(after_micro));
+            }
+            // Need full compaction on top of micro results
+            return self
+                .full_compact(&after_micro, provider, model_config, cancel_token)
+                .await
+                .map(Some);
         }
 
-        // Need full compaction
-        let result = self
-            .full_compact(to_compact, provider, model_config, cancel_token)
-            .await?;
-
-        Ok(Some(result))
+        // No micro-compaction possible, do full compaction directly
+        self.full_compact(messages, provider, model_config, cancel_token)
+            .await
+            .map(Some)
     }
 }
 

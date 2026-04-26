@@ -30,6 +30,8 @@ pub struct ThemeConfig {
     pub user_msg_bg: Color,
     /// System/tool accent (tool calls, system messages)
     pub accent_system: Color,
+    /// Info states
+    pub accent_info: Color,
     /// Success states
     pub accent_success: Color,
     /// Warning states
@@ -76,6 +78,7 @@ impl Default for ThemeConfig {
             accent_user: hex("#C4C6CF"),
             user_msg_bg: hex("#2A2A35"),
             accent_system: hex("#64C8DF"),
+            accent_info: hex("#64C8DF"),
             accent_success: hex("#64DC8C"),
             accent_warning: hex("#DFC864"),
             accent_error: hex("#EF7494"),
@@ -159,6 +162,9 @@ pub mod colors {
     }
     pub fn accent_system() -> Color {
         current_theme().accent_system
+    }
+    pub fn accent_info() -> Color {
+        current_theme().accent_info
     }
     pub fn accent_success() -> Color {
         current_theme().accent_success
