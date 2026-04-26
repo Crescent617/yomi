@@ -164,9 +164,10 @@ impl Agent {
 
     async fn run(mut self) -> Result<(), AgentError> {
         tracing::info!(
-            "Agent {} started with {} messages",
+            "Agent {} started with {} initial message(s), max_iterations={}",
             self.id,
-            self.message_buffer.len()
+            self.message_buffer.len(),
+            self.max_iterations
         );
 
         self.context.transition_to(AgentState::WaitingForInput);
@@ -177,7 +178,8 @@ impl Agent {
                 break;
             }
 
-            if self.context.iteration_count() >= self.max_iterations
+            if self.max_iterations > 0
+                && self.context.iteration_count() >= self.max_iterations
                 && self.context.current_state() == AgentState::Streaming
             {
                 tracing::warn!(
@@ -221,7 +223,7 @@ impl Agent {
                     }
                 }
                 AgentState::ExecutingTool => {
-                    tracing::info!("Agent {} executing tools", self.id);
+                    tracing::debug!("Agent {} executing tools", self.id);
                     if let Err(e) = self.handle_execute_tool().await {
                         self.emit_error(
                             crate::event::ErrorPhase::ToolExecution,
@@ -240,7 +242,7 @@ impl Agent {
 
         let tool_calls = self.count_tool_calls();
         let final_state = self.context.current_state();
-        tracing::info!(
+        tracing::debug!(
             "Agent {} finished: state={:?}, messages={}, tool_calls={}",
             self.id,
             final_state,
@@ -403,11 +405,17 @@ impl Agent {
 
         // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
-        tracing::info!(
+        tracing::debug!(
             "Agent {} preparing to stream with {} tool(s): {:?}",
             self.id,
             tools.len(),
             tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        tracing::debug!(
+            "Agent {} iteration {}/{}",
+            self.id,
+            self.context.iteration_count(),
+            self.max_iterations,
         );
 
         let _ = self
@@ -431,7 +439,7 @@ impl Agent {
             tokio::spawn(async move { provider.stream(&messages, &tools, &model_config).await });
         let abort_handle = stream_task.abort_handle();
 
-        info!("Agent {} waiting for model stream to start", self.id);
+        tracing::debug!("Agent {} waiting for model stream to start", self.id);
 
         let mut stream = tokio::select! {
             biased;
@@ -710,14 +718,14 @@ impl Agent {
                 .tool_calls
                 .as_ref()
                 .map_or(0, std::vec::Vec::len);
-            tracing::info!(
+            tracing::debug!(
                 "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
                 self.id,
                 tool_count
             );
             self.context.transition_to(AgentState::ExecutingTool);
         } else {
-            tracing::info!(
+            tracing::debug!(
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
