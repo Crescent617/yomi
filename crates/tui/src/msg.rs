@@ -68,6 +68,7 @@ pub enum Msg {
     CommandYolo,    // /yolo - toggle yolo mode
     CommandBrowse,  // /browse - toggle browse mode
     CommandCompact, // /compact - force message compaction
+    CommandHelp,    // /help - show help dialog
 
     // Suspend process to background (Ctrl-Z)
     Suspend,
@@ -76,6 +77,9 @@ pub enum Msg {
     ShowHistoryPicker,       // Show fuzzy history search
     HistorySelected(String), // User selected a history item
     CloseHistoryPicker,      // Close history picker without selection
+
+    // Help dialog
+    CloseHelpDialog, // Close the help dialog
 }
 
 impl From<AppEvent> for Msg {

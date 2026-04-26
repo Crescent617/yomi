@@ -32,9 +32,9 @@ use kernel::types::{ContentBlock, Message};
 
 use crate::{
     components::{
-        history_items, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
-        ChatViewComponent, FuzzyPickerComponent, InfoBarComponent, InputComponent, PickerConfig,
-        SelectDialogComponent, StatusBarComponent,
+        default_help_sections, history_items, info_bar::Notification, status_bar::Tip,
+        tips::get_random_tip, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
+        InfoBarComponent, InputComponent, PickerConfig, SelectDialogComponent, StatusBarComponent,
     },
     id::Id,
     msg::{Msg, UserEvent},
@@ -669,6 +669,9 @@ impl Model {
 
             // Render history picker on top if active
             self.app.view(&Id::HistoryPicker, f, f.area());
+
+            // Render help dialog on top if active
+            self.app.view(&Id::HelpDialog, f, f.area());
         });
     }
 
@@ -728,6 +731,13 @@ impl Model {
         app.mount(
             Id::HistoryPicker,
             Box::new(history_picker),
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
+        )?;
+
+        // Mount help dialog component (hidden by default)
+        app.mount(
+            Id::HelpDialog,
+            Box::new(HelpDialog::new("Keyboard Shortcuts")),
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
@@ -1438,6 +1448,39 @@ impl Model {
                 Msg::CloseHistoryPicker => {
                     // Return focus to input box and trigger redraw
                     let _ = self.app.active(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
+                // Help dialog messages
+                Msg::CommandHelp => {
+                    // Show help dialog with default help sections
+                    let sections = default_help_sections();
+                    if let Err(e) = self.app.attr(
+                        &Id::HelpDialog,
+                        Attribute::Custom("show"),
+                        AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(sections))),
+                    ) {
+                        tracing::warn!("Failed to show help dialog: {}", e);
+                    }
+                    // Give focus to help dialog so it receives keyboard events
+                    if let Err(e) = self.app.active(&Id::HelpDialog) {
+                        tracing::warn!("Failed to focus help dialog: {}", e);
+                    }
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::CloseHelpDialog => {
+                    // Hide help dialog and return focus to input box
+                    if let Err(e) = self.app.attr(
+                        &Id::HelpDialog,
+                        Attribute::Custom("hide"),
+                        AttrValue::Flag(true),
+                    ) {
+                        tracing::warn!("Failed to hide help dialog: {}", e);
+                    }
+                    if let Err(e) = self.app.active(&Id::InputBox) {
+                        tracing::warn!("Failed to focus input box: {}", e);
+                    }
                     self.state.should_redraw = true;
                     None
                 }
