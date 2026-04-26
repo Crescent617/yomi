@@ -2152,9 +2152,8 @@ impl InputComponent {
                     Some(Msg::Quit)
                 } else {
                     // First Ctrl+C: show hint in status bar for 1 second
-                    Some(Msg::Notification(Notification::new(
+                    Some(Msg::Notification(Notification::warn(
                         "Press Ctrl+C again to exit",
-                        crate::components::info_bar::NotificationLevel::Unknown,
                         1000, // 1000ms = 1 second, matches double-press detection
                     )))
                 }
