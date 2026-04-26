@@ -37,7 +37,7 @@ impl GlobTool {
         &self,
         search_dir: PathBuf,
         pattern: String,
-        no_ignore: bool,
+        include_ignored: bool,
         include_hidden: bool,
         limit: usize,
     ) -> Result<Vec<PathBuf>> {
@@ -47,7 +47,7 @@ impl GlobTool {
             let mut files = Vec::new();
 
             let walker = ignore::WalkBuilder::new(&search_dir)
-                .standard_filters(!no_ignore)
+                .standard_filters(!include_ignored)
                 .hidden(!include_hidden)
                 .follow_links(false)
                 .build();
@@ -133,13 +133,13 @@ impl Tool for GlobTool {
                     "type": "string",
                     "description": "The directory to search in. If not specified, the current working directory will be used."
                 },
-                "no_ignore": {
+                "include_ignored": {
                     "type": "boolean",
-                    "description": "Whether to ignore .gitignore files. Default: false"
+                    "description": "Whether to include files ignored by .gitignore. Default: false"
                 },
-                "hidden": {
+                "include_hidden": {
                     "type": "boolean",
-                    "description": "Whether to include hidden files (starting with .). Default: false"
+                    "description": "Whether to include hidden files (starting with .). Default: true"
                 }
             },
             "required": ["pattern"]
@@ -151,8 +151,8 @@ impl Tool for GlobTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
         let path = args["path"].as_str();
-        let no_ignore = args["no_ignore"].as_bool().unwrap_or(false);
-        let include_hidden = args["hidden"].as_bool().unwrap_or(false);
+        let include_ignored = args["include_ignored"].as_bool().unwrap_or(false);
+        let include_hidden = args["include_hidden"].as_bool().unwrap_or(true);
 
         // Determine search directory
         let search_dir = match path {
@@ -186,7 +186,7 @@ impl Tool for GlobTool {
             .search_files(
                 search_dir,
                 pattern.to_string(),
-                no_ignore,
+                include_ignored,
                 include_hidden,
                 MAX_RESULTS,
             )
@@ -393,25 +393,26 @@ mod tests {
 
         let tool = GlobTool::new(base_path);
 
-        // Without hidden flag - should not include .hidden.rs
+        // Without include_hidden flag (default true) - should include .hidden.rs
         let args = serde_json::json!({
             "pattern": "*.rs"
         });
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(!result.text_content().contains(".hidden.rs"));
+        assert!(result.text_content().contains(".hidden.rs"));
         assert!(result.text_content().contains("normal.rs"));
 
-        // With hidden flag - should include .hidden.rs
+        // With include_hidden: false - should not include .hidden.rs
         let args = serde_json::json!({
             "pattern": "*.rs",
-            "hidden": true
+            "include_hidden": false
         });
         let ctx = ToolExecCtx::new("test_tool_call");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.text_content().contains(".hidden.rs"));
+        assert!(!result.text_content().contains(".hidden.rs"));
+        assert!(result.text_content().contains("normal.rs"));
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 # Yomi
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/Rust-1.90+-orange.svg)](https://www.rust-lang.org)
+[![Release](https://github.com/crescent617/yomi/actions/workflows/release.yml/badge.svg)](https://github.com/crescent617/yomi/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A simple AI coding assistant CLI built in Rust, featuring an async agent loop, sub-agent support, and an elegant TUI interface.
@@ -19,7 +20,7 @@ A simple AI coding assistant CLI built in Rust, featuring an async agent loop, s
 
 ### Prerequisites
 
-- Rust 1.75+ (install via [rustup](https://rustup.rs))
+- Rust 1.90+ (install via [rustup](https://rustup.rs))
 - API key from OpenAI or Anthropic
 
 ### Installation
@@ -30,10 +31,10 @@ brew update && brew install crescent617/tap/yomi
 
 ### Configuration
 
-更多配置选项请参见 [config.md](docs/config.md)。
+See [config.md](docs/config.md) for more options.
 
 ```bash
-# model
+# General
 export YOMI_CONTEXT_WINDOW=200k
 
 # OpenAI
@@ -46,7 +47,6 @@ export YOMI_PROVIDER=anthropic
 export ANTHROPIC_AUTH_TOKEN=sk-...
 export ANTHROPIC_BASE_URL=https://xxx
 export ANTHROPIC_MODEL=xxx
-
 ```
 
 ### Usage
