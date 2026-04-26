@@ -17,9 +17,9 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors};
+use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
 use kernel::utils::tokens;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 /// Notification level for info bar messages
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -283,20 +283,7 @@ impl InfoBar {
 
         // Truncate if too long, right-aligned
         let display = if text_width > width {
-            // For truncation, we need to handle by char count since
-            // truncate_with_suffix works on byte length
-            let mut truncated = String::new();
-            let mut current_width = 0;
-            for ch in text.chars() {
-                let ch_width = ch.width_cjk().unwrap_or(0);
-                if current_width + ch_width + 3 > width {
-                    // +3 for "..."
-                    break;
-                }
-                truncated.push(ch);
-                current_width += ch_width;
-            }
-            format!("{truncated}...")
+            truncate_by_width(text, width, "...")
         } else {
             let padding = width.saturating_sub(text_width);
             format!("{:>padding$}{}", "", text, padding = padding)

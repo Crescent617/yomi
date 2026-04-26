@@ -25,7 +25,7 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::colors,
-    utils::text::{char_idx_to_byte_idx, substring_by_chars, truncate_unicode},
+    utils::text::{char_idx_to_byte_idx, substring_by_chars, truncate_by_chars},
     utils::{strs, text::preprocess},
 };
 use kernel::task::{
@@ -2181,28 +2181,32 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
         n if n == SHELL_TOOL_NAME => {
             let cmd = value["command"].as_str()?;
             // Return command only, timeout will be rendered separately with text_secondary style
-            Some(truncate_unicode(cmd, 50))
+            Some(truncate_by_chars(cmd, 50))
         }
         n if n == GLOB_TOOL_NAME || n == GREP_TOOL_NAME => {
             value["pattern"].as_str().map(String::from)
         }
         n if n == WEBFETCH_TOOL_NAME => value["url"].as_str().map(|url| {
             // Truncate long URLs for display
-            truncate_unicode(url, MAX_LEN)
+            truncate_by_chars(url, MAX_LEN)
         }),
         n if n == SKILL_TOOL_NAME => {
             // Prefer 'name', fallback to 'path'
             value["name"]
                 .as_str()
-                .map(|s| truncate_unicode(s, MAX_LEN))
-                .or_else(|| value["path"].as_str().map(|s| truncate_unicode(s, MAX_LEN)))
+                .map(|s| truncate_by_chars(s, MAX_LEN))
+                .or_else(|| {
+                    value["path"]
+                        .as_str()
+                        .map(|s| truncate_by_chars(s, MAX_LEN))
+                })
         }
         n if n == SUBAGENT_TOOL_NAME => value["prompt"]
             .as_str()
-            .map(|p| truncate_unicode(p, MAX_LEN)),
+            .map(|p| truncate_by_chars(p, MAX_LEN)),
         _ => None,
     };
 
     // Apply unicode-safe truncation to all results
-    target.map(|t| truncate_unicode(&t, MAX_LEN))
+    target.map(|t| truncate_by_chars(&t, MAX_LEN))
 }
