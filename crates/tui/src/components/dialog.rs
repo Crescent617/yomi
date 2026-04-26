@@ -11,7 +11,7 @@ use tuirealm::{
     ratatui::{
         layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
         style::{Modifier, Style},
-        widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
         Frame,
     },
     state::{State, StateValue},
@@ -102,11 +102,13 @@ impl SelectDialog {
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
         // Calculate dialog size (centered, 60% width, auto height)
         let dialog_width = (f32::from(area.width) * 0.6).clamp(40.0, 80.0) as u16;
+        let dialog_width = dialog_width.min(area.width.saturating_sub(4));
         let message_height = self
             .message
             .as_ref()
             .map_or(0, |m| m.lines().count() as u16);
-        let dialog_height = (5 + message_height + self.options.len() as u16).min(area.height - 4);
+        let dialog_height =
+            (5 + message_height + self.options.len() as u16).min(area.height.saturating_sub(4));
 
         let dialog_area = Rect {
             x: area.x + (area.width - dialog_width) / 2,
@@ -122,6 +124,7 @@ impl SelectDialog {
         let block = Block::default()
             .title(self.title.as_str())
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(colors::accent_system())
             .title_style(
                 Style::default()
@@ -329,6 +332,7 @@ impl Component for SelectDialogComponent {
 impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
     fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+        use Event::Keyboard;
 
         tracing::trace!(
             "Dialog received event: {:?}, active={}",
@@ -341,21 +345,35 @@ impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
         }
 
         match *ev {
-            Event::Keyboard(KeyEvent {
-                code: Key::Up,
-                modifiers: KeyModifiers::NONE,
-            }) => {
+            // Up arrow or Ctrl+P or 'k': navigate up
+            Keyboard(
+                KeyEvent {
+                    code: Key::Up | Key::Char('k'),
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.select_up();
                 Some(Msg::Redraw)
             }
-            Event::Keyboard(KeyEvent {
-                code: Key::Down,
-                modifiers: KeyModifiers::NONE,
-            }) => {
+            // Down arrow or Ctrl+N or 'j': navigate down
+            Keyboard(
+                KeyEvent {
+                    code: Key::Down | Key::Char('j'),
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
                 self.component.select_down();
                 Some(Msg::Redraw)
             }
-            Event::Keyboard(KeyEvent {
+            Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
@@ -370,7 +388,7 @@ impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
                     None
                 }
             }
-            Event::Keyboard(KeyEvent {
+            Keyboard(KeyEvent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
             }) => {
