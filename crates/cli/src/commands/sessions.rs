@@ -2,14 +2,43 @@ use crate::args::GlobalArgs;
 use crate::utils::load_config;
 use anyhow::Result;
 use kernel::{storage::FsStorage, storage::Storage, types::Role, types::SessionId};
+use sqlx::sqlite::SqlitePoolOptions;
+use std::path::Path;
 use std::sync::Arc;
+
+/// Create SQLite pool with proper connection string and PRAGMAs
+async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Create empty file if it doesn't exist (sqlx requirement)
+    if !db_path.exists() {
+        tokio::fs::File::create(db_path).await?;
+    }
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", db_path.display()))
+        .await?;
+
+    // Set busy timeout (5 seconds)
+    sqlx::query("PRAGMA busy_timeout = 5000")
+        .execute(&pool)
+        .await?;
+
+    Ok(pool)
+}
 
 #[allow(clippy::needless_pass_by_value)]
 pub async fn list(global: GlobalArgs) -> Result<()> {
     let config = load_config(global.config.as_ref())?;
     let data_dir = config.data_dir;
 
-    let storage = Arc::new(FsStorage::new(data_dir.join("sessions"))?);
+    let db_path = data_dir.join("yomi.db");
+    let pool = create_db_pool(&db_path).await?;
+    let storage = Arc::new(FsStorage::new(data_dir.join("sessions"), pool).await?);
     let sessions = storage.list_sessions().await?;
 
     if sessions.is_empty() {

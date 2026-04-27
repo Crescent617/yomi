@@ -1,6 +1,8 @@
 pub mod fs;
+pub mod meta;
 
 pub use fs::FsStorage;
+pub use meta::{MetaStorage, SessionMeta};
 
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
@@ -14,6 +16,9 @@ pub struct SessionInfo {
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub parent_id: Option<String>,
+    pub title: Option<String>,
+    pub message_count: i64,
 }
 
 #[async_trait]
