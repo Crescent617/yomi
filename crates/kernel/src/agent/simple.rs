@@ -168,7 +168,12 @@ impl SimpleAgent {
                 .await?;
 
             // Update token usage if available
-            // Note: We use the latest values since prompt_tokens includes full history
+            // Note: For each model response:
+            // - prompt_tokens includes the FULL conversation history (all previous messages)
+            // - completion_tokens is the CURRENT response's output tokens only
+            // So total_tokens = prompt_tokens + completion_tokens represents the cumulative total
+            // across all iterations. We directly assign (not accumulate) because each response
+            // already includes the complete history in prompt_tokens.
             if let Some((prompt, completion)) = token_usage {
                 metrics.total_prompt_tokens = prompt;
                 metrics.total_completion_tokens = completion;

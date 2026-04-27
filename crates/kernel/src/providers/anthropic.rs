@@ -360,6 +360,7 @@ struct AnthropicStreamState {
     current_tool_call: Option<PartialToolCall>,
     accumulated_text: String,
     accumulated_thinking: String,
+    input_tokens: Option<u32>,
 }
 
 struct PartialToolCall {
@@ -374,6 +375,7 @@ impl AnthropicStreamState {
             current_tool_call: None,
             accumulated_text: String::new(),
             accumulated_thinking: String::new(),
+            input_tokens: None,
         }
     }
 
@@ -385,7 +387,11 @@ impl AnthropicStreamState {
         let mut items = Vec::new();
 
         match event {
-            AnthropicStreamEvent::MessageStart { .. } | AnthropicStreamEvent::Ping => {}
+            AnthropicStreamEvent::MessageStart { message } => {
+                // Store input tokens from message_start event
+                self.input_tokens = Some(message.usage.input_tokens);
+            }
+            AnthropicStreamEvent::Ping => {}
             AnthropicStreamEvent::ContentBlockStart { content_block, .. } => match content_block {
                 AnthropicContent::Text { text } => {
                     self.accumulated_text = text;
@@ -442,9 +448,11 @@ impl AnthropicStreamState {
             }
             AnthropicStreamEvent::MessageDelta { usage, .. } => {
                 // Extract token usage from the message delta
+                // Note: message_delta contains output_tokens, input_tokens should come from message_start
                 if let Some(usage) = usage {
+                    let prompt_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
                     items.push(ModelStreamItem::TokenUsage {
-                        prompt_tokens: usage.input_tokens,
+                        prompt_tokens,
                         completion_tokens: usage.output_tokens,
                     });
                 }
@@ -566,7 +574,7 @@ struct AnthropicTool {
 enum AnthropicStreamEvent {
     MessageStart {
         #[serde(rename = "message")]
-        _message: AnthropicMessageStart,
+        message: AnthropicMessageStart,
     },
     ContentBlockStart {
         #[serde(rename = "index")]
@@ -611,7 +619,7 @@ struct AnthropicMessageStart {
     #[serde(rename = "stop_sequence")]
     _stop_sequence: Option<String>,
     #[serde(rename = "usage")]
-    _usage: AnthropicUsage,
+    usage: AnthropicUsage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1081,5 +1089,32 @@ mod tests {
             !json.contains("\"tool_use_id\": null"),
             "Should not contain null tool_use_id"
         );
+    }
+
+    #[test]
+    fn test_stream_state_token_usage() {
+        let mut state = AnthropicStreamState::new();
+
+        // Simulate message_start with input_tokens
+        let event = r#"{"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":100,"output_tokens":1}}}"#;
+        let items = state.process(event).unwrap();
+        assert!(items.is_empty()); // No items emitted on message_start
+
+        // Simulate message_delta with output_tokens
+        let event = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":55}}"#;
+        let items = state.process(event).unwrap();
+
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            ModelStreamItem::TokenUsage {
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                // prompt_tokens should come from message_start (100), not message_delta (0)
+                assert_eq!(*prompt_tokens, 100, "prompt_tokens should be from message_start");
+                assert_eq!(*completion_tokens, 55, "completion_tokens should be from message_delta");
+            }
+            _ => panic!("Expected TokenUsage item, got {:?}", items[0]),
+        }
     }
 }
