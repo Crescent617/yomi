@@ -20,7 +20,9 @@ impl FsStorage {
         std::fs::create_dir_all(&base_dir).context("Failed to create storage directory")?;
 
         let meta = MetaStorage::new(pool);
-        meta.init().await.context("Failed to initialize metadata storage")?;
+        meta.init()
+            .await
+            .context("Failed to initialize metadata storage")?;
 
         Ok(Self { base_dir, meta })
     }
@@ -148,7 +150,11 @@ impl Storage for FsStorage {
         file.flush().await?;
 
         // Update message count: get existing count and add new messages
-        let existing_count = self.meta.get(session_id).await?.map_or(0, |m| m.message_count);
+        let existing_count = self
+            .meta
+            .get(session_id)
+            .await?
+            .map_or(0, |m| m.message_count);
         self.meta
             .update_message_count(session_id, existing_count + messages.len() as i64)
             .await?;
