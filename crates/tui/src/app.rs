@@ -850,6 +850,12 @@ impl Model {
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
+                    // Windows workaround: re-enable mouse capture after shell commands
+                    // Shell tools may disable ENABLE_MOUSE_INPUT console mode on Windows
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = self.terminal.enable_mouse_capture();
+                    }
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Error {
                     tool_id,
@@ -865,6 +871,11 @@ impl Model {
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
+                    // Windows workaround: re-enable mouse capture after shell commands
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = self.terminal.enable_mouse_capture();
+                    }
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Progress {
                     tool_id,
