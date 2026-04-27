@@ -1,27 +1,32 @@
-use crate::storage::Storage;
+use crate::storage::{MetaStorage, SessionInfo, Storage};
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::future::join_all;
+use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
-/// Filesystem-based storage implementation using JSONL format
+/// Filesystem-based storage with `SQLite` metadata
 pub struct FsStorage {
     base_dir: PathBuf,
+    meta: MetaStorage,
 }
 
 impl FsStorage {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Result<Self> {
+    /// Create new `FsStorage` with `SQLite` metadata
+    pub async fn new(base_dir: impl Into<PathBuf>, pool: SqlitePool) -> Result<Self> {
         let base_dir = base_dir.into();
         std::fs::create_dir_all(&base_dir).context("Failed to create storage directory")?;
-        Ok(Self { base_dir })
+
+        let meta = MetaStorage::new(pool);
+        meta.init().await.context("Failed to initialize metadata storage")?;
+
+        Ok(Self { base_dir, meta })
     }
 
     /// Default storage path: ~/.local/share/yomi/sessions/
     pub fn default_path() -> PathBuf {
-        // Use ~/.local/share/yomi/sessions as default
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
@@ -52,7 +57,6 @@ impl FsStorage {
             if line.trim().is_empty() {
                 continue;
             }
-            // Skip lines that fail to parse (e.g., old event types)
             if let Ok(msg) = serde_json::from_str::<Message>(line) {
                 messages.push(msg);
             }
@@ -66,9 +70,14 @@ impl FsStorage {
 impl Storage for FsStorage {
     async fn create_session(&self) -> Result<SessionId> {
         let session_id = SessionId::new();
-        let path = self.session_file_path(&session_id);
+
+        // Create metadata in SQLite
+        self.meta.create(&session_id).await?;
+
         // Create empty file
+        let path = self.session_file_path(&session_id);
         fs::File::create(&path).await?;
+
         Ok(session_id)
     }
 
@@ -77,54 +86,43 @@ impl Storage for FsStorage {
         let new_id = SessionId::new();
         let new_path = self.session_file_path(&new_id);
 
-        // Copy file directly
-        fs::copy(&parent_path, &new_path)
-            .await
-            .with_context(|| format!("Failed to fork session: parent {} not found", parent_id.0))?;
+        // Create metadata first (if this fails, no orphan file)
+        self.meta.fork(&new_id, parent_id).await?;
+
+        // Copy file
+        if let Err(e) = fs::copy(&parent_path, &new_path).await {
+            // Clean up metadata if file copy fails
+            let _ = self.meta.delete(&new_id).await;
+            return Err(e).with_context(|| {
+                format!("Failed to fork session: parent {} not found", parent_id.0)
+            });
+        }
+
+        // Update message count from copied file
+        let messages = self.read_messages(&new_id).await?;
+        self.meta
+            .update_message_count(&new_id, messages.len() as i64)
+            .await?;
 
         Ok(new_id)
     }
 
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>> {
-        let path = self.session_file_path(id);
-        if !path.exists() {
-            return Ok(None);
+        match self.meta.get(id).await? {
+            Some(meta) => Ok(Some(SessionRecord {
+                id: meta.id,
+                created_at: meta.created_at,
+                updated_at: meta.updated_at,
+            })),
+            None => Ok(None),
         }
-
-        let meta = fs::metadata(&path).await?;
-        let now = chrono::Utc::now();
-
-        // created() can fail on some filesystems (ext3, tmpfs, etc.)
-        let created_at = meta
-            .created()
-            .ok()
-            .and_then(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
-            })
-            .flatten()
-            .unwrap_or(now);
-
-        let updated_at = meta
-            .modified()
-            .ok()
-            .and_then(|t| {
-                t.duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
-            })
-            .flatten()
-            .unwrap_or(now);
-
-        Ok(Some(SessionRecord {
-            id: id.clone(),
-            created_at,
-            updated_at,
-        }))
     }
 
     async fn delete_session(&self, id: &SessionId) -> Result<()> {
+        // Delete metadata
+        self.meta.delete(id).await?;
+
+        // Delete file
         let path = self.session_file_path(id);
         if path.exists() {
             fs::remove_file(&path).await?;
@@ -148,6 +146,12 @@ impl Storage for FsStorage {
             file.write_all(b"\n").await?;
         }
         file.flush().await?;
+
+        // Update message count: get existing count and add new messages
+        let existing_count = self.meta.get(session_id).await?.map_or(0, |m| m.message_count);
+        self.meta
+            .update_message_count(session_id, existing_count + messages.len() as i64)
+            .await?;
 
         Ok(())
     }
@@ -179,56 +183,124 @@ impl Storage for FsStorage {
         // Atomic rename
         fs::rename(&temp_path, &path).await?;
 
+        // Update message count
+        self.meta
+            .update_message_count(session_id, messages.len() as i64)
+            .await?;
+
         Ok(())
     }
 
-    async fn list_sessions(&self) -> Result<Vec<crate::storage::SessionInfo>> {
-        let mut entries = fs::read_dir(&self.base_dir).await?;
-        let mut paths = Vec::new();
+    async fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
+        let metas = self.meta.list().await?;
 
-        // Collect all jsonl file paths
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                paths.push(path);
-            }
-        }
-
-        // Concurrently fetch metadata for all files
-        let metadata_futs: Vec<_> = paths
+        let sessions = metas
             .into_iter()
-            .filter_map(|path| {
-                let id = path.file_stem().and_then(|s| s.to_str())?.to_string();
-                Some(async move {
-                    let meta = fs::metadata(&path).await.ok()?;
-                    let ctime = meta.created().ok()?;
-                    let mtime = meta.modified().ok()?;
-                    let created_at = chrono::DateTime::from_timestamp(
-                        ctime.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64,
-                        0,
-                    )?;
-                    let updated_at = chrono::DateTime::from_timestamp(
-                        mtime.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64,
-                        0,
-                    )?;
-                    Some(crate::storage::SessionInfo {
-                        id,
-                        created_at,
-                        updated_at,
-                    })
-                })
+            .map(|m| SessionInfo {
+                id: m.id.0,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+                parent_id: m.parent_id.map(|p| p.0),
+                title: m.title,
+                message_count: m.message_count,
             })
             .collect();
 
-        let mut sessions: Vec<_> = join_all(metadata_futs)
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
-
-        // Sort by updated_at descending (most recent first)
-        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-
         Ok(sessions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    async fn create_test_storage() -> (FsStorage, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let storage = FsStorage::new(temp_dir.path(), pool).await.unwrap();
+        (storage, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_session() {
+        let (storage, _dir) = create_test_storage().await;
+
+        let id = storage.create_session().await.unwrap();
+        let session = storage.get_session(&id).await.unwrap().unwrap();
+
+        assert_eq!(session.id.0, id.0);
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions() {
+        let (storage, _dir) = create_test_storage().await;
+
+        let id1 = storage.create_session().await.unwrap();
+        let id2 = storage.create_session().await.unwrap();
+
+        // Add message to id1 to make it more recent
+        storage
+            .append_messages(&id1, &[Message::user("test")])
+            .await
+            .unwrap();
+
+        let list = storage.list_sessions().await.unwrap();
+        assert_eq!(list.len(), 2);
+        // id1 should be first (more recent)
+        assert_eq!(list[0].id, id1.0);
+        assert_eq!(list[1].id, id2.0);
+    }
+
+    #[tokio::test]
+    async fn test_fork_session() {
+        let (storage, _dir) = create_test_storage().await;
+
+        let parent = storage.create_session().await.unwrap();
+        storage
+            .append_messages(&parent, &[Message::user("hello")])
+            .await
+            .unwrap();
+
+        let child = storage.fork_session(&parent).await.unwrap();
+
+        // Check parent relationship
+        let list = storage.list_sessions().await.unwrap();
+        let child_info = list.iter().find(|s| s.id == child.0).unwrap();
+        assert_eq!(child_info.parent_id.as_ref().unwrap(), &parent.0);
+        assert_eq!(child_info.message_count, 1);
+
+        // Check messages were copied
+        let messages = storage.get_messages(&child).await.unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_message_count_update() {
+        let (storage, _dir) = create_test_storage().await;
+
+        let id = storage.create_session().await.unwrap();
+
+        // Add messages
+        storage
+            .append_messages(&id, &[Message::user("msg1"), Message::assistant("msg2")])
+            .await
+            .unwrap();
+
+        let list = storage.list_sessions().await.unwrap();
+        assert_eq!(list[0].message_count, 2);
+
+        // Set messages (compaction)
+        storage
+            .set_messages(&id, &[Message::user("compact")])
+            .await
+            .unwrap();
+
+        let list = storage.list_sessions().await.unwrap();
+        assert_eq!(list[0].message_count, 1);
     }
 }

@@ -27,6 +27,7 @@ tracing-rolling-file = { workspace = true }
 directories = { workspace = true }
 toml = { workspace = true }
 md5 = { workspace = true }
+sqlx = { workspace = true }
 
 [lints]
 workspace = true

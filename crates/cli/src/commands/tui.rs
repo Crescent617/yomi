@@ -18,9 +18,35 @@ use kernel::{
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
-use std::path::PathBuf;
+use sqlx::sqlite::SqlitePoolOptions;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Create SQLite pool with proper connection string and PRAGMAs
+async fn create_db_pool(db_path: &Path) -> anyhow::Result<sqlx::SqlitePool> {
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Create empty file if it doesn't exist (sqlx requirement)
+    if !db_path.exists() {
+        tokio::fs::File::create(db_path).await?;
+    }
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", db_path.display()))
+        .await?;
+
+    // Set busy timeout (5 seconds)
+    sqlx::query("PRAGMA busy_timeout = 5000")
+        .execute(&pool)
+        .await?;
+
+    Ok(pool)
+}
 
 #[derive(Default, clap::Parser)]
 pub struct TuiArgs {
@@ -67,7 +93,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     init_logging(&config)?;
 
     let skills = load_skills(&config).await;
-    let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"))?);
+
+    // Create SQLite pool for session metadata
+    let db_path = config.data_dir.join("yomi.db");
+    let pool = create_db_pool(&db_path).await?;
+    let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"), pool).await?);
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
     let project_memory = kernel::project_memory::load(&working_dir).await?;
