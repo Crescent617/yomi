@@ -1017,7 +1017,7 @@ impl InputComponent {
     }
 
     /// Handle text paste by creating a placeholder
-    fn handle_text_paste(&mut self, text: String) -> Msg {
+    fn handle_text_paste(&mut self, text: &str) -> Msg {
         // If there's a selection, delete it first
         if self.component.has_selection() {
             self.component.delete_selection();
@@ -1238,10 +1238,17 @@ impl InputComponent {
     /// Update command completion state based on current input
     fn update_completion(&mut self) {
         let content = self.component.content();
-        if content.starts_with('/') && !self.command_completion.is_visible() {
-            // Start fresh completion when '/' is typed
+
+        // Command names only contain alphanumeric, '_' or '-'
+        let should_show = content.starts_with('/')
+            && content
+                .chars()
+                .skip(1)
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+
+        if should_show && !self.command_completion.is_visible() {
             self.start_command_completion(1);
-        } else if !content.starts_with('/') {
+        } else if !should_show {
             self.command_completion.hide();
             self.command_query.clear();
         }
@@ -1842,7 +1849,7 @@ impl InputComponent {
 
         // Handle paste event first (needs to borrow text)
         if let Event::Paste(text) = ev {
-            return Some(self.handle_text_paste(text.clone()));
+            return Some(self.handle_text_paste(text));
         }
 
         // Handle mouse events for text selection
@@ -1895,7 +1902,7 @@ impl InputComponent {
                     use arboard::Clipboard;
                     match Clipboard::new() {
                         Ok(mut clipboard) => match clipboard.get_text() {
-                            Ok(text) => return Some(self.handle_text_paste(text)),
+                            Ok(text) => return Some(self.handle_text_paste(&text)),
                             Err(e) => tracing::debug!("No text in clipboard: {}", e),
                         },
                         Err(e) => tracing::debug!("Failed to create clipboard: {}", e),

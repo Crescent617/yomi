@@ -1,4 +1,5 @@
 use crate::event::ToolEvent;
+use crate::tools::base::MAX_TOOL_OUTPUT_LENGTH;
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use crate::utils::strs;
@@ -7,8 +8,7 @@ use tokio::task::JoinSet;
 
 use tokio_util::sync::CancellationToken;
 
-const MAX_OUTPUT_LENGTH: usize = 40_000;
-const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to length.]";
+const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to limit]";
 
 /// Tool execution result
 pub struct ToolExecutionResult {
@@ -19,7 +19,130 @@ pub struct ToolExecutionResult {
 
 /// Truncate output if it exceeds max length (UTF-8 safe)
 fn truncate_output(output: &str) -> String {
-    strs::truncate_with_suffix(output, MAX_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
+    strs::truncate_with_suffix(output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
+}
+
+/// Truncate and convert `ToolOutputBlock` to `ContentBlock`
+fn truncate_and_convert_blocks(
+    blocks: &[crate::types::ToolOutputBlock],
+) -> Vec<crate::types::ToolOutputBlock> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            crate::types::ToolOutputBlock::Text { text } => crate::types::ToolOutputBlock::Text {
+                text: truncate_output(text),
+            },
+            crate::types::ToolOutputBlock::Image { url, mime_type } => {
+                crate::types::ToolOutputBlock::Image {
+                    url: url.clone(),
+                    mime_type: mime_type.clone(),
+                }
+            }
+        })
+        .collect()
+}
+
+/// Convert `ToolOutputBlock` to `ContentBlock`
+fn to_content_blocks(blocks: &[crate::types::ToolOutputBlock]) -> Vec<ContentBlock> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            crate::types::ToolOutputBlock::Text { text } => {
+                ContentBlock::Text { text: text.clone() }
+            }
+            crate::types::ToolOutputBlock::Image { url, mime_type: _ } => ContentBlock::ImageUrl {
+                image_url: crate::types::ImageUrl {
+                    url: url.clone(),
+                    detail: None,
+                },
+            },
+        })
+        .collect()
+}
+
+/// Build success result from tool output
+fn build_success_result(
+    agent_id: &AgentId,
+    call_id: &str,
+    result: &ToolOutput,
+    elapsed_ms: u64,
+) -> (ToolEvent, Message) {
+    let truncated = truncate_and_convert_blocks(&result.contents);
+    let content_blocks = to_content_blocks(&truncated);
+    let output = truncate_output(&result.text_content());
+
+    let event = ToolEvent::Output {
+        agent_id: agent_id.clone(),
+        tool_id: call_id.to_string(),
+        output,
+        content_blocks: truncated,
+        elapsed_ms,
+    };
+
+    let message = Message {
+        role: Role::Tool,
+        content: content_blocks,
+        tool_calls: None,
+        tool_call_id: Some(call_id.to_string()),
+        created_at: chrono::Utc::now(),
+        token_usage: None,
+    };
+
+    (event, message)
+}
+
+/// Build error result from tool output
+fn build_error_result(
+    agent_id: &AgentId,
+    call_id: &str,
+    result: &ToolOutput,
+    elapsed_ms: u64,
+) -> (ToolEvent, Message) {
+    let error = format!("Error: {}", result.error_text());
+
+    let event = ToolEvent::Error {
+        agent_id: agent_id.clone(),
+        tool_id: call_id.to_string(),
+        error: error.clone(),
+        content_blocks: Vec::new(),
+        elapsed_ms,
+    };
+
+    let message = Message {
+        role: Role::Tool,
+        content: vec![ContentBlock::Text { text: error }],
+        tool_calls: None,
+        tool_call_id: Some(call_id.to_string()),
+        created_at: chrono::Utc::now(),
+        token_usage: None,
+    };
+
+    (event, message)
+}
+
+/// Log result and push to results vector
+fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecutionResult) {
+    match &result.event {
+        ToolEvent::Output { elapsed_ms, .. } => {
+            tracing::debug!(
+                "Tool {} completed successfully in {}ms",
+                result.tool_call_id,
+                elapsed_ms
+            );
+        }
+        ToolEvent::Error {
+            error, elapsed_ms, ..
+        } => {
+            tracing::warn!(
+                "Tool {} failed in {}ms: {}",
+                result.tool_call_id,
+                elapsed_ms,
+                error
+            );
+        }
+        _ => {}
+    }
+    results.push(result);
 }
 
 /// Execute multiple tool calls in parallel with optional cancellation support
@@ -44,16 +167,12 @@ pub async fn execute_tools_parallel(
     let mut join_set = JoinSet::new();
 
     for call in tool_calls {
-        tracing::debug!("Looking up tool: '{}'", call.name);
-    }
-
-    for call in tool_calls {
         let agent_id = agent_id.clone();
-        // Clone necessary fields to avoid holding references
         let call_id = call.id.clone();
         let call_name = call.name.clone();
         let arguments = call.arguments.clone();
         let tool_opt = tool_registry.get(&call_name);
+
         if tool_opt.is_none() {
             tracing::error!(
                 "Tool '{}' not found in registry. Available tools: {:?}",
@@ -62,7 +181,6 @@ pub async fn execute_tools_parallel(
             );
         }
 
-        // Clone parent_messages and cancel_token for the async block
         let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
         let cancel_token_for_task = cancel_token.cloned();
 
@@ -80,71 +198,11 @@ pub async fn execute_tools_parallel(
                 None => ToolOutput::error(format!("Unknown tool: {call_name}")),
             };
             let elapsed = start.elapsed().as_millis() as u64;
-            let success = result.success();
 
-            // Truncate output if too long
-            let text = truncate_output(&result.text_content());
-
-            let (event, message) = if success {
-                // Convert ToolOutput blocks to ContentBlocks for the message
-                let content_blocks: Vec<ContentBlock> = result
-                    .contents
-                    .iter()
-                    .map(|block| match block {
-                        crate::types::ToolOutputBlock::Text { text } => {
-                            ContentBlock::Text { text: text.clone() }
-                        }
-                        crate::types::ToolOutputBlock::Image { url, mime_type: _ } => {
-                            ContentBlock::ImageUrl {
-                                image_url: crate::types::ImageUrl {
-                                    url: url.clone(),
-                                    detail: None,
-                                },
-                            }
-                        }
-                    })
-                    .collect();
-
-                // For the event's text output, use the text content
-                let output = text;
-
-                (
-                    ToolEvent::Output {
-                        agent_id: agent_id.clone(),
-                        tool_id: call_id.clone(),
-                        output: output.clone(),
-                        content_blocks: result.contents.clone(),
-                        elapsed_ms: elapsed,
-                    },
-                    Message {
-                        role: Role::Tool,
-                        content: content_blocks,
-                        tool_calls: None,
-                        tool_call_id: Some(call_id.clone()),
-                        created_at: chrono::Utc::now(),
-                        token_usage: None,
-                    },
-                )
+            let (event, message) = if result.success() {
+                build_success_result(&agent_id, &call_id, &result, elapsed)
             } else {
-                let error_text = result.error_text();
-                let error = format!("Error: {error_text}");
-                (
-                    ToolEvent::Error {
-                        agent_id: agent_id.clone(),
-                        tool_id: call_id.clone(),
-                        error: error.clone(),
-                        content_blocks: Vec::new(),
-                        elapsed_ms: elapsed,
-                    },
-                    Message {
-                        role: Role::Tool,
-                        content: vec![ContentBlock::Text { text: error }],
-                        tool_calls: None,
-                        tool_call_id: Some(call_id.clone()),
-                        created_at: chrono::Utc::now(),
-                        token_usage: None,
-                    },
-                )
+                build_error_result(&agent_id, &call_id, &result, elapsed)
             };
 
             ToolExecutionResult {
@@ -157,7 +215,6 @@ pub async fn execute_tools_parallel(
 
     let mut results = Vec::new();
 
-    // If cancel_token is provided, use select! to wait for either completion or cancellation
     if let Some(token) = cancel_token {
         loop {
             tokio::select! {
@@ -169,52 +226,16 @@ pub async fn execute_tools_parallel(
                 }
                 result = join_set.join_next() => {
                     match result {
-                        Some(Ok(r)) => {
-                            if let ToolEvent::Output { elapsed_ms, .. } = &r.event {
-                                tracing::debug!(
-                                    "Tool {} completed successfully in {}ms",
-                                    r.tool_call_id,
-                                    elapsed_ms
-                                );
-                            } else if let ToolEvent::Error { error, elapsed_ms, .. } = &r.event {
-                                tracing::warn!(
-                                    "Tool {} failed in {}ms: {}",
-                                    r.tool_call_id,
-                                    elapsed_ms,
-                                    error
-                                );
-                            }
-                            results.push(r);
-                        }
-                        Some(Err(e)) => {
-                            tracing::warn!("Tool task panicked: {}", e);
-                        }
-                        None => break, // All tasks completed
+                        Some(Ok(r)) => log_and_push_result(&mut results, r),
+                        Some(Err(e)) => tracing::warn!("Tool task panicked: {}", e),
+                        None => break,
                     }
                 }
             }
         }
     } else {
-        // Original behavior without cancellation
         while let Some(Ok(result)) = join_set.join_next().await {
-            if let ToolEvent::Output { elapsed_ms, .. } = &result.event {
-                tracing::debug!(
-                    "Tool {} completed successfully in {}ms",
-                    result.tool_call_id,
-                    elapsed_ms
-                );
-            } else if let ToolEvent::Error {
-                error, elapsed_ms, ..
-            } = &result.event
-            {
-                tracing::warn!(
-                    "Tool {} failed in {}ms: {}",
-                    result.tool_call_id,
-                    elapsed_ms,
-                    error
-                );
-            }
-            results.push(result);
+            log_and_push_result(&mut results, result);
         }
     }
 

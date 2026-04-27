@@ -12,6 +12,9 @@ const DEFAULT_MAX_CONCURRENT_MTIME_OPS: usize = 100;
 /// Maximum file size (10 MB)
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Maximum tool output length (20 KB)
+pub const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
+
 /// Trait for tools that operate on files within a base directory
 #[allow(async_fn_in_trait)]
 pub trait FileTool: Send + Sync {

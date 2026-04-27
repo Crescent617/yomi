@@ -1,10 +1,11 @@
-use crate::tools::base::{FileTool, MAX_FILE_SIZE};
+use crate::tools::base::{FileTool, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
 use crate::tools::file_lock::{lock_shared_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
 use crate::utils::line_numbers::format_file_lines;
+use crate::utils::strs::truncate_with_suffix;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -12,6 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
+
+/// Truncation message for read tool output
+const READ_TRUNCATION_MESSAGE: &str =
+    "\n\n[Content truncated due to length. Use offset/limit to read specific sections.]";
 
 pub struct ReadTool {
     base_dir: PathBuf,
@@ -83,6 +88,8 @@ impl ReadTool {
             .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
 
         let content = tokio::fs::read_to_string(path).await?;
+
+        // Check content size and truncate if too large
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
 
@@ -95,13 +102,20 @@ impl ReadTool {
             )));
         }
 
-        let result_content = if start == 0 && end == total_lines {
+        let mut result_content = if start == 0 && end == total_lines {
             // Reading whole file
             content.clone()
         } else {
             // Reading partial content
             lines[start..end].join("\n")
         };
+
+        // Truncate if content exceeds max size
+        result_content = truncate_with_suffix(
+            &result_content,
+            MAX_TOOL_OUTPUT_LENGTH,
+            READ_TRUNCATION_MESSAGE,
+        );
 
         // Add line numbers to the result
         let formatted_result = format_file_lines(&result_content, offset);

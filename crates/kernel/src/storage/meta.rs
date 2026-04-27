@@ -107,11 +107,7 @@ impl MetaStorage {
     }
 
     /// Update message count and `updated_at` timestamp
-    pub async fn update_message_count(
-        &self,
-        id: &SessionId,
-        message_count: i64,
-    ) -> Result<()> {
+    pub async fn update_message_count(&self, id: &SessionId, message_count: i64) -> Result<()> {
         sqlx::query(
             r"
             UPDATE sessions 
@@ -237,7 +233,10 @@ mod tests {
 
         let meta = storage.get(&id).await.unwrap().unwrap();
         assert_eq!(meta.message_count, 5);
-        assert!(meta.updated_at >= created_at, "updated_at should be >= created_at");
+        assert!(
+            meta.updated_at >= created_at,
+            "updated_at should be >= created_at"
+        );
     }
 
     #[tokio::test]

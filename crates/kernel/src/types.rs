@@ -487,8 +487,7 @@ impl ToolOutput {
         self.contents
             .iter()
             .filter_map(|block| block.as_text())
-            .collect::<Vec<_>>()
-            .join("")
+            .collect()
     }
 
     /// Get all text content for error display

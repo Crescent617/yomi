@@ -961,11 +961,10 @@ impl ChatView {
                             ])));
                         }
                     } else if *status == ToolStatus::Running {
-                        let running_text = progress
-                            .as_ref()
-                            .map_or_else(|| "Running...".to_string(), |p| {
-                                format!("Running: {}", sanitize_single_line(p))
-                            });
+                        let running_text = progress.as_ref().map_or_else(
+                            || "Running...".to_string(),
+                            |p| format!("Running: {}", sanitize_single_line(p)),
+                        );
                         lines.push(Arc::new(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
