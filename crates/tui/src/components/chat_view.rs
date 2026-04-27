@@ -1105,7 +1105,7 @@ impl ChatView {
 
 impl ChatView {
     const MASCOT_COL_WIDTH: usize = 8;
-    const MOUSE_SCROLL_LINES: usize = 1;
+    const MOUSE_SCROLL_LINES: usize = 3;
 
     /// Rebuild banner cache (separate because mascot animates).
     fn rebuild_banner_cache(&mut self) {
