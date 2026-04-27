@@ -113,8 +113,8 @@ cleanup() {
 trap cleanup EXIT
 
 log "Cloning ${TAP_REPO}..."
-git clone --depth 1 "git@github.com:${TAP_REPO}.git" "$TAP_DIR" 2>/dev/null || \
-    git clone --depth 1 "https://github.com/${TAP_REPO}.git" "$TAP_DIR"
+git clone --depth 1 "https://github.com/${TAP_REPO}.git" "$TAP_DIR" || git clone --depth 1 "git@github.com:${TAP_REPO}.git" "$TAP_DIR" 2>/dev/null
+
 
 FORMULA_PATH="${TAP_DIR}/Formula/${FORMULA_NAME}.rb"
 mkdir -p "$(dirname "$FORMULA_PATH")"
