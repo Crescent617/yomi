@@ -1034,6 +1034,7 @@ impl InputComponent {
         // Large text: use placeholder
         self.placeholder_counter += 1;
         let placeholder = format!("[Pasted #{} text]", self.placeholder_counter);
+        let cleaned = text.replace('\r', "");
         self.pasted_contents.insert(placeholder.clone(), cleaned);
         self.component.insert_str(&placeholder);
         self.update_completion();
