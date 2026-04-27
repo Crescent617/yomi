@@ -794,12 +794,11 @@ impl ChatView {
                 // Peek args in folded mode (max 150 chars, compact whitespace)
                 let peek_args = if *folded {
                     arguments.as_ref().and_then(|args| {
-                        // Compact whitespace: replace newlines/tabs with single space
-                        let compact = args;
+                        let compact = sanitize_single_line(args);
                         if compact.is_empty() {
                             None
                         } else {
-                            let peek = truncate_by_chars(compact, 150);
+                            let peek = truncate_by_chars(&compact, 150);
                             Some(peek)
                         }
                     })
@@ -867,7 +866,7 @@ impl ChatView {
                     // Show progress for running tools
                     if *status == ToolStatus::Running {
                         if let Some(ref prog) = progress {
-                            let prog_text = prog.clone();
+                            let prog_text = sanitize_single_line(prog);
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
                                 Span::styled(
@@ -964,7 +963,9 @@ impl ChatView {
                     } else if *status == ToolStatus::Running {
                         let running_text = progress
                             .as_ref()
-                            .map_or_else(|| "Running...".to_string(), |p| format!("Running: {p}"));
+                            .map_or_else(|| "Running...".to_string(), |p| {
+                                format!("Running: {}", sanitize_single_line(p))
+                            });
                         lines.push(Arc::new(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(colors::text_secondary())),
                             Span::styled(
@@ -2166,6 +2167,11 @@ fn tool_icon(tool_name: &str) -> &'static str {
     }
 }
 
+/// Sanitize text for single-line display by replacing newlines/tabs with spaces.
+fn sanitize_single_line(s: &str) -> String {
+    s.replace(['\n', '\r', '\t'], " ")
+}
+
 /// Extract a concise description from tool arguments for the title
 /// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"
 /// Results are truncated to 100 characters (Unicode-safe).
@@ -2174,13 +2180,13 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let args = args?;
     let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
 
-    let f = |s: &str| truncate_by_chars(s, MAX_LEN);
+    let f = |s: &str| truncate_by_chars(&sanitize_single_line(s), MAX_LEN);
 
     let target = match tool_name {
-        READ_TOOL_NAME | EDIT_TOOL_NAME => value["path"].as_str().map(String::from),
-        WRITE_TOOL_NAME => value["file_path"].as_str().map(String::from),
+        READ_TOOL_NAME | EDIT_TOOL_NAME => value["path"].as_str().map(f),
+        WRITE_TOOL_NAME => value["file_path"].as_str().map(f),
         SHELL_TOOL_NAME => value["command"].as_str().map(f),
-        GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(String::from),
+        GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(f),
         WEBFETCH_TOOL_NAME => value["url"].as_str().map(f),
         SKILL_TOOL_NAME => value["name"]
             .as_str()
@@ -2190,5 +2196,5 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
         _ => None,
     };
 
-    target.map(|t| truncate_by_chars(&t, MAX_LEN))
+    target.map(|t| truncate_by_chars(&sanitize_single_line(&t), MAX_LEN))
 }

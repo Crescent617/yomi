@@ -244,11 +244,8 @@ pub async fn run_session_loop(
             .get_file_state_snapshot(&session_id)
             .await
             .filter(|s| !s.is_empty());
-        if file_state.is_some() {
-            tracing::info!(
-                "Saved file state with {} entries",
-                file_state.as_ref().unwrap().entries.len()
-            );
+        if let Some(ref state) = file_state {
+            tracing::info!("Saved file state with {} entries", state.entries.len());
         }
         app_storage
             .save_session(&ctx.working_dir, &session_id.0, file_state.as_ref())
