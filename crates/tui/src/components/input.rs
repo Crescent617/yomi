@@ -1022,9 +1022,19 @@ impl InputComponent {
         if self.component.has_selection() {
             self.component.delete_selection();
         }
+
+        // If text is small (< 1k), insert directly without placeholder
+        if text.len() < 1024 {
+            let cleaned = text.replace('\r', "");
+            self.component.insert_str(&cleaned);
+            self.update_completion();
+            return Msg::InputChanged(self.component.content().to_string());
+        }
+
+        // Large text: use placeholder
         self.placeholder_counter += 1;
         let placeholder = format!("[Pasted #{} text]", self.placeholder_counter);
-        self.pasted_contents.insert(placeholder.clone(), text);
+        self.pasted_contents.insert(placeholder.clone(), cleaned);
         self.component.insert_str(&placeholder);
         self.update_completion();
         Msg::InputChanged(self.component.content().to_string())
