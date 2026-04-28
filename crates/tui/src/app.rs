@@ -463,9 +463,21 @@ impl Model {
         self.state.should_redraw = true;
     }
 
+    /// Clear the tool call delta display from `InfoBar`.
+    fn clear_tool_call_delta(&mut self) {
+        let _ = self.app.attr(
+            &Id::InfoBar,
+            Attribute::Custom("clear_tool_call"),
+            AttrValue::Flag(true),
+        );
+    }
+
     /// Stop streaming with given status - cleanup UI and save content
     fn stop_streaming(&mut self, status: StreamingStatus) {
         self.state.is_streaming = false;
+
+        // Clear tool call state
+        self.clear_tool_call_delta();
 
         match status {
             StreamingStatus::Completed => {
@@ -767,6 +779,8 @@ impl Model {
             match event {
                 AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                     self.state.is_streaming = true;
+                    // Clear tool call delta when receiving regular content
+                    self.clear_tool_call_delta();
                     match content {
                         kernel::event::ContentChunk::Text(text) => {
                             self.append_streaming_content(&text, false);
@@ -776,6 +790,17 @@ impl Model {
                         }
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
+                }
+                AppEvent::Model(kernel::event::ModelEvent::ToolCallDelta {
+                    tool_name,
+                    arguments_delta,
+                    ..
+                }) => {
+                    // Update status bar to show tool call in progress
+                    let attr = Attribute::Custom("append_tool_call_delta");
+                    let value = AttrValue::String(format!("{tool_name}\x00{arguments_delta}"));
+                    self.app.attr(&Id::InfoBar, attr, value)?;
+                    self.state.should_redraw = true;
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
                     self.finalize_assistant_message();

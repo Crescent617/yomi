@@ -398,8 +398,21 @@ impl ToolCallAssembler {
                 if let Some(name) = call.function.name.filter(|s| !s.is_empty()) {
                     partial.name = Some(name);
                 }
+
+                // Emit incremental update for UI feedback if we have:
+                // 1. args delta in this chunk, and
+                // 2. accumulated id from previous chunks (name may come later)
                 if let Some(args) = call.function.arguments {
-                    partial.arguments.push_str(&args);
+                    if !args.is_empty() {
+                        partial.arguments.push_str(&args);
+                        if let Some(id) = &partial.id {
+                            items.push(ModelStreamItem::ToolCallDelta {
+                                id: id.clone(),
+                                name: partial.name.clone().unwrap_or_default(),
+                                arguments_delta: args,
+                            });
+                        }
+                    }
                 }
             }
         }

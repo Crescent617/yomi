@@ -160,6 +160,8 @@ pub struct InfoBar {
     /// Current notification with level
     notification: Option<Notification>,
     notification_timeout: Option<std::time::Instant>,
+    /// Current tool call being streamed (`tool_name`)
+    current_tool_call: Option<String>,
 }
 
 impl InfoBar {
@@ -233,10 +235,13 @@ impl InfoBar {
         Some(time_str)
     }
 
-    /// Render the left section (spinner, tokens, elapsed time)
+    /// Render the left section (spinner, tokens, elapsed time, tool call)
     fn render_left_section(&self) -> Line<'static> {
-        // Show when streaming, compacting, or has tokens
-        if self.state == InfoBarState::Idle && self.token_count == 0.0 {
+        // Show when streaming, compacting, or has tokens, or has tool call
+        if self.state == InfoBarState::Idle
+            && self.token_count == 0.0
+            && self.current_tool_call.is_none()
+        {
             return Line::from("");
         }
 
@@ -249,6 +254,14 @@ impl InfoBar {
         // Status text (e.g., "Compacting...")
         if !status_text.is_empty() {
             spans.push(Span::styled(format!("{status_text} "), indicator_style));
+        }
+
+        // Show tool call in progress
+        if let Some(tool_name) = &self.current_tool_call {
+            let tool_style = Style::default()
+                .fg(colors::accent_info())
+                .add_modifier(Modifier::ITALIC);
+            spans.push(Span::styled(format!("calling {tool_name}... "), tool_style));
         }
 
         let token_style = Style::default().fg(colors::text_secondary());
@@ -374,6 +387,24 @@ impl Component for InfoBar {
             Attribute::Custom("clear_notification") => {
                 self.notification = None;
                 self.notification_timeout = None;
+            }
+            Attribute::Custom("append_tool_call_delta") => {
+                // Format: "tool_name\x00arguments_delta"
+                // arguments_delta contains only the newly added fragment
+                if let AttrValue::String(data) = value {
+                    let parts: Vec<&str> = data.split('\x00').collect();
+                    if parts.len() >= 2 {
+                        let tool_name = parts[0].to_string();
+                        let arguments_delta = parts[1];
+
+                        // Count tokens for the delta fragment
+                        self.token_count += tokens::estimate_tokens_f64(arguments_delta);
+                        self.current_tool_call = Some(tool_name);
+                    }
+                }
+            }
+            Attribute::Custom("clear_tool_call") => {
+                self.current_tool_call = None;
             }
             _ => {}
         }

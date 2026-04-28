@@ -303,6 +303,15 @@ impl SimpleAgent {
                                 content: chunk,
                             }));
                         }
+                        ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
+                            // Forward incremental tool call update for UI feedback
+                            on_event(Event::Model(ModelEvent::ToolCallDelta {
+                                agent_id: self.agent_id.clone(),
+                                tool_id: id,
+                                tool_name: name,
+                                arguments_delta,
+                            }));
+                        }
                         ModelStreamItem::ToolCall(request) => {
                             state.handle_tool_call(request);
                         }

@@ -6,7 +6,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Create SQLite pool with proper connection string and PRAGMAs
+/// Create `SQLite` pool with proper connection string and PRAGMAs
 async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {

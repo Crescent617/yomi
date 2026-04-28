@@ -423,7 +423,13 @@ impl AnthropicStreamState {
                     }
                     AnthropicDelta::InputJsonDelta { partial_json } => {
                         if let Some(ref mut tool) = self.current_tool_call {
+                            // `partial_json` is the delta fragment from SSE
                             tool.input_json.push_str(&partial_json);
+                            items.push(ModelStreamItem::ToolCallDelta {
+                                id: tool.id.clone(),
+                                name: tool.name.clone(),
+                                arguments_delta: partial_json,
+                            });
                         }
                     }
                 }
@@ -1111,8 +1117,14 @@ mod tests {
                 completion_tokens,
             } => {
                 // prompt_tokens should come from message_start (100), not message_delta (0)
-                assert_eq!(*prompt_tokens, 100, "prompt_tokens should be from message_start");
-                assert_eq!(*completion_tokens, 55, "completion_tokens should be from message_delta");
+                assert_eq!(
+                    *prompt_tokens, 100,
+                    "prompt_tokens should be from message_start"
+                );
+                assert_eq!(
+                    *completion_tokens, 55,
+                    "completion_tokens should be from message_delta"
+                );
             }
             _ => panic!("Expected TokenUsage item, got {:?}", items[0]),
         }

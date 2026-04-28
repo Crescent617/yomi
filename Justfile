@@ -41,4 +41,4 @@ build-release:
     cargo build --release
 
 brew-release:
-    ./scripts/brew-release.sh
+    bash ./scripts/brew-release.sh

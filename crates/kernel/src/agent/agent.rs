@@ -502,6 +502,17 @@ impl Agent {
                                 tracing::warn!("Failed to send chunk event: {}", e);
                             }
                         }
+                        ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
+                            // Forward incremental tool call update to TUI for UI feedback
+                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::ToolCallDelta {
+                                agent_id: self.id.clone(),
+                                tool_id: id,
+                                tool_name: name,
+                                arguments_delta,
+                            })) {
+                                tracing::warn!("Failed to send tool call delta event: {}", e);
+                            }
+                        }
                         ModelStreamItem::ToolCall(request) => {
                             state.handle_tool_call(request);
                         }
