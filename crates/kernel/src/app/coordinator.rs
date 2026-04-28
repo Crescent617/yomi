@@ -48,7 +48,8 @@ impl Coordinator {
         config: SessionConfig,
         file_state_store: Arc<crate::tools::file_state::FileStateStore>,
     ) -> Result<SessionId> {
-        let id = self.storage.create_session().await?;
+        let working_dir = config.project_path.to_string_lossy().to_string();
+        let id = self.storage.create_session(Some(&working_dir)).await?;
         let mut session = Session::new(
             id.clone(),
             config,

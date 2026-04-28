@@ -12,6 +12,7 @@ pub struct SessionMeta {
     pub parent_id: Option<SessionId>,
     pub title: Option<String>,
     pub message_count: i64,
+    pub working_dir: Option<String>,
 }
 
 /// SQLite-based metadata storage
@@ -27,52 +28,51 @@ impl MetaStorage {
     }
 
     /// Initialize database schema
+    /// 
+    /// Note: Schema is now managed by the migrations system in `crate::storage::migrations`.
+    /// This method is kept for backwards compatibility and testing purposes.
+    /// In production, migrations are run automatically when creating `FsStorage`.
     pub async fn init(&self) -> Result<()> {
-        sqlx::query(
-            r"
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                parent_id TEXT,
-                title TEXT,
-                message_count INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (parent_id) REFERENCES sessions(id) ON DELETE SET NULL
-            );
-            ",
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to create sessions table")?;
-
-        sqlx::query(
-            r"
-            CREATE INDEX IF NOT EXISTS idx_sessions_updated_at 
-            ON sessions(updated_at DESC);
-            ",
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to create updated_at index")?;
-
+        // Schema is managed by migrations system
+        // This method exists for tests that need to ensure tables exist
+        // without going through the full migration system
         Ok(())
     }
 
-    /// Create a new session record
-    pub async fn create(&self, id: &SessionId) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id) VALUES (?)")
+    /// Create a new session record with optional working directory
+    pub async fn create(&self, id: &SessionId, working_dir: Option<&str>) -> Result<()> {
+        sqlx::query("INSERT INTO sessions (id, working_dir) VALUES (?, ?)")
             .bind(&id.0)
+            .bind(working_dir)
             .execute(&self.pool)
             .await
             .context("Failed to create session record")?;
         Ok(())
     }
 
-    /// Create a forked session record
+    /// Create a forked session record, inheriting `working_dir` from parent
     pub async fn fork(&self, new_id: &SessionId, parent_id: &SessionId) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, parent_id) VALUES (?, ?)")
+        // Get parent's working_dir and verify parent exists
+        let parent_working_dir: Option<String> = sqlx::query_scalar(
+            "SELECT working_dir FROM sessions WHERE id = ?"
+        )
+        .bind(&parent_id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to get parent session working_dir")?;
+
+        // Check if parent exists
+        if parent_working_dir.is_none() {
+            return Err(anyhow::anyhow!(
+                "Cannot fork session: parent session '{}' does not exist",
+                parent_id.0
+            ));
+        }
+
+        sqlx::query("INSERT INTO sessions (id, parent_id, working_dir) VALUES (?, ?, ?)")
             .bind(&new_id.0)
             .bind(&parent_id.0)
+            .bind(parent_working_dir)
             .execute(&self.pool)
             .await
             .context("Failed to create forked session record")?;
@@ -83,8 +83,8 @@ impl MetaStorage {
     pub async fn get(&self, id: &SessionId) -> Result<Option<SessionMeta>> {
         let row = sqlx::query_as::<_, SessionRow>(
             r"
-            SELECT id, created_at, updated_at, parent_id, title, message_count 
-            FROM sessions 
+            SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir
+            FROM sessions
             WHERE id = ?
             ",
         )
@@ -139,14 +139,32 @@ impl MetaStorage {
     pub async fn list(&self) -> Result<Vec<SessionMeta>> {
         let rows = sqlx::query_as::<_, SessionRow>(
             r"
-            SELECT id, created_at, updated_at, parent_id, title, message_count 
-            FROM sessions 
+            SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir
+            FROM sessions
             ORDER BY updated_at DESC
             ",
         )
         .fetch_all(&self.pool)
         .await
         .context("Failed to list sessions")?;
+
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
+    /// List sessions by working directory ordered by `updated_at` DESC
+    pub async fn list_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionMeta>> {
+        let rows = sqlx::query_as::<_, SessionRow>(
+            r"
+            SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir
+            FROM sessions
+            WHERE working_dir = ?
+            ORDER BY updated_at DESC
+            ",
+        )
+        .bind(working_dir)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to list sessions by working directory")?;
 
         Ok(rows.into_iter().map(|r| r.into()).collect())
     }
@@ -161,6 +179,7 @@ struct SessionRow {
     parent_id: Option<String>,
     title: Option<String>,
     message_count: i64,
+    working_dir: Option<String>,
 }
 
 impl From<SessionRow> for SessionMeta {
@@ -172,6 +191,7 @@ impl From<SessionRow> for SessionMeta {
             parent_id: row.parent_id.map(SessionId),
             title: row.title,
             message_count: row.message_count,
+            working_dir: row.working_dir,
         }
     }
 }
@@ -179,53 +199,64 @@ impl From<SessionRow> for SessionMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::migrations::run_migrations;
 
-    async fn create_test_pool() -> SqlitePool {
-        sqlx::sqlite::SqlitePoolOptions::new()
+    async fn create_test_storage() -> MetaStorage {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
-            .unwrap()
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+        MetaStorage::new(pool)
     }
 
     #[tokio::test]
     async fn test_create_and_get() {
-        let pool = create_test_pool().await;
-        let storage = MetaStorage::new(pool);
-        storage.init().await.unwrap();
+        let storage = create_test_storage().await;
 
         let id = SessionId::new();
-        storage.create(&id).await.unwrap();
+        storage.create(&id, None).await.unwrap();
 
         let meta = storage.get(&id).await.unwrap().unwrap();
         assert_eq!(meta.id.0, id.0);
         assert_eq!(meta.message_count, 0);
+        assert_eq!(meta.working_dir, None);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_working_dir() {
+        let storage = create_test_storage().await;
+
+        let id = SessionId::new();
+        storage.create(&id, Some("/test/working/dir")).await.unwrap();
+
+        let meta = storage.get(&id).await.unwrap().unwrap();
+        assert_eq!(meta.working_dir, Some("/test/working/dir".to_string()));
     }
 
     #[tokio::test]
     async fn test_fork() {
-        let pool = create_test_pool().await;
-        let storage = MetaStorage::new(pool);
-        storage.init().await.unwrap();
+        let storage = create_test_storage().await;
 
         let parent = SessionId::new();
-        storage.create(&parent).await.unwrap();
+        storage.create(&parent, Some("/parent/dir")).await.unwrap();
 
         let child = SessionId::new();
         storage.fork(&child, &parent).await.unwrap();
 
         let meta = storage.get(&child).await.unwrap().unwrap();
         assert_eq!(meta.parent_id.as_ref().unwrap().0, parent.0);
+        // Check working_dir was inherited
+        assert_eq!(meta.working_dir, Some("/parent/dir".to_string()));
     }
 
     #[tokio::test]
     async fn test_update_message_count() {
-        let pool = create_test_pool().await;
-        let storage = MetaStorage::new(pool);
-        storage.init().await.unwrap();
+        let storage = create_test_storage().await;
 
         let id = SessionId::new();
-        storage.create(&id).await.unwrap();
+        storage.create(&id, None).await.unwrap();
         let created_at = storage.get(&id).await.unwrap().unwrap().created_at;
 
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -241,14 +272,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_ordering() {
-        let pool = create_test_pool().await;
-        let storage = MetaStorage::new(pool);
-        storage.init().await.unwrap();
+        let storage = create_test_storage().await;
 
         let id1 = SessionId::new();
         let id2 = SessionId::new();
-        storage.create(&id1).await.unwrap();
-        storage.create(&id2).await.unwrap();
+        storage.create(&id1, None).await.unwrap();
+        storage.create(&id2, None).await.unwrap();
         // Update id1 to make it more recent
         storage.update_message_count(&id1, 1).await.unwrap();
 
@@ -260,13 +289,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_by_working_dir() {
+        let storage = create_test_storage().await;
+
+        let id1 = SessionId::new();
+        let id2 = SessionId::new();
+        let id3 = SessionId::new();
+        storage.create(&id1, Some("/dir/a")).await.unwrap();
+        storage.create(&id2, Some("/dir/b")).await.unwrap();
+        storage.create(&id3, None).await.unwrap();
+
+        let list_a = storage.list_by_working_dir("/dir/a").await.unwrap();
+        assert_eq!(list_a.len(), 1);
+        assert_eq!(list_a[0].id.0, id1.0);
+
+        let list_b = storage.list_by_working_dir("/dir/b").await.unwrap();
+        assert_eq!(list_b.len(), 1);
+        assert_eq!(list_b[0].id.0, id2.0);
+
+        let list_all = storage.list().await.unwrap();
+        assert_eq!(list_all.len(), 3);
+    }
+
+    #[tokio::test]
     async fn test_delete() {
-        let pool = create_test_pool().await;
-        let storage = MetaStorage::new(pool);
-        storage.init().await.unwrap();
+        let storage = create_test_storage().await;
 
         let id = SessionId::new();
-        storage.create(&id).await.unwrap();
+        storage.create(&id, None).await.unwrap();
         assert!(storage.get(&id).await.unwrap().is_some());
 
         storage.delete(&id).await.unwrap();

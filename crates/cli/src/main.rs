@@ -47,8 +47,12 @@ struct SessionArgs {
 
 #[derive(Subcommand)]
 enum SessionsCommands {
-    /// List all sessions
-    List,
+    /// List sessions (default: current directory only)
+    List {
+        /// List all sessions, not just current directory
+        #[arg(short, long)]
+        all: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -112,7 +116,7 @@ async fn main() -> Result<()> {
 
 async fn run_session(args: SessionArgs) -> Result<()> {
     match args.command {
-        SessionsCommands::List => commands::sessions::list(args.global).await,
+        SessionsCommands::List { all } => commands::sessions::list(args.global, all).await,
     }
 }
 

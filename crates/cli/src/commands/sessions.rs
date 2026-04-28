@@ -32,14 +32,30 @@ async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub async fn list(global: GlobalArgs) -> Result<()> {
+pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
     let config = load_config(global.config.as_ref())?;
     let data_dir = config.data_dir;
 
     let db_path = data_dir.join("yomi.db");
     let pool = create_db_pool(&db_path).await?;
     let storage = Arc::new(FsStorage::new(data_dir.join("sessions"), pool).await?);
-    let sessions = storage.list_sessions().await?;
+
+    // Get current working directory
+    let current_dir = std::env::current_dir()?;
+    let current_dir_str = current_dir.to_string_lossy().to_string();
+
+    // List sessions: by default only current working dir, with --all list all
+    let sessions = if all {
+        storage.list_sessions().await?
+    } else {
+        let filtered = storage.list_sessions_by_working_dir(&current_dir_str).await?;
+        if filtered.is_empty() {
+            println!("No sessions found for current directory: {}", current_dir_str);
+            println!("Use --all to list all sessions.");
+            return Ok(());
+        }
+        filtered
+    };
 
     if sessions.is_empty() {
         println!("No sessions found.");
@@ -76,22 +92,26 @@ pub async fn list(global: GlobalArgs) -> Result<()> {
                 "(error loading messages)".to_string()
             };
 
-        rows.push((session.id.clone(), age_str, preview));
+        let working_dir = session.working_dir.clone().unwrap_or_else(|| "(unknown)".to_string());
+        rows.push((session.id.clone(), age_str, working_dir, preview));
     }
 
     let id_width = rows.iter().map(|r| r.0.len()).max().unwrap_or(10).max(10);
     let age_width = rows.iter().map(|r| r.1.len()).max().unwrap_or(5).max(5);
+    let wd_width = rows.iter().map(|r| r.2.len()).max().unwrap_or(10).max(10);
 
     println!(
-        "{:<id_width$}  {:<age_width$}  PREVIEW",
+        "{:<id_width$}  {:<age_width$}  {:<wd_width$}  PREVIEW",
         "SESSION ID",
         "AGE",
+        "WORKING DIR",
         id_width = id_width,
-        age_width = age_width
+        age_width = age_width,
+        wd_width = wd_width
     );
 
-    for (id, age, preview) in rows {
-        println!("{id:<id_width$}  {age:<age_width$}  {preview}");
+    for (id, age, wd, preview) in rows {
+        println!("{id:<id_width$}  {age:<age_width$}  {wd:<wd_width$}  {preview}");
     }
 
     Ok(())

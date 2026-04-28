@@ -234,7 +234,9 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
 
         // Create session for transcript recording if storage is available
         let subagent_session_id = if let Some(storage) = &self.storage {
-            match storage.create_session().await {
+            // Use parent's working_dir (from ctx.working_dir) for the subagent session
+            let working_dir = ctx.working_dir.to_string_lossy().to_string();
+            match storage.create_session(Some(&working_dir)).await {
                 Ok(sid) => {
                     tracing::debug!(
                         "Created sub-agent session: {} for agent {}",

@@ -69,6 +69,7 @@ impl Agent {
             SystemPromptBuilder::new()
                 .base_prompt(&args.base_prompt)
                 .with_skills(&args.skills)
+                .with_working_dir(&args.working_dir)
                 .build()
         } else {
             // Merge project memory with base prompt
@@ -77,6 +78,7 @@ impl Agent {
             SystemPromptBuilder::new()
                 .base_prompt(&memory_prompt)
                 .with_skills(&args.skills)
+                .with_working_dir(&args.working_dir)
                 .build()
         };
 
