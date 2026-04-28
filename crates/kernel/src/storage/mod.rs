@@ -24,6 +24,22 @@ pub struct SessionInfo {
     pub working_dir: Option<String>,
 }
 
+impl SessionInfo {
+    /// Format the age of the session (time since last update) as a human-readable string
+    pub fn format_age(&self) -> String {
+        let age = Utc::now() - self.updated_at;
+        if age.num_days() > 0 {
+            format!("{}d ago", age.num_days())
+        } else if age.num_hours() > 0 {
+            format!("{}h ago", age.num_hours())
+        } else if age.num_minutes() > 0 {
+            format!("{}m ago", age.num_minutes())
+        } else {
+            "just now".to_string()
+        }
+    }
+}
+
 #[async_trait]
 pub trait Storage: Send + Sync {
     /// Create a new session with optional working directory
