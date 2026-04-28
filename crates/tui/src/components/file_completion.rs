@@ -236,7 +236,7 @@ impl FileCompletion {
                 })
                 .collect();
             // Sort by score descending
-            filtered.sort_by(|a, b| b.1.cmp(&a.1));
+            filtered.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
             filtered
                 .into_iter()
                 .map(|(file, _)| file)

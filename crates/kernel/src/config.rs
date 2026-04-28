@@ -339,8 +339,7 @@ fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
 #[inline]
 fn env_bool(name: &str) -> bool {
     std::env::var(name)
-        .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
-        .unwrap_or(false)
+        .is_ok_and(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
 }
 
 #[inline]

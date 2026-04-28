@@ -254,13 +254,12 @@ impl StreamingMarkdownRenderer {
                                 .push(Line::from(Span::styled("```", Styles::code_lang())));
                             code_language = None;
                         }
-                        TagEnd::Item => {
+                        TagEnd::Item
                             // End of list item, push current line and add spacing
-                            if !current_line.is_empty() {
+                            if !current_line.is_empty() => {
                                 self.lines.push(Line::from(current_line));
                                 current_line = Vec::new();
                             }
-                        }
                         TagEnd::List(_) => {
                             list_stack.pop();
                             // Add empty line after list

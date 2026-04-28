@@ -355,7 +355,7 @@ impl Tool for GrepTool {
         "Search file contents using regex patterns (powered by ripgrep). Supports various output modes, context lines, and file filtering. Respects .gitignore by default. Always searches hidden files."
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

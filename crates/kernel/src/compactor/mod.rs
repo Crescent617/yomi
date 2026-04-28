@@ -240,9 +240,8 @@ impl Compactor {
         // Create summary message as user role so it survives session restore
         let summary = Message::user(summary_text);
         // Reconstruct: summary + recent (system_msgs NOT included)
-        let mut result: Vec<Arc<Message>> = std::iter::once(Arc::new(summary))
-            .chain(recent.into_iter())
-            .collect();
+        let mut result: Vec<Arc<Message>> =
+            std::iter::once(Arc::new(summary)).chain(recent).collect();
 
         // Estimate total tokens and set on the last message for accurate future calculations
         set_token_usage_on_last(&mut result);

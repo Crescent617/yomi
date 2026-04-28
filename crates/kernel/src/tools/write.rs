@@ -64,7 +64,7 @@ impl Tool for WriteTool {
         "Write a file to the local filesystem. Completely overwrites existing files or creates new ones. Must read the file first if it exists."
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

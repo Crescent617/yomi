@@ -232,11 +232,9 @@ impl Table {
                         });
                     }
                 }
-                MdEvent::Start(Tag::TableCell) => {
-                    if !current_cell.is_empty() {
-                        current_row.push(current_cell.trim().to_string());
-                        current_cell.clear();
-                    }
+                MdEvent::Start(Tag::TableCell) if !current_cell.is_empty() => {
+                    current_row.push(current_cell.trim().to_string());
+                    current_cell.clear();
                 }
                 MdEvent::End(TagEnd::TableCell) => {
                     current_row.push(current_cell.trim().to_string());

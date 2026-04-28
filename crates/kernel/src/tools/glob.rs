@@ -121,7 +121,7 @@ impl Tool for GlobTool {
         "Find files matching a glob pattern. Supports patterns like '**/*.rs' or 'src/**/*.ts'. Respects .gitignore files by default."
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

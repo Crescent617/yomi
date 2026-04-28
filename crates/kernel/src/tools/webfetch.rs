@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 pub const WEBFETCH_TOOL_NAME: &str = "webfetch";
 
 // 15 minute cache TTL
-const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const CACHE_TTL: Duration = Duration::from_mins(15);
 // Max cache entries
 const MAX_CACHE_ENTRIES: NonZeroUsize = NonZeroUsize::new(100).unwrap();
 // Max content size (10MB)
@@ -28,7 +28,7 @@ const MAX_URL_LENGTH: usize = 2000;
 // Max markdown output length
 const MAX_RESULT_LENGTH: usize = 10_000;
 // Request timeout
-const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+const FETCH_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Cache entry for fetched content
 #[derive(Clone)]
@@ -215,7 +215,7 @@ impl Tool for WebFetchTool {
         "Fetches content from a URL, extracts the main article content (removing navigation, ads, etc.), and converts to markdown."
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

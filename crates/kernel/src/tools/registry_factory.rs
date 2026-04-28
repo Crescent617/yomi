@@ -7,12 +7,95 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::tools::{
-    EditTool, GlobTool, GrepTool, ReadTool, ShellTool, ShellToolCtx, SkillTool, SubagentTool,
-    ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
+    EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx, SkillTool,
+    SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Configuration for creating a tool registry.
+pub struct ToolRegistryConfig<'a> {
+    pub agent_id: &'a AgentId,
+    pub shared: &'a Arc<crate::agent::AgentShared>,
+    pub event_tx: &'a mpsc::Sender<Event>,
+    pub skills: Vec<Arc<Skill>>,
+    pub session_id: &'a str,
+    pub skill_folders: Vec<PathBuf>,
+    pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
+    pub parent_session_id: Option<&'a str>,
+    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    pub enable_sub_agents: bool,
+    pub enable_reminder: bool,
+}
+
+impl<'a> ToolRegistryConfig<'a> {
+    /// Create config for a main agent.
+    pub fn for_main_agent(
+        agent_id: &'a AgentId,
+        shared: &'a Arc<crate::agent::AgentShared>,
+        input_tx: &'a mpsc::Sender<AgentInput>,
+        event_tx: &'a mpsc::Sender<Event>,
+        skills: Vec<Arc<Skill>>,
+        session_id: &'a str,
+    ) -> Self {
+        Self {
+            agent_id,
+            shared,
+            event_tx,
+            skills,
+            session_id,
+            skill_folders: shared.skill_folders.clone(),
+            input_tx: Some(input_tx),
+            parent_session_id: None,
+            file_state_store: None,
+            enable_sub_agents: true,
+            enable_reminder: true,
+        }
+    }
+
+    /// Create config for a subagent.
+    pub fn for_subagent(
+        parent_id: &'a AgentId,
+        shared: &'a Arc<crate::agent::AgentShared>,
+        event_tx: &'a mpsc::Sender<Event>,
+        skills: Vec<Arc<Skill>>,
+        session_id: &'a str,
+        parent_session_id: &'a str,
+    ) -> Self {
+        Self {
+            agent_id: parent_id,
+            shared,
+            event_tx,
+            skills,
+            session_id,
+            skill_folders: shared.skill_folders.clone(),
+            input_tx: None,
+            parent_session_id: Some(parent_session_id),
+            file_state_store: None,
+            enable_sub_agents: false,
+            enable_reminder: false,
+        }
+    }
+
+    /// Set whether to enable subagents.
+    #[must_use]
+    pub fn with_enable_sub_agents(mut self, enable: bool) -> Self {
+        self.enable_sub_agents = enable;
+        self
+    }
+
+    /// Set the file state store.
+    #[must_use]
+    pub fn with_file_state_store(
+        mut self,
+        store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    ) -> Self {
+        self.file_state_store = store;
+        self
+    }
+}
 
 /// Factory for creating tool registries with standard configuration.
 ///
@@ -23,37 +106,14 @@ pub struct ToolRegistryFactory;
 
 impl ToolRegistryFactory {
     /// Create a tool registry with standard tools.
-    ///
-    /// # Arguments
-    /// * `agent_id` - The agent ID for tool context
-    /// * `shared` - Shared agent resources
-    /// * `input_tx` - Optional input sender for async bash tool results
-    /// * `event_tx` - Event sender for permission requests and progress
-    /// * `skills` - Skills to register
-    /// * `session_id` - Session ID for transcript recording
-    /// * `parent_session_id` - Parent session ID for task store sharing (subagents)
-    /// * `enable_sub_agents` - Whether to enable the subagent tool
-    /// * `skill_folders` - Folders to search for skills (for `skill_load` tool)
-    /// * `file_state_store` - Optional file state store (creates new if None)
-    #[allow(clippy::too_many_arguments)]
-    pub fn create(
-        agent_id: &AgentId,
-        shared: &Arc<crate::agent::AgentShared>,
-        input_tx: Option<&mpsc::Sender<AgentInput>>,
-        event_tx: &mpsc::Sender<Event>,
-        skills: Vec<Arc<Skill>>,
-        session_id: &str,
-        parent_session_id: Option<&str>,
-        enable_sub_agents: bool,
-        skill_folders: Vec<std::path::PathBuf>,
-        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
-    ) -> ToolRegistry {
+    pub fn create(config: ToolRegistryConfig<'_>) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
-        let file_state_store = file_state_store
+        let file_state_store = config
+            .file_state_store
             .unwrap_or_else(|| Arc::new(crate::tools::file_state::FileStateStore::new()));
 
         // Register Bash tool
-        let bash_ctx = ShellToolCtx::new(agent_id.clone(), input_tx.cloned());
+        let bash_ctx = ShellToolCtx::new(config.agent_id.clone(), config.input_tx.cloned());
         let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         registry.register(bash_tool);
 
@@ -70,44 +130,48 @@ impl ToolRegistryFactory {
         registry.register(write_tool);
 
         // Register Glob tool
-        let glob_tool = GlobTool::new();
-        registry.register(glob_tool);
+        registry.register(GlobTool::new());
 
         // Register Grep tool
-        let grep_tool = GrepTool::new();
-        registry.register(grep_tool);
+        registry.register(GrepTool::new());
 
         // Register WebFetch tool
-        let webfetch_tool = WebFetchTool::new();
-        registry.register(webfetch_tool);
+        registry.register(WebFetchTool::new());
 
         // Register WebSearch tool
-        let websearch_tool = WebSearchTool::new();
-        registry.register(websearch_tool);
+        registry.register(WebSearchTool::new());
 
         // Register SkillLoad tool
-        let skill_load_tool = SkillTool::new(skill_folders);
-        registry.register(skill_load_tool);
+        registry.register(SkillTool::new(config.skill_folders));
 
         // Register SubAgent tool if enabled
-        if enable_sub_agents {
+        if config.enable_sub_agents {
             let subagent_tool = SubagentTool::new(
-                agent_id.clone(),
-                Arc::clone(shared),
-                input_tx.cloned().unwrap(),
-                skills,
-                shared.storage.clone(),
-                session_id.to_owned(),
-                event_tx.clone(),
+                config.agent_id.clone(),
+                Arc::clone(config.shared),
+                config.input_tx.cloned().unwrap(),
+                config.skills,
+                config.shared.storage.clone(),
+                config.session_id.to_owned(),
+                config.event_tx.clone(),
             );
             registry.register(subagent_tool);
         }
 
         // Register task tools if task_store is provided
-        if let Some(task_store) = &shared.task_store {
-            // Use parent_session_id for task store if available (subagents share parent's task list)
-            let task_list_id = parent_session_id.unwrap_or(session_id).to_owned();
+        if let Some(task_store) = &config.shared.task_store {
+            let task_list_id = config
+                .parent_session_id
+                .unwrap_or(config.session_id)
+                .to_owned();
             registry.register_task_tools(task_store.clone(), task_list_id);
+        }
+
+        // Register Reminder tool if enabled (main agent only)
+        if config.enable_reminder {
+            if let Some(tx) = config.input_tx {
+                registry.register(ReminderTool::new(tx.clone()));
+            }
         }
 
         registry
