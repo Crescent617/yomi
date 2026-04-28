@@ -32,7 +32,7 @@ impl Tool for TaskCreateTool {
         "Create a new task in the task list"
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {

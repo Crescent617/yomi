@@ -18,7 +18,7 @@ use tokio::time::timeout;
 // Stream transformer: SSE -> ModelStreamItem
 // Accumulates tool calls, emits content immediately
 // 2-minute idle timeout to detect stalled connections
-const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const IDLE_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub struct OpenAIProvider {
     client: Client,

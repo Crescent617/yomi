@@ -56,29 +56,15 @@ impl SubagentTool {
     /// Build the system prompt for the sub-agent
     fn build_system_prompt(&self, inherit_context: bool) -> String {
         let context_note = if inherit_context {
-            "You have been provided with the full conversation context from the parent agent, so you understand the ongoing discussion and can build upon previous work.\n- You have access to the parent's conversation history - use it to understand the full context"
+            "Given the conversation context provided, use the tools available to complete the task."
         } else {
-            "You have zero context about the parent conversation - rely on the user message for complete task information."
+            "Given the user's message, use the tools available to complete the task."
         };
 
         format!(
-            r"You are a sub-agent spawned by parent agent {parent_id}.
+            r"You are a sub-agent of {parent_id}. {context_note}
 
-## Your Role
-You are a specialist agent handling a specific task delegated by the parent agent. {context_note}
-
-## Guidelines
-- Focus on the specific task described in the user message
-- If the task involves code changes, read the relevant files first
-- Report your findings concisely; avoid unnecessary verbosity
-- When complete, provide a clear summary of what you found or accomplished
-- Do NOT make assumptions about files or code you haven't examined
-
-## Output Format
-1. **Summary**: Brief overview of what you did
-2. **Details**: Specific findings, changes, or results
-3. **Recommendations**: Any follow-up actions needed (if applicable)
-",
+Complete the task fully — don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.",
             parent_id = self.parent_id,
         )
     }
@@ -112,20 +98,15 @@ You are a specialist agent handling a specific task delegated by the parent agen
     /// Create tool registry for the subagent
     fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
         // Subagent doesn't need input_tx since it doesn't receive AgentInput.
-        // BashTool's async mode will fail gracefully with a clear error message.
         // Subagents get a fresh file state store (not shared with parent).
-        crate::tools::ToolRegistryFactory::create(
+        crate::tools::ToolRegistryFactory::create(crate::tools::ToolRegistryConfig::for_subagent(
             &self.parent_id,
             &self.shared,
-            None, // No input_tx for subagent
             &self.parent_event_tx,
             self.skills.clone(),
             session_id,
-            Some(&self.parent_session_id),
-            false, // Disable nested subagents to prevent infinite recursion
-            self.shared.skill_folders.clone(),
-            None, // Fresh file state store for subagent
-        )
+            &self.parent_session_id,
+        ))
     }
 }
 
@@ -149,56 +130,51 @@ impl Tool for SubagentTool {
 ## When to Use
 - Research tasks requiring multiple file reads or searches
 - Implementation work that requires changes across multiple files
-- Tasks that can be parallelized for better performance
 - Complex analysis that would clutter the main context with intermediate results
+- Tasks that can be parallelized for better performance
 
 ## When NOT to Use
-- Simple file reads - use the read tool directly
-- Single grep/search operations - use bash or search tools
-- Tasks requiring only 1-2 quick edits
+- If you want to read a specific file path, use the read tool directly
+- If you are searching for code, use the grep tool instead
+- Other simple tasks requiring only 1-2 quick edits
+
+## Parallel Execution
+When you have multiple independent tasks, launch multiple agents concurrently by sending a **single message with multiple agent tool calls**. For example, if you need to audit dependencies AND refactor the auth module, send both agent calls in the same message.
 
 ## Writing the Prompt
-Brief the agent like a smart colleague who just walked into the room:
+Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation and doesn't know what you've tried.
 - Explain what you're trying to accomplish and why
 - Describe what you've already learned or ruled out
-- Give enough context for the agent to make judgment calls
+- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction
 - If you need a short response, say so ("report in under 200 words")
-- Lookups: hand over the exact command
-- Investigations: hand over the question
-
-## Never Delegate Understanding
-Don't write "based on your findings, fix the bug" - write prompts that prove YOU understood. Include file paths, line numbers, what specifically to change.
-
-## Execution Modes
-- **sync** (default and most of cases): Wait for sub-agent completion, returns full results
-- **async**: Returns immediately, results sent as background notification when ready. Use async when you have genuinely independent work to do in parallel."#
+- Lookups: hand over the exact command. Investigations: hand over the question."#
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
                 "description": {
                     "type": "string",
-                    "description": "Short summary (3-5 words) of what the sub-agent will do, e.g., 'Audit dependencies', 'Refactor auth module'"
+                    "description": "Short summary (3-5 words) of what the agent will do, e.g., 'Audit dependencies', 'Refactor auth module'"
                 },
-                "task": {
+                "prompt": {
                     "type": "string",
-                    "description": "The specific task description for the sub-agent. Be detailed - the sub-agent has no context about your conversation."
+                    "description": "Instructions for the agent. Brief clearly - what to do, why, and expected output. Include task ID if using task tracking."
                 },
                 "mode": {
                     "type": "string",
                     "enum": ["async", "sync"],
-                    "description": "Execution mode: 'async' returns immediately with sub-agent ID (use for parallel work), 'sync' waits for completion and returns results (use when you need the results to proceed)",
+                    "description": "Execution mode. 'sync' (default) waits for completion and returns results. 'async' returns immediately and runs in background — use for independent work that doesn't block your next steps.",
                     "default": "sync"
                 },
                 "inherit_context": {
                     "type": "boolean",
-                    "description": "Whether to inherit the parent agent's conversation context. When true, the sub-agent will receive the parent's message history (excluding system messages). Useful when the sub-agent needs full context of the conversation.",
+                    "description": "Give the agent access to this conversation history. Use when agent needs full context.",
                     "default": false
                 }
             },
-            "required": ["description", "task"]
+            "required": ["description", "prompt"]
         })
     }
 
@@ -208,9 +184,9 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?
             .to_string();
-        let task = args["task"]
+        let prompt = args["prompt"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'task' argument"))?
+            .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' argument"))?
             .to_string();
 
         let mode_str = args["mode"].as_str().unwrap_or("sync");
@@ -222,7 +198,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         let inherit_context = args["inherit_context"].as_bool().unwrap_or(false);
 
         tracing::info!(
-            "Spawning sub-agent {} for parent {} with task: {} (inherit_context: {})",
+            "Spawning sub-agent {} for parent {}: {} (inherit_context: {})",
             ctx.tool_call_id,
             self.parent_id,
             description,
@@ -289,7 +265,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                         &mut simple_agent,
                         system_prompt,
                         history,
-                        task,
+                        prompt,
                         cancel_token,
                         &parent_event_tx,
                         &parent_id,
@@ -317,7 +293,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
                     &mut simple_agent,
                     system_prompt,
                     history,
-                    task,
+                    prompt,
                     cancel_token,
                     &self.parent_event_tx,
                     &self.parent_id,
@@ -421,7 +397,7 @@ impl SubagentTool {
                     event_tx,
                     agent_id,
                     tool_id,
-                    format!("iteration {iteration_count} · streaming"),
+                    format!("iteration {iteration_count} · running..."),
                     None,
                 );
             }

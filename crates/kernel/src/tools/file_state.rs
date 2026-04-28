@@ -109,7 +109,7 @@ impl FileStateStore {
 
     /// Check if the store is empty
     pub fn is_empty(&self) -> bool {
-        self.mtimes.read().map(|m| m.is_empty()).unwrap_or(true)
+        self.mtimes.read().map_or(true, |m| m.is_empty())
     }
 }
 

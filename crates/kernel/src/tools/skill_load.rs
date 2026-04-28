@@ -31,7 +31,7 @@ impl Tool for SkillTool {
         "Load a skill file and return its content."
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

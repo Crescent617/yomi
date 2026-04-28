@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
-const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const IDLE_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub struct AnthropicProvider {
     client: Client,

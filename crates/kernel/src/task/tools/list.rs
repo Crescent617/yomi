@@ -32,7 +32,7 @@ impl Tool for TaskListTool {
         "List all tasks in the task list"
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {

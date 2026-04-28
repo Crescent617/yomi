@@ -83,7 +83,7 @@ impl Tool for ShellTool {
         }
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

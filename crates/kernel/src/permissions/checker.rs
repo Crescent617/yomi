@@ -273,7 +273,7 @@ impl Checker {
         );
 
         // 等待响应（使用 timeout 防止无限等待）
-        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_mins(5), rx).await {
             Ok(Ok(response)) => {
                 tracing::info!(
                     "Permission check received response: approved={}, remember={}",

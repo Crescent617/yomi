@@ -265,7 +265,7 @@ impl Tool for WebSearchTool {
         "Searches the web for information using DuckDuckGo. Returns search results with titles, URLs, snippets, and optionally fetches content from top results"
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {

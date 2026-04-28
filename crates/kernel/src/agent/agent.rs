@@ -95,16 +95,16 @@ impl Agent {
 
         // Create agent-specific tool registry with standard tools
         let tool_registry = crate::tools::ToolRegistryFactory::create(
-            &id,
-            &shared,
-            Some(&input_tx),
-            &event_tx,
-            args.skills.clone(),
-            &args.session_id,
-            args.parent_session_id.as_deref(),
-            args.enable_sub_agents,
-            shared.skill_folders.clone(),
-            args.file_state_store.clone(),
+            crate::tools::ToolRegistryConfig::for_main_agent(
+                &id,
+                &shared,
+                &input_tx,
+                &event_tx,
+                args.skills.clone(),
+                &args.session_id,
+            )
+            .with_enable_sub_agents(args.enable_sub_agents)
+            .with_file_state_store(args.file_state_store.clone()),
         );
 
         // Create permission checker and responder from shared state

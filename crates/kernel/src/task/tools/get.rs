@@ -32,7 +32,7 @@ impl Tool for TaskGetTool {
         "Retrieve a task by ID"
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {

@@ -15,6 +15,7 @@ pub mod grep;
 pub mod parallel;
 pub mod read;
 pub mod registry_factory;
+pub mod reminder;
 pub mod shell;
 pub mod skill_load;
 pub mod subagent;
@@ -29,7 +30,8 @@ pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use parallel::execute_tools_parallel;
 pub use read::{ReadTool, READ_TOOL_NAME};
-pub use registry_factory::ToolRegistryFactory;
+pub use registry_factory::{ToolRegistryConfig, ToolRegistryFactory};
+pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
@@ -113,7 +115,7 @@ use futures::future::Either;
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn desc(&self) -> &str;
-    fn params(&self) -> Value;
+    fn schema(&self) -> Value;
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput>;
 }
@@ -177,7 +179,7 @@ impl ToolRegistry {
                 Arc::new(ToolDefinition {
                     name: tool.name().to_string(),
                     description: tool.desc().to_string(),
-                    parameters: tool.params(),
+                    parameters: tool.schema(),
                 })
             })
             .collect();

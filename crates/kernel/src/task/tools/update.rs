@@ -33,7 +33,7 @@ impl Tool for TaskUpdateTool {
         "Update a task in the task list"
     }
 
-    fn params(&self) -> Value {
+    fn schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {

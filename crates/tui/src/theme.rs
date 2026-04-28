@@ -349,7 +349,7 @@ pub mod chars {
 
 /// Get spinner character for frame index
 pub fn spinner_char(frame: usize) -> &'static str {
-    chars::SPINNER[frame % chars::SPINNER.len()]
+    chars::SPINNER[(frame / 3) % chars::SPINNER.len()]
 }
 
 /// Helper to create a custom color from RGB values
