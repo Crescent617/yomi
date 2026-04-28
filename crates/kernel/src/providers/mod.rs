@@ -19,6 +19,15 @@ pub type ModelStream =
 #[derive(Debug, Clone)]
 pub enum ModelStreamItem {
     Chunk(ContentChunk),
+    /// Incremental tool call update (for UI feedback during argument streaming)
+    /// Only contains the newly added fragment, not the accumulated arguments.
+    ToolCallDelta {
+        id: String,
+        name: String,
+        /// Newly added argument fragment (delta), not the full accumulated string
+        arguments_delta: String,
+    },
+    /// Complete tool call (final)
     ToolCall(ToolCallRequest),
     Complete,
     Fallback {

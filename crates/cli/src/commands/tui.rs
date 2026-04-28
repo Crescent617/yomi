@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Create SQLite pool with proper connection string and PRAGMAs
+/// Create `SQLite` pool with proper connection string and PRAGMAs
 async fn create_db_pool(db_path: &Path) -> anyhow::Result<sqlx::SqlitePool> {
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {

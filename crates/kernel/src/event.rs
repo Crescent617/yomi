@@ -113,6 +113,15 @@ pub enum ModelEvent {
         agent_id: AgentId,
         content: ContentChunk,
     },
+    /// Incremental tool call update (for UI feedback during argument streaming)
+    /// Only contains the newly added fragment, not the accumulated arguments.
+    ToolCallDelta {
+        agent_id: AgentId,
+        tool_id: String,
+        tool_name: String,
+        /// Newly added argument fragment (delta), not the full accumulated string
+        arguments_delta: String,
+    },
     Completed {
         agent_id: AgentId,
     },

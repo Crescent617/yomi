@@ -10,9 +10,7 @@ use std::str::FromStr;
 pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
     let path = path.as_ref();
     if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-        {
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
             return PathBuf::from(home).join(stripped);
         }
     }
