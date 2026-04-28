@@ -48,9 +48,11 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
     let sessions = if all {
         storage.list_sessions().await?
     } else {
-        let filtered = storage.list_sessions_by_working_dir(&current_dir_str).await?;
+        let filtered = storage
+            .list_sessions_by_working_dir(&current_dir_str)
+            .await?;
         if filtered.is_empty() {
-            println!("No sessions found for current directory: {}", current_dir_str);
+            println!("No sessions found for current directory: {current_dir_str}");
             println!("Use --all to list all sessions.");
             return Ok(());
         }
@@ -92,7 +94,10 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
                 "(error loading messages)".to_string()
             };
 
-        let working_dir = session.working_dir.clone().unwrap_or_else(|| "(unknown)".to_string());
+        let working_dir = session
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| "(unknown)".to_string());
         rows.push((session.id.clone(), age_str, working_dir, preview));
     }
 

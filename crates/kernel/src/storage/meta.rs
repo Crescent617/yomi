@@ -28,7 +28,7 @@ impl MetaStorage {
     }
 
     /// Initialize database schema
-    /// 
+    ///
     /// Note: Schema is now managed by the migrations system in `crate::storage::migrations`.
     /// This method is kept for backwards compatibility and testing purposes.
     /// In production, migrations are run automatically when creating `FsStorage`.
@@ -53,13 +53,12 @@ impl MetaStorage {
     /// Create a forked session record, inheriting `working_dir` from parent
     pub async fn fork(&self, new_id: &SessionId, parent_id: &SessionId) -> Result<()> {
         // Get parent's working_dir and verify parent exists
-        let parent_working_dir: Option<String> = sqlx::query_scalar(
-            "SELECT working_dir FROM sessions WHERE id = ?"
-        )
-        .bind(&parent_id.0)
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to get parent session working_dir")?;
+        let parent_working_dir: Option<String> =
+            sqlx::query_scalar("SELECT working_dir FROM sessions WHERE id = ?")
+                .bind(&parent_id.0)
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed to get parent session working_dir")?;
 
         // Check if parent exists
         if parent_working_dir.is_none() {
@@ -229,7 +228,10 @@ mod tests {
         let storage = create_test_storage().await;
 
         let id = SessionId::new();
-        storage.create(&id, Some("/test/working/dir")).await.unwrap();
+        storage
+            .create(&id, Some("/test/working/dir"))
+            .await
+            .unwrap();
 
         let meta = storage.get(&id).await.unwrap().unwrap();
         assert_eq!(meta.working_dir, Some("/test/working/dir".to_string()));

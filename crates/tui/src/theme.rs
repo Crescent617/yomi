@@ -325,30 +325,26 @@ impl Styles {
 
 /// Block characters for drawing UI elements
 pub mod chars {
-    // Vertical borders for message blocks
+    // Message block borders (used for blockquotes and user messages)
     pub const USER_BAR: &str = "│";
-    pub const USER_CORNER_TOP: &str = "╭";
-    pub const USER_CORNER_BOTTOM: &str = "╰";
 
-    // Section indicators
-    pub const FOLD_COLLAPSED: &str = ""; // 先不用
-    pub const FOLD_EXPANDED: &str = ""; // 先不用
+    // List markers
     pub const BULLET: &str = "•";
 
-    // Input
-    pub const INPUT_PROMPT: &str = "❯";
-    pub const INPUT_PROMPT_MULTI: &str = "│";
+    // Input prompt characters (with trailing space for display)
+    pub const INPUT_PROMPT: &str = "❯ ";
+    pub const INPUT_PROMPT_MULTI: &str = "│ ";
 
-    // Code block
-    pub const CODE_TOP_LEFT: &str = "╭";
-    pub const CODE_TOP_RIGHT: &str = "╮";
-    pub const CODE_BOTTOM_LEFT: &str = "╰";
-    pub const CODE_BOTTOM_RIGHT: &str = "╯";
-    pub const CODE_HORIZONTAL: &str = "─";
-    pub const CODE_VERTICAL: &str = "│";
+    // Tool output borders (with trailing space for display)
+    pub const TOOL_BORDER: &str = "│ ";
+    pub const TOOL_BORDER_INDENT: &str = "│   ";
+
+    // Status indicators
+    pub const CANCELLED: &str = "✕";
+    pub const COMPLETED: &str = "✓";
 
     // Spinner frames
-    pub const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    pub const SPINNER: &[&str] = &["∙∙", "●∙", "∙●"];
 }
 
 /// Get spinner character for frame index
