@@ -348,9 +348,11 @@ impl Component for InfoBar {
             }
             Attribute::Custom(attr::STOP_STREAMING) => {
                 self.set_state(InfoBarState::Completed);
+                self.current_tool_call = None;
             }
             Attribute::Custom(attr::CANCEL_STREAMING) => {
                 self.set_state(InfoBarState::Cancelled);
+                self.current_tool_call = None;
             }
             Attribute::Custom(attr::START_COMPACTING) => {
                 self.set_state(InfoBarState::Compacting);

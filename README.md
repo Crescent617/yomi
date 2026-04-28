@@ -22,6 +22,10 @@
 - Rust 1.90+ (install via [rustup](https://rustup.rs))
 - API key from OpenAI or Anthropic
 
+### Dependencies
+
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) — for file search
+
 ### Installation
 
 ```bash
