@@ -1590,16 +1590,7 @@ impl Model {
                     let items: Vec<crate::components::PickerItem> = sessions
                         .into_iter()
                         .map(|s| {
-                            let age = chrono::Utc::now() - s.updated_at;
-                            let age_str = if age.num_days() > 0 {
-                                format!("{}d ago", age.num_days())
-                            } else if age.num_hours() > 0 {
-                                format!("{}h ago", age.num_hours())
-                            } else if age.num_minutes() > 0 {
-                                format!("{}m ago", age.num_minutes())
-                            } else {
-                                "just now".to_string()
-                            };
+                            let age_str = s.format_age();
                             let preview = s.title.unwrap_or_else(|| "(no message)".to_string());
                             let label = format!("{} - {}", s.id, age_str);
                             crate::components::PickerItem::new(s.id, label).with_meta(preview)
@@ -1607,18 +1598,24 @@ impl Model {
                         .collect();
 
                     // Show the session picker
-                    let _ = self.app.attr(
+                    if let Err(e) = self.app.attr(
                         &Id::SessionPicker,
                         Attribute::Custom(attr::ITEMS),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
-                    );
-                    let _ = self.app.attr(
+                    ) {
+                        tracing::warn!("Failed to set session picker items: {}", e);
+                    }
+                    if let Err(e) = self.app.attr(
                         &Id::SessionPicker,
                         Attribute::Custom(attr::SHOW),
                         AttrValue::Flag(true),
-                    );
+                    ) {
+                        tracing::warn!("Failed to show session picker: {}", e);
+                    }
                     // Give focus to session picker
-                    let _ = self.app.active(&Id::SessionPicker);
+                    if let Err(e) = self.app.active(&Id::SessionPicker) {
+                        tracing::warn!("Failed to focus session picker: {}", e);
+                    }
                     self.state.should_redraw = true;
                     None
                 }

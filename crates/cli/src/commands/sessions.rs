@@ -68,16 +68,7 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
 
     let mut rows = Vec::new();
     for session in sessions.iter().take(50) {
-        let age = chrono::Utc::now() - session.updated_at;
-        let age_str = if age.num_days() > 0 {
-            format!("{}d ago", age.num_days())
-        } else if age.num_hours() > 0 {
-            format!("{}h ago", age.num_hours())
-        } else if age.num_minutes() > 0 {
-            format!("{}m ago", age.num_minutes())
-        } else {
-            "just now".to_string()
-        };
+        let age_str = session.format_age();
 
         // Use title field for last user message preview (reusing title for preview)
         let preview = session.title.as_ref().map_or_else(
