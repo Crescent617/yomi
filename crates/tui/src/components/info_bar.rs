@@ -17,7 +17,12 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{
+    attr,
+    msg::Msg,
+    theme::{chars, colors, spinner_char},
+    utils::text::truncate_by_width,
+};
 use kernel::utils::tokens;
 use unicode_width::UnicodeWidthStr;
 
@@ -109,37 +114,29 @@ impl InfoBarState {
     /// Get the spinner frame and style for this state
     fn spinner(self, tick_frame: usize) -> (String, Style, &'static str) {
         match self {
-            Self::Streaming => {
-                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
-                let frame = FRAMES[(tick_frame / 3) % FRAMES.len()];
-                (
-                    frame.to_string(),
-                    Style::default()
-                        .fg(colors::accent_system())
-                        .add_modifier(Modifier::BOLD),
-                    "",
-                )
-            }
-            Self::Compacting => {
-                const FRAMES: &[&str] = &["∙∙", "●∙", "∙●"];
-                let frame = FRAMES[(tick_frame / 3) % FRAMES.len()];
-                (
-                    frame.to_string(),
-                    Style::default()
-                        .fg(colors::accent_warning())
-                        .add_modifier(Modifier::BOLD),
-                    "Compacting...",
-                )
-            }
+            Self::Streaming => (
+                spinner_char(tick_frame).to_string(),
+                Style::default()
+                    .fg(colors::accent_system())
+                    .add_modifier(Modifier::BOLD),
+                "",
+            ),
+            Self::Compacting => (
+                spinner_char(tick_frame).to_string(),
+                Style::default()
+                    .fg(colors::accent_warning())
+                    .add_modifier(Modifier::BOLD),
+                "Compacting...",
+            ),
             Self::Cancelled => (
-                "✕".to_string(),
+                chars::CANCELLED.to_string(),
                 Style::default()
                     .fg(colors::accent_error())
                     .add_modifier(Modifier::BOLD),
                 "",
             ),
             Self::Completed | Self::Idle => (
-                "✓".to_string(),
+                chars::COMPLETED.to_string(),
                 Style::default()
                     .fg(colors::accent_success())
                     .add_modifier(Modifier::BOLD),

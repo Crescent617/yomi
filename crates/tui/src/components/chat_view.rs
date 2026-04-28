@@ -25,7 +25,7 @@ use crate::{
     components::info_bar::Notification,
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
-    theme::colors,
+    theme::{chars, colors},
     utils::text::{char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars},
 };
 use kernel::task::{
@@ -694,7 +694,11 @@ impl ChatView {
                     match block {
                         ContentBlock::Text { text } => {
                             for line in text.lines() {
-                                let prefix = if line_idx == 0 { "❯ " } else { "│ " };
+                                let prefix = if line_idx == 0 {
+                                    chars::INPUT_PROMPT
+                                } else {
+                                    chars::INPUT_PROMPT_MULTI
+                                };
                                 lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
                                         prefix,
@@ -712,7 +716,11 @@ impl ChatView {
                             }
                         }
                         ContentBlock::ImageUrl { .. } => {
-                            let prefix = if line_idx == 0 { "❯ " } else { "│ " };
+                            let prefix = if line_idx == 0 {
+                                chars::INPUT_PROMPT
+                            } else {
+                                chars::INPUT_PROMPT_MULTI
+                            };
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
                                     prefix,
@@ -909,7 +917,10 @@ impl ChatView {
                     if let Some(args) = arguments {
                         if !args.is_empty() {
                             lines.push(Arc::new(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    chars::TOOL_BORDER,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
                                 Span::styled(
                                     "Arguments:",
                                     Style::default()
@@ -920,7 +931,7 @@ impl ChatView {
                             for line in args.lines() {
                                 lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
-                                        "│   ",
+                                        chars::TOOL_BORDER_INDENT,
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
@@ -935,7 +946,10 @@ impl ChatView {
                     if let Some(err) = error {
                         for line in err.lines() {
                             lines.push(Arc::new(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(colors::accent_error())),
+                                Span::styled(
+                                    chars::TOOL_BORDER,
+                                    Style::default().fg(colors::accent_error()),
+                                ),
                                 Span::styled(
                                     preprocess(line),
                                     Style::default().fg(colors::accent_error()),
@@ -944,7 +958,10 @@ impl ChatView {
                         }
                     } else if let Some(out) = output {
                         lines.push(Arc::new(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(
+                                chars::TOOL_BORDER,
+                                Style::default().fg(colors::text_secondary()),
+                            ),
                             Span::styled(
                                 "Output:",
                                 Style::default()
@@ -954,7 +971,10 @@ impl ChatView {
                         ])));
                         for line in out.lines() {
                             lines.push(Arc::new(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(colors::accent_system())),
+                                Span::styled(
+                                    chars::TOOL_BORDER,
+                                    Style::default().fg(colors::accent_system()),
+                                ),
                                 Span::styled(
                                     preprocess(line),
                                     Style::default().fg(colors::text_primary()),
@@ -967,7 +987,10 @@ impl ChatView {
                             |p| format!("Running: {}", sanitize_single_line(p)),
                         );
                         lines.push(Arc::new(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(
+                                chars::TOOL_BORDER,
+                                Style::default().fg(colors::text_secondary()),
+                            ),
                             Span::styled(
                                 running_text,
                                 Style::default()
@@ -977,7 +1000,10 @@ impl ChatView {
                         ])));
                     } else if *status == ToolStatus::Cancelled {
                         lines.push(Arc::new(Line::from(vec![
-                            Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                            Span::styled(
+                                chars::TOOL_BORDER,
+                                Style::default().fg(colors::text_secondary()),
+                            ),
                             Span::styled(
                                 "Cancelled",
                                 Style::default()
@@ -991,7 +1017,10 @@ impl ChatView {
                     for block in content_blocks {
                         if let ToolOutputBlock::Image { url, mime_type, .. } = block {
                             lines.push(Arc::new(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    chars::TOOL_BORDER,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
                                 Span::styled(
                                     "Image:",
                                     Style::default()
@@ -1001,7 +1030,10 @@ impl ChatView {
                             ])));
                             let url_display = truncate_by_chars(url, 100);
                             lines.push(Arc::new(Line::from(vec![
-                                Span::styled("│   ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    chars::TOOL_BORDER_INDENT,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
                                 Span::styled(
                                     url_display,
                                     Style::default().fg(colors::text_primary()),
@@ -1010,7 +1042,7 @@ impl ChatView {
                             if let Some(mime) = mime_type {
                                 lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
-                                        "│   ",
+                                        chars::TOOL_BORDER_INDENT,
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
@@ -1091,7 +1123,10 @@ impl ChatView {
         if !is_folded {
             for line in thinking.lines() {
                 lines.push(Arc::new(Line::from(vec![
-                    Span::styled("│ ", Style::default().fg(colors::text_secondary())),
+                    Span::styled(
+                        chars::TOOL_BORDER,
+                        Style::default().fg(colors::text_secondary()),
+                    ),
                     Span::styled(
                         preprocess(line),
                         Style::default().fg(colors::text_secondary()),

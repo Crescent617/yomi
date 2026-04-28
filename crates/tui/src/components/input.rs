@@ -22,7 +22,7 @@ use crate::{
     attr,
     components::{info_bar::Notification, input_edit::TextInput, CompletionList, FileCompletion},
     msg::Msg,
-    theme::colors,
+    theme::{chars, colors},
     utils::text::truncate_by_chars,
 };
 
@@ -538,7 +538,11 @@ impl InputMock {
         let mut content_idx = 0;
 
         for (line_num, line) in self.content.split('\n').enumerate() {
-            let prefix = if line_num == 0 { "❯ " } else { "│ " };
+            let prefix = if line_num == 0 {
+                chars::INPUT_PROMPT
+            } else {
+                chars::INPUT_PROMPT_MULTI
+            };
             let prefix_width = prefix.width();
             let available_width = content_width.saturating_sub(prefix_width);
 
@@ -559,7 +563,11 @@ impl InputMock {
                     // Find how many chars fit in available_width
                     let chunk = Self::truncate_to_width(&line[line_idx..], available_width);
                     let chunk_len = chunk.len();
-                    let chunk_prefix = if is_first_chunk { prefix } else { "│ " };
+                    let chunk_prefix = if is_first_chunk {
+                        prefix
+                    } else {
+                        chars::INPUT_PROMPT_MULTI
+                    };
 
                     visual_lines.push(VisualLine {
                         text: chunk.to_string(),
@@ -728,7 +736,7 @@ impl Component for InputMock {
         let text = if self.content.is_empty() {
             tuirealm::ratatui::text::Text::from(vec![Line::from(vec![
                 Span::styled(
-                    "❯ ",
+                    chars::INPUT_PROMPT,
                     Style::default()
                         .fg(colors::accent_user())
                         .add_modifier(Modifier::BOLD),
