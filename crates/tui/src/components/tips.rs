@@ -9,6 +9,7 @@ pub const TIPS: &[&str] = &[
     "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
     "Use Ctrl+V to paste image in clipboard",
     "Type /new to start a new session",
+    "Type /sessions to switch between sessions",
     "Type /yolo to toggle YOLO mode",
     const_concat!(
         "Use env var ",

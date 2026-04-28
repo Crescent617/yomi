@@ -136,6 +136,8 @@ impl Storage for FsStorage {
     }
 
     async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()> {
+        use crate::types::Role;
+
         let path = self.session_file_path(session_id);
 
         let mut file = fs::OpenOptions::new()
@@ -145,10 +147,21 @@ impl Storage for FsStorage {
             .await
             .context("Failed to open session file")?;
 
+        // Track last user message for metadata update
+        let mut last_user_message: Option<String> = None;
+
         for message in messages {
             let line = serde_json::to_string(message)?;
             file.write_all(line.as_bytes()).await?;
             file.write_all(b"\n").await?;
+
+            // Track user messages
+            if message.role == Role::User {
+                let text = message.text_content();
+                if !text.is_empty() {
+                    last_user_message = Some(text);
+                }
+            }
         }
         file.flush().await?;
 
@@ -161,6 +174,17 @@ impl Storage for FsStorage {
         self.meta
             .update_message_count(session_id, existing_count + messages.len() as i64)
             .await?;
+
+        // Update title with last user message if any (reusing title field for preview)
+        if let Some(text) = last_user_message {
+            // Truncate to reasonable length for preview (100 chars)
+            let truncated = if text.chars().count() > 100 {
+                format!("{}...", text.chars().take(100).collect::<String>())
+            } else {
+                text
+            };
+            self.meta.update_title(session_id, truncated).await?;
+        }
 
         Ok(())
     }

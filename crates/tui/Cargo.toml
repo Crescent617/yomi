@@ -21,6 +21,7 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 
 # Image clipboard support
 # Enable wayland-data-control for native Wayland support (no XWayland needed)

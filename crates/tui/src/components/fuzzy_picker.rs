@@ -7,7 +7,6 @@
 //! - File picker
 //! - Any list that needs filtering
 
-use crate::utils::text::truncate_by_chars;
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
@@ -492,22 +491,51 @@ impl Component for FuzzyPicker {
     }
 }
 
+/// Callback type for picker results
+pub type PickerCallback = Box<dyn Fn(String) -> crate::msg::Msg + Send>;
+pub type PickerCancelCallback = Box<dyn Fn() -> crate::msg::Msg + Send>;
+
 /// App-level fuzzy picker component that handles keyboard events
-#[derive(Debug)]
 pub struct FuzzyPickerComponent {
     component: FuzzyPicker,
+    on_select: Option<PickerCallback>,
+    on_cancel: Option<PickerCancelCallback>,
+}
+
+impl std::fmt::Debug for FuzzyPickerComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FuzzyPickerComponent")
+            .field("component", &self.component)
+            .field("has_on_select", &self.on_select.is_some())
+            .field("has_on_cancel", &self.on_cancel.is_some())
+            .finish()
+    }
 }
 
 impl FuzzyPickerComponent {
     pub fn new(config: PickerConfig) -> Self {
         Self {
             component: FuzzyPicker::new(config),
+            on_select: None,
+            on_cancel: None,
         }
     }
 
     #[must_use]
     pub fn with_items(mut self, items: Vec<PickerItem>) -> Self {
         self.component = self.component.with_items(items);
+        self
+    }
+
+    /// Set callbacks for selection and cancel events
+    #[must_use]
+    pub fn with_callbacks(
+        mut self,
+        on_select: impl Fn(String) -> crate::msg::Msg + Send + 'static,
+        on_cancel: impl Fn() -> crate::msg::Msg + Send + 'static,
+    ) -> Self {
+        self.on_select = Some(Box::new(on_select));
+        self.on_cancel = Some(Box::new(on_cancel));
         self
     }
 
@@ -599,7 +627,8 @@ impl AppComponent<crate::msg::Msg, crate::msg::UserEvent> for FuzzyPickerCompone
             }) => {
                 if let Some(id) = self.component.current_selection() {
                     self.component.hide();
-                    Some(crate::msg::Msg::HistorySelected(id))
+                    // Use callback if set
+                    self.on_select.as_ref().map(|callback| callback(id))
                 } else {
                     None
                 }
@@ -616,7 +645,8 @@ impl AppComponent<crate::msg::Msg, crate::msg::UserEvent> for FuzzyPickerCompone
                 },
             ) => {
                 self.component.hide();
-                Some(crate::msg::Msg::CloseHistoryPicker)
+                // Use callback if set
+                self.on_cancel.as_ref().map(|callback| callback())
             }
             // Regular character: add to search
             Keyboard(KeyEvent {
@@ -679,21 +709,4 @@ impl AppComponent<crate::msg::Msg, crate::msg::UserEvent> for FuzzyPickerCompone
 pub enum PickerResult {
     Selected(String), // Selected item ID
     Cancelled,
-}
-
-// Convenience function to create history items
-pub fn history_items(history: &[String]) -> Vec<PickerItem> {
-    history
-        .iter()
-        .enumerate()
-        .map(|(idx, text)| {
-            // Replace newlines with spaces and trim leading whitespace for preview
-            let text_single_line = text.replace('\n', " ").trim_start().to_string();
-            PickerItem::new(
-                format!("history_{idx}"),
-                truncate_by_chars(&text_single_line, 50),
-            )
-        })
-        .rev() // Most recent first
-        .collect()
 }

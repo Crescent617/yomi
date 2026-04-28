@@ -63,12 +63,17 @@ pub enum Msg {
     DialogCancelled,       // Dialog was cancelled
 
     // Slash commands
-    CommandNew,     // /new - create new session
-    CommandClear,   // /clear - clear history
-    CommandYolo,    // /yolo - toggle yolo mode
-    CommandBrowse,  // /browse - toggle browse mode
-    CommandCompact, // /compact - force message compaction
-    CommandHelp,    // /help - show help dialog
+    CommandNew,      // /new - create new session
+    CommandClear,    // /clear - clear history
+    CommandYolo,     // /yolo - toggle yolo mode
+    CommandBrowse,   // /browse - toggle browse mode
+    CommandCompact,  // /compact - force message compaction
+    CommandHelp,     // /help - show help dialog
+    CommandSessions, // /sessions - switch session
+
+    // Session picker
+    SessionSelected(String), // User selected a session to switch to
+    CloseSessionPicker,      // Close session picker without selection
 
     // Suspend process to background (Ctrl-Z)
     Suspend,

@@ -279,6 +279,7 @@ pub fn default_help_sections() -> Vec<HelpSection> {
             .add_binding("Ctrl+N / Down", "Next history"),
         HelpSection::new("Slash Commands")
             .add_binding("/new", "Create new session")
+            .add_binding("/sessions", "Switch to another session")
             .add_binding("/clear", "Clear chat history")
             .add_binding("/yolo", "Toggle YOLO mode")
             .add_binding("/browse", "Toggle browse mode")

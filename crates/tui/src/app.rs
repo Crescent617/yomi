@@ -3,6 +3,8 @@
 //! Main application using tuirealm framework for component-based TUI.
 
 use anyhow::Result;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Result type returned by TUI
 pub struct TuiResult {
@@ -10,8 +12,9 @@ pub struct TuiResult {
     pub input_history: Vec<String>,
     /// Whether to create a new session after exiting
     pub should_create_new_session: bool,
+    /// Session ID to switch to (for /sessions command)
+    pub switch_to_session: Option<String>,
 }
-use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tuirealm::{
     application::{Application, PollStrategy},
@@ -31,12 +34,13 @@ use kernel::types::{ContentBlock, Message};
 use crate::{
     attr,
     components::{
-        default_help_sections, history_items, info_bar::Notification, status_bar::Tip,
-        tips::get_random_tip, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
-        InfoBarComponent, InputComponent, PickerConfig, SelectDialogComponent, StatusBarComponent,
+        default_help_sections, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
+        ChatViewComponent, FuzzyPickerComponent, HelpDialog, InfoBarComponent, InputComponent,
+        PickerConfig, PickerItem, SelectDialogComponent, StatusBarComponent,
     },
     id::Id,
     msg::{Msg, UserEvent},
+    utils::text::truncate_by_chars,
 };
 
 /// Application mode - single source of truth for UI mode
@@ -71,6 +75,8 @@ pub struct AppState {
     pub should_create_new_session: bool,
     /// Initial message to send on startup (from CLI prompt arg)
     pub initial_message: Option<String>,
+    /// Session ID to switch to on exit (for /sessions command)
+    pub switch_to_session: Option<String>,
 }
 
 pub struct Model {
@@ -85,6 +91,8 @@ pub struct Model {
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
     pub ctrl_tx: mpsc::Sender<ControlCommand>,
+    /// Storage for loading sessions list
+    storage: Arc<dyn kernel::storage::Storage>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -115,6 +123,7 @@ impl Model {
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
         ctrl_tx: mpsc::Sender<ControlCommand>,
+        storage: Arc<dyn kernel::storage::Storage>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
@@ -132,11 +141,13 @@ impl Model {
                 is_streaming: false,
                 should_create_new_session: false,
                 initial_message,
+                switch_to_session: None,
             },
             terminal,
             event_rx,
             input_tx,
             ctrl_tx,
+            storage,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -268,6 +279,23 @@ impl Model {
             AttrValue::String(working_dir_str),
         );
         Ok(())
+    }
+
+    /// Convert input history to picker items for fuzzy search
+    fn history_items(&self) -> Vec<PickerItem> {
+        self.input_history
+            .iter()
+            .enumerate()
+            .map(|(idx, text)| {
+                // Replace newlines with spaces and trim leading whitespace for preview
+                let text_single_line = text.replace('\n', " ").trim_start().to_string();
+                PickerItem::new(
+                    format!("history_{idx}"),
+                    truncate_by_chars(&text_single_line, 50),
+                )
+            })
+            .rev() // Most recent first
+            .collect()
     }
 
     /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
@@ -697,6 +725,9 @@ impl Model {
             // Render history picker on top if active
             self.app.view(&Id::HistoryPicker, f, f.area());
 
+            // Render session picker on top if active
+            self.app.view(&Id::SessionPicker, f, f.area());
+
             // Render help dialog on top if active
             self.app.view(&Id::HelpDialog, f, f.area());
         });
@@ -754,10 +785,28 @@ impl Model {
             PickerConfig::new("History")
                 .with_placeholder("Search history...")
                 .with_max_height(12),
-        );
+        )
+        .with_callbacks(crate::msg::Msg::HistorySelected, || {
+            crate::msg::Msg::CloseHistoryPicker
+        });
         app.mount(
             Id::HistoryPicker,
             Box::new(history_picker),
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
+        )?;
+
+        // Mount session picker component (hidden by default, for /sessions command)
+        let session_picker = FuzzyPickerComponent::new(
+            PickerConfig::new("Switch Session")
+                .with_placeholder("Search sessions...")
+                .with_max_height(12),
+        )
+        .with_callbacks(crate::msg::Msg::SessionSelected, || {
+            crate::msg::Msg::CloseSessionPicker
+        });
+        app.mount(
+            Id::SessionPicker,
+            Box::new(session_picker),
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
@@ -1031,6 +1080,7 @@ impl Model {
         Ok(TuiResult {
             input_history: self.get_new_history_entries(),
             should_create_new_session: self.state.should_create_new_session,
+            switch_to_session: self.state.switch_to_session.clone(),
         })
     }
 
@@ -1468,7 +1518,7 @@ impl Model {
                 // History picker messages
                 Msg::ShowHistoryPicker => {
                     // Convert history to picker items (most recent first)
-                    let items = history_items(&self.input_history);
+                    let items = self.history_items();
                     // Show the picker with history items
                     let _ = self.app.attr(
                         &Id::HistoryPicker,
@@ -1528,6 +1578,72 @@ impl Model {
                     self.state.should_redraw = true;
                     None
                 }
+                Msg::CommandSessions => {
+                    // Load sessions for current working dir and show picker
+                    let working_dir = self.working_dir.to_string_lossy().to_string();
+                    let sessions = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(self.storage.list_sessions_by_working_dir(&working_dir))
+                    })
+                    .unwrap_or_default();
+
+                    let items: Vec<crate::components::PickerItem> = sessions
+                        .into_iter()
+                        .map(|s| {
+                            let age = chrono::Utc::now() - s.updated_at;
+                            let age_str = if age.num_days() > 0 {
+                                format!("{}d ago", age.num_days())
+                            } else if age.num_hours() > 0 {
+                                format!("{}h ago", age.num_hours())
+                            } else if age.num_minutes() > 0 {
+                                format!("{}m ago", age.num_minutes())
+                            } else {
+                                "just now".to_string()
+                            };
+                            let preview = s.title.unwrap_or_else(|| "(no message)".to_string());
+                            let label = format!("{} - {}", s.id, age_str);
+                            crate::components::PickerItem::new(s.id, label).with_meta(preview)
+                        })
+                        .collect();
+
+                    // Show the session picker
+                    let _ = self.app.attr(
+                        &Id::SessionPicker,
+                        Attribute::Custom(attr::ITEMS),
+                        AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
+                    );
+                    let _ = self.app.attr(
+                        &Id::SessionPicker,
+                        Attribute::Custom(attr::SHOW),
+                        AttrValue::Flag(true),
+                    );
+                    // Give focus to session picker
+                    let _ = self.app.active(&Id::SessionPicker);
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::SessionSelected(session_id) => {
+                    // Hide picker and set switch target
+                    let _ = self.app.attr(
+                        &Id::SessionPicker,
+                        Attribute::Custom(attr::HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    self.state.switch_to_session = Some(session_id);
+                    self.state.quit = true;
+                    None
+                }
+                Msg::CloseSessionPicker => {
+                    // Hide session picker and return focus to input box
+                    let _ = self.app.attr(
+                        &Id::SessionPicker,
+                        Attribute::Custom(attr::HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    let _ = self.app.active(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
                 Msg::CloseHelpDialog => {
                     // Hide help dialog and return focus to input box
                     if let Err(e) = self.app.attr(
@@ -1557,6 +1673,7 @@ pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
+    storage: Arc<dyn kernel::storage::Storage>,
     working_dir: String,
     skills: Vec<String>,
     input_history: Vec<String>,
@@ -1570,6 +1687,7 @@ pub async fn run_tui(
         event_rx,
         input_tx,
         ctrl_tx,
+        storage,
         input_history,
         working_dir_path,
         session_messages,
