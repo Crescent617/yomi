@@ -1,5 +1,6 @@
 use crate::skill::Skill;
 use crate::types::Message;
+use chrono::Local;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -42,6 +43,7 @@ impl PromptBuilder {
 pub struct SystemPromptBuilder<'a> {
     base_prompt: Option<&'a str>,
     skills: &'a [Arc<Skill>],
+    working_dir: Option<&'a std::path::Path>,
 }
 
 const SKILL_SECTION_HEADER: &str = "\n\n# Skills\nIMPORTANT: before replying, you must scan available skills and load skill when task hits its description.\n\n";
@@ -63,28 +65,51 @@ impl<'a> SystemPromptBuilder<'a> {
         self
     }
 
+    #[must_use]
+    pub const fn with_working_dir(mut self, dir: &'a std::path::Path) -> Self {
+        self.working_dir = Some(dir);
+        self
+    }
+
     pub fn build(self) -> String {
         let base = self
             .base_prompt
             .unwrap_or("You are a helpful AI coding assistant.")
             .trim();
 
-        if self.skills.is_empty() {
+        let mut prompt = if self.skills.is_empty() {
             base.to_string()
         } else {
-            let mut prompt = base.to_string();
-            prompt.push_str(SKILL_SECTION_HEADER);
-            prompt.push_str("## Available Skills\n");
+            let mut p = base.to_string();
+            p.push_str(SKILL_SECTION_HEADER);
+            p.push_str("## Available Skills\n");
             for skill in self.skills {
                 let _ = write!(
-                    prompt,
+                    p,
                     "name: {}\ndescription: {}\npath: {}\n\n",
                     skill.name,
                     skill.description,
                     skill.source_path.display()
                 );
             }
-            prompt
+            p
+        };
+
+        // Ensure there's a blank line before Environment section
+        if !prompt.ends_with('\n') {
+            prompt.push('\n');
         }
+        prompt.push_str("\n# Environment\n");
+        let _ = write!(prompt, "Date: {}", Local::now().format("%Y-%m-%d"));
+        if let Some(cwd) = self.working_dir {
+            let _ = write!(prompt, "\nCWD: {}", cwd.display());
+        }
+        let _ = write!(
+            prompt,
+            "\nOS: {} ({})",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        prompt
     }
 }

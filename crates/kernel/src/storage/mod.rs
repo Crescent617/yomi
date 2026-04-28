@@ -1,8 +1,10 @@
 pub mod fs;
 pub mod meta;
+pub mod migrations;
 
 pub use fs::FsStorage;
 pub use meta::{MetaStorage, SessionMeta};
+pub use migrations::{run_migrations, CURRENT_SCHEMA_VERSION};
 
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;
@@ -19,11 +21,13 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     pub title: Option<String>,
     pub message_count: i64,
+    pub working_dir: Option<String>,
 }
 
 #[async_trait]
 pub trait Storage: Send + Sync {
-    async fn create_session(&self) -> Result<SessionId>;
+    /// Create a new session with optional working directory
+    async fn create_session(&self, working_dir: Option<&str>) -> Result<SessionId>;
     async fn fork_session(&self, parent_id: &SessionId) -> Result<SessionId>;
     async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>>;
     async fn delete_session(&self, id: &SessionId) -> Result<()>;
@@ -33,4 +37,6 @@ pub trait Storage: Send + Sync {
     async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
     /// List all sessions with basic info
     async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
+    /// List sessions filtered by working directory
+    async fn list_sessions_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>>;
 }

@@ -1,3 +1,4 @@
+use crate::storage::migrations::run_migrations;
 use crate::storage::{MetaStorage, SessionInfo, Storage};
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::{Context, Result};
@@ -19,10 +20,12 @@ impl FsStorage {
         let base_dir = base_dir.into();
         std::fs::create_dir_all(&base_dir).context("Failed to create storage directory")?;
 
-        let meta = MetaStorage::new(pool);
-        meta.init()
+        // Run database migrations before initializing MetaStorage
+        run_migrations(&pool)
             .await
-            .context("Failed to initialize metadata storage")?;
+            .context("Failed to run database migrations")?;
+
+        let meta = MetaStorage::new(pool);
 
         Ok(Self { base_dir, meta })
     }
@@ -70,11 +73,11 @@ impl FsStorage {
 
 #[async_trait]
 impl Storage for FsStorage {
-    async fn create_session(&self) -> Result<SessionId> {
+    async fn create_session(&self, working_dir: Option<&str>) -> Result<SessionId> {
         let session_id = SessionId::new();
 
         // Create metadata in SQLite
-        self.meta.create(&session_id).await?;
+        self.meta.create(&session_id, working_dir).await?;
 
         // Create empty file
         let path = self.session_file_path(&session_id);
@@ -209,6 +212,26 @@ impl Storage for FsStorage {
                 parent_id: m.parent_id.map(|p| p.0),
                 title: m.title,
                 message_count: m.message_count,
+                working_dir: m.working_dir,
+            })
+            .collect();
+
+        Ok(sessions)
+    }
+
+    async fn list_sessions_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>> {
+        let metas = self.meta.list_by_working_dir(working_dir).await?;
+
+        let sessions = metas
+            .into_iter()
+            .map(|m| SessionInfo {
+                id: m.id.0,
+                created_at: m.created_at,
+                updated_at: m.updated_at,
+                parent_id: m.parent_id.map(|p| p.0),
+                title: m.title,
+                message_count: m.message_count,
+                working_dir: m.working_dir,
             })
             .collect();
 
@@ -236,7 +259,7 @@ mod tests {
     async fn test_create_and_get_session() {
         let (storage, _dir) = create_test_storage().await;
 
-        let id = storage.create_session().await.unwrap();
+        let id = storage.create_session(None).await.unwrap();
         let session = storage.get_session(&id).await.unwrap().unwrap();
 
         assert_eq!(session.id.0, id.0);
@@ -246,8 +269,8 @@ mod tests {
     async fn test_list_sessions() {
         let (storage, _dir) = create_test_storage().await;
 
-        let id1 = storage.create_session().await.unwrap();
-        let id2 = storage.create_session().await.unwrap();
+        let id1 = storage.create_session(None).await.unwrap();
+        let id2 = storage.create_session(None).await.unwrap();
 
         // Add message to id1 to make it more recent
         storage
@@ -266,7 +289,7 @@ mod tests {
     async fn test_fork_session() {
         let (storage, _dir) = create_test_storage().await;
 
-        let parent = storage.create_session().await.unwrap();
+        let parent = storage.create_session(Some("/test/dir")).await.unwrap();
         storage
             .append_messages(&parent, &[Message::user("hello")])
             .await
@@ -279,6 +302,8 @@ mod tests {
         let child_info = list.iter().find(|s| s.id == child.0).unwrap();
         assert_eq!(child_info.parent_id.as_ref().unwrap(), &parent.0);
         assert_eq!(child_info.message_count, 1);
+        // Check working_dir was inherited
+        assert_eq!(child_info.working_dir, Some("/test/dir".to_string()));
 
         // Check messages were copied
         let messages = storage.get_messages(&child).await.unwrap();
@@ -289,7 +314,7 @@ mod tests {
     async fn test_message_count_update() {
         let (storage, _dir) = create_test_storage().await;
 
-        let id = storage.create_session().await.unwrap();
+        let id = storage.create_session(None).await.unwrap();
 
         // Add messages
         storage
