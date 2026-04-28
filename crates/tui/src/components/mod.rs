@@ -19,7 +19,7 @@ pub use chat_view::ChatViewComponent;
 pub use completion_list::CompletionList;
 pub use dialog::{SelectDialog, SelectDialogComponent};
 pub use file_completion::FileCompletion;
-pub use fuzzy_picker::{history_items, FuzzyPickerComponent, PickerConfig, PickerItem};
+pub use fuzzy_picker::{FuzzyPickerComponent, PickerConfig, PickerItem};
 pub use help_dialog::{default_help_sections, HelpDialog, HelpSection};
 pub use info_bar::InfoBarComponent;
 pub use input::InputComponent;

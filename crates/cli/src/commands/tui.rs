@@ -145,7 +145,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         .await
         .unwrap_or_default();
 
-    let session_arg = match args.resume {
+    let mut session_arg = match args.resume {
         Some(None) => SessionArg::Last,
         Some(Some(id)) => SessionArg::Specific(id),
         None => SessionArg::New,
@@ -181,8 +181,16 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         }
         input_history.extend(result.new_history_entries);
 
+        // Handle session switching (/sessions command)
+        if let Some(switch_to_id) = result.switch_to_session {
+            session_arg = SessionArg::Specific(switch_to_id);
+            is_first_session = true; // Treat as first session to trigger restore flow
+            continue;
+        }
+
         if result.should_create_new_session {
             is_first_session = false;
+            session_arg = SessionArg::New;
             continue;
         }
 

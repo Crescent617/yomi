@@ -122,7 +122,7 @@ impl MetaStorage {
         Ok(())
     }
 
-    /// Update session title
+    /// Update session title (also used for last user message preview)
     pub async fn update_title(&self, id: &SessionId, title: impl Into<String>) -> Result<()> {
         let title = title.into();
         sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")

@@ -10,5 +10,6 @@ pub enum Id {
     Banner,        // Banner with mascot and system info (empty state)
     Dialog,        // Select dialog for permission confirmation
     HistoryPicker, // Fuzzy finder for input history (C-r)
+    SessionPicker, // Fuzzy finder for session switching (/sessions)
     HelpDialog,    // Help dialog for keyboard shortcuts
 }

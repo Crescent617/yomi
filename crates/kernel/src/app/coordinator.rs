@@ -235,4 +235,9 @@ impl Coordinator {
     ) -> Result<Vec<crate::types::Message>> {
         self.storage.get_messages(session_id).await
     }
+
+    /// Get storage reference
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
+    }
 }

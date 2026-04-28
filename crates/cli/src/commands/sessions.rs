@@ -1,7 +1,7 @@
 use crate::args::GlobalArgs;
 use crate::utils::load_config;
 use anyhow::Result;
-use kernel::{storage::FsStorage, storage::Storage, types::Role, types::SessionId};
+use kernel::{storage::FsStorage, storage::Storage};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
@@ -79,22 +79,17 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
             "just now".to_string()
         };
 
-        let preview =
-            if let Ok(messages) = storage.get_messages(&SessionId(session.id.clone())).await {
-                messages.iter().rev().find(|m| m.role == Role::User).map_or(
-                    "(no user message)".to_string(),
-                    |m| {
-                        let text = m.text_content().replace('\n', " ").trim_start().to_string();
-                        if text.chars().count() > 50 {
-                            format!("{}...", text.chars().take(50).collect::<String>())
-                        } else {
-                            text
-                        }
-                    },
-                )
-            } else {
-                "(error loading messages)".to_string()
-            };
+        // Use title field for last user message preview (reusing title for preview)
+        let preview = session.title.as_ref().map_or_else(
+            || "(no user message)".to_string(),
+            |t| {
+                if t.chars().count() > 50 {
+                    format!("{}...", t.chars().take(50).collect::<String>())
+                } else {
+                    t.clone()
+                }
+            },
+        );
 
         let working_dir = session
             .working_dir

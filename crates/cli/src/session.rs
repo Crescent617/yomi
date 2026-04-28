@@ -26,6 +26,7 @@ pub struct SessionContext {
 pub struct SessionResult {
     pub new_history_entries: Vec<String>,
     pub should_create_new_session: bool,
+    pub switch_to_session: Option<String>,
 }
 
 /// Session argument parsed from command line
@@ -222,6 +223,7 @@ pub async fn run_session_loop(
         event_rx,
         input_tx,
         ctrl_tx,
+        coordinator.storage().clone(),
         ctx.working_dir.to_string_lossy().to_string(),
         ctx.skill_names.clone(),
         input_history,
@@ -263,5 +265,6 @@ pub async fn run_session_loop(
     Ok(SessionResult {
         new_history_entries: tui_result.input_history,
         should_create_new_session: tui_result.should_create_new_session,
+        switch_to_session: tui_result.switch_to_session,
     })
 }

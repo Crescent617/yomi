@@ -815,6 +815,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear chat history"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
+    ("/sessions", "Switch to another session"),
     ("/compact", "Force message compaction"),
     ("/help", "Show keyboard shortcuts help"),
 ];
@@ -1836,6 +1837,7 @@ impl InputComponent {
             "/clear" => Some(Msg::CommandClear),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
+            "/sessions" => Some(Msg::CommandSessions),
             "/compact" => Some(Msg::CommandCompact),
             "/help" => Some(Msg::CommandHelp),
             _ => None, // Unknown command: treat as regular message
