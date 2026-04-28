@@ -2,8 +2,9 @@ use crate::args::GlobalArgs;
 use crate::utils::load_config;
 use anyhow::Result;
 use kernel::{storage::FsStorage, storage::Storage, types::Role, types::SessionId};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Create `SQLite` pool with proper connection string and PRAGMAs
@@ -18,14 +19,15 @@ async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
         tokio::fs::File::create(db_path).await?;
     }
 
+    // Parse connection options and set pragmas for ALL connections
+    let connect_options =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .pragma("busy_timeout", "5000")
+            .pragma("journal_mode", "WAL");
+
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect(&format!("sqlite://{}", db_path.display()))
-        .await?;
-
-    // Set busy timeout (5 seconds)
-    sqlx::query("PRAGMA busy_timeout = 5000")
-        .execute(&pool)
+        .connect_with(connect_options)
         .await?;
 
     Ok(pool)

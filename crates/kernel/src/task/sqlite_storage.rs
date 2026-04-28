@@ -1,7 +1,9 @@
 use crate::task::types::{CreateTaskInput, Task, TaskStatus, TaskUpdates};
 use anyhow::Result;
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Pool, Row, Sqlite};
 use std::path::Path;
+use std::str::FromStr;
 
 pub struct SqliteTaskStorage {
     pool: Pool<Sqlite>,
@@ -48,17 +50,16 @@ impl SqliteTaskStorage {
             format!("sqlite://{url_path}")
         };
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&conn_str)
-            .await?;
+        // Parse connection options and set pragmas for ALL connections via after_connect hook
+        // WAL mode enables better concurrent read/write performance
+        let connect_options = SqliteConnectOptions::from_str(&conn_str)?
+            .pragma("foreign_keys", "ON")
+            .pragma("busy_timeout", "5000")
+            .pragma("journal_mode", "WAL");
 
-        // Enable foreign keys and set busy timeout (5 seconds)
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await?;
-        sqlx::query("PRAGMA busy_timeout = 5000")
-            .execute(&pool)
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(connect_options)
             .await?;
 
         let storage = Self { pool };
