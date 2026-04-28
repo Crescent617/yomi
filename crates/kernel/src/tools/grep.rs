@@ -1,10 +1,10 @@
-use crate::tools::{FileTool, Tool, ToolExecCtx};
+use crate::tools::base::get_mtimes_concurrent;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fmt::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -15,15 +15,17 @@ pub const GREP_TOOL_NAME: &str = "grep";
 const DEFAULT_HEAD_LIMIT: usize = 250;
 const RIPGREP_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct GrepTool {
-    base_dir: PathBuf,
+pub struct GrepTool;
+
+impl Default for GrepTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GrepTool {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            base_dir: base_dir.into(),
-        }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Build ripgrep command arguments
@@ -200,10 +202,11 @@ impl GrepTool {
         &self,
         args: Vec<String>,
         search_path: &PathBuf,
+        working_dir: &std::path::Path,
     ) -> Result<(String, String, i32)> {
         let mut cmd = Command::new("rg");
         cmd.args(&args)
-            .current_dir(&self.base_dir)
+            .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -239,7 +242,13 @@ impl GrepTool {
 
     /// Get file modification time in milliseconds since epoch
     /// Format `files_with_matches` output with sorting by mtime
-    async fn format_files_output(&self, stdout: &str, limit: usize, offset: usize) -> String {
+    async fn format_files_output(
+        &self,
+        stdout: &str,
+        limit: usize,
+        offset: usize,
+        working_dir: &std::path::Path,
+    ) -> String {
         let lines: Vec<&str> = stdout.lines().collect();
 
         if lines.is_empty() {
@@ -249,8 +258,7 @@ impl GrepTool {
         // Parse file paths and get modification times concurrently with limited concurrency
         // to avoid file descriptor exhaustion when there are many matches
         let paths: Vec<PathBuf> = lines.into_iter().map(PathBuf::from).collect();
-        let mut files_with_mtime: Vec<(PathBuf, u64)> =
-            self.get_mtimes_concurrent(paths, None).await;
+        let mut files_with_mtime: Vec<(PathBuf, u64)> = get_mtimes_concurrent(paths, None).await;
 
         // Sort by mtime descending (newest first), then by path ascending as tiebreaker
         files_with_mtime.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -259,7 +267,7 @@ impl GrepTool {
         let sorted_paths: Vec<String> = files_with_mtime
             .into_iter()
             .map(|(path, _)| {
-                path.strip_prefix(&self.base_dir).map_or_else(
+                path.strip_prefix(working_dir).map_or_else(
                     |_| path.to_string_lossy().to_string(),
                     |p| p.to_string_lossy().to_string(),
                 )
@@ -337,11 +345,6 @@ impl GrepTool {
     }
 }
 
-impl FileTool for GrepTool {
-    fn base_dir(&self) -> &Path {
-        &self.base_dir
-    }
-}
 #[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &'static str {
@@ -418,7 +421,7 @@ impl Tool for GrepTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
@@ -447,8 +450,8 @@ impl Tool for GrepTool {
 
         // Determine search path
         let search_path = match path {
-            Some(p) => self.resolve_path(p),
-            None => self.base_dir.clone(),
+            Some(p) => ctx.working_dir.join(p),
+            None => ctx.working_dir.clone(),
         };
 
         // Validate path exists
@@ -475,15 +478,22 @@ impl Tool for GrepTool {
         tracing::debug!("Running ripgrep with args: {:?}", rg_args);
 
         // Run ripgrep
-        let (stdout, stderr, code) = self.run_ripgrep(rg_args, &search_path).await?;
+        let (stdout, stderr, code) = self
+            .run_ripgrep(rg_args, &search_path, &ctx.working_dir)
+            .await?;
 
         // Handle different output modes
         let response = if code == 0 || code == 1 {
             // code 0 = matches found, code 1 = no matches (not an error)
             match output_mode {
                 "files_with_matches" => {
-                    self.format_files_output(&stdout, limit.unwrap_or(DEFAULT_HEAD_LIMIT), offset)
-                        .await
+                    self.format_files_output(
+                        &stdout,
+                        limit.unwrap_or(DEFAULT_HEAD_LIMIT),
+                        offset,
+                        &ctx.working_dir,
+                    )
+                    .await
                 }
                 "count" => {
                     self.format_count_output(&stdout, limit.unwrap_or(DEFAULT_HEAD_LIMIT), offset)
@@ -538,13 +548,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "println!",
             "output_mode": "files_with_matches"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test1.rs"));
@@ -564,13 +574,13 @@ mod tests {
         .await
         .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "println!",
             "output_mode": "content"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("println"));
@@ -585,14 +595,14 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "main",
             "output_mode": "content",
             "-i": true
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("MAIN"));
@@ -610,13 +620,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "main",
             "glob": "*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test.rs"));
@@ -632,13 +642,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "nonexistent",
             "output_mode": "files_with_matches"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("No files found"));
@@ -656,7 +666,7 @@ mod tests {
         .await
         .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
         let args = serde_json::json!({
             "pattern": "fn main",
             "output_mode": "content",
@@ -664,7 +674,7 @@ mod tests {
             "-A": 2
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("line 1"));
@@ -686,13 +696,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new(base_path);
+        let tool = GrepTool::new();
 
         // Always searches hidden files (claude-code behavior)
         let args = serde_json::json!({
             "pattern": "fn secret"
         });
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains(".hidden.rs"));

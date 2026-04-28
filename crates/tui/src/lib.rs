@@ -3,6 +3,7 @@
 //! Component-based TUI framework with delta rendering and streaming markdown support.
 
 pub mod app;
+pub mod attr;
 pub mod components;
 pub mod id;
 pub mod markdown_stream;

@@ -18,7 +18,7 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
 use kernel::permissions::Level;
 use unicode_width::UnicodeWidthStr;
 
@@ -249,7 +249,7 @@ impl Component for StatusBar {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("set_mode") => {
+            Attribute::Custom(attr::SET_MODE) => {
                 if let AttrValue::Number(mode_val) = value {
                     self.mode = match mode_val {
                         1 => AppMode::Browse,
@@ -257,10 +257,10 @@ impl Component for StatusBar {
                     };
                 }
             }
-            Attribute::Custom("tick") => {
+            Attribute::Custom(attr::TICK) => {
                 self.check_timeout();
             }
-            Attribute::Custom("show_tip") => {
+            Attribute::Custom(attr::SHOW_TIP) => {
                 // Use downcast from PropPayload::Any
                 use tuirealm::props::PropPayload;
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
@@ -270,11 +270,11 @@ impl Component for StatusBar {
                     }
                 }
             }
-            Attribute::Custom("clear_tip") => {
+            Attribute::Custom(attr::CLEAR_TIP) => {
                 self.tip = None;
                 self.tip_timeout = None;
             }
-            Attribute::Custom("set_ctx_usage") => {
+            Attribute::Custom(attr::SET_CTX_USAGE) => {
                 // Parse "tokens\x00context_window" format
                 if let AttrValue::String(value_str) = value {
                     let parts: Vec<&str> = value_str.split('\x00').collect();
@@ -287,7 +287,7 @@ impl Component for StatusBar {
                     }
                 }
             }
-            Attribute::Custom("set_permission_level") => {
+            Attribute::Custom(attr::SET_PERMISSION_LEVEL) => {
                 // Parse permission level: 0 = Safe, 1 = Caution, 2 = Dangerous
                 if let AttrValue::Number(level_val) = value {
                     self.permission_level = match level_val {
@@ -298,7 +298,7 @@ impl Component for StatusBar {
                     };
                 }
             }
-            Attribute::Custom("set_scroll_progress") => {
+            Attribute::Custom(attr::SET_SCROLL_PROGRESS) => {
                 // Parse "current\x00total" format
                 if let AttrValue::String(value_str) = value {
                     let parts: Vec<&str> = value_str.split('\x00').collect();
@@ -311,7 +311,7 @@ impl Component for StatusBar {
                     }
                 }
             }
-            Attribute::Custom("clear_scroll_progress") => {
+            Attribute::Custom(attr::CLEAR_SCROLL_PROGRESS) => {
                 self.clear_scroll_progress();
             }
             _ => {

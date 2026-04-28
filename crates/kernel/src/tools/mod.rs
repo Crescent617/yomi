@@ -22,7 +22,7 @@ pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
-pub use base::{FileTool, MAX_FILE_SIZE};
+pub use base::MAX_FILE_SIZE;
 
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
@@ -45,30 +45,35 @@ pub struct ToolExecCtx<'a> {
     pub parent_messages: Option<&'a [Arc<crate::types::Message>]>,
     /// Runtime cancel token for checking cancellation requests (tokio native)
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
+    /// Working directory for file-based operations
+    pub working_dir: std::path::PathBuf,
 }
 
 impl<'a> ToolExecCtx<'a> {
     /// Create a new context with just the tool call ID
-    pub fn new(tool_call_id: &'a str) -> Self {
+    pub fn new(tool_call_id: &'a str, working_dir: impl Into<std::path::PathBuf>) -> Self {
         Self {
             tool_call_id,
             parent_messages: None,
             cancel_token: None,
+            working_dir: working_dir.into(),
         }
     }
 
-    /// Create a context with tool call ID, parent messages, and runtime token
+    /// Create a context with tool call ID, parent messages, runtime token, and working directory
     /// This is a convenience constructor for the common case where both
     /// `parent_messages` and `cancel_token` are available
     pub fn with_parent_ctx(
         tool_call_id: &'a str,
         parent_messages: Option<&'a [Arc<crate::types::Message>]>,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
+        working_dir: impl Into<std::path::PathBuf>,
     ) -> Self {
         Self {
             tool_call_id,
             parent_messages,
             cancel_token,
+            working_dir: working_dir.into(),
         }
     }
 

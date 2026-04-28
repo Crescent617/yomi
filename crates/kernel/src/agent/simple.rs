@@ -60,6 +60,8 @@ pub struct SimpleAgent {
     event_tx: Option<mpsc::Sender<Event>>,
     /// Agent ID for events
     agent_id: AgentId,
+    /// Working directory for tool execution
+    working_dir: std::path::PathBuf,
 }
 
 impl SimpleAgent {
@@ -67,6 +69,7 @@ impl SimpleAgent {
         provider: Arc<dyn Provider>,
         model_config: ModelConfig,
         tool_registry: ToolRegistry,
+        working_dir: impl Into<std::path::PathBuf>,
     ) -> Self {
         Self {
             provider,
@@ -76,6 +79,7 @@ impl SimpleAgent {
             permission_checker: None,
             event_tx: None,
             agent_id: AgentId::new(),
+            working_dir: working_dir.into(),
         }
     }
 
@@ -363,7 +367,12 @@ impl SimpleAgent {
             .get(&call.name)
             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-        let ctx = ToolExecCtx::with_parent_ctx(&call.id, None, Some(cancel_token.clone()));
+        let ctx = ToolExecCtx::with_parent_ctx(
+            &call.id,
+            None,
+            Some(cancel_token.clone()),
+            &self.working_dir,
+        );
 
         let output = tool.exec(call.arguments.clone(), ctx).await?;
 

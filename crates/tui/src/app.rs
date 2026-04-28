@@ -29,6 +29,7 @@ use kernel::permissions::Level;
 use kernel::types::{ContentBlock, Message};
 
 use crate::{
+    attr,
     components::{
         default_help_sections, history_items, info_bar::Notification, status_bar::Tip,
         tips::get_random_tip, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
@@ -213,12 +214,12 @@ impl Model {
         self.mode = alt_mode;
         let _ = self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("set_mode"),
+            Attribute::Custom(attr::SET_MODE),
             AttrValue::Number(alt_mode as isize),
         );
         let _ = self.app.attr(
             &Id::InputBox,
-            Attribute::Custom("mode"),
+            Attribute::Custom(attr::MODE),
             AttrValue::Number(alt_mode as isize),
         );
 
@@ -230,12 +231,12 @@ impl Model {
         self.mode = current_mode;
         let _ = self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("set_mode"),
+            Attribute::Custom(attr::SET_MODE),
             AttrValue::Number(current_mode as isize),
         );
         let _ = self.app.attr(
             &Id::InputBox,
-            Attribute::Custom("mode"),
+            Attribute::Custom(attr::MODE),
             AttrValue::Number(current_mode as isize),
         );
 
@@ -256,14 +257,14 @@ impl Model {
         let history_json = serde_json::to_string(&self.input_history)?;
         self.app.attr(
             &Id::InputBox,
-            Attribute::Custom("history"),
+            Attribute::Custom(attr::HISTORY),
             AttrValue::String(history_json),
         )?;
         // Set working directory for file completion
         let working_dir_str = self.working_dir.to_string_lossy().to_string();
         let _ = self.app.attr(
             &Id::InputBox,
-            Attribute::Custom("working_dir"),
+            Attribute::Custom(attr::WORKING_DIR),
             AttrValue::String(working_dir_str),
         );
         Ok(())
@@ -299,7 +300,7 @@ impl Model {
         let messages: Vec<kernel::types::Message> = std::mem::take(&mut self.session_messages);
         self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("init_history"),
+            Attribute::Custom(attr::INIT_HISTORY),
             AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(messages))),
         )?;
         Ok(())
@@ -319,7 +320,7 @@ impl Model {
         };
         self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("set_permission_level"),
+            Attribute::Custom(attr::SET_PERMISSION_LEVEL),
             AttrValue::Number(level_val),
         )?;
 
@@ -327,7 +328,7 @@ impl Model {
         let tip = get_random_tip();
         self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("show_tip"),
+            Attribute::Custom(attr::SHOW_TIP),
             Tip::new(format!("💡 {tip}"), 10000).to_attr_value(),
         )?;
 
@@ -339,7 +340,7 @@ impl Model {
         let usage_str = format!("{tokens}\x00{context_window}");
         self.app.attr(
             &Id::StatusBar,
-            Attribute::Custom("set_ctx_usage"),
+            Attribute::Custom(attr::SET_CTX_USAGE),
             AttrValue::String(usage_str),
         )?;
         Ok(())
@@ -353,7 +354,7 @@ impl Model {
         let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
         self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("set_banner"),
+            Attribute::Custom(attr::SET_BANNER),
             AttrValue::String(banner_str),
         )?;
         Ok(())
@@ -364,12 +365,12 @@ impl Model {
         // Query scroll progress from ChatView
         if let Ok(Some(query_result)) = self
             .app
-            .query(&Id::ChatView, Attribute::Custom("scroll_progress"))
+            .query(&Id::ChatView, Attribute::Custom(attr::SCROLL_PROGRESS))
         {
             if let AttrValue::String(progress_str) = query_result.into_attr() {
                 let _ = self.app.attr(
                     &Id::StatusBar,
-                    Attribute::Custom("set_scroll_progress"),
+                    Attribute::Custom(attr::SET_SCROLL_PROGRESS),
                     AttrValue::String(progress_str),
                 );
             }
@@ -430,7 +431,7 @@ impl Model {
             };
             self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom("add_assistant_with_thinking"),
+                Attribute::Custom(attr::ADD_ASSISTANT_WITH_THINKING),
                 AttrValue::String(combined),
             )?;
         }
@@ -451,13 +452,13 @@ impl Model {
         // Start ChatView streaming
         let _ = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("start_streaming"),
+            Attribute::Custom(attr::START_STREAMING),
             AttrValue::Flag(true),
         );
         // Start InfoBar streaming
         let _ = self.app.attr(
             &Id::InfoBar,
-            Attribute::Custom("start_streaming"),
+            Attribute::Custom(attr::START_STREAMING),
             AttrValue::Flag(true),
         );
         self.state.should_redraw = true;
@@ -467,7 +468,7 @@ impl Model {
     fn clear_tool_call_delta(&mut self) {
         let _ = self.app.attr(
             &Id::InfoBar,
-            Attribute::Custom("clear_tool_call"),
+            Attribute::Custom(attr::CLEAR_TOOL_CALL),
             AttrValue::Flag(true),
         );
     }
@@ -483,17 +484,17 @@ impl Model {
             StreamingStatus::Completed => {
                 let _ = self.app.attr(
                     &Id::InfoBar,
-                    Attribute::Custom("stop_streaming"),
+                    Attribute::Custom(attr::STOP_STREAMING),
                     AttrValue::Flag(true),
                 );
                 let _ = self.app.attr(
                     &Id::StatusBar,
-                    Attribute::Custom("clear_message"),
+                    Attribute::Custom(attr::CLEAR_MESSAGE),
                     AttrValue::Flag(true),
                 );
                 let _ = self.app.attr(
                     &Id::ChatView,
-                    Attribute::Custom("stop_streaming"),
+                    Attribute::Custom(attr::STOP_STREAMING),
                     AttrValue::Flag(true),
                 );
             }
@@ -503,12 +504,12 @@ impl Model {
                 let _ = self.save_partial_content();
                 let _ = self.app.attr(
                     &Id::InfoBar,
-                    Attribute::Custom("cancel_streaming"),
+                    Attribute::Custom(attr::CANCEL_STREAMING),
                     AttrValue::Flag(true),
                 );
                 let _ = self.app.attr(
                     &Id::ChatView,
-                    Attribute::Custom("cancel_streaming"),
+                    Attribute::Custom(attr::CANCEL_STREAMING),
                     AttrValue::Flag(true),
                 );
             }
@@ -521,7 +522,7 @@ impl Model {
     fn scroll_chat_to_bottom(&mut self) {
         let _ = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("scroll_to_bottom"),
+            Attribute::Custom(attr::SCROLL_TO_BOTTOM),
             AttrValue::Flag(true),
         );
     }
@@ -531,7 +532,7 @@ impl Model {
         let msg = message.into();
         let _ = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("add_error_message"),
+            Attribute::Custom(attr::ADD_ERROR_MESSAGE),
             AttrValue::String(msg),
         );
         self.scroll_chat_to_bottom();
@@ -546,14 +547,14 @@ impl Model {
             self.current_thinking.push_str(text);
             let _ = self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom("append_thinking"),
+                Attribute::Custom(attr::APPEND_THINKING),
                 AttrValue::String(text.to_string()),
             );
         } else {
             self.current_content.push_str(text);
             let _ = self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom("append_content"),
+                Attribute::Custom(attr::APPEND_CONTENT),
                 AttrValue::String(text.to_string()),
             );
         }
@@ -595,14 +596,14 @@ impl Model {
             };
             let _ = self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom("add_assistant_with_thinking"),
+                Attribute::Custom(attr::ADD_ASSISTANT_WITH_THINKING),
                 AttrValue::String(combined),
             );
         }
         // Clear streaming UI
         let _ = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom("cancel_streaming"),
+            Attribute::Custom(attr::CANCEL_STREAMING),
             AttrValue::Flag(true),
         );
     }
@@ -611,7 +612,7 @@ impl Model {
     fn show_notification(&mut self, notification: &Notification) {
         let _ = self.app.attr(
             &Id::InfoBar,
-            Attribute::Custom("show_notification"),
+            Attribute::Custom(attr::SHOW_NOTIFICATION),
             notification.to_attr_value(),
         );
     }
@@ -797,7 +798,7 @@ impl Model {
                     ..
                 }) => {
                     // Update status bar to show tool call in progress
-                    let attr = Attribute::Custom("append_tool_call_delta");
+                    let attr = Attribute::Custom(attr::APPEND_TOOL_CALL_DELTA);
                     let value = AttrValue::String(format!("{tool_name}\x00{arguments_delta}"));
                     self.app.attr(&Id::InfoBar, attr, value)?;
                     self.state.should_redraw = true;
@@ -820,9 +821,9 @@ impl Model {
                 AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
                     let attr = if active {
-                        Attribute::Custom("start_compacting")
+                        Attribute::Custom(attr::START_COMPACTING)
                     } else {
-                        Attribute::Custom("stop_compacting")
+                        Attribute::Custom(attr::STOP_COMPACTING)
                     };
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
                     self.state.should_redraw = true;
@@ -836,7 +837,7 @@ impl Model {
                     let usage_str = format!("{total_tokens}\x00{context_window}");
                     self.app.attr(
                         &Id::StatusBar,
-                        Attribute::Custom("set_ctx_usage"),
+                        Attribute::Custom(attr::SET_CTX_USAGE),
                         AttrValue::String(usage_str),
                     )?;
                     self.state.should_redraw = true;
@@ -852,7 +853,7 @@ impl Model {
                     let combined = format!("{tool_id}\x00{tool_name}\x00{args_str}");
                     self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("start_tool"),
+                        Attribute::Custom(attr::START_TOOL),
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
@@ -871,7 +872,7 @@ impl Model {
                         format!("{tool_id}\x00{output}\x00{elapsed_ms}\x00{blocks_json}");
                     self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("complete_tool"),
+                        Attribute::Custom(attr::COMPLETE_TOOL),
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
@@ -892,7 +893,7 @@ impl Model {
                     let combined = format!("{tool_id}\x00{error}\x00{elapsed_ms}");
                     self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("fail_tool"),
+                        Attribute::Custom(attr::FAIL_TOOL),
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
@@ -914,7 +915,7 @@ impl Model {
                     let combined = format!("{tool_id}\x00{message}\x00{tokens_str}");
                     self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("update_tool_progress"),
+                        Attribute::Custom(attr::UPDATE_TOOL_PROGRESS),
                         AttrValue::String(combined),
                     )?;
                     self.state.should_redraw = true;
@@ -996,7 +997,7 @@ impl Model {
                     tracing::debug!("Showing dialog with data: {dialog_data}",);
                     let _ = self.app.attr(
                         &Id::Dialog,
-                        Attribute::Custom("show"),
+                        Attribute::Custom(attr::SHOW),
                         AttrValue::String(dialog_data),
                     );
                     // Give focus to dialog so it receives keyboard events
@@ -1061,13 +1062,13 @@ impl Model {
             let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
             let _ = self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom("add_user_message"),
+                Attribute::Custom(attr::ADD_USER_MESSAGE),
                 AttrValue::String(blocks_json),
             );
             // Start streaming indicator (InfoBar only - ChatView will be started by ModelEvent::Request)
             let _ = self.app.attr(
                 &Id::InfoBar,
-                Attribute::Custom("start_streaming"),
+                Attribute::Custom(attr::START_STREAMING),
                 AttrValue::Flag(true),
             );
         }
@@ -1149,7 +1150,7 @@ impl Model {
                     let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("add_user_message"),
+                        Attribute::Custom(attr::ADD_USER_MESSAGE),
                         AttrValue::String(blocks_json),
                     );
                     self.scroll_chat_to_bottom();
@@ -1157,7 +1158,7 @@ impl Model {
                     // (ChatView streaming will be started by ModelEvent::Request)
                     let _ = self.app.attr(
                         &Id::InfoBar,
-                        Attribute::Custom("start_streaming"),
+                        Attribute::Custom(attr::START_STREAMING),
                         AttrValue::Flag(true),
                     );
                     // Send to kernel (supports multi-modal content)
@@ -1221,19 +1222,19 @@ impl Model {
                             // Update status bar to show BROWSE mode
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("set_mode"),
+                                Attribute::Custom(attr::SET_MODE),
                                 AttrValue::Number(1),
                             );
                             // Update input box mode so it knows to use browse shortcuts
                             let _ = self.app.attr(
                                 &Id::InputBox,
-                                Attribute::Custom("mode"),
+                                Attribute::Custom(attr::MODE),
                                 AttrValue::Number(1),
                             );
                             // Show help message for browse mode shortcuts
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("show_tip"),
+                                Attribute::Custom(attr::SHOW_TIP),
                                 Tip::new("C-o toggle, C-e expand, j/k/g/G scroll, q exit", 0)
                                     .to_attr_value(),
                             );
@@ -1246,19 +1247,19 @@ impl Model {
                             // Collapse all blocks
                             let _ = self.app.attr(
                                 &Id::ChatView,
-                                Attribute::Custom("collapse_all"),
+                                Attribute::Custom(attr::COLLAPSE_ALL),
                                 AttrValue::Flag(true),
                             );
                             // Update status bar to show NORMAL mode
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("set_mode"),
+                                Attribute::Custom(attr::SET_MODE),
                                 AttrValue::Number(0),
                             );
                             // Update input box mode so it uses normal text input
                             let _ = self.app.attr(
                                 &Id::InputBox,
-                                Attribute::Custom("mode"),
+                                Attribute::Custom(attr::MODE),
                                 AttrValue::Number(0),
                             );
                             // Clear tip
@@ -1326,7 +1327,7 @@ impl Model {
                 Msg::GoToBottom => {
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("scroll_to_bottom"),
+                        Attribute::Custom(attr::SCROLL_TO_BOTTOM),
                         AttrValue::Flag(true),
                     );
                     // Update scroll progress in browse mode
@@ -1338,7 +1339,7 @@ impl Model {
                 Msg::ToggleExpandAll => {
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("toggle_expand_all"),
+                        Attribute::Custom(attr::TOGGLE_EXPAND_ALL),
                         AttrValue::Flag(true),
                     );
                     None
@@ -1356,7 +1357,7 @@ impl Model {
                                 // Update status bar to show YOLO
                                 let _ = self.app.attr(
                                     &Id::StatusBar,
-                                    Attribute::Custom("set_permission_level"),
+                                    Attribute::Custom(attr::SET_PERMISSION_LEVEL),
                                     AttrValue::Number(2),
                                 );
                                 // Show notification
@@ -1406,7 +1407,7 @@ impl Model {
                     // Clear chat history
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("clear_history"),
+                        Attribute::Custom(attr::CLEAR_HISTORY),
                         AttrValue::Flag(true),
                     );
                     None
@@ -1432,7 +1433,7 @@ impl Model {
                     };
                     let _ = self.app.attr(
                         &Id::StatusBar,
-                        Attribute::Custom("set_permission_level"),
+                        Attribute::Custom(attr::SET_PERMISSION_LEVEL),
                         AttrValue::Number(level_num),
                     );
 
@@ -1471,12 +1472,12 @@ impl Model {
                     // Show the picker with history items
                     let _ = self.app.attr(
                         &Id::HistoryPicker,
-                        Attribute::Custom("items"),
+                        Attribute::Custom(attr::ITEMS),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
                     );
                     let _ = self.app.attr(
                         &Id::HistoryPicker,
-                        Attribute::Custom("show"),
+                        Attribute::Custom(attr::SHOW),
                         AttrValue::Flag(true),
                     );
                     // Give focus to history picker
@@ -1492,7 +1493,7 @@ impl Model {
                                 // Set the input box content using custom attribute
                                 let _ = self.app.attr(
                                     &Id::InputBox,
-                                    Attribute::Custom("set_content"),
+                                    Attribute::Custom(attr::SET_CONTENT),
                                     AttrValue::String(selected_text),
                                 );
                             }
@@ -1515,7 +1516,7 @@ impl Model {
                     let sections = default_help_sections();
                     if let Err(e) = self.app.attr(
                         &Id::HelpDialog,
-                        Attribute::Custom("show"),
+                        Attribute::Custom(attr::SHOW),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(sections))),
                     ) {
                         tracing::warn!("Failed to show help dialog: {}", e);
@@ -1531,7 +1532,7 @@ impl Model {
                     // Hide help dialog and return focus to input box
                     if let Err(e) = self.app.attr(
                         &Id::HelpDialog,
-                        Attribute::Custom("hide"),
+                        Attribute::Custom(attr::HIDE),
                         AttrValue::Flag(true),
                     ) {
                         tracing::warn!("Failed to hide help dialog: {}", e);

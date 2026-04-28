@@ -17,7 +17,7 @@ use tuirealm::{
     state::{State, StateValue},
 };
 
-use crate::{msg::Msg, theme::colors};
+use crate::{attr, msg::Msg, theme::colors};
 
 /// Dialog result type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +211,7 @@ impl Component for SelectDialog {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("show") => {
+            Attribute::Custom(attr::SHOW) => {
                 if let AttrValue::String(data) = value {
                     // Format: "title\x00option1\x00option2\x00...\x00message"
                     let parts: Vec<&str> = data.split('\x00').collect();
@@ -232,7 +232,7 @@ impl Component for SelectDialog {
                     }
                 }
             }
-            Attribute::Custom("hide") => {
+            Attribute::Custom(attr::HIDE) => {
                 self.hide();
             }
             _ => {

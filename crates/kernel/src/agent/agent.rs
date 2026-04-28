@@ -48,6 +48,8 @@ pub struct Agent {
     permission_checker: Option<Arc<Checker>>,
     // Pending token usage for the current message
     pending_token_usage: Option<MessageTokenUsage>,
+    // Working directory for tool execution
+    working_dir: std::path::PathBuf,
 }
 
 impl Agent {
@@ -93,7 +95,6 @@ impl Agent {
         let tool_registry = crate::tools::ToolRegistryFactory::create(
             &id,
             &shared,
-            &args.working_dir,
             Some(&input_tx),
             &event_tx,
             args.skills.clone(),
@@ -128,6 +129,7 @@ impl Agent {
             tool_registry,
             permission_checker,
             pending_token_usage: None,
+            working_dir: args.working_dir,
         };
 
         let handle_id = id.clone();
@@ -811,6 +813,7 @@ impl Agent {
                 &self.tool_registry,
                 Some(&cancel_token),
                 Some(self.message_buffer.messages()),
+                &self.working_dir,
             )
             .await
         };

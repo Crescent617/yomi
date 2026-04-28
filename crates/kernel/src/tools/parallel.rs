@@ -156,6 +156,7 @@ pub async fn execute_tools_parallel(
     tool_registry: &ToolRegistry,
     cancel_token: Option<&CancellationToken>,
     parent_messages: Option<&[Arc<Message>]>,
+    working_dir: &std::path::Path,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -183,6 +184,7 @@ pub async fn execute_tools_parallel(
 
         let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
         let cancel_token_for_task = cancel_token.cloned();
+        let working_dir = working_dir.to_path_buf();
 
         join_set.spawn(async move {
             let start = std::time::Instant::now();
@@ -192,6 +194,7 @@ pub async fn execute_tools_parallel(
                         &call_id,
                         parent_messages_for_task.as_deref(),
                         cancel_token_for_task,
+                        &working_dir,
                     );
                     execute_single_tool_with_ctx(tool, arguments, ctx).await
                 }

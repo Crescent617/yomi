@@ -1,4 +1,4 @@
-use crate::tools::base::{FileTool, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
+use crate::tools::base::{get_mtime, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
 use crate::tools::file_lock::{lock_shared_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
@@ -9,7 +9,7 @@ use crate::utils::strs::truncate_with_suffix;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
@@ -19,14 +19,18 @@ const READ_TRUNCATION_MESSAGE: &str =
     "\n\n[Content truncated due to length. Use offset/limit to read specific sections.]";
 
 pub struct ReadTool {
-    base_dir: PathBuf,
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
+impl Default for ReadTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadTool {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
-            base_dir: base_dir.into(),
             file_state_store: None,
         }
     }
@@ -59,8 +63,8 @@ impl ReadTool {
             Some(data_url) => {
                 // Track file mtime if store is available
                 if let Some(ref store) = self.file_state_store {
-                    let mtime = self.get_mtime(path);
-                    store.record(path.to_path_buf(), mtime.await);
+                    let mtime = get_mtime(path).await;
+                    store.record(path.to_path_buf(), mtime);
                 }
 
                 // Create output with image and metadata text
@@ -122,8 +126,8 @@ impl ReadTool {
 
         // Track file mtime if store is available
         if let Some(ref store) = self.file_state_store {
-            let mtime = self.get_mtime(path);
-            store.record(path.to_path_buf(), mtime.await);
+            let mtime = get_mtime(path).await;
+            store.record(path.to_path_buf(), mtime);
         }
 
         // Build response with file info
@@ -136,12 +140,6 @@ impl ReadTool {
         };
 
         Ok(ToolOutput::text(response))
-    }
-}
-
-impl FileTool for ReadTool {
-    fn base_dir(&self) -> &Path {
-        &self.base_dir
     }
 }
 
@@ -177,14 +175,14 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
         let offset = args["offset"].as_u64().map_or(1, |n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n as usize);
 
-        let path = self.resolve_path(path_str);
+        let path = ctx.working_dir.join(path_str);
 
         tracing::debug!("Read: {}", path.display());
 
