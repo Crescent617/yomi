@@ -18,8 +18,9 @@ use kernel::{
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -35,14 +36,15 @@ async fn create_db_pool(db_path: &Path) -> anyhow::Result<sqlx::SqlitePool> {
         tokio::fs::File::create(db_path).await?;
     }
 
+    // Parse connection options and set pragmas for ALL connections
+    let connect_options =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .pragma("busy_timeout", "5000")
+            .pragma("journal_mode", "WAL");
+
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect(&format!("sqlite://{}", db_path.display()))
-        .await?;
-
-    // Set busy timeout (5 seconds)
-    sqlx::query("PRAGMA busy_timeout = 5000")
-        .execute(&pool)
+        .connect_with(connect_options)
         .await?;
 
     Ok(pool)
