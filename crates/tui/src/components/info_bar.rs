@@ -17,7 +17,7 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
 use kernel::utils::tokens;
 use unicode_width::UnicodeWidthStr;
 
@@ -346,36 +346,36 @@ impl Component for InfoBar {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("start_streaming") => {
+            Attribute::Custom(attr::START_STREAMING) => {
                 self.set_state(InfoBarState::Streaming);
             }
-            Attribute::Custom("stop_streaming") => {
+            Attribute::Custom(attr::STOP_STREAMING) => {
                 self.set_state(InfoBarState::Completed);
             }
-            Attribute::Custom("cancel_streaming") => {
+            Attribute::Custom(attr::CANCEL_STREAMING) => {
                 self.set_state(InfoBarState::Cancelled);
             }
-            Attribute::Custom("start_compacting") => {
+            Attribute::Custom(attr::START_COMPACTING) => {
                 self.set_state(InfoBarState::Compacting);
             }
-            Attribute::Custom("stop_compacting") => {
+            Attribute::Custom(attr::STOP_COMPACTING) => {
                 self.set_state(InfoBarState::Idle);
             }
-            Attribute::Custom("append_content") => {
+            Attribute::Custom(attr::APPEND_CONTENT) => {
                 if let AttrValue::String(text) = value {
                     self.append_content(&text);
                 }
             }
-            Attribute::Custom("append_thinking") => {
+            Attribute::Custom(attr::APPEND_THINKING) => {
                 if let AttrValue::String(text) = value {
                     self.append_thinking(&text);
                 }
             }
-            Attribute::Custom("tick") => {
+            Attribute::Custom(attr::TICK) => {
                 self.tick();
                 self.check_timeout();
             }
-            Attribute::Custom("show_notification") => {
+            Attribute::Custom(attr::SHOW_NOTIFICATION) => {
                 // Use downcast from PropPayload::Any
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
                     let any = payload.as_any();
@@ -384,11 +384,11 @@ impl Component for InfoBar {
                     }
                 }
             }
-            Attribute::Custom("clear_notification") => {
+            Attribute::Custom(attr::CLEAR_NOTIFICATION) => {
                 self.notification = None;
                 self.notification_timeout = None;
             }
-            Attribute::Custom("append_tool_call_delta") => {
+            Attribute::Custom(attr::APPEND_TOOL_CALL_DELTA) => {
                 // Format: "tool_name\x00arguments_delta"
                 // arguments_delta contains only the newly added fragment
                 if let AttrValue::String(data) = value {
@@ -403,7 +403,7 @@ impl Component for InfoBar {
                     }
                 }
             }
-            Attribute::Custom("clear_tool_call") => {
+            Attribute::Custom(attr::CLEAR_TOOL_CALL) => {
                 self.current_tool_call = None;
             }
             _ => {}

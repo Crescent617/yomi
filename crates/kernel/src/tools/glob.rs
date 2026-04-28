@@ -1,35 +1,33 @@
-use crate::tools::{FileTool, Tool, ToolExecCtx};
+use crate::tools::base::get_mtimes_concurrent;
+use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub const GLOB_TOOL_NAME: &str = "glob";
 pub const MAX_RESULTS: usize = 100;
 
-pub struct GlobTool {
-    base_dir: PathBuf,
+pub struct GlobTool;
+
+impl Default for GlobTool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GlobTool {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            base_dir: base_dir.into(),
-        }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Build glob matcher for pattern
-    fn build_matcher(pattern: &str) -> Result<Option<globset::GlobMatcher>> {
-        if pattern.is_empty() || pattern == "**/*" {
-            return Ok(None);
-        }
-
+    fn build_matcher(pattern: &str) -> Result<globset::GlobMatcher> {
         let glob = globset::Glob::new(pattern)
             .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{pattern}': {e}"))?;
 
-        Ok(Some(glob.compile_matcher()))
+        Ok(glob.compile_matcher())
     }
 
     /// Search files using ignore crate with proper glob matching
@@ -50,6 +48,16 @@ impl GlobTool {
                 .standard_filters(!include_ignored)
                 .hidden(!include_hidden)
                 .follow_links(false)
+                .filter_entry(move |e| {
+                    if include_ignored {
+                        true
+                    } else {
+                        !e.path().components().any(|c| {
+                            let name = c.as_os_str();
+                            name == ".git" || name == ".jj"
+                        })
+                    }
+                })
                 .build();
 
             for entry in walker {
@@ -62,16 +70,14 @@ impl GlobTool {
                         let path = entry.path();
 
                         // Apply glob pattern matching
-                        if let Some(ref m) = matcher {
-                            // Get relative path from search_dir for matching
-                            let relative_path = path
-                                .strip_prefix(&search_dir)
-                                .unwrap_or(path)
-                                .to_string_lossy();
+                        // Get relative path from search_dir for matching
+                        let relative_path = path
+                            .strip_prefix(&search_dir)
+                            .unwrap_or(path)
+                            .to_string_lossy();
 
-                            if !m.is_match(&*relative_path) {
-                                continue;
-                            }
+                        if !matcher.is_match(&*relative_path) {
+                            continue;
                         }
 
                         files.push(path.to_path_buf());
@@ -86,8 +92,7 @@ impl GlobTool {
 
         // Get modification times concurrently with limited concurrency
         // to avoid file descriptor exhaustion on large directories
-        let mut files_with_mtime: Vec<(PathBuf, u64)> =
-            self.get_mtimes_concurrent(files, None).await;
+        let mut files_with_mtime: Vec<(PathBuf, u64)> = get_mtimes_concurrent(files, None).await;
 
         // Sort by mtime descending (newest first), then by path for deterministic order
         files_with_mtime.sort_by(|a, b| {
@@ -106,11 +111,6 @@ impl GlobTool {
     }
 }
 
-impl FileTool for GlobTool {
-    fn base_dir(&self) -> &Path {
-        &self.base_dir
-    }
-}
 #[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &'static str {
@@ -146,7 +146,7 @@ impl Tool for GlobTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
@@ -156,8 +156,8 @@ impl Tool for GlobTool {
 
         // Determine search directory
         let search_dir = match path {
-            Some(p) => self.resolve_path(p),
-            None => self.base_dir.clone(),
+            Some(p) => ctx.working_dir.join(p),
+            None => ctx.working_dir.clone(),
         };
 
         // Validate directory exists
@@ -199,7 +199,7 @@ impl Tool for GlobTool {
         let filenames: Vec<String> = files
             .into_iter()
             .map(|path| {
-                path.strip_prefix(&self.base_dir).map_or_else(
+                path.strip_prefix(&ctx.working_dir).map_or_else(
                     |_| path.to_string_lossy().to_string(),
                     |p| p.to_string_lossy().to_string(),
                 )
@@ -252,12 +252,12 @@ mod tests {
 
         std::fs::File::create(base_path.join("test.txt")).unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test1.rs"));
@@ -276,12 +276,12 @@ mod tests {
         let mut file = std::fs::File::create(sub_dir.join("main.rs")).unwrap();
         writeln!(file, "content").unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "**/*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("src/main.rs"));
@@ -310,12 +310,12 @@ mod tests {
         let mut gitignore = std::fs::File::create(base_path.join(".gitignore")).unwrap();
         writeln!(gitignore, "target/").unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "**/*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("tracked.rs"));
@@ -327,12 +327,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "*.nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("No files found"));
@@ -349,13 +349,13 @@ mod tests {
         let mut file = std::fs::File::create(sub_dir.join("main.rs")).unwrap();
         writeln!(file, "content").unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "*.rs",
             "path": "src"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("main.rs"));
@@ -366,13 +366,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         let args = serde_json::json!({
             "pattern": "*.rs",
             "path": "nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("does not exist"));
@@ -391,13 +391,13 @@ mod tests {
         let mut normal = std::fs::File::create(base_path.join("normal.rs")).unwrap();
         writeln!(normal, "content").unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
 
         // Without include_hidden flag (default true) - should include .hidden.rs
         let args = serde_json::json!({
             "pattern": "*.rs"
         });
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains(".hidden.rs"));
@@ -408,7 +408,7 @@ mod tests {
             "pattern": "*.rs",
             "include_hidden": false
         });
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(!result.text_content().contains(".hidden.rs"));
@@ -432,13 +432,13 @@ mod tests {
 
         std::fs::File::create(base_path.join("test.txt")).unwrap();
 
-        let tool = GlobTool::new(base_path);
+        let tool = GlobTool::new();
         // Use brace expansion to match multiple extensions
         let args = serde_json::json!({
             "pattern": "*.{rs,ts,js}"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(

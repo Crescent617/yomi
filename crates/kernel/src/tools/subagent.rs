@@ -24,8 +24,6 @@ pub struct SubagentTool {
     skills: Vec<Arc<Skill>>,
     /// Storage for transcript recording (optional)
     storage: Option<Arc<dyn Storage>>,
-    /// Working directory for sub-agent
-    working_dir: std::path::PathBuf,
     /// Parent session ID for task store sharing
     parent_session_id: String,
     /// Parent's `event_tx` for forwarding permission requests and progress
@@ -41,7 +39,6 @@ impl SubagentTool {
         parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
         skills: Vec<Arc<Skill>>,
         storage: Option<Arc<dyn Storage>>,
-        working_dir: impl Into<std::path::PathBuf>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<Event>,
     ) -> Self {
@@ -51,7 +48,6 @@ impl SubagentTool {
             parent_input_tx,
             skills,
             storage,
-            working_dir: working_dir.into(),
             parent_session_id,
             parent_event_tx,
         }
@@ -88,7 +84,7 @@ You are a specialist agent handling a specific task delegated by the parent agen
     }
 
     /// Create a `SimpleAgent` with the same configuration as this subagent tool
-    fn create_simple_agent(&self, session_id: &str) -> SimpleAgent {
+    fn create_simple_agent(&self, session_id: &str, working_dir: &std::path::Path) -> SimpleAgent {
         use crate::permissions::Checker;
         let tool_registry = self.create_tool_registry(session_id);
         let agent_id = crate::types::AgentId::new();
@@ -106,6 +102,7 @@ You are a specialist agent handling a specific task delegated by the parent agen
             self.shared.provider.clone(),
             (*self.shared.model_config).clone(),
             tool_registry,
+            working_dir,
         )
         .with_agent_id(agent_id)
         .with_event_tx(self.parent_event_tx.clone())
@@ -120,7 +117,6 @@ You are a specialist agent handling a specific task delegated by the parent agen
         crate::tools::ToolRegistryFactory::create(
             &self.parent_id,
             &self.shared,
-            &self.working_dir,
             None, // No input_tx for subagent
             &self.parent_event_tx,
             self.skills.clone(),
@@ -261,7 +257,7 @@ Don't write "based on your findings, fix the bug" - write prompts that prove YOU
         };
 
         // Create SimpleAgent for execution
-        let mut simple_agent = self.create_simple_agent(&subagent_session_id);
+        let mut simple_agent = self.create_simple_agent(&subagent_session_id, &ctx.working_dir);
         let sub_agent_id = AgentId::new();
 
         // Prepare history if inherit_context is enabled

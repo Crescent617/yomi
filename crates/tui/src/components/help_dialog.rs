@@ -20,7 +20,7 @@ use tuirealm::{
     state::{State, StateValue},
 };
 
-use crate::{msg::Msg, theme::colors};
+use crate::{attr, msg::Msg, theme::colors};
 
 /// A section of help content with a title and list of key bindings
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +198,7 @@ impl Component for HelpDialog {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("show") => {
+            Attribute::Custom(attr::SHOW) => {
                 if let AttrValue::Payload(payload) = value {
                     if let Some(any_ref) = payload.as_any() {
                         if let Some(sections) = any_ref.downcast_ref::<Vec<HelpSection>>() {
@@ -207,7 +207,7 @@ impl Component for HelpDialog {
                     }
                 }
             }
-            Attribute::Custom("hide") => {
+            Attribute::Custom(attr::HIDE) => {
                 self.hide();
             }
             _ => {

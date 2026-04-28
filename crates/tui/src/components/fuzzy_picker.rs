@@ -23,6 +23,7 @@ use tuirealm::{
 };
 
 use crate::{
+    attr,
     components::input_edit::{TextBuffer, TextInput},
     theme::colors,
 };
@@ -408,18 +409,18 @@ impl Component for FuzzyPicker {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("show") => {
+            Attribute::Custom(attr::SHOW) => {
                 self.visible = true;
                 self.input.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
                 self.update_filtered();
             }
-            Attribute::Custom("hide") => {
+            Attribute::Custom(attr::HIDE) => {
                 self.hide();
                 self.scroll_offset = 0;
             }
-            Attribute::Custom("items") => {
+            Attribute::Custom(attr::ITEMS) => {
                 if let AttrValue::Payload(payload) = value {
                     if let Some(any_ref) = payload.as_any() {
                         if let Some(items) = any_ref.downcast_ref::<Vec<PickerItem>>() {
@@ -429,7 +430,7 @@ impl Component for FuzzyPicker {
                     }
                 }
             }
-            Attribute::Custom("query") => {
+            Attribute::Custom(attr::QUERY) => {
                 if let AttrValue::String(query) = value {
                     self.set_query(query);
                 }

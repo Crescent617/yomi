@@ -1,4 +1,4 @@
-use crate::tools::base::{FileTool, MAX_FILE_SIZE};
+use crate::tools::base::{get_mtime, MAX_FILE_SIZE};
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
@@ -8,20 +8,24 @@ use crate::utils::line_numbers::format_file_lines;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub const EDIT_TOOL_NAME: &str = "edit";
 
 pub struct EditTool {
-    base_dir: PathBuf,
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
+impl Default for EditTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EditTool {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
-            base_dir: base_dir.into(),
             file_state_store: None,
         }
     }
@@ -38,7 +42,7 @@ impl EditTool {
         let store = self.file_state_store.as_ref()?;
 
         // Check if file has been modified (mtime changed)
-        let current_mtime = self.get_mtime(path).await;
+        let current_mtime = get_mtime(path).await;
         if store.is_stale(path, current_mtime) {
             return Some(
                 "File has been modified since it was read. Read the file again before editing."
@@ -61,11 +65,6 @@ fn find_actual_string(file_content: &str, search_string: &str) -> Option<String>
     }
 }
 
-impl FileTool for EditTool {
-    fn base_dir(&self) -> &Path {
-        &self.base_dir
-    }
-}
 #[async_trait]
 impl Tool for EditTool {
     fn name(&self) -> &'static str {
@@ -102,7 +101,7 @@ impl Tool for EditTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
@@ -114,7 +113,7 @@ impl Tool for EditTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'new_str' argument"))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = self.resolve_path(path_str);
+        let path = ctx.working_dir.join(path_str);
 
         tracing::debug!("Edit: replace in {}", path.display());
 
@@ -205,8 +204,8 @@ impl Tool for EditTool {
 
         // Update file mtime in store
         if let Some(ref store) = self.file_state_store {
-            let mtime = self.get_mtime(&path);
-            store.record(path.clone(), mtime.await);
+            let mtime = get_mtime(&path).await;
+            store.record(path.clone(), mtime);
         }
 
         // Generate diff
@@ -242,23 +241,17 @@ mod tests {
         writeln!(temp_file, "hello world").unwrap();
         let path = temp_file.path().parent().unwrap();
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
-        // Use canonicalized path to match what EditTool.resolve_path() returns
+        // Use canonicalized path for file state store
         let full_path = path.join(file_name).canonicalize().unwrap();
 
-        let tool = EditTool::new(path);
+        let tool = EditTool::new();
 
         // First, simulate a read by setting file state with actual file's mtime
         let store = Arc::new(FileStateStore::new());
         let _content = "hello world".to_string();
 
         // Get actual file mtime
-        let metadata = tokio::fs::metadata(&full_path).await.unwrap();
-        let mtime = metadata
-            .modified()
-            .unwrap()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let mtime = crate::tools::base::get_mtime(&full_path).await;
 
         store.record(full_path.clone(), mtime);
 
@@ -270,7 +263,7 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.text_content().contains("Replaced"));
 
@@ -286,7 +279,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let tool = EditTool::new(path).with_file_state_store(store);
+        let tool = EditTool::new().with_file_state_store(store);
 
         let args = serde_json::json!({
             "path": file_name,
@@ -294,7 +287,7 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("not been read"));

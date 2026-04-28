@@ -21,6 +21,7 @@ use tuirealm::{
 use super::wrap_paragraph::WrapParagraph;
 
 use crate::{
+    attr,
     components::info_bar::Notification,
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
@@ -1763,7 +1764,7 @@ impl Component for ChatView {
 
     fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
         match attr {
-            Attribute::Custom("scroll_progress") => {
+            Attribute::Custom(attr::SCROLL_PROGRESS) => {
                 let (current, total) = self.get_scroll_progress();
                 Some(QueryResult::Owned(AttrValue::String(format!(
                     "{current}\x00{total}"
@@ -2053,7 +2054,7 @@ impl Component for ChatViewComponent {
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         use tuirealm::props::PropPayload;
         match attr {
-            Attribute::Custom("init_history") => {
+            Attribute::Custom(attr::INIT_HISTORY) => {
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
                     let any = payload.as_any();
                     if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {

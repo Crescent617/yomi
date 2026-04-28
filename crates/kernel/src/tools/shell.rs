@@ -34,26 +34,24 @@ pub struct ShellToolCtx {
 }
 
 impl ShellToolCtx {
-    pub fn new(
-        _agent_id: AgentId,
-        input_tx: Option<mpsc::Sender<AgentInput>>,
-        _working_dir: std::path::PathBuf,
-    ) -> Self {
+    pub fn new(_agent_id: AgentId, input_tx: Option<mpsc::Sender<AgentInput>>) -> Self {
         Self { input_tx }
     }
 }
 
 pub struct ShellTool {
-    working_dir: std::path::PathBuf,
     ctx: Option<ShellToolCtx>,
 }
 
+impl Default for ShellTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShellTool {
-    pub fn new(working_dir: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            working_dir: working_dir.into(),
-            ctx: None,
-        }
+    pub fn new() -> Self {
+        Self { ctx: None }
     }
 
     #[must_use]
@@ -63,7 +61,7 @@ impl ShellTool {
     }
 
     fn gen_task_id() -> String {
-        format!("task_{}", gen_base56_id(12))
+        format!("sh-{}", gen_base56_id(12))
     }
 
     fn log_path(task_id: &str) -> std::path::PathBuf {
@@ -108,7 +106,7 @@ impl Tool for ShellTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
@@ -118,9 +116,11 @@ impl Tool for ShellTool {
         tracing::debug!("Executing bash command: {}", command);
 
         if background {
-            self.exec_async(command, timeout_secs).await
+            self.exec_async(command, timeout_secs, &ctx.working_dir)
+                .await
         } else {
-            self.exec_sync(command, timeout_secs).await
+            self.exec_sync(command, timeout_secs, &ctx.working_dir)
+                .await
         }
     }
 }
@@ -137,12 +137,17 @@ impl ShellTool {
     }
 
     /// Execute command synchronously and return output directly
-    async fn exec_sync(&self, command: &str, timeout_secs: Option<u64>) -> Result<ToolOutput> {
+    async fn exec_sync(
+        &self,
+        command: &str,
+        timeout_secs: Option<u64>,
+        working_dir: &std::path::Path,
+    ) -> Result<ToolOutput> {
         let (shell, arg) = Self::shell_command();
         let child = Command::new(&shell)
             .arg(&arg)
             .arg(command)
-            .current_dir(&self.working_dir)
+            .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -187,7 +192,12 @@ impl ShellTool {
     }
 
     /// Execute command in background and notify via `TaskResult` when complete
-    async fn exec_async(&self, command: &str, timeout_secs: Option<u64>) -> Result<ToolOutput> {
+    async fn exec_async(
+        &self,
+        command: &str,
+        timeout_secs: Option<u64>,
+        working_dir: &std::path::Path,
+    ) -> Result<ToolOutput> {
         let ctx = self
             .ctx
             .as_ref()
@@ -208,7 +218,7 @@ impl ShellTool {
         let child = Command::new(&shell)
             .arg(&arg)
             .arg(command)
-            .current_dir(&self.working_dir)
+            .current_dir(working_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;

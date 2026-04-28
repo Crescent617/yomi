@@ -19,6 +19,7 @@ use tuirealm::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
+    attr,
     components::{info_bar::Notification, input_edit::TextInput, CompletionList, FileCompletion},
     msg::Msg,
     theme::colors,
@@ -1709,7 +1710,7 @@ impl Component for InputComponent {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("mode") => {
+            Attribute::Custom(attr::MODE) => {
                 if let AttrValue::Number(mode_val) = value {
                     self.mode = match mode_val {
                         1 => crate::app::AppMode::Browse,
@@ -1717,19 +1718,19 @@ impl Component for InputComponent {
                     };
                 }
             }
-            Attribute::Custom("history") => {
+            Attribute::Custom(attr::HISTORY) => {
                 if let AttrValue::String(data) = value {
                     if let Ok(history) = serde_json::from_str::<Vec<String>>(&data) {
                         self.set_history(history);
                     }
                 }
             }
-            Attribute::Custom("working_dir") => {
+            Attribute::Custom(attr::WORKING_DIR) => {
                 if let AttrValue::String(path) = value {
                     self.set_working_dir(path);
                 }
             }
-            Attribute::Custom("set_content") => {
+            Attribute::Custom(attr::SET_CONTENT) => {
                 if let AttrValue::String(content) = value {
                     self.component.clear();
                     self.component.insert_str(&content);

@@ -15,7 +15,7 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
 
 /// Mascot ASCII art frames
 const MASCOT_FRAMES: &[(&str, u8)] = &[
@@ -232,12 +232,12 @@ impl Component for BannerComponent {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom("working_dir") => {
+            Attribute::Custom(attr::WORKING_DIR) => {
                 if let AttrValue::String(dir) = value {
                     self.working_dir = dir;
                 }
             }
-            Attribute::Custom("skills") => {
+            Attribute::Custom(attr::SKILLS) => {
                 if let AttrValue::String(skills) = value {
                     self.skills = skills.split(',').map(|s| s.trim().to_string()).collect();
                 }

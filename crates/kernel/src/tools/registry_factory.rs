@@ -11,7 +11,6 @@ use crate::tools::{
     ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -28,7 +27,6 @@ impl ToolRegistryFactory {
     /// # Arguments
     /// * `agent_id` - The agent ID for tool context
     /// * `shared` - Shared agent resources
-    /// * `working_dir` - Working directory for file-based tools
     /// * `input_tx` - Optional input sender for async bash tool results
     /// * `event_tx` - Event sender for permission requests and progress
     /// * `skills` - Skills to register
@@ -41,7 +39,6 @@ impl ToolRegistryFactory {
     pub fn create(
         agent_id: &AgentId,
         shared: &Arc<crate::agent::AgentShared>,
-        working_dir: &Path,
         input_tx: Option<&mpsc::Sender<AgentInput>>,
         event_tx: &mpsc::Sender<Event>,
         skills: Vec<Arc<Skill>>,
@@ -56,35 +53,28 @@ impl ToolRegistryFactory {
             .unwrap_or_else(|| Arc::new(crate::tools::file_state::FileStateStore::new()));
 
         // Register Bash tool
-        let bash_ctx = ShellToolCtx::new(
-            agent_id.clone(),
-            input_tx.cloned(),
-            working_dir.to_path_buf(),
-        );
-        let bash_tool = ShellTool::new(working_dir).with_ctx(bash_ctx);
+        let bash_ctx = ShellToolCtx::new(agent_id.clone(), input_tx.cloned());
+        let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         registry.register(bash_tool);
 
         // Register Read tool with file state store
-        let read_tool =
-            ReadTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        let read_tool = ReadTool::new().with_file_state_store(Arc::clone(&file_state_store));
         registry.register(read_tool);
 
         // Register Edit tool with file state store
-        let edit_tool =
-            EditTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        let edit_tool = EditTool::new().with_file_state_store(Arc::clone(&file_state_store));
         registry.register(edit_tool);
 
         // Register Write tool with file state store
-        let write_tool =
-            WriteTool::new(working_dir).with_file_state_store(Arc::clone(&file_state_store));
+        let write_tool = WriteTool::new().with_file_state_store(Arc::clone(&file_state_store));
         registry.register(write_tool);
 
         // Register Glob tool
-        let glob_tool = GlobTool::new(working_dir);
+        let glob_tool = GlobTool::new();
         registry.register(glob_tool);
 
         // Register Grep tool
-        let grep_tool = GrepTool::new(working_dir);
+        let grep_tool = GrepTool::new();
         registry.register(grep_tool);
 
         // Register WebFetch tool
@@ -107,7 +97,6 @@ impl ToolRegistryFactory {
                 input_tx.cloned().unwrap(),
                 skills,
                 shared.storage.clone(),
-                working_dir.to_path_buf(),
                 session_id.to_owned(),
                 event_tx.clone(),
             );

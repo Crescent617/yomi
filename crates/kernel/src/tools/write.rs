@@ -1,4 +1,4 @@
-use crate::tools::base::FileTool;
+use crate::tools::base::get_mtime;
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
@@ -14,14 +14,18 @@ use std::sync::Arc;
 pub const WRITE_TOOL_NAME: &str = "write";
 
 pub struct WriteTool {
-    base_dir: PathBuf,
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
+impl Default for WriteTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WriteTool {
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
-            base_dir: base_dir.into(),
             file_state_store: None,
         }
     }
@@ -38,7 +42,7 @@ impl WriteTool {
         let store = self.file_state_store.as_ref()?;
 
         // Check if file has been modified (mtime changed)
-        let current_mtime = self.get_mtime(path).await;
+        let current_mtime = get_mtime(path).await;
         if store.is_stale(path, current_mtime) {
             return Some(
                 "File has been modified since it was read. Read the file again before writing."
@@ -50,11 +54,6 @@ impl WriteTool {
     }
 }
 
-impl FileTool for WriteTool {
-    fn base_dir(&self) -> &Path {
-        &self.base_dir
-    }
-}
 #[async_trait]
 impl Tool for WriteTool {
     fn name(&self) -> &'static str {
@@ -82,7 +81,7 @@ impl Tool for WriteTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let file_path_str = args["file_path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'file_path' argument"))?;
@@ -95,7 +94,7 @@ impl Tool for WriteTool {
         let path = if file_path_str.starts_with('/') {
             PathBuf::from(file_path_str)
         } else {
-            self.resolve_path(file_path_str)
+            ctx.working_dir.join(file_path_str)
         };
 
         tracing::debug!("Write: {}", path.display());
@@ -148,8 +147,8 @@ impl Tool for WriteTool {
 
         // Update file state store
         if let Some(ref store) = self.file_state_store {
-            let mtime = self.get_mtime(&path);
-            store.record(path.clone(), mtime.await);
+            let mtime = get_mtime(&path).await;
+            store.record(path.clone(), mtime);
         }
 
         // Build response
@@ -182,13 +181,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new(base_path);
+        let tool = WriteTool::new();
         let args = serde_json::json!({
             "file_path": "test.txt",
             "content": "Hello, World!"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("created successfully"));
@@ -206,13 +205,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new(base_path);
+        let tool = WriteTool::new();
         let args = serde_json::json!({
             "file_path": "src/nested/test.rs",
             "content": "fn main() {}"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -234,7 +233,7 @@ mod tests {
             .unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let tool = WriteTool::new(base_path).with_file_state_store(store);
+        let tool = WriteTool::new().with_file_state_store(store);
 
         let args = serde_json::json!({
             "file_path": "existing.txt",
@@ -242,7 +241,7 @@ mod tests {
         });
 
         // Should fail because file hasn't been read
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("not been read"));
@@ -262,12 +261,10 @@ mod tests {
         let store = Arc::new(FileStateStore::new());
 
         // Record the file as read with the current mtime
-        // The path must match what resolve_path returns (canonicalized)
-        let tool_for_mtime = WriteTool::new(&base_path);
-        let mtime = tool_for_mtime.get_mtime(&file_path).await;
+        let mtime = crate::tools::base::get_mtime(&file_path).await;
         store.record(file_path.clone(), mtime);
 
-        let tool = WriteTool::new(&base_path).with_file_state_store(store);
+        let tool = WriteTool::new().with_file_state_store(store);
 
         let args = serde_json::json!({
             "file_path": "existing.txt",
@@ -275,7 +272,7 @@ mod tests {
         });
 
         // Should succeed because file was recorded as read
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("updated"));
@@ -291,14 +288,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new(base_path);
+        let tool = WriteTool::new();
         let absolute_path = base_path.join("absolute.txt");
         let args = serde_json::json!({
             "file_path": absolute_path.to_str().unwrap(),
             "content": "absolute path content"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -316,19 +313,19 @@ mod tests {
         let store = Arc::new(crate::tools::file_state::FileStateStore::new());
 
         // Create WriteTool with file state store
-        let write_tool = WriteTool::new(&base_path).with_file_state_store(Arc::clone(&store));
+        let write_tool = WriteTool::new().with_file_state_store(Arc::clone(&store));
 
         // Write a new file
         let args = serde_json::json!({
             "file_path": "test.txt",
             "content": "Hello, World!"
         });
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = write_tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
         // Now create EditTool with the same file state store
-        let edit_tool = crate::tools::edit::EditTool::new(&base_path).with_file_state_store(store);
+        let edit_tool = crate::tools::edit::EditTool::new().with_file_state_store(store);
 
         // Try to edit the file without reading first
         // This should succeed because WriteTool already recorded the file state
@@ -337,7 +334,7 @@ mod tests {
             "old_str": "Hello",
             "new_str": "Goodbye"
         });
-        let ctx = ToolExecCtx::new("test_tool_call_2");
+        let ctx = ToolExecCtx::new("test_tool_call_2", &base_path);
         let result = edit_tool.exec(args, ctx).await.unwrap();
 
         // Should succeed, not fail with "not been read" error

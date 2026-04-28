@@ -116,7 +116,7 @@ This is a test skill.";
             "path": skill_path.to_str().unwrap()
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -145,7 +145,7 @@ description: Debugging skill
             "name": "debugging"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -154,12 +154,13 @@ description: Debugging skill
 
     #[tokio::test]
     async fn test_load_skill_not_found() {
+        let temp = TempDir::new().unwrap();
         let tool = SkillTool::new(vec![]);
         let args = serde_json::json!({
             "name": "nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -168,12 +169,13 @@ description: Debugging skill
 
     #[tokio::test]
     async fn test_load_skill_path_not_found() {
+        let temp = TempDir::new().unwrap();
         let tool = SkillTool::new(vec![]);
         let args = serde_json::json!({
             "path": "/nonexistent/path/SKILL.md"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -205,7 +207,7 @@ description: Writing superpower
             "name": "superpowers:writing"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call");
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
