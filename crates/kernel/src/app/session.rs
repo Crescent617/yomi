@@ -85,6 +85,7 @@ impl Session {
             self.agent_shared.provider.clone(),
             self.agent_shared.model_config.clone(),
             self.agent_shared.task_store.clone(),
+            self.agent_shared.todo_storage.clone(),
             self.agent_shared.project_memory.clone(),
             self.agent_shared.compactor.clone(),
             self.agent_shared.storage.clone(),

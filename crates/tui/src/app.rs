@@ -29,6 +29,7 @@ use unicode_width::UnicodeWidthStr;
 
 use kernel::event::{ControlCommand, Event as AppEvent};
 use kernel::permissions::Level;
+use kernel::tools::TODO_WRITE_TOOL_NAME;
 use kernel::types::{ContentBlock, Message};
 
 use crate::{
@@ -36,7 +37,7 @@ use crate::{
     components::{
         default_help_sections, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
         ChatViewComponent, FuzzyPickerComponent, HelpDialog, InfoBarComponent, InputComponent,
-        PickerConfig, PickerItem, SelectDialogComponent, StatusBarComponent,
+        PickerConfig, PickerItem, SelectDialogComponent, StatusBarComponent, TodoListComponent,
     },
     id::Id,
     msg::{Msg, UserEvent},
@@ -115,6 +116,10 @@ pub struct Model {
     session_messages: Vec<Message>,
     /// Permission level for displaying YOLO mode indicator
     permission_level: Level,
+    /// Data directory for todo storage
+    data_dir: std::path::PathBuf,
+    /// Current session ID
+    session_id: String,
 }
 
 impl Model {
@@ -129,6 +134,8 @@ impl Model {
         session_messages: Vec<Message>,
         permission_level: Level,
         initial_message: Option<String>,
+        data_dir: std::path::PathBuf,
+        session_id: String,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app()?;
@@ -158,6 +165,8 @@ impl Model {
             working_dir,
             session_messages,
             permission_level,
+            data_dir,
+            session_id,
         })
     }
 
@@ -371,6 +380,20 @@ impl Model {
             Attribute::Custom(attr::SET_CTX_USAGE),
             AttrValue::String(usage_str),
         )?;
+        Ok(())
+    }
+
+    /// Initialize todo list from file storage
+    pub fn init_todo_list(&mut self) -> Result<()> {
+        use kernel::storage::TodoStorage;
+        let todo_storage = TodoStorage::new(&self.data_dir);
+        if let Some(todo_json) = todo_storage.load(&self.session_id) {
+            self.app.attr(
+                &Id::TodoList,
+                Attribute::Custom(attr::SET_TODOS),
+                AttrValue::String(todo_json),
+            )?;
+        }
         Ok(())
     }
 
@@ -730,6 +753,9 @@ impl Model {
 
             // Render help dialog on top if active
             self.app.view(&Id::HelpDialog, f, f.area());
+
+            // Render todo list floating panel (renders itself only if visible)
+            self.app.view(&Id::TodoList, f, f.area());
         });
     }
 
@@ -817,6 +843,13 @@ impl Model {
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
+        // Mount todo list component (floating panel)
+        app.mount(
+            Id::TodoList,
+            Box::new(TodoListComponent::new()),
+            vec![Sub::new(EventClause::Tick, SubClause::Always)],
+        )?;
+
         // Set focus to input box
         app.active(&Id::InputBox)?;
 
@@ -898,13 +931,25 @@ impl Model {
                     ..
                 }) => {
                     // Show tool execution start in chat view
-                    let args_str = arguments.unwrap_or_default();
+                    let args_str = arguments.clone().unwrap_or_default();
                     let combined = format!("{tool_id}\x00{tool_name}\x00{args_str}");
                     self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom(attr::START_TOOL),
                         AttrValue::String(combined),
                     )?;
+
+                    // Handle todoWrite tool - update todo list panel
+                    if tool_name == TODO_WRITE_TOOL_NAME {
+                        if let Some(args) = arguments {
+                            self.app.attr(
+                                &Id::TodoList,
+                                Attribute::Custom(attr::SET_TODOS),
+                                AttrValue::String(args),
+                            )?;
+                        }
+                    }
+
                     self.state.should_redraw = true;
                 }
                 AppEvent::Tool(kernel::event::ToolEvent::Output {
@@ -1460,6 +1505,21 @@ impl Model {
                         Attribute::Custom(attr::CLEAR_HISTORY),
                         AttrValue::Flag(true),
                     );
+                    // Clear todo list
+                    let _ = self.app.attr(
+                        &Id::TodoList,
+                        Attribute::Custom(attr::CLEAR_TODOS),
+                        AttrValue::Flag(true),
+                    );
+                    None
+                }
+                Msg::CommandTodos => {
+                    // Toggle todo list visibility
+                    let _ = self.app.attr(
+                        &Id::TodoList,
+                        Attribute::Custom(attr::TOGGLE_TODOS),
+                        AttrValue::Flag(true),
+                    );
                     None
                 }
                 Msg::CommandYolo => {
@@ -1678,6 +1738,8 @@ pub async fn run_tui(
     permission_level: Level,
     context_window: u32,
     initial_message: Option<String>,
+    data_dir: std::path::PathBuf,
+    session_id: String,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1690,6 +1752,8 @@ pub async fn run_tui(
         session_messages,
         permission_level,
         initial_message,
+        data_dir,
+        session_id,
     )?;
     model.init_banner(working_dir, skills)?;
     model.init_status_bar()?;
@@ -1697,6 +1761,8 @@ pub async fn run_tui(
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)
     model.init_session_messages(context_window)?;
+    // Initialize todo list from file
+    model.init_todo_list()?;
     // run() consumes model and returns the new history entries
     model.run().await
 }

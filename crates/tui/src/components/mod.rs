@@ -12,6 +12,7 @@ pub mod input;
 pub mod input_edit;
 pub mod status_bar;
 pub mod tips;
+pub mod todo_list;
 pub mod wrap_paragraph;
 
 pub use banner::{BannerComponent, BannerData};
@@ -25,3 +26,4 @@ pub use info_bar::InfoBarComponent;
 pub use input::InputComponent;
 pub use input_edit::{TextBuffer, TextInput};
 pub use status_bar::StatusBarComponent;
+pub use todo_list::{TodoItem, TodoListComponent, TodoStatus};

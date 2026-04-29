@@ -30,8 +30,8 @@ use crate::{
 };
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
-    SHELL_TOOL_NAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME,
-    WRITE_TOOL_NAME,
+    SHELL_TOOL_NAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_READ_TOOL_NAME, WEBFETCH_TOOL_NAME,
+    WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -2201,7 +2201,8 @@ fn tool_icon(tool_name: &str) -> &'static str {
         | TASK_GET_TOOL_NAME
         | TASK_LIST_TOOL_NAME
         | TASK_UPDATE_TOOL_NAME
-        | TODO_WRITE_TOOL_NAME => " ",
+        | TODO_WRITE_TOOL_NAME
+        | TODO_READ_TOOL_NAME => " ",
         _ => " ",
     }
 }
@@ -2232,6 +2233,7 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
             .map(f)
             .or_else(|| value["path"].as_str().map(f)),
         SUBAGENT_TOOL_NAME => value["prompt"].as_str().map(f),
+        TODO_READ_TOOL_NAME => Some(String::new()), // No specific target for reading todos
         _ => None,
     };
 
