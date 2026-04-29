@@ -292,8 +292,10 @@ impl AgentExecutionContext {
 pub struct AgentShared {
     pub provider: Arc<dyn crate::providers::Provider>,
     pub model_config: Arc<ModelConfig>,
-    /// Task store for task tools
+    /// Task store for task tools (legacy)
     pub task_store: Option<Arc<crate::task::TaskStore>>,
+    /// Todo storage for todo list persistence
+    pub todo_storage: Option<Arc<crate::storage::TodoStorage>>,
     /// Project memory (CLAUDE.md/AGENTS.md)
     pub project_memory: Arc<crate::project_memory::MemoryFiles>,
     /// Context compactor for managing long conversations
@@ -312,6 +314,7 @@ impl AgentShared {
         provider: Arc<dyn crate::providers::Provider>,
         model_config: Arc<ModelConfig>,
         task_store: Option<Arc<crate::task::TaskStore>>,
+        todo_storage: Option<Arc<crate::storage::TodoStorage>>,
         project_memory: Arc<crate::project_memory::MemoryFiles>,
         compactor: Option<crate::compactor::Compactor>,
         storage: Option<Arc<dyn crate::storage::Storage>>,
@@ -322,6 +325,7 @@ impl AgentShared {
             provider,
             model_config,
             task_store,
+            todo_storage,
             project_memory,
             compactor,
             storage,

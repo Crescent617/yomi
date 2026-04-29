@@ -14,7 +14,7 @@ use kernel::{
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
-    storage::{FsStorage, Storage},
+    storage::{FsStorage, Storage, TodoStorage},
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
@@ -102,6 +102,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"), pool).await?);
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
+    let todo_storage = Arc::new(TodoStorage::new(&config.data_dir));
     let project_memory = kernel::project_memory::load(&working_dir).await?;
 
     let coordinator = Arc::new(Coordinator::new(
@@ -109,6 +110,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         provider,
         config.model.clone(),
         Some(task_store),
+        Some(todo_storage),
         project_memory,
         Some(compactor::Compactor::default()),
         get_skill_folders(&config),
@@ -137,6 +139,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         skill_names: skill_names.clone(),
         auto_approve: config.auto_approve,
         context_window,
+        data_dir: config.data_dir.clone(),
     };
 
     let mut is_first_session = true;
