@@ -67,13 +67,22 @@ impl MascotAnimator {
 pub struct BannerData {
     pub working_dir: String,
     pub skills: Vec<String>,
+    pub auto_approve_level: String,
+    pub model_name: String,
 }
 
 impl BannerData {
-    pub const fn new(working_dir: String, skills: Vec<String>) -> Self {
+    pub const fn new(
+        working_dir: String,
+        skills: Vec<String>,
+        auto_approve_level: String,
+        model_name: String,
+    ) -> Self {
         Self {
             working_dir,
             skills,
+            auto_approve_level,
+            model_name,
         }
     }
 
@@ -153,8 +162,20 @@ impl BannerData {
             result
         };
 
+        // Truncate model name if too long
+        let model_str = if self.model_name.len() > 40 {
+            truncate_by_width(&self.model_name, 40, "...")
+        } else if self.model_name.is_empty() {
+            "-".to_string()
+        } else {
+            self.model_name.clone()
+        };
+
         vec![
-            "Hello!".to_string(),
+            format!(
+                "Model: {model_str} | Auto-approve: {}",
+                self.auto_approve_level
+            ),
             format!("CWD: {working_dir}"),
             format!("Skills: {skills_str}"),
         ]
@@ -167,6 +188,8 @@ pub struct BannerComponent {
     props: Props,
     working_dir: String,
     skills: Vec<String>,
+    auto_approve_level: String,
+    model_name: String,
     mascot_animator: MascotAnimator,
 }
 
@@ -176,6 +199,8 @@ impl BannerComponent {
             props: Props::default(),
             working_dir: String::new(),
             skills: Vec::new(),
+            auto_approve_level: String::new(),
+            model_name: String::new(),
             mascot_animator: MascotAnimator::default(),
         }
     }
@@ -191,6 +216,8 @@ impl Component for BannerComponent {
         let banner_data = BannerData {
             working_dir: self.working_dir.clone(),
             skills: self.skills.clone(),
+            auto_approve_level: self.auto_approve_level.clone(),
+            model_name: self.model_name.clone(),
         };
 
         // Split into two columns: mascot (left) and info (right)
@@ -336,10 +363,18 @@ mod tests {
                 "caveman:caveman".to_string(),
                 "nopua".to_string(),
             ],
+            "safe".to_string(),
+            "claude-3-5-sonnet".to_string(),
         );
         let lines = banner.info_lines();
-        assert_eq!(lines[0], "Hello!");
+        // Line 0: Model and Auto-approve info
+        assert!(lines[0].contains("Auto-approve"));
+        assert!(lines[0].contains("safe"));
+        assert!(lines[0].contains("Model"));
+        assert!(lines[0].contains("claude-3-5-sonnet"));
+        // Line 1: Working directory
         assert_eq!(lines[1], "CWD: /home/user");
+        // Line 2: Skills
         assert!(lines[2].contains("caveman:caveman"));
         assert!(lines[2].contains("nopua"));
         assert!(lines[2].contains("superpowers:{a, b}"));

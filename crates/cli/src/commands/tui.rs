@@ -140,6 +140,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         auto_approve: config.auto_approve,
         context_window,
         data_dir: config.data_dir.clone(),
+        model_name: config.model.model_id.clone(),
     };
 
     let mut is_first_session = true;

@@ -135,9 +135,7 @@ impl Tool for TodoReadTool {
     }
 
     fn desc(&self) -> &'static str {
-        r"Read the current todo list.
-Use this to check the status of tasks before taking action.
-Returns the current todo list with all tasks and their statuses."
+        r"Read the current todo list. Use this when lost track of your tasks or want to review the list"
     }
 
     fn schema(&self) -> Value {

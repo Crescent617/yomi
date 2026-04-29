@@ -344,8 +344,14 @@ impl Model {
     }
 
     /// Initialize banner with real data (called once at startup)
-    pub fn init_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
-        self.update_banner(working_dir, skills)
+    pub fn init_banner(
+        &mut self,
+        working_dir: String,
+        skills: Vec<String>,
+        model_name: String,
+    ) -> Result<()> {
+        let level = self.permission_level.to_string();
+        self.update_banner(working_dir, skills, level, model_name)
     }
 
     /// Initialize status bar with permission level for YOLO mode display
@@ -398,11 +404,23 @@ impl Model {
     }
 
     /// Update banner data in `ChatView`
-    pub fn update_banner(&mut self, working_dir: String, skills: Vec<String>) -> Result<()> {
+    pub fn update_banner(
+        &mut self,
+        working_dir: String,
+        skills: Vec<String>,
+        auto_approve_level: String,
+        model_name: String,
+    ) -> Result<()> {
         use crate::components::BannerData;
-        let banner = BannerData::new(working_dir, skills);
-        // Serialize banner data: working_dir\x00skill1,skill2,...
-        let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
+        let banner = BannerData::new(working_dir, skills, auto_approve_level, model_name);
+        // Serialize banner data: working_dir\x00skill1,skill2,...\x00auto_approve_level\x00model_name
+        let banner_str = format!(
+            "{}\x00{}\x00{}\x00{}",
+            banner.working_dir,
+            banner.skills.join(","),
+            banner.auto_approve_level,
+            banner.model_name
+        );
         self.app.attr(
             &Id::ChatView,
             Attribute::Custom(attr::SET_BANNER),
@@ -1740,6 +1758,7 @@ pub async fn run_tui(
     initial_message: Option<String>,
     data_dir: std::path::PathBuf,
     session_id: String,
+    model_name: String,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1755,7 +1774,7 @@ pub async fn run_tui(
         data_dir,
         session_id,
     )?;
-    model.init_banner(working_dir, skills)?;
+    model.init_banner(working_dir, skills, model_name)?;
     model.init_status_bar()?;
     // Set input history after banner init
     model.init_input_history()?;
