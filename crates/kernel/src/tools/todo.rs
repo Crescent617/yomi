@@ -2,89 +2,23 @@ use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 pub const TODO_WRITE_TOOL_NAME: &str = "todoWrite";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum TodoStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-}
-
-impl std::fmt::Display for TodoStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Completed => write!(f, "completed"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Todo {
-    pub id: String,
-    pub content: String,
-    pub status: TodoStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoList {
-    pub todos: Vec<Todo>,
-}
-
-/// In-memory store for todos per session
-#[derive(Debug, Default)]
-pub struct TodoStore {
-    sessions: Mutex<HashMap<String, Vec<Todo>>>,
-}
-
-impl TodoStore {
-    pub fn new() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn get_todos(&self, session_id: &str) -> Vec<Todo> {
-        let sessions = self.sessions.lock().unwrap();
-        sessions.get(session_id).cloned().unwrap_or_default()
-    }
-
-    pub fn set_todos(&self, session_id: &str, todos: Vec<Todo>) {
-        let mut sessions = self.sessions.lock().unwrap();
-        if todos.is_empty() {
-            sessions.remove(session_id);
-        } else {
-            sessions.insert(session_id.to_string(), todos);
-        }
-    }
-}
-
-pub type SharedTodoStore = Arc<TodoStore>;
-
-/// `TodoWriteTool` - Simple in-memory todo list management
-/// Replaces the heavier Task system for simple task tracking
-pub struct TodoWriteTool {
-    store: SharedTodoStore,
-    session_id: String,
-}
+/// `TodoWriteTool` - Simple todo list management tool
+/// Stateless tool that receives todo list and confirms receipt
+pub struct TodoWriteTool;
 
 impl TodoWriteTool {
-    pub fn new(store: SharedTodoStore, session_id: impl Into<String>) -> Self {
-        Self {
-            store,
-            session_id: session_id.into(),
-        }
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for TodoWriteTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -149,47 +83,19 @@ Guidelines:
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("todos must be an array"))?;
 
-        let mut todos = Vec::new();
+        // Validate todo items
         for item in todos_array {
-            let id = item["id"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("todo id is required"))?
-                .to_string();
-
-            let content = item["content"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("todo content is required"))?
-                .to_string();
-
-            let status = match item["status"].as_str() {
-                Some("pending") => TodoStatus::Pending,
-                Some("in_progress") => TodoStatus::InProgress,
-                Some("completed") => TodoStatus::Completed,
+            if item["id"].as_str().is_none() {
+                return Err(anyhow::anyhow!("todo id is required"));
+            }
+            if item["content"].as_str().is_none() {
+                return Err(anyhow::anyhow!("todo content is required"));
+            }
+            match item["status"].as_str() {
+                Some("pending" | "in_progress" | "completed") => {}
                 _ => return Err(anyhow::anyhow!("invalid status")),
-            };
-
-            let notes = item["notes"].as_str().map(|s| s.to_string());
-
-            todos.push(Todo {
-                id,
-                content,
-                status,
-                notes,
-            });
+            }
         }
-
-        // Check conditions before moving todos
-        let all_completed = todos.iter().all(|t| t.status == TodoStatus::Completed);
-
-        // Store new todos (filter out completed if all done - mimics claude-code behavior)
-        let todos_to_store: Vec<Todo> = if all_completed {
-            Vec::new() // Clear list when all done
-        } else {
-            todos
-        };
-
-        self.store
-            .set_todos(&self.session_id, todos_to_store.clone());
 
         Ok(ToolOutput::text("Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable"))
     }
@@ -201,8 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_write_tool() {
-        let store = Arc::new(TodoStore::new());
-        let tool = TodoWriteTool::new(store.clone(), "test_session");
+        let tool = TodoWriteTool::new();
 
         let input = json!({
             "todos": [
@@ -222,76 +127,77 @@ mod tests {
         let ctx = ToolExecCtx::new("test", "/tmp");
         let result = tool.exec(input, ctx).await.unwrap();
 
-        // Check human-readable success message (claude-code aligned)
+        // Check success message
         let text = result.text_content();
         assert!(text.contains("Todos have been modified successfully"));
-
-        // Verify storage
-        let stored = store.get_todos("test_session");
-        assert_eq!(stored.len(), 2);
-        assert_eq!(stored[0].content, "Fix bug");
     }
 
     #[tokio::test]
-    async fn test_verification_nudge_when_all_completed_no_verify() {
-        let store = Arc::new(TodoStore::new());
-        let tool = TodoWriteTool::new(store.clone(), "test_session");
+    async fn test_todo_write_tool_empty_list() {
+        let tool = TodoWriteTool::new();
 
-        // Complete 3+ tasks with no verification step
         let input = json!({
-            "todos": [
-                {"id": "1", "content": "Task 1", "status": "completed"},
-                {"id": "2", "content": "Task 2", "status": "completed"},
-                {"id": "3", "content": "Task 3", "status": "completed"}
-            ]
+            "todos": []
         });
 
         let ctx = ToolExecCtx::new("test", "/tmp");
         let result = tool.exec(input, ctx).await.unwrap();
 
         let text = result.text_content();
-        assert!(text.contains("verification step"));
+        assert!(text.contains("Todos have been modified successfully"));
     }
 
     #[tokio::test]
-    async fn test_no_nudge_when_has_verification_task() {
-        let store = Arc::new(TodoStore::new());
-        let tool = TodoWriteTool::new(store.clone(), "test_session");
+    async fn test_todo_write_tool_invalid_status() {
+        let tool = TodoWriteTool::new();
 
-        // Complete 3+ tasks but one is verification
         let input = json!({
             "todos": [
-                {"id": "1", "content": "Task 1", "status": "completed"},
-                {"id": "2", "content": "Verify implementation", "status": "completed"},
-                {"id": "3", "content": "Task 3", "status": "completed"}
+                {"id": "1", "content": "Task 1", "status": "invalid_status"}
             ]
         });
 
         let ctx = ToolExecCtx::new("test", "/tmp");
-        let result = tool.exec(input, ctx).await.unwrap();
-
-        let text = result.text_content();
-        assert!(!text.contains("verification step"));
+        let result = tool.exec(input, ctx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid status"));
     }
 
     #[tokio::test]
-    async fn test_all_completed_clears_list() {
-        let store = Arc::new(TodoStore::new());
-        let tool = TodoWriteTool::new(store.clone(), "test_session");
+    async fn test_todo_write_tool_missing_id() {
+        let tool = TodoWriteTool::new();
 
-        // Add some todos first
         let input = json!({
             "todos": [
-                {"id": "1", "content": "Task 1", "status": "completed"},
-                {"id": "2", "content": "Task 2", "status": "completed"}
+                {"content": "Task 1", "status": "pending"}
             ]
         });
 
         let ctx = ToolExecCtx::new("test", "/tmp");
-        tool.exec(input, ctx).await.unwrap();
+        let result = tool.exec(input, ctx).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("todo id is required"));
+    }
 
-        // List should be cleared when all completed
-        let stored = store.get_todos("test_session");
-        assert!(stored.is_empty());
+    #[tokio::test]
+    async fn test_todo_write_tool_missing_content() {
+        let tool = TodoWriteTool::new();
+
+        let input = json!({
+            "todos": [
+                {"id": "1", "status": "pending"}
+            ]
+        });
+
+        let ctx = ToolExecCtx::new("test", "/tmp");
+        let result = tool.exec(input, ctx).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("todo content is required"));
     }
 }
