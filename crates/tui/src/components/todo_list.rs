@@ -69,8 +69,13 @@ impl TodoList {
     }
 
     /// Update visible state based on todos and manual hide
+    /// Only show when there are pending or in-progress todos
     fn update_visible(&mut self) {
-        self.visible = !self.todos.is_empty() && !self.manually_hidden;
+        let has_pending = self
+            .todos
+            .iter()
+            .any(|t| matches!(t.status, TodoStatus::Pending | TodoStatus::InProgress));
+        self.visible = has_pending && !self.manually_hidden;
     }
 
     /// Update todo list from JSON string
