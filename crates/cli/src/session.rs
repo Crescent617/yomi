@@ -21,6 +21,7 @@ pub struct SessionContext {
     pub auto_approve: kernel::permissions::Level,
     pub context_window: u32,
     pub data_dir: std::path::PathBuf,
+    pub model_name: String,
 }
 
 /// Result of running a session
@@ -234,6 +235,7 @@ pub async fn run_session_loop(
         initial_message,
         ctx.data_dir.clone(),
         session_id.0.clone(),
+        ctx.model_name.clone(),
     )
     .await?;
 
