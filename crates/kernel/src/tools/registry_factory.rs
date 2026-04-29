@@ -158,13 +158,9 @@ impl ToolRegistryFactory {
             registry.register(subagent_tool);
         }
 
-        // Register task tools if task_store is provided
-        if let Some(task_store) = &config.shared.task_store {
-            let task_list_id = config
-                .parent_session_id
-                .unwrap_or(config.session_id)
-                .to_owned();
-            registry.register_task_tools(task_store.clone(), task_list_id);
+        // Register todo tool
+        if let Some(todo_storage) = config.shared.todo_storage.clone() {
+            registry.register_todo_tool(todo_storage, config.session_id.to_owned());
         }
 
         // Register Reminder tool if enabled (main agent only)

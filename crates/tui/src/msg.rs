@@ -70,6 +70,7 @@ pub enum Msg {
     CommandCompact,  // /compact - force message compaction
     CommandHelp,     // /help - show help dialog
     CommandSessions, // /sessions - switch session
+    CommandTodos,    // /todos - toggle todo list visibility
 
     // Session picker
     SessionSelected(String), // User selected a session to switch to

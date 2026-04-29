@@ -99,3 +99,9 @@ pub const QUERY: &str = "query";
 pub const SET_CONTENT: &str = "set_content";
 /// Attribute for ticking/updating animation frame.
 pub const TICK: &str = "tick";
+/// Attribute for updating todo list content (JSON string).
+pub const SET_TODOS: &str = "set_todos";
+/// Attribute for clearing todo list.
+pub const CLEAR_TODOS: &str = "clear_todos";
+/// Attribute for toggling todo list visibility.
+pub const TOGGLE_TODOS: &str = "toggle_todos";

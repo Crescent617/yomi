@@ -12,4 +12,5 @@ pub enum Id {
     HistoryPicker, // Fuzzy finder for input history (C-r)
     SessionPicker, // Fuzzy finder for session switching (/sessions)
     HelpDialog,    // Help dialog for keyboard shortcuts
+    TodoList,      // Floating todo list panel
 }

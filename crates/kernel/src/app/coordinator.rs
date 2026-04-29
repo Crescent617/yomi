@@ -17,11 +17,13 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: Arc<dyn Storage>,
         provider: Arc<dyn Provider>,
         model_config: ModelConfig,
         task_store: Option<Arc<crate::task::TaskStore>>,
+        todo_storage: Option<Arc<crate::storage::TodoStorage>>,
         project_memory: crate::project_memory::MemoryFiles,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
@@ -30,6 +32,7 @@ impl Coordinator {
             provider,
             Arc::new(model_config),
             task_store,
+            todo_storage,
             Arc::new(project_memory),
             compactor,
             Some(storage.clone()),

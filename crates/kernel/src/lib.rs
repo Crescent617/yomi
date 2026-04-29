@@ -47,7 +47,7 @@ pub use providers::{
     ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{Skill, SkillLoader};
-pub use storage::{FsStorage, Storage};
+pub use storage::{FsStorage, Storage, TodoStorage};
 pub use tools::{Tool, ToolRegistry};
 pub use types::*;
 

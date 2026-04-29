@@ -5,6 +5,7 @@ use std::sync::{LazyLock, RwLock};
 use tuirealm::ratatui::style::{Color, Modifier, Style};
 
 /// Semantic color configuration - modify these to customize the theme
+/// NOTE: Should follow a consistent naming convention for easy access and maintenance. DO NOT add color like 'gray', 'blue', etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemeConfig {
     // Core background colors
@@ -130,6 +131,7 @@ pub mod presets {
 }
 
 /// Color accessors - use these to get current theme colors
+/// NOTE: only access colors defined in `ThemeConfig` to ensure consistency and maintainability. DO NOT add new colors here without adding to `ThemeConfig` and updating the default theme.
 pub mod colors {
     use super::current_theme;
     use tuirealm::ratatui::style::Color;

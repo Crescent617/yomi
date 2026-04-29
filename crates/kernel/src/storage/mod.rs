@@ -1,10 +1,12 @@
 pub mod fs;
 pub mod meta;
 pub mod migrations;
+pub mod todo;
 
 pub use fs::FsStorage;
 pub use meta::{MetaStorage, SessionMeta};
 pub use migrations::{run_migrations, CURRENT_SCHEMA_VERSION};
+pub use todo::TodoStorage;
 
 use crate::types::{Message, SessionId, SessionRecord};
 use anyhow::Result;

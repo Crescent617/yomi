@@ -20,6 +20,7 @@ pub struct SessionContext {
     pub skill_names: Vec<String>,
     pub auto_approve: kernel::permissions::Level,
     pub context_window: u32,
+    pub data_dir: std::path::PathBuf,
 }
 
 /// Result of running a session
@@ -231,6 +232,8 @@ pub async fn run_session_loop(
         ctx.auto_approve,
         ctx.context_window,
         initial_message,
+        ctx.data_dir.clone(),
+        session_id.0.clone(),
     )
     .await?;
 

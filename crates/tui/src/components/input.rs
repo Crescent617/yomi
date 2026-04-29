@@ -813,6 +813,7 @@ impl Component for InputMock {
 const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
     ("/clear", "Clear chat history"),
+    ("/todos", "Toggle todo list visibility"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
     ("/sessions", "Switch to another session"),
@@ -1835,6 +1836,7 @@ impl InputComponent {
         match parts[0] {
             "/new" => Some(Msg::CommandNew),
             "/clear" => Some(Msg::CommandClear),
+            "/todos" => Some(Msg::CommandTodos),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
             "/sessions" => Some(Msg::CommandSessions),
