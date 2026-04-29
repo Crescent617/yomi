@@ -148,7 +148,7 @@ impl ShellTool {
             .arg(&arg)
             .arg(command)
             .current_dir(working_dir)
-            .stdin(Stdio::null())  // Prevent commands from hanging on interactive input
+            .stdin(Stdio::null()) // Prevent commands from hanging on interactive input
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -220,7 +220,7 @@ impl ShellTool {
             .arg(&arg)
             .arg(command)
             .current_dir(working_dir)
-            .stdin(Stdio::null())  // Prevent commands from hanging on interactive input
+            .stdin(Stdio::null()) // Prevent commands from hanging on interactive input
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
