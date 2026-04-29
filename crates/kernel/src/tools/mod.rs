@@ -1,4 +1,3 @@
-use crate::task::{SharedTaskStore, TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool};
 use crate::types::{ToolDefinition, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -19,6 +18,7 @@ pub mod reminder;
 pub mod shell;
 pub mod skill_load;
 pub mod subagent;
+pub mod todo;
 pub mod webfetch;
 pub mod websearch;
 pub mod write;
@@ -35,6 +35,7 @@ pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
+pub use todo::{SharedTodoStore, TodoStore, TodoWriteTool, TODO_WRITE_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
@@ -205,10 +206,8 @@ impl ToolRegistry {
 }
 
 impl ToolRegistry {
-    pub fn register_task_tools(&mut self, store: SharedTaskStore, task_list_id: String) {
-        self.register(TaskCreateTool::new(store.clone(), task_list_id.clone()));
-        self.register(TaskUpdateTool::new(store.clone(), task_list_id.clone()));
-        self.register(TaskListTool::new(store.clone(), task_list_id.clone()));
-        self.register(TaskGetTool::new(store, task_list_id));
+    /// Register todo tool (replaces the heavier task tools)
+    pub fn register_todo_tool(&mut self, store: SharedTodoStore, session_id: String) {
+        self.register(TodoWriteTool::new(store, session_id));
     }
 }
