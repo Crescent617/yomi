@@ -84,13 +84,6 @@ impl ToolLevelResolver {
             "pacman -R",
             "brew install",
             "brew uninstall",
-            // 修改系统文件权限
-            "chmod 777",
-            "chmod -R 777",
-            "chown -R",
-            // 文件重定向覆盖 (可能导致数据丢失)
-            " > /",
-            ">/",
         ];
         let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
         let cmd_lower = cmd.to_lowercase();

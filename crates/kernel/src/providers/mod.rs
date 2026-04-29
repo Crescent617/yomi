@@ -71,6 +71,7 @@ impl Default for ThinkingConfig {
 /// Model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
+    pub provider: crate::config::ModelProvider,
     pub model_id: String,
     pub endpoint: String,
     pub api_key: String,
@@ -84,6 +85,7 @@ pub struct ModelConfig {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
+            provider: crate::config::ModelProvider::default(),
             model_id: String::new(),
             endpoint: String::new(),
             api_key: String::new(),

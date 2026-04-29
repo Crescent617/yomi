@@ -46,7 +46,7 @@ pub struct SystemPromptBuilder<'a> {
     working_dir: Option<&'a std::path::Path>,
 }
 
-const SKILL_SECTION_HEADER: &str = "\n\n# Skills\nIMPORTANT: before replying, you must scan available skills and load skill when task hits its description.\n\n";
+const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill when task hits its description.\n\n";
 
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {
@@ -76,30 +76,24 @@ impl<'a> SystemPromptBuilder<'a> {
             .base_prompt
             .unwrap_or("You are a helpful AI coding assistant.")
             .trim();
+        let mut prompt = base.to_string();
+        prompt.push_str("\n\n");
 
-        let mut prompt = if self.skills.is_empty() {
-            base.to_string()
-        } else {
-            let mut p = base.to_string();
-            p.push_str(SKILL_SECTION_HEADER);
-            p.push_str("## Available Skills\n");
+        if !self.skills.is_empty() {
+            prompt.push_str(SKILL_SECTION_HEADER);
+            prompt.push_str("## Available Skills\n");
             for skill in self.skills {
                 let _ = write!(
-                    p,
+                    prompt,
                     "name: {}\ndescription: {}\npath: {}\n\n",
                     skill.name,
                     skill.description,
                     skill.source_path.display()
                 );
             }
-            p
-        };
-
-        // Ensure there's a blank line before Environment section
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
         }
-        prompt.push_str("\n# Environment\n");
+
+        prompt.push_str("# Environment\n");
         let _ = write!(prompt, "Date: {}", Local::now().format("%Y-%m-%d"));
         if let Some(cwd) = self.working_dir {
             let _ = write!(prompt, "\nCWD: {}", cwd.display());
