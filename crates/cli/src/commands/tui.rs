@@ -8,7 +8,6 @@ use crate::{
 use anyhow::{Context, Result};
 use kernel::{
     agent::AgentConfig,
-    compactor,
     config::{Config, ModelProvider},
     expand_tilde,
     misc::plugin::PluginLoader,
@@ -112,7 +111,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         Some(task_store),
         Some(todo_storage),
         project_memory,
-        Some(compactor::Compactor::default()),
+        Some(config.agent.compactor.clone()),
         config
             .skill_folders()
             .into_iter()

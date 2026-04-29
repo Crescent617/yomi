@@ -429,7 +429,8 @@ impl Model {
         Ok(())
     }
 
-    /// Update scroll progress in status bar (for browse mode)
+    /// Update scroll progress in status bar
+    /// Shows scroll progress when user has scrolled up, clears when at bottom
     fn update_scroll_progress(&mut self) {
         // Query scroll progress from ChatView
         if let Ok(Some(query_result)) = self
@@ -437,11 +438,26 @@ impl Model {
             .query(&Id::ChatView, Attribute::Custom(attr::SCROLL_PROGRESS))
         {
             if let AttrValue::String(progress_str) = query_result.into_attr() {
-                let _ = self.app.attr(
-                    &Id::StatusBar,
-                    Attribute::Custom(attr::SET_SCROLL_PROGRESS),
-                    AttrValue::String(progress_str),
-                );
+                let parts: Vec<&str> = progress_str.split('\x00').collect();
+                if parts.len() == 3 {
+                    let is_scrolled = parts[2] == "1";
+                    if is_scrolled {
+                        // Set scroll progress (format: current\x00total)
+                        let scroll_data = format!("{}\x00{}", parts[0], parts[1]);
+                        let _ = self.app.attr(
+                            &Id::StatusBar,
+                            Attribute::Custom(attr::SET_SCROLL_PROGRESS),
+                            AttrValue::String(scroll_data),
+                        );
+                    } else {
+                        // At bottom, clear scroll progress
+                        let _ = self.app.attr(
+                            &Id::StatusBar,
+                            Attribute::Custom(attr::CLEAR_SCROLL_PROGRESS),
+                            AttrValue::Flag(true),
+                        );
+                    }
+                }
             }
         }
     }
@@ -1286,10 +1302,8 @@ impl Model {
                         Attribute::Custom("scroll_up"),
                         AttrValue::Number(amount as isize),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::ScrollDown => {
@@ -1299,10 +1313,8 @@ impl Model {
                         Attribute::Custom("scroll_down"),
                         AttrValue::Number(amount as isize),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::InputChanged(_) => {
@@ -1402,10 +1414,8 @@ impl Model {
                         Attribute::Custom("page_up"),
                         AttrValue::Number(height as isize),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::PageHalfDown => {
@@ -1419,10 +1429,8 @@ impl Model {
                         Attribute::Custom("page_down"),
                         AttrValue::Number(height as isize),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::GoToTop => {
@@ -1431,10 +1439,8 @@ impl Model {
                         Attribute::Custom("scroll_to_top"),
                         AttrValue::Flag(true),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::GoToBottom => {
@@ -1443,10 +1449,8 @@ impl Model {
                         Attribute::Custom(attr::SCROLL_TO_BOTTOM),
                         AttrValue::Flag(true),
                     );
-                    // Update scroll progress in browse mode
-                    if self.mode == AppMode::Browse {
-                        self.update_scroll_progress();
-                    }
+                    // Update scroll progress
+                    self.update_scroll_progress();
                     None
                 }
                 Msg::ToggleExpandAll => {

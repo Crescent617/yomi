@@ -160,9 +160,9 @@ impl Component for TodoList {
         let panel_height =
             (display_count as u16 + 2 + u16::from(hidden_count > 0)).min(area.height / 2);
 
-        // Position on the right side, top corner
+        // Position on the right side, top corner (no margin)
         let panel_area = Rect {
-            x: area.x + area.width.saturating_sub(panel_width + 2),
+            x: area.x + area.width.saturating_sub(panel_width),
             y: area.y + 1,
             width: panel_width,
             height: panel_height,

@@ -9,7 +9,7 @@ use tuirealm::{
     event::Event,
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
-        layout::{Constraint, Direction, Layout, Rect},
+        layout::{Alignment, Constraint, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::Paragraph,
@@ -18,9 +18,8 @@ use tuirealm::{
     state::State,
 };
 
-use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{attr, msg::Msg, theme::colors};
 use kernel::permissions::Level;
-use unicode_width::UnicodeWidthStr;
 
 /// Tip message for status bar (center section)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +53,7 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center: tip] [right: ctx win usage or scroll progress]
+/// Layout: [mode] [center: tip] [scroll progress (optional)] [ctx usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
@@ -66,7 +65,8 @@ pub struct StatusBar {
     ctx_usage: Option<(u32, u32)>,
     /// Permission level for displaying YOLO mode
     permission_level: Option<Level>,
-    /// Scroll progress in browse mode (`current_line`, `total_lines`)
+    /// Scroll progress (`current_line`, `total_lines`)
+    /// Displayed in browse mode always, or in normal mode when user scrolled up
     scroll_progress: Option<(usize, usize)>,
 }
 
@@ -147,46 +147,33 @@ impl StatusBar {
         )
     }
 
-    fn render_center_section(&self, width: usize) -> Span<'static> {
+    fn render_center_section(&self) -> Span<'static> {
         let text = self.tip.as_ref().map_or("", |t| t.content.as_str());
-
-        if text.is_empty() {
-            return Span::styled("", Style::default());
-        }
-
-        // Center the message, truncate if too long (using display width for CJK)
-        let text_width = text.width_cjk();
-        let display = if text_width > width {
-            truncate_by_width(text, width, "...")
-        } else {
-            let padding = (width.saturating_sub(text_width)) / 2;
-            format!("{:>padding$}{}", "", text, padding = padding)
-        };
-
         Span::styled(
-            display,
+            text.to_string(),
             Style::default()
                 .fg(colors::text_secondary())
                 .add_modifier(Modifier::ITALIC),
         )
     }
 
-    fn render_right_section(&self) -> Span<'static> {
-        // In browse mode, show scroll progress
-        if self.mode == AppMode::Browse {
-            if let Some((current, total)) = self.scroll_progress {
-                let text = format!("[{current}/{total}]");
-                return Span::styled(
-                    text,
-                    Style::default()
-                        .fg(colors::text_secondary())
-                        .add_modifier(Modifier::BOLD),
-                );
-            }
-            return Span::styled("[0/0]", Style::default().fg(colors::text_secondary()));
+    fn render_scroll_progress_section(&self) -> Span<'static> {
+        // Show scroll progress when available (browse mode always, normal mode when scrolled)
+        if let Some((current, total)) = self.scroll_progress {
+            let text = format!("[{current}/{total}]");
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled("", Style::default())
         }
+    }
 
-        // Display context window usage: "Context: 0.5%"
+    fn render_context_usage_section(&self) -> Span<'static> {
+        // Display context window usage: "0.5% (128K)"
         #[allow(clippy::cast_precision_loss)]
         if let Some((tokens, context_window)) = self.ctx_usage {
             let percentage = tokens as f32 / context_window as f32;
@@ -211,34 +198,46 @@ impl StatusBar {
 
 impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        // Check for tip timeout
         self.check_timeout();
 
-        // Split area into three sections: [mode] [center: tip] [right]
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(10), // Mode section (" NORMAL ")
-                Constraint::Min(10),    // Center: tip
-                Constraint::Length(14), // Right section: context usage or scroll progress
-            ])
-            .split(area);
+        let has_scroll = self.scroll_progress.is_some();
 
-        // Render mode section
-        let mode_span = self.render_mode_section();
-        let mode_line = Line::from(vec![mode_span]);
-        frame.render_widget(Paragraph::new(mode_line), chunks[0]);
+        // Layout: [mode] [center] [right content]
+        // Right content contains scroll (optional) + context
+        let constraints = vec![
+            Constraint::Min(0),  // Mode (auto width)
+            Constraint::Fill(1), // Center tip (fills space)
+            Constraint::Min(0),  // Right side: scroll? + context
+        ];
 
-        // Render center tip section
-        let center_width = chunks[1].width as usize;
-        let center_span = self.render_center_section(center_width);
-        let center_line = Line::from(vec![center_span]);
-        frame.render_widget(Paragraph::new(center_line), chunks[1]);
+        let chunks = Layout::horizontal(constraints).split(area);
 
-        // Render right section
-        let right_span = self.render_right_section();
-        let right_line = Line::from(vec![right_span]);
-        frame.render_widget(Paragraph::new(right_line), chunks[2]);
+        // Mode (left)
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![self.render_mode_section()])),
+            chunks[0],
+        );
+
+        // Center tip
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![self.render_center_section()])),
+            chunks[1],
+        );
+
+        // Right side content: scroll (optional) + context (right-aligned)
+        let right_spans = if has_scroll {
+            vec![
+                self.render_scroll_progress_section(),
+                Span::raw(" "),
+                self.render_context_usage_section(),
+            ]
+        } else {
+            vec![self.render_context_usage_section()]
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
+            chunks[2],
+        );
     }
 
     fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
