@@ -212,7 +212,7 @@ impl Tool for WebFetchTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Fetches content from a URL, extracts the main article content (removing navigation, ads, etc.), and converts to markdown."
+        "Fetches content from a URL, extracts the main article content (removing navigation, ads, etc.), and converts to text."
     }
 
     fn schema(&self) -> Value {
