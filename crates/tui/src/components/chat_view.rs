@@ -596,6 +596,12 @@ impl ChatView {
         }
     }
 
+    /// Check if user has scrolled up from the bottom
+    /// Returns true if `scroll_offset > 0` (not at bottom)
+    pub const fn is_scrolled_up(&self) -> bool {
+        self.scroll_offset > 0
+    }
+
     /// Get scroll progress for browse mode (`current_line`, `total_lines`)
     /// Returns the 1-based current visible start position and total lines
     /// Note: now uses visual lines (post-wrap) instead of logical lines
@@ -1143,7 +1149,7 @@ impl ChatView {
 
 impl ChatView {
     const MASCOT_COL_WIDTH: usize = 8;
-    const MOUSE_SCROLL_LINES: usize = 3;
+    const MOUSE_SCROLL_LINES: usize = 2;
 
     /// Rebuild banner cache (separate because mascot animates).
     fn rebuild_banner_cache(&mut self) {
@@ -1793,8 +1799,8 @@ impl Component for ChatView {
 
         frame.render_widget(paragraph, area);
 
-        // Draw scroll-to-bottom button if not at bottom
-        if self.scroll_offset > 0 {
+        // Draw scroll-to-bottom button if user has scrolled up
+        if self.is_scrolled_up() {
             self.draw_scroll_button(frame, area);
         }
     }
@@ -1803,8 +1809,10 @@ impl Component for ChatView {
         match attr {
             Attribute::Custom(attr::SCROLL_PROGRESS) => {
                 let (current, total) = self.get_scroll_progress();
+                // Third value indicates if user has scrolled up from bottom (1 = scrolled, 0 = at bottom)
+                let is_scrolled = i32::from(self.is_scrolled_up());
                 Some(QueryResult::Owned(AttrValue::String(format!(
-                    "{current}\x00{total}"
+                    "{current}\x00{total}\x00{is_scrolled}"
                 ))))
             }
             _ => self
