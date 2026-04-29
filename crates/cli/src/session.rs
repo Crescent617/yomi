@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tui::run_tui;
 
-use crate::storage::AppStorage;
+use crate::{storage::AppStorage, utils::DEBUG_MODE};
 
 /// Context needed to run a session
 #[derive(Clone)]
@@ -148,14 +148,16 @@ pub async fn run_session_loop(
     is_first_session: bool,
     initial_message: Option<String>,
 ) -> Result<SessionResult> {
-    // Print startup info
-    if is_first_session {
-        println!("yomi session started: {}", session_id.0);
-        println!("Working directory: {}", ctx.working_dir.display());
-    } else {
-        println!("yomi new session started: {}", session_id.0);
+    // Print startup info only in debug mode (DEBUG=1)
+    if *DEBUG_MODE {
+        if is_first_session {
+            println!("yomi session started: {}", session_id.0);
+            println!("Working directory: {}", ctx.working_dir.display());
+        } else {
+            println!("yomi new session started: {}", session_id.0);
+        }
+        println!("Starting TUI...\n");
     }
-    println!("Starting TUI...\n");
 
     // Create channels
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<ContentBlock>>(100);

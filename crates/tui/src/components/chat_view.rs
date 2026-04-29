@@ -1859,7 +1859,8 @@ impl Component for ChatView {
                     let skills = parts.get(1).map_or(Vec::new(), |s| {
                         s.split(',').map(|skill| skill.trim().to_string()).collect()
                     });
-                    let auto_approve_level = parts.get(2).map_or(String::new(), |s| (*s).to_string());
+                    let auto_approve_level =
+                        parts.get(2).map_or(String::new(), |s| (*s).to_string());
                     let model_name = parts.get(3).map_or(String::new(), |s| (*s).to_string());
                     self.set_banner(crate::components::BannerData::new(
                         working_dir,

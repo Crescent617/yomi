@@ -3,7 +3,7 @@ use crate::{
     misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
     storage::AppStorage,
-    utils::resolve_skill_folders,
+    utils::{resolve_skill_folders, DEBUG_MODE},
 };
 use anyhow::{Context, Result};
 use kernel::{
@@ -307,16 +307,18 @@ fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
 }
 
 fn print_startup_info(config: &Config) {
-    println!("Provider: {}", config.provider);
-    println!("Model: {}", config.model.model_id);
-    println!("Endpoint: {}", config.model.endpoint);
-    let api_key = config.api_key();
-    let key_preview = if api_key.len() > 8 {
-        strs::truncate_with_suffix(api_key, 11, "...")
-    } else {
-        "not set".to_string()
-    };
-    println!("API Key: {key_preview}\n");
+    if *DEBUG_MODE {
+        println!("Provider: {}", config.provider);
+        println!("Model: {}", config.model.model_id);
+        println!("Endpoint: {}", config.model.endpoint);
+        let api_key = config.api_key();
+        let key_preview = if api_key.len() > 8 {
+            strs::truncate_with_suffix(api_key, 11, "...")
+        } else {
+            "not set".to_string()
+        };
+        println!("API Key: {key_preview}\n");
+    }
 }
 
 fn init_logging(config: &Config) -> Result<()> {

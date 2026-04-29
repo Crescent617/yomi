@@ -1,6 +1,12 @@
 use anyhow::Result;
 use kernel::{config::Config, expand_tilde, DEFAULT_DATA_DIR};
 use std::path::PathBuf;
+use std::sync::LazyLock;
+
+/// Global debug mode flag, initialized from DEBUG=1 environment variable
+pub static DEBUG_MODE: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("DEBUG").is_ok_and(|v| v == "1" || v.to_lowercase().contains('t'))
+});
 
 /// Load configuration from the specified path or search default locations
 pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
