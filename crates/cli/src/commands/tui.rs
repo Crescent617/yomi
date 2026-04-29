@@ -3,13 +3,13 @@ use crate::{
     misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
     storage::AppStorage,
-    utils::{resolve_skill_folders, DEBUG_MODE},
+    utils::DEBUG_MODE,
 };
 use anyhow::{Context, Result};
 use kernel::{
     agent::AgentConfig,
     compactor,
-    config::{env_names, Config, ModelProvider},
+    config::{Config, ModelProvider},
     expand_tilde,
     misc::plugin::PluginLoader,
     permissions::Level,
@@ -113,7 +113,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         Some(todo_storage),
         project_memory,
         Some(compactor::Compactor::default()),
-        get_skill_folders(&config),
+        config
+            .skill_folders()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
     ));
 
     let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
@@ -204,12 +208,12 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     Ok(())
 }
 
-fn get_skill_folders(config: &Config) -> Vec<PathBuf> {
-    resolve_skill_folders(&config.skill_folders)
-}
-
 async fn load_skills(config: &Config) -> Vec<Arc<kernel::skill::Skill>> {
-    let skill_folders = get_skill_folders(config);
+    let skill_folders: Vec<PathBuf> = config
+        .skill_folders()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
 
     tracing::debug!("Loading skills from folders: {:?}", skill_folders);
 
@@ -238,10 +242,10 @@ async fn load_skills(config: &Config) -> Vec<Arc<kernel::skill::Skill>> {
 }
 
 async fn load_plugin_skills(config: &Config, skills: &mut Vec<Arc<kernel::skill::Skill>>) {
-    let plugin_dirs = if config.plugin_dirs.is_empty() {
+    let plugin_dirs = if config.claude_plugin_dirs.is_empty() {
         vec![expand_tilde("~/.claude/plugins/cache")]
     } else {
-        config.plugin_dirs.clone()
+        config.claude_plugin_dirs.clone()
     };
 
     tracing::debug!("Loading plugins from directories: {:?}", plugin_dirs);
@@ -298,7 +302,7 @@ fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
         std::process::exit(1);
     }
 
-    let provider: Arc<dyn kernel::Provider> = match config.provider {
+    let provider: Arc<dyn kernel::Provider> = match config.model.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
@@ -308,7 +312,7 @@ fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
 
 fn print_startup_info(config: &Config) {
     if *DEBUG_MODE {
-        println!("Provider: {}", config.provider);
+        println!("Provider: {}", config.model.provider);
         println!("Model: {}", config.model.model_id);
         println!("Endpoint: {}", config.model.endpoint);
         let api_key = config.api_key();
@@ -322,8 +326,7 @@ fn print_startup_info(config: &Config) {
 }
 
 fn init_logging(config: &Config) -> Result<()> {
-    let log_dir = std::env::var(env_names::LOG_DIR)
-        .map_or_else(|_| config.data_dir.join("logs"), PathBuf::from);
+    let log_dir = config.log_dir();
 
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;

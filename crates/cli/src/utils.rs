@@ -25,26 +25,8 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
     };
 
     config.apply_env_overrides();
+    config.finalize();
     Ok(config)
-}
-
-/// Default skill folder paths used when no folders are configured
-pub fn default_skill_folders() -> Vec<std::path::PathBuf> {
-    vec![
-        std::path::PathBuf::from(".agents/skills"),
-        expand_tilde(DEFAULT_DATA_DIR).join("skills"),
-        expand_tilde("~/.agents/skills"),
-        expand_tilde("~/.claude/skills"),
-    ]
-}
-
-/// Resolve skill folders from config, falling back to defaults if empty
-pub fn resolve_skill_folders(configured: &[String]) -> Vec<PathBuf> {
-    if configured.is_empty() {
-        default_skill_folders()
-    } else {
-        configured.iter().map(expand_tilde).collect()
-    }
 }
 
 /// Get a value from a JSON Value using dot notation (e.g., "`model.api_key`")

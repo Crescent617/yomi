@@ -20,6 +20,16 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
 /// Default data directory path
 pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
+/// Generate default skill folders based on a given `data_dir`
+pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from(".agents/skills"),
+        data_dir.join("skills"),
+        expand_tilde("~/.agents/skills"),
+        expand_tilde("~/.claude/skills"),
+    ]
+}
+
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
 
@@ -146,31 +156,71 @@ impl std::fmt::Display for ModelProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub provider: ModelProvider,
     pub model: ModelConfig,
     pub agent: AgentConfig,
     pub yolo: bool,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
-    pub skill_folders: Vec<String>,
-    /// Plugin directories to load skills from
-    pub plugin_dirs: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_folders: Option<Vec<String>>,
+    /// Claude plugin directories to load skills from
+    pub claude_plugin_dirs: Vec<PathBuf>,
     /// Load skills from claude plugins cache (default: true)
     pub load_claude_plugins: bool,
+}
+
+impl Config {
+    /// Finalize configuration by computing and filling in default values.
+    /// Call this after all configuration sources are loaded.
+    pub fn finalize(&mut self) {
+        // Fill log_dir default if not set
+        if self.log_dir.is_none() {
+            self.log_dir = Some(self.data_dir.join("logs"));
+        }
+
+        // Fill skill_folders default if not set
+        if self.skill_folders.is_none() {
+            self.skill_folders = Some(
+                default_skill_folders(&self.data_dir)
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect(),
+            );
+        }
+    }
+
+    /// Get the log directory (defaults to `data_dir/logs`)
+    pub fn log_dir(&self) -> PathBuf {
+        self.log_dir
+            .clone()
+            .unwrap_or_else(|| self.data_dir.join("logs"))
+    }
+
+    /// Get the skill folders (defaults based on `data_dir`)
+    pub fn skill_folders(&self) -> Vec<String> {
+        self.skill_folders.clone().unwrap_or_else(|| {
+            default_skill_folders(&self.data_dir)
+                .into_iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect()
+        })
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
-            provider: ModelProvider::default(),
             model: ModelConfig::default(),
             agent: AgentConfig::default(),
             yolo: false,
             auto_approve: Level::default(),
             data_dir,
-            skill_folders: Vec::new(),
-            plugin_dirs: vec![expand_tilde("~/.claude/plugins/cache")],
+            log_dir: None,
+            skill_folders: None,
+            claude_plugin_dirs: vec![expand_tilde("~/.claude/plugins/cache")],
             load_claude_plugins: true,
         }
     }
@@ -205,11 +255,11 @@ impl Config {
         // Provider selection (may affect subsequent provider-specific lookups)
         if let Some(provider) = env_var(env_names::PROVIDER) {
             if let Ok(p) = provider.parse() {
-                self.provider = p;
+                self.model.provider = p;
             }
         }
 
-        let provider = self.provider;
+        let provider = self.model.provider;
 
         // API Key: YOMI_ generic > provider-specific standard
         if let Some(key) = env_first(&[env_names::API_KEY, provider.standard_api_key_env()]) {
@@ -260,14 +310,19 @@ impl Config {
             self.data_dir = expand_tilde(dir);
         }
 
+        // Log directory (expands ~ to home, defaults to data_dir/logs)
+        if let Some(dir) = env_var(env_names::LOG_DIR) {
+            self.log_dir = Some(expand_tilde(dir));
+        }
+
         // Skill folders (comma-separated)
         if let Some(folders) = env_var(env_names::SKILL_FOLDERS) {
-            self.skill_folders = folders.split(',').map(String::from).collect();
+            self.skill_folders = Some(folders.split(',').map(String::from).collect());
         }
 
         // Plugin directories (colon-separated, like PATH)
         if let Some(dirs) = env_var(env_names::PLUGIN_DIRS) {
-            self.plugin_dirs = dirs.split(':').map(expand_tilde).collect();
+            self.claude_plugin_dirs = dirs.split(':').map(expand_tilde).collect();
         }
 
         self.load_claude_plugins = env_bool(env_names::LOAD_CLAUDE_PLUGINS);

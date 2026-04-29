@@ -1,7 +1,7 @@
 use crate::args::GlobalArgs;
-use crate::utils::{get_nested_value, set_nested_value};
+use crate::utils::{get_nested_value, load_config, set_nested_value};
 use anyhow::{Context, Result};
-use kernel::{config::Config, expand_tilde, DEFAULT_DATA_DIR};
+use kernel::{expand_tilde, DEFAULT_DATA_DIR};
 use std::path::PathBuf;
 
 fn config_path(global: &GlobalArgs) -> PathBuf {
@@ -11,19 +11,9 @@ fn config_path(global: &GlobalArgs) -> PathBuf {
         .unwrap_or_else(|| expand_tilde(DEFAULT_DATA_DIR).join("config.toml"))
 }
 
-/// Load config from file if it exists, otherwise from environment
-fn load_config_or_env(global: &GlobalArgs) -> Result<Config> {
-    let path = config_path(global);
-    if path.exists() {
-        Config::from_file(&path)
-    } else {
-        Ok(Config::from_env())
-    }
-}
-
 #[allow(clippy::needless_pass_by_value)]
 pub fn show(global: GlobalArgs) -> Result<()> {
-    let config = load_config_or_env(&global)?;
+    let config = load_config(global.config.as_ref())?;
     let toml_str = toml::to_string_pretty(&config)?;
     println!("{toml_str}");
     Ok(())
@@ -31,7 +21,7 @@ pub fn show(global: GlobalArgs) -> Result<()> {
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn get(global: GlobalArgs, key: &str) -> Result<()> {
-    let config = load_config_or_env(&global)?;
+    let config = load_config(global.config.as_ref())?;
     let value = serde_json::to_value(&config)?;
     match get_nested_value(&value, key) {
         Some(v) => println!("{v}"),
