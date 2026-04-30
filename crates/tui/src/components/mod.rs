@@ -15,7 +15,7 @@ pub mod tips;
 pub mod todo_list;
 pub mod wrap_paragraph;
 
-pub use banner::{BannerComponent, BannerData};
+pub use banner::BannerData;
 pub use chat_view::ChatViewComponent;
 pub use completion_list::CompletionList;
 pub use dialog::{SelectDialog, SelectDialogComponent};

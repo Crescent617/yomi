@@ -2,20 +2,15 @@
 //!
 //! Shows mascot and system info with blinking animation.
 
-use tuirealm::{
-    command::{Cmd, CmdResult},
-    component::{AppComponent, Component},
-    event::Event,
-    props::{AttrValue, Attribute, Props, QueryResult},
-    ratatui::{
-        layout::{Constraint, Direction, Layout, Rect},
-        text::{Line, Span},
-        Frame,
-    },
-    state::State,
+use tuirealm::ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
 };
 
-use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
+use crate::{theme::colors, utils::text::truncate_by_width};
+
+/// Yomi version constant
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Mascot ASCII art frames
 const MASCOT_FRAMES: &[(&str, u8)] = &[
@@ -63,350 +58,64 @@ impl MascotAnimator {
 }
 
 /// Banner data for rendering (used by `ChatView`)
+/// Holds `working_dir`, other info comes from global config
 #[derive(Debug, Clone, Default)]
 pub struct BannerData {
     pub working_dir: String,
-    pub skills: Vec<String>,
-    pub auto_approve_level: String,
-    pub model_name: String,
 }
 
 impl BannerData {
-    pub const fn new(
-        working_dir: String,
-        skills: Vec<String>,
-        auto_approve_level: String,
-        model_name: String,
-    ) -> Self {
-        Self {
-            working_dir,
-            skills,
-            auto_approve_level,
-            model_name,
-        }
+    pub fn new(working_dir: String) -> Self {
+        Self { working_dir }
     }
 
-    /// Group skills by prefix (e.g., "superpowers:a", "superpowers:b" -> "superpowers:{a, b}")
-    fn group_skills(skills: &[String]) -> Vec<String> {
-        const MAX_PER_GROUP: usize = 3;
-        use std::collections::HashMap;
-
-        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-
-        for skill in skills {
-            if let Some(colon_pos) = skill.find(':') {
-                let prefix = skill[..colon_pos].to_string();
-                let suffix = skill[colon_pos + 1..].to_string();
-                groups.entry(prefix).or_default().push(suffix);
-            } else {
-                // No colon, treat as standalone skill
-                groups.entry(skill.clone()).or_default();
-            }
-        }
-
-        let mut result: Vec<String> = Vec::new();
-
-        for (prefix, suffixes) in groups {
-            if suffixes.is_empty() {
-                result.push(prefix);
-            } else if suffixes.len() == 1 {
-                result.push(format!("{}:{}", prefix, suffixes[0]));
-            } else {
-                // Sort suffixes for consistent display
-                let mut sorted_suffixes = suffixes;
-                sorted_suffixes.sort();
-
-                // Limit to MAX_PER_GROUP
-                let total = sorted_suffixes.len();
-                let display: Vec<_> = sorted_suffixes.into_iter().take(MAX_PER_GROUP).collect();
-
-                if total > MAX_PER_GROUP {
-                    result.push(format!(
-                        "{prefix}:{{{}}} (+{})",
-                        display.join(", "),
-                        total - MAX_PER_GROUP
-                    ));
-                } else {
-                    result.push(format!("{prefix}:{{{}}}", display.join(", ")));
-                }
-            }
-        }
-
-        // Sort for consistent display
-        result.sort();
-        result
-    }
-
-    /// Get info lines for right panel
-    pub fn info_lines(&self) -> Vec<String> {
-        const MAX_DISPLAY_LEN: usize = 200;
+    /// Returns styled lines: title, model/permissions, cwd, skills
+    pub fn info_lines(&self) -> Vec<Line<'_>> {
+        let config = crate::config();
 
         let working_dir = if self.working_dir.is_empty() {
-            "~".to_string()
+            "~"
         } else {
-            self.working_dir.clone()
-        };
-
-        let skills_str = if self.skills.is_empty() {
-            "None".to_string()
-        } else {
-            // Group skills by prefix
-            let grouped = Self::group_skills(&self.skills);
-
-            let mut result = grouped.join(", ");
-
-            if result.len() > MAX_DISPLAY_LEN {
-                result = truncate_by_width(&result, MAX_DISPLAY_LEN, "...");
-            }
-
-            result
+            &self.working_dir
         };
 
         // Truncate model name if too long
-        let model_str = if self.model_name.len() > 40 {
-            truncate_by_width(&self.model_name, 40, "...")
-        } else if self.model_name.is_empty() {
+        let model_name = &config.model.model_id;
+        let model_str = if model_name.len() > 40 {
+            truncate_by_width(model_name, 40, "...")
+        } else if model_name.is_empty() {
             "-".to_string()
         } else {
-            self.model_name.clone()
+            model_name.clone()
         };
 
-        vec![
-            format!(
-                "Model: {model_str} | Auto-approve: {}",
-                self.auto_approve_level
+        let auto_approve = config.auto_approve.to_string();
+
+        // Title line: Yomi (primary, bold) + version (secondary, non-bold)
+        let title_line = Line::from(vec![
+            Span::styled(
+                "Yomi ",
+                Style::default()
+                    .fg(colors::text_primary())
+                    .add_modifier(Modifier::BOLD),
             ),
-            format!("CWD: {working_dir}"),
-            format!("Skills: {skills_str}"),
+            Span::styled(
+                format!("v{VERSION}"),
+                Style::default().fg(colors::text_secondary()),
+            ),
+        ]);
+
+        // Info lines (secondary color)
+        vec![
+            title_line,
+            Line::from(Span::styled(
+                format!("{model_str} · auto-approve {auto_approve}"),
+                colors::text_secondary(),
+            )),
+            Line::from(Span::styled(
+                format!(" {working_dir}"),
+                colors::text_secondary(),
+            )),
         ]
-    }
-}
-
-/// Banner component showing mascot and system info
-#[derive(Debug, Default)]
-pub struct BannerComponent {
-    props: Props,
-    working_dir: String,
-    skills: Vec<String>,
-    auto_approve_level: String,
-    model_name: String,
-    mascot_animator: MascotAnimator,
-}
-
-impl BannerComponent {
-    pub fn new() -> Self {
-        Self {
-            props: Props::default(),
-            working_dir: String::new(),
-            skills: Vec::new(),
-            auto_approve_level: String::new(),
-            model_name: String::new(),
-            mascot_animator: MascotAnimator::default(),
-        }
-    }
-
-    /// Process tick for animation, returns true if redraw needed
-    pub fn tick(&mut self) -> bool {
-        self.mascot_animator.tick()
-    }
-}
-
-impl Component for BannerComponent {
-    fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let banner_data = BannerData {
-            working_dir: self.working_dir.clone(),
-            skills: self.skills.clone(),
-            auto_approve_level: self.auto_approve_level.clone(),
-            model_name: self.model_name.clone(),
-        };
-
-        // Split into two columns: mascot (left) and info (right)
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(8), Constraint::Min(20)])
-            .split(area);
-
-        let mascot_area = columns[0];
-        let info_area = columns[1];
-
-        // Render mascot (left column, centered vertically)
-        let mascot_lines: Vec<Line> = self
-            .mascot_animator
-            .current_lines()
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line.to_string(), colors::accent_system())))
-            .collect();
-
-        let mascot_paragraph = tuirealm::ratatui::widgets::Paragraph::new(mascot_lines)
-            .alignment(tuirealm::ratatui::layout::Alignment::Center);
-        frame.render_widget(mascot_paragraph, mascot_area);
-
-        // Render info (right column)
-        let info_lines: Vec<Line> = banner_data
-            .info_lines()
-            .into_iter()
-            .map(|text| Line::from(Span::styled(text, colors::text_secondary())))
-            .collect();
-
-        let info_paragraph = tuirealm::ratatui::widgets::Paragraph::new(info_lines)
-            .alignment(tuirealm::ratatui::layout::Alignment::Left);
-        frame.render_widget(info_paragraph, info_area);
-    }
-
-    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
-        self.props.get(attr).map(|v| v.into())
-    }
-
-    fn attr(&mut self, attr: Attribute, value: AttrValue) {
-        match attr {
-            Attribute::Custom(attr::WORKING_DIR) => {
-                if let AttrValue::String(dir) = value {
-                    self.working_dir = dir;
-                }
-            }
-            Attribute::Custom(attr::SKILLS) => {
-                if let AttrValue::String(skills) = value {
-                    self.skills = skills.split(',').map(|s| s.trim().to_string()).collect();
-                }
-            }
-            _ => {
-                self.props.set(attr, value);
-            }
-        }
-    }
-
-    fn state(&self) -> State {
-        State::None
-    }
-
-    fn perform(&mut self, _cmd: Cmd) -> CmdResult {
-        CmdResult::NoChange
-    }
-}
-
-impl AppComponent<Msg, crate::msg::UserEvent> for BannerComponent {
-    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
-        // Handle tick events for blinking animation
-        if *ev == Event::Tick && self.tick() {
-            // Animation state changed, trigger redraw
-            return Some(Msg::Redraw);
-        }
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_group_skills_empty() {
-        let skills: Vec<String> = vec![];
-        let grouped = BannerData::group_skills(&skills);
-        assert!(grouped.is_empty());
-    }
-
-    #[test]
-    fn test_group_skills_no_prefix() {
-        let skills = vec!["nopua".to_string(), "debug".to_string()];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped, vec!["debug", "nopua"]);
-    }
-
-    #[test]
-    fn test_group_skills_single_prefix() {
-        let skills = vec!["superpowers:a".to_string(), "superpowers:b".to_string()];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped, vec!["superpowers:{a, b}"]);
-    }
-
-    #[test]
-    fn test_group_skills_multiple_prefixes() {
-        let skills = vec![
-            "superpowers:a".to_string(),
-            "superpowers:b".to_string(),
-            "caveman:caveman".to_string(),
-            "nopua".to_string(),
-        ];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(
-            grouped,
-            vec!["caveman:caveman", "nopua", "superpowers:{a, b}"]
-        );
-    }
-
-    #[test]
-    fn test_group_skills_single_item_per_prefix() {
-        let skills = vec!["superpowers:a".to_string(), "caveman:caveman".to_string()];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped, vec!["caveman:caveman", "superpowers:a"]);
-    }
-
-    #[test]
-    fn test_group_skills_sorted() {
-        let skills = vec![
-            "superpowers:z".to_string(),
-            "superpowers:a".to_string(),
-            "superpowers:m".to_string(),
-        ];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped, vec!["superpowers:{a, m, z}"]);
-    }
-
-    #[test]
-    fn test_info_lines_with_grouped_skills() {
-        let banner = BannerData::new(
-            "/home/user".to_string(),
-            vec![
-                "superpowers:a".to_string(),
-                "superpowers:b".to_string(),
-                "caveman:caveman".to_string(),
-                "nopua".to_string(),
-            ],
-            "safe".to_string(),
-            "claude-3-5-sonnet".to_string(),
-        );
-        let lines = banner.info_lines();
-        // Line 0: Model and Auto-approve info
-        assert!(lines[0].contains("Auto-approve"));
-        assert!(lines[0].contains("safe"));
-        assert!(lines[0].contains("Model"));
-        assert!(lines[0].contains("claude-3-5-sonnet"));
-        // Line 1: Working directory
-        assert_eq!(lines[1], "CWD: /home/user");
-        // Line 2: Skills
-        assert!(lines[2].contains("caveman:caveman"));
-        assert!(lines[2].contains("nopua"));
-        assert!(lines[2].contains("superpowers:{a, b}"));
-    }
-
-    #[test]
-    fn test_group_skills_max_3_per_group() {
-        let skills = vec![
-            "superpowers:a".to_string(),
-            "superpowers:b".to_string(),
-            "superpowers:c".to_string(),
-            "superpowers:d".to_string(),
-            "superpowers:e".to_string(),
-        ];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped.len(), 1);
-        // Should show first 3 + "(+2)"
-        assert!(grouped[0].contains("superpowers:{a, b, c}"));
-        assert!(grouped[0].contains("(+2)"));
-    }
-
-    #[test]
-    fn test_group_skills_exactly_3() {
-        let skills = vec![
-            "superpowers:a".to_string(),
-            "superpowers:b".to_string(),
-            "superpowers:c".to_string(),
-        ];
-        let grouped = BannerData::group_skills(&skills);
-        assert_eq!(grouped.len(), 1);
-        assert_eq!(grouped[0], "superpowers:{a, b, c}");
-        // Should not have "+"
-        assert!(!grouped[0].contains('+'));
     }
 }

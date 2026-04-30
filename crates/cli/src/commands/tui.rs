@@ -119,15 +119,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             .collect(),
     ));
 
-    let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
-
     let mk_agent_config = || AgentConfig {
         model: config.model.clone(),
         skills: skills.clone(),
         ..config.agent.clone()
     };
-
-    let context_window = mk_agent_config().compactor.context_window;
 
     let mk_config = || SessionConfig {
         agent: mk_agent_config(),
@@ -137,13 +133,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     print_startup_info(&config);
 
+    // Initialize global config for TUI
+    tui::init_config(config.clone());
+
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),
-        skill_names: skill_names.clone(),
-        auto_approve: config.auto_approve,
-        context_window,
-        data_dir: config.data_dir.clone(),
-        model_name: config.model.model_id.clone(),
     };
 
     let mut is_first_session = true;

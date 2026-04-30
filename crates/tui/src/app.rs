@@ -113,12 +113,10 @@ pub struct Model {
     working_dir: std::path::PathBuf,
     /// Session messages to display on startup (for resumed sessions)
     session_messages: Vec<Message>,
-    /// Permission level for displaying YOLO mode indicator
-    permission_level: Level,
-    /// Data directory for todo storage
-    data_dir: std::path::PathBuf,
     /// Current session ID
     session_id: String,
+    /// Current permission level (can be changed at runtime via YOLO mode)
+    permission_level: Level,
     /// Queued message waiting to be sent when streaming ends (only one allowed)
     queued_message: Option<Vec<ContentBlock>>,
 }
@@ -133,9 +131,7 @@ impl Model {
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
-        permission_level: Level,
         initial_message: Option<String>,
-        data_dir: std::path::PathBuf,
         session_id: String,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
@@ -165,9 +161,8 @@ impl Model {
             input_history,
             working_dir,
             session_messages,
-            permission_level,
-            data_dir,
             session_id,
+            permission_level: crate::config().auto_approve,
             queued_message: None,
         })
     }
@@ -310,7 +305,9 @@ impl Model {
     }
 
     /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
-    fn init_session_messages(&mut self, context_window: u32) -> Result<()> {
+    fn init_session_messages(&mut self) -> Result<()> {
+        let context_window = crate::config().agent.compactor.context_window;
+
         if self.session_messages.is_empty() {
             // Still initialize StatusBar with 0 tokens
             self.init_ctx_usage(0, context_window)?;
@@ -345,15 +342,9 @@ impl Model {
         Ok(())
     }
 
-    /// Initialize banner with real data (called once at startup)
-    pub fn init_banner(
-        &mut self,
-        working_dir: String,
-        skills: Vec<String>,
-        model_name: String,
-    ) -> Result<()> {
-        let level = self.permission_level.to_string();
-        self.update_banner(working_dir, skills, level, model_name)
+    /// Initialize banner (data comes from global config and `working_dir`)
+    pub fn init_banner(&mut self) -> Result<()> {
+        self.update_banner()
     }
 
     /// Initialize status bar with permission level for YOLO mode display
@@ -394,7 +385,7 @@ impl Model {
     /// Initialize todo list from file storage
     pub fn init_todo_list(&mut self) -> Result<()> {
         use kernel::storage::TodoStorage;
-        let todo_storage = TodoStorage::new(&self.data_dir);
+        let todo_storage = TodoStorage::new(&crate::config().data_dir);
         if let Some(todo_json) = todo_storage.load(&self.session_id) {
             self.app.attr(
                 &Id::TodoList,
@@ -405,28 +396,13 @@ impl Model {
         Ok(())
     }
 
-    /// Update banner data in `ChatView`
-    pub fn update_banner(
-        &mut self,
-        working_dir: String,
-        skills: Vec<String>,
-        auto_approve_level: String,
-        model_name: String,
-    ) -> Result<()> {
-        use crate::components::BannerData;
-        let banner = BannerData::new(working_dir, skills, auto_approve_level, model_name);
-        // Serialize banner data: working_dir\x00skill1,skill2,...\x00auto_approve_level\x00model_name
-        let banner_str = format!(
-            "{}\x00{}\x00{}\x00{}",
-            banner.working_dir,
-            banner.skills.join(","),
-            banner.auto_approve_level,
-            banner.model_name
-        );
+    /// Update banner in `ChatView` (data comes from global config and `working_dir`)
+    pub fn update_banner(&mut self) -> Result<()> {
+        let working_dir = self.working_dir.to_string_lossy().to_string();
         self.app.attr(
             &Id::ChatView,
             Attribute::Custom(attr::SET_BANNER),
-            AttrValue::String(banner_str),
+            AttrValue::String(working_dir),
         )?;
         Ok(())
     }
@@ -1836,15 +1812,10 @@ pub async fn run_tui(
     ctrl_tx: mpsc::Sender<ControlCommand>,
     storage: Arc<dyn kernel::storage::Storage>,
     working_dir: String,
-    skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
-    permission_level: Level,
-    context_window: u32,
     initial_message: Option<String>,
-    data_dir: std::path::PathBuf,
     session_id: String,
-    model_name: String,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1855,17 +1826,15 @@ pub async fn run_tui(
         input_history,
         working_dir_path,
         session_messages,
-        permission_level,
         initial_message,
-        data_dir,
         session_id,
     )?;
-    model.init_banner(working_dir, skills, model_name)?;
+    model.init_banner()?;
     model.init_status_bar()?;
     // Set input history after banner init
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)
-    model.init_session_messages(context_window)?;
+    model.init_session_messages()?;
     // Initialize todo list from file
     model.init_todo_list()?;
     // run() consumes model and returns the new history entries
