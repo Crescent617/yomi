@@ -113,10 +113,6 @@ pub struct Model {
     working_dir: std::path::PathBuf,
     /// Session messages to display on startup (for resumed sessions)
     session_messages: Vec<Message>,
-    /// Permission level for displaying YOLO mode indicator
-    permission_level: Level,
-    /// Data directory for todo storage
-    data_dir: std::path::PathBuf,
     /// Current session ID
     session_id: String,
     /// Queued message waiting to be sent when streaming ends (only one allowed)
@@ -133,9 +129,7 @@ impl Model {
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
-        permission_level: Level,
         initial_message: Option<String>,
-        data_dir: std::path::PathBuf,
         session_id: String,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
@@ -165,8 +159,6 @@ impl Model {
             input_history,
             working_dir,
             session_messages,
-            permission_level,
-            data_dir,
             session_id,
             queued_message: None,
         })
@@ -345,15 +337,9 @@ impl Model {
         Ok(())
     }
 
-    /// Initialize banner with real data (called once at startup)
-    pub fn init_banner(
-        &mut self,
-        working_dir: String,
-        skills: Vec<String>,
-        model_name: String,
-    ) -> Result<()> {
-        let level = self.permission_level.to_string();
-        self.update_banner(working_dir, skills, level, model_name)
+    /// Initialize banner with skills (other data comes from global config)
+    pub fn init_banner(&mut self, skills: Vec<String>) -> Result<()> {
+        self.update_banner(skills)
     }
 
     /// Initialize status bar with permission level for YOLO mode display
@@ -412,16 +398,18 @@ impl Model {
         skills: Vec<String>,
         auto_approve_level: String,
         model_name: String,
+        max_iterations: usize,
     ) -> Result<()> {
         use crate::components::BannerData;
-        let banner = BannerData::new(working_dir, skills, auto_approve_level, model_name);
-        // Serialize banner data: working_dir\x00skill1,skill2,...\x00auto_approve_level\x00model_name
+        let banner = BannerData::new(working_dir, skills, auto_approve_level, model_name, max_iterations);
+        // Serialize banner data: working_dir\x00skill1,skill2,...\x00auto_approve_level\x00model_name\x00max_iterations
         let banner_str = format!(
-            "{}\x00{}\x00{}\x00{}",
+            "{}\x00{}\x00{}\x00{}\x00{}",
             banner.working_dir,
             banner.skills.join(","),
             banner.auto_approve_level,
-            banner.model_name
+            banner.model_name,
+            banner.max_iterations
         );
         self.app.attr(
             &Id::ChatView,
@@ -1839,12 +1827,8 @@ pub async fn run_tui(
     skills: Vec<String>,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
-    permission_level: Level,
-    context_window: u32,
     initial_message: Option<String>,
-    data_dir: std::path::PathBuf,
     session_id: String,
-    model_name: String,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1855,17 +1839,15 @@ pub async fn run_tui(
         input_history,
         working_dir_path,
         session_messages,
-        permission_level,
         initial_message,
-        data_dir,
         session_id,
     )?;
-    model.init_banner(working_dir, skills, model_name)?;
+    model.init_banner(skills)?;
     model.init_status_bar()?;
     // Set input history after banner init
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)
-    model.init_session_messages(context_window)?;
+    model.init_session_messages()?;
     // Initialize todo list from file
     model.init_todo_list()?;
     // run() consumes model and returns the new history entries

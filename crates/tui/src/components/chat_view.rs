@@ -1899,11 +1899,15 @@ impl Component for ChatView {
                     let auto_approve_level =
                         parts.get(2).map_or(String::new(), |s| (*s).to_string());
                     let model_name = parts.get(3).map_or(String::new(), |s| (*s).to_string());
+                    let max_iterations = parts.get(4).map_or(100usize, |s| {
+                        s.parse::<usize>().unwrap_or(100)
+                    });
                     self.set_banner(crate::components::BannerData::new(
                         working_dir,
                         skills,
                         auto_approve_level,
                         model_name,
+                        max_iterations,
                     ));
                 }
             }

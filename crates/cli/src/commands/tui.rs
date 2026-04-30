@@ -144,6 +144,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         context_window,
         data_dir: config.data_dir.clone(),
         model_name: config.model.model_id.clone(),
+        max_iterations: config.agent.max_iterations,
     };
 
     let mut is_first_session = true;

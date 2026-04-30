@@ -63,30 +63,18 @@ impl MascotAnimator {
 }
 
 /// Banner data for rendering (used by `ChatView`)
+/// Only holds skills (loaded at runtime), other fields come from global config
 #[derive(Debug, Clone, Default)]
 pub struct BannerData {
-    pub working_dir: String,
     pub skills: Vec<String>,
-    pub auto_approve_level: String,
-    pub model_name: String,
 }
 
 impl BannerData {
-    pub const fn new(
-        working_dir: String,
-        skills: Vec<String>,
-        auto_approve_level: String,
-        model_name: String,
-    ) -> Self {
-        Self {
-            working_dir,
-            skills,
-            auto_approve_level,
-            model_name,
-        }
+    pub fn new(skills: Vec<String>) -> Self {
+        Self { skills }
     }
 
-    /// Group skills by prefix (e.g., "superpowers:a", "superpowers:b" -> "superpowers:{a, b}")
+    /// Group skills by prefix (e.g. "superpowers:a", "superpowers:b" -> "superpowers:{a, b}")
     fn group_skills(skills: &[String]) -> Vec<String> {
         const MAX_PER_GROUP: usize = 3;
         use std::collections::HashMap;
@@ -138,14 +126,17 @@ impl BannerData {
     }
 
     /// Get info lines for right panel
+    /// Reads model, auto_approve, max_iterations from global config
     pub fn info_lines(&self) -> Vec<String> {
         const MAX_DISPLAY_LEN: usize = 200;
 
-        let working_dir = if self.working_dir.is_empty() {
-            "~".to_string()
-        } else {
-            self.working_dir.clone()
-        };
+        let config = crate::config();
+
+        let working_dir = config
+            .skill_folders()
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("~");
 
         let skills_str = if self.skills.is_empty() {
             "None".to_string()
@@ -163,19 +154,25 @@ impl BannerData {
         };
 
         // Truncate model name if too long
-        let model_str = if self.model_name.len() > 40 {
-            truncate_by_width(&self.model_name, 40, "...")
-        } else if self.model_name.is_empty() {
+        let model_name = &config.model.model_id;
+        let model_str = if model_name.len() > 40 {
+            truncate_by_width(model_name, 40, "...")
+        } else if model_name.is_empty() {
             "-".to_string()
         } else {
-            self.model_name.clone()
+            model_name.clone()
+        };
+
+        let auto_approve = config.auto_approve.to_string();
+
+        let max_iter_str = if config.agent.max_iterations == 0 {
+            "∞".to_string()
+        } else {
+            config.agent.max_iterations.to_string()
         };
 
         vec![
-            format!(
-                "Model: {model_str} | Auto-approve: {}",
-                self.auto_approve_level
-            ),
+            format!("Model: {model_str} | Auto-approve: {auto_approve} | Max-iter: {max_iter_str}"),
             format!("CWD: {working_dir}"),
             format!("Skills: {skills_str}"),
         ]
@@ -186,10 +183,7 @@ impl BannerData {
 #[derive(Debug, Default)]
 pub struct BannerComponent {
     props: Props,
-    working_dir: String,
     skills: Vec<String>,
-    auto_approve_level: String,
-    model_name: String,
     mascot_animator: MascotAnimator,
 }
 
@@ -197,10 +191,7 @@ impl BannerComponent {
     pub fn new() -> Self {
         Self {
             props: Props::default(),
-            working_dir: String::new(),
             skills: Vec::new(),
-            auto_approve_level: String::new(),
-            model_name: String::new(),
             mascot_animator: MascotAnimator::default(),
         }
     }
@@ -213,12 +204,7 @@ impl BannerComponent {
 
 impl Component for BannerComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        let banner_data = BannerData {
-            working_dir: self.working_dir.clone(),
-            skills: self.skills.clone(),
-            auto_approve_level: self.auto_approve_level.clone(),
-            model_name: self.model_name.clone(),
-        };
+        let banner_data = BannerData::new(self.skills.clone());
 
         // Split into two columns: mascot (left) and info (right)
         let columns = Layout::default()
@@ -259,11 +245,6 @@ impl Component for BannerComponent {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(attr::WORKING_DIR) => {
-                if let AttrValue::String(dir) = value {
-                    self.working_dir = dir;
-                }
-            }
             Attribute::Custom(attr::SKILLS) => {
                 if let AttrValue::String(skills) = value {
                     self.skills = skills.split(',').map(|s| s.trim().to_string()).collect();
@@ -351,33 +332,6 @@ mod tests {
         ];
         let grouped = BannerData::group_skills(&skills);
         assert_eq!(grouped, vec!["superpowers:{a, m, z}"]);
-    }
-
-    #[test]
-    fn test_info_lines_with_grouped_skills() {
-        let banner = BannerData::new(
-            "/home/user".to_string(),
-            vec![
-                "superpowers:a".to_string(),
-                "superpowers:b".to_string(),
-                "caveman:caveman".to_string(),
-                "nopua".to_string(),
-            ],
-            "safe".to_string(),
-            "claude-3-5-sonnet".to_string(),
-        );
-        let lines = banner.info_lines();
-        // Line 0: Model and Auto-approve info
-        assert!(lines[0].contains("Auto-approve"));
-        assert!(lines[0].contains("safe"));
-        assert!(lines[0].contains("Model"));
-        assert!(lines[0].contains("claude-3-5-sonnet"));
-        // Line 1: Working directory
-        assert_eq!(lines[1], "CWD: /home/user");
-        // Line 2: Skills
-        assert!(lines[2].contains("caveman:caveman"));
-        assert!(lines[2].contains("nopua"));
-        assert!(lines[2].contains("superpowers:{a, b}"));
     }
 
     #[test]
