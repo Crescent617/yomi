@@ -156,7 +156,6 @@ impl std::fmt::Display for ModelProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub model: ModelConfig,
     pub agent: AgentConfig,
     pub yolo: bool,
     pub auto_approve: Level,
@@ -172,6 +171,12 @@ pub struct Config {
 }
 
 impl Config {
+    /// Get model configuration (convenience accessor)
+    #[inline]
+    pub fn model(&self) -> &ModelConfig {
+        &self.agent.model
+    }
+
     /// Finalize configuration by computing and filling in default values.
     /// Call this after all configuration sources are loaded.
     pub fn finalize(&mut self, working_dir: &std::path::Path) {
@@ -213,7 +218,6 @@ impl Default for Config {
     fn default() -> Self {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
-            model: ModelConfig::default(),
             agent: AgentConfig::default(),
             yolo: false,
             auto_approve: Level::default(),
@@ -255,48 +259,48 @@ impl Config {
         // Provider selection (may affect subsequent provider-specific lookups)
         if let Some(provider) = env_var(env_names::PROVIDER) {
             if let Ok(p) = provider.parse() {
-                self.model.provider = p;
+                self.agent.model.provider = p;
             }
         }
 
-        let provider = self.model.provider;
+        let provider = self.agent.model.provider;
 
         // API Key: YOMI_ generic > provider-specific standard
         if let Some(key) = env_first(&[env_names::API_KEY, provider.standard_api_key_env()]) {
-            self.model.api_key = key;
+            self.agent.model.api_key = key;
         }
 
         // Model: YOMI_ generic > provider-specific standard
         if let Some(model) = env_first(&[env_names::MODEL, provider.standard_model_env()]) {
-            self.model.model_id = model;
+            self.agent.model.model_id = model;
         }
 
         // Endpoint: YOMI_ generic > provider-specific standard
         if let Some(endpoint) = env_first(&[env_names::API_BASE, provider.standard_api_base_env()])
         {
-            self.model.endpoint = endpoint;
+            self.agent.model.endpoint = endpoint;
         }
 
         // Numeric settings
         if let Some(tokens) = env_parse::<u32>(env_names::MAX_TOKENS) {
-            self.model.max_tokens = Some(tokens);
+            self.agent.model.max_tokens = Some(tokens);
         }
         if let Some(temp) = env_parse::<f32>(env_names::TEMPERATURE) {
-            self.model.temperature = Some(temp);
+            self.agent.model.temperature = Some(temp);
         }
         if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
             self.agent.max_iterations = iters;
         }
         if let Some(budget) = env_parse::<u32>(env_names::THINKING_BUDGET) {
-            self.model.thinking.budget_tokens = budget;
+            self.agent.model.thinking.budget_tokens = budget;
         }
 
         // Boolean settings
         if let Some(enabled) = env_bool_opt(env_names::THINKING) {
-            self.model.thinking.enabled = enabled;
+            self.agent.model.thinking.enabled = enabled;
         }
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
-            self.model.thinking.effort = Some(effort);
+            self.agent.model.thinking.effort = Some(effort);
         }
         self.yolo = env_bool(env_names::YOLO);
 
@@ -347,21 +351,18 @@ impl Config {
                 self.agent.compactor.compact_threshold = tokens * 8 / 10;
             }
         }
-
-        // Sync model config to agent config
-        self.agent.model = self.model.clone();
     }
 
     /// Get the API key for the current provider
     #[inline]
     pub fn api_key(&self) -> &str {
-        &self.model.api_key
+        &self.agent.model.api_key
     }
 
     /// Check if API key is configured
     #[inline]
     pub const fn has_api_key(&self) -> bool {
-        !self.model.api_key.is_empty()
+        !self.agent.model.api_key.is_empty()
     }
 
     /// Set the data directory
@@ -587,5 +588,24 @@ mod tests {
         // Invalid values
         assert_eq!(parse_context_window("invalid"), None);
         assert_eq!(parse_context_window(""), None);
+    }
+
+    #[test]
+    fn test_config_serialization_roundtrip() {
+        let config = Config::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+
+        // Verify key fields are preserved
+        assert_eq!(parsed.agent.model.provider, config.agent.model.provider);
+        assert_eq!(parsed.yolo, config.yolo);
+        assert_eq!(parsed.data_dir, config.data_dir);
+    }
+
+    #[test]
+    fn test_config_model_accessor() {
+        let config = Config::default();
+        assert_eq!(config.model().provider, config.agent.model.provider);
+        assert_eq!(config.model().model_id, config.agent.model.model_id);
     }
 }

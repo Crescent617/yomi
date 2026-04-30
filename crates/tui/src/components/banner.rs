@@ -80,7 +80,7 @@ impl BannerData {
         };
 
         // Truncate model name if too long
-        let model_name = &config.model.model_id;
+        let model_name = &config.agent.model.model_id;
         let model_str = if model_name.len() > 40 {
             truncate_by_width(model_name, 40, "...")
         } else if model_name.is_empty() {
