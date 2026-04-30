@@ -1178,13 +1178,23 @@ impl ChatView {
 
             for i in 0..max_rows {
                 let mascot_part = mascot_lines.get(i).unwrap_or(&"");
-                let info_part = info_lines.get(i).map_or("", |s| s.as_str());
                 let mascot_padded = format!("{mascot_part:width$}", width = Self::MASCOT_COL_WIDTH);
+                let mascot_span = Span::styled(mascot_padded, colors::accent_system());
 
-                self.banner_cache.push(Arc::new(Line::from(vec![
-                    Span::styled(mascot_padded, colors::accent_system()),
-                    Span::styled(info_part.to_string(), colors::text_secondary()),
-                ])));
+                // info_lines[i] is already a Line with styled spans
+                // Clone spans to create 'static lifetime line for cache
+                let mut combined_spans: Vec<Span<'static>> = vec![mascot_span];
+                if let Some(info_line) = info_lines.get(i) {
+                    for span in &info_line.spans {
+                        let cloned_span = Span::styled(
+                            span.content.to_string(),
+                            span.style,
+                        );
+                        combined_spans.push(cloned_span);
+                    }
+                }
+
+                self.banner_cache.push(Arc::new(Line::from(combined_spans)));
             }
             self.banner_cache.push(Arc::new(Line::from("")));
         }
@@ -1890,21 +1900,8 @@ impl Component for ChatView {
                 }
             }
             attr::SET_BANNER => {
-                if let AttrValue::String(banner_str) = value {
-                    let parts: Vec<&str> = banner_str.split('\x00').collect();
-                    let working_dir = parts.first().map_or(String::new(), |s| (*s).to_string());
-                    let skills = parts.get(1).map_or(Vec::new(), |s| {
-                        s.split(',').map(|skill| skill.trim().to_string()).collect()
-                    });
-                    let auto_approve_level =
-                        parts.get(2).map_or(String::new(), |s| (*s).to_string());
-                    let model_name = parts.get(3).map_or(String::new(), |s| (*s).to_string());
-                    self.set_banner(crate::components::BannerData::new(
-                        working_dir,
-                        skills,
-                        auto_approve_level,
-                        model_name,
-                    ));
+                if let AttrValue::String(working_dir) = value {
+                    self.set_banner(crate::components::BannerData::new(working_dir));
                 }
             }
             attr::START_STREAMING => self.start_streaming(),
@@ -2004,13 +2001,10 @@ impl Component for ChatView {
     }
 
     fn state(&self) -> State {
-        // Return banner data if present: "working_dir|skill1,skill2,..."
+        // Return banner working_dir
         self.banner.as_ref().map_or_else(
             || State::None,
-            |banner| {
-                let banner_str = format!("{}\x00{}", banner.working_dir, banner.skills.join(","));
-                State::Single(StateValue::String(banner_str))
-            },
+            |banner| State::Single(StateValue::String(banner.working_dir.clone())),
         )
     }
 

@@ -45,7 +45,7 @@ pub mod env_names {
 
     /// Standard non-prefixed provider-specific env vars
     pub const OPENAI_API_KEY: &str = "OPENAI_API_KEY";
-    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
+    pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
     pub const OPENAI_API_MODEL: &str = "OPENAI_API_MODEL";
     pub const ANTHROPIC_MODEL: &str = "ANTHROPIC_MODEL";
     pub const OPENAI_API_BASE: &str = "OPENAI_API_BASE";

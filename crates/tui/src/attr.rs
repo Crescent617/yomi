@@ -97,10 +97,8 @@ pub const TOGGLE_THINKING: &str = "toggle_thinking";
 // Banner & Info
 // =============================================================================
 
-/// Attribute for setting banner/skills info.
+/// Attribute for setting banner info (`working_dir`).
 pub const SET_BANNER: &str = "set_banner";
-/// Attribute for setting skills list.
-pub const SKILLS: &str = "skills";
 /// Attribute for initializing chat history.
 pub const INIT_HISTORY: &str = "init_history";
 
