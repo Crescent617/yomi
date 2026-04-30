@@ -620,7 +620,7 @@ impl Model {
             Attribute::Custom(attr::ADD_ERROR_MESSAGE),
             AttrValue::String(msg),
         );
-        self.scroll_chat_to_bottom();
+        // Note: scroll progress will be updated in next view() call (Browse mode)
     }
 
     /// Append streaming content to `ChatView` and `InfoBar`
@@ -722,6 +722,10 @@ impl Model {
     }
 
     pub fn view(&mut self) {
+        // Update scroll progress on each redraw (throttled by frame rate)
+        // Shows progress when scrolled up, clears when at bottom
+        self.update_scroll_progress();
+
         // Pre-fetch content to calculate height without borrowing self in closure
         let input_content =
             if let Ok(State::Single(StateValue::String(content))) = self.app.state(&Id::InputBox) {
@@ -922,7 +926,7 @@ impl Model {
                 AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
                     self.finalize_assistant_message();
                     self.stop_streaming(StreamingStatus::Completed);
-                    self.scroll_chat_to_bottom();
+                    // Note: Don't scroll to bottom here - respect user's scroll position
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Error { error, .. }) => {
                     // Model-level error: stop streaming and show error
@@ -1302,8 +1306,6 @@ impl Model {
                         Attribute::Custom("scroll_up"),
                         AttrValue::Number(amount as isize),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::ScrollDown => {
@@ -1313,8 +1315,6 @@ impl Model {
                         Attribute::Custom("scroll_down"),
                         AttrValue::Number(amount as isize),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::InputChanged(_) => {
@@ -1363,8 +1363,7 @@ impl Model {
                                 Tip::new("C-o toggle, C-e expand, j/k/g/G scroll, q exit", 0)
                                     .to_attr_value(),
                             );
-                            // Initialize scroll progress
-                            self.update_scroll_progress();
+                            // Scroll progress will be updated in view() on next redraw
                         }
                         AppMode::Browse => {
                             // Exit browse mode
@@ -1414,8 +1413,6 @@ impl Model {
                         Attribute::Custom("page_up"),
                         AttrValue::Number(height as isize),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::PageHalfDown => {
@@ -1429,8 +1426,6 @@ impl Model {
                         Attribute::Custom("page_down"),
                         AttrValue::Number(height as isize),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::GoToTop => {
@@ -1439,8 +1434,6 @@ impl Model {
                         Attribute::Custom("scroll_to_top"),
                         AttrValue::Flag(true),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::GoToBottom => {
@@ -1449,8 +1442,6 @@ impl Model {
                         Attribute::Custom(attr::SCROLL_TO_BOTTOM),
                         AttrValue::Flag(true),
                     );
-                    // Update scroll progress
-                    self.update_scroll_progress();
                     None
                 }
                 Msg::ToggleExpandAll => {
