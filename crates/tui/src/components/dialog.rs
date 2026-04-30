@@ -211,7 +211,7 @@ impl Component for SelectDialog {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(attr::SHOW) => {
+            Attribute::Custom(attr::DIALOG_SHOW) => {
                 if let AttrValue::String(data) = value {
                     // Format: "title\x00option1\x00option2\x00...\x00message"
                     let parts: Vec<&str> = data.split('\x00').collect();
@@ -232,7 +232,7 @@ impl Component for SelectDialog {
                     }
                 }
             }
-            Attribute::Custom(attr::HIDE) => {
+            Attribute::Custom(attr::DIALOG_HIDE) => {
                 self.hide();
             }
             _ => {

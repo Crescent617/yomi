@@ -328,7 +328,8 @@ impl Styles {
 /// Block characters for drawing UI elements
 pub mod chars {
     // Message block borders (used for blockquotes and user messages)
-    pub const USER_BAR: &str = "│";
+    pub const MSG_INDENT_GUIDE: &str = "│ ";
+    pub const MSG_INDENT2_GUIDE: &str = "│  ";
 
     // List markers
     pub const BULLET: &str = "•";
@@ -336,10 +337,6 @@ pub mod chars {
     // Input prompt characters (with trailing space for display)
     pub const INPUT_PROMPT: &str = "❯ ";
     pub const INPUT_PROMPT_MULTI: &str = "│ ";
-
-    // Tool output borders (with trailing space for display)
-    pub const TOOL_BORDER: &str = "│ ";
-    pub const TOOL_BORDER_INDENT: &str = "│   ";
 
     // Status indicators
     pub const CANCELLED: &str = "✕";

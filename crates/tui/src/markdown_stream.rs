@@ -188,7 +188,7 @@ impl StreamingMarkdownRenderer {
                     }
                     Tag::BlockQuote(_) => {
                         current_line.push(Span::styled(
-                            format!("{} ", chars::USER_BAR),
+                            chars::MSG_INDENT_GUIDE,
                             Style::default().fg(colors::border()),
                         ));
                     }

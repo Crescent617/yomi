@@ -3,13 +3,12 @@ use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
-use crate::utils::diff::generate_diff;
-use crate::utils::line_numbers::format_file_lines;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 pub const WRITE_TOOL_NAME: &str = "write";
 
@@ -61,7 +60,7 @@ impl Tool for WriteTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Write a file to the local filesystem. Completely overwrites existing files or creates new ones. Must read the file first if it exists."
+        "Write a file to the local filesystem. Overwrites/append existing files or creates new ones."
     }
 
     fn schema(&self) -> Value {
@@ -70,11 +69,17 @@ impl Tool for WriteTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "The absolute path to the file to write (must be absolute, not relative)"
+                    "description": "Relative to the working directory or absolute path"
                 },
                 "content": {
                     "type": "string",
                     "description": "The content to write to the file"
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Write mode: 'overwrite' (default) or 'append'",
+                    "enum": ["overwrite", "append"],
+                    "default": "overwrite"
                 }
             },
             "required": ["file_path", "content"]
@@ -88,6 +93,8 @@ impl Tool for WriteTool {
         let content = args["content"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'content' argument"))?;
+        let mode = args["mode"].as_str().unwrap_or("overwrite");
+        let is_append = mode == "append";
 
         // Note: file_path is expected to be absolute from the agent
         // But we also support relative paths for convenience
@@ -97,12 +104,13 @@ impl Tool for WriteTool {
             ctx.working_dir.join(file_path_str)
         };
 
-        tracing::debug!("Write: {}", path.display());
+        tracing::debug!("Write: {} (mode: {})", path.display(), mode);
 
         // Check if file exists
         let file_exists = tokio::fs::try_exists(&path).await?;
 
         // If file exists and we have a file state store, check if it's been read
+        // Skip staleness check for append mode (we're not overwriting)
         if file_exists {
             if let Some(ref store) = self.file_state_store {
                 if !store.has_recorded(&path) {
@@ -126,8 +134,8 @@ impl Tool for WriteTool {
         }
 
         // Write the file (with exclusive lock for existing files)
-        let original_content = if file_exists {
-            // For existing files, acquire exclusive lock first, then read and write
+        let original_content = if file_exists && !is_append {
+            // For existing files in overwrite mode, acquire exclusive lock first, then read and write
             let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
@@ -137,6 +145,25 @@ impl Tool for WriteTool {
 
             // Write new content
             tokio::fs::write(&path, content).await?;
+
+            original
+        } else if is_append && file_exists {
+            // Append mode: acquire lock, read original for diff, then append
+            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+
+            // Read original content for diff
+            let original = tokio::fs::read_to_string(&path).await.ok();
+
+            // Append content
+            let mut file = tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .await?;
+            file.write_all(content.as_bytes()).await?;
+            file.flush().await?;
+            drop(file);
 
             original
         } else {
@@ -152,19 +179,12 @@ impl Tool for WriteTool {
         }
 
         // Build response
-        let response = if let Some(ref old_content) = original_content {
-            // File was updated - show diff
-            let diff = generate_diff(old_content, content, 3);
-            format!(
-                "File updated: {file_path_str}\n\nDiff:\n{}",
-                format_file_lines(&diff, 1)
-            )
+        let response = if is_append && file_exists {
+            format!("File appended: {file_path_str}")
+        } else if original_content.is_some() {
+            format!("File updated: {file_path_str}")
         } else {
-            // File was created
-            format!(
-                "File created successfully at: {file_path_str}\n\nContent:\n{}",
-                format_file_lines(content, 1)
-            )
+            format!("File created: {file_path_str}")
         };
 
         Ok(ToolOutput::text_with_summary(response, ""))
@@ -190,8 +210,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.text_content().contains("created successfully"));
-        assert!(result.text_content().contains("Hello, World!"));
+        assert!(result.text_content().contains("File created"));
+        assert!(result.text_content().contains("test.txt"));
 
         // Verify file was created
         let content = tokio::fs::read_to_string(base_path.join("test.txt"))
@@ -275,8 +295,8 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call", &base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.text_content().contains("updated"));
-        assert!(result.text_content().contains("Diff:"));
+        assert!(result.text_content().contains("File updated"));
+        assert!(result.text_content().contains("existing.txt"));
 
         // Verify file was updated
         let content = tokio::fs::read_to_string(&file_path).await.unwrap();

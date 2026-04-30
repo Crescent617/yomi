@@ -408,18 +408,18 @@ impl Component for FuzzyPicker {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(attr::SHOW) => {
+            Attribute::Custom(attr::DIALOG_SHOW) => {
                 self.visible = true;
                 self.input.clear();
                 self.selected = 0;
                 self.scroll_offset = 0;
                 self.update_filtered();
             }
-            Attribute::Custom(attr::HIDE) => {
+            Attribute::Custom(attr::DIALOG_HIDE) => {
                 self.hide();
                 self.scroll_offset = 0;
             }
-            Attribute::Custom(attr::ITEMS) => {
+            Attribute::Custom(attr::PICKER_ITEMS) => {
                 if let AttrValue::Payload(payload) = value {
                     if let Some(any_ref) = payload.as_any() {
                         if let Some(items) = any_ref.downcast_ref::<Vec<PickerItem>>() {
@@ -429,7 +429,7 @@ impl Component for FuzzyPicker {
                     }
                 }
             }
-            Attribute::Custom(attr::QUERY) => {
+            Attribute::Custom(attr::PICKER_QUERY) => {
                 if let AttrValue::String(query) = value {
                     self.set_query(query);
                 }

@@ -163,7 +163,7 @@ impl Component for TodoList {
         // Position on the right side, top corner (no margin)
         let panel_area = Rect {
             x: area.x + area.width.saturating_sub(panel_width),
-            y: area.y + 1,
+            y: area.y,
             width: panel_width,
             height: panel_height,
         };
