@@ -41,8 +41,21 @@ use crate::{
     },
     id::Id,
     msg::{Msg, UserEvent},
-    utils::text::truncate_by_chars,
+    utils::text::{substring_by_chars, truncate_by_chars},
 };
+
+/// Format a session ID for display, truncating long IDs with ellipsis.
+/// Uses character-based slicing for Unicode safety.
+fn format_short_id(id: &str) -> String {
+    let char_count = id.chars().count();
+    if char_count > 12 {
+        let start = substring_by_chars(id, 0, 6);
+        let end = substring_by_chars(id, char_count.saturating_sub(4), char_count);
+        format!("{start}...{end}")
+    } else {
+        id.to_string()
+    }
+}
 
 /// Application mode - single source of truth for UI mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1731,8 +1744,12 @@ impl Model {
                         .into_iter()
                         .map(|s| {
                             let age_str = s.format_age();
-                            let preview = s.title.unwrap_or_else(|| "(no message)".to_string());
-                            let label = format!("{} - {}", s.id, age_str);
+                            let preview = s
+                                .title
+                                .unwrap_or_else(|| "(no message)".to_string())
+                                .replace('\n', " ");
+                            let short_id = format_short_id(&s.id);
+                            let label = format!("{short_id} - {age_str}");
                             crate::components::PickerItem::new(s.id, label).with_meta(preview)
                         })
                         .collect();

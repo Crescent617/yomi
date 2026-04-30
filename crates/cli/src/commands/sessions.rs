@@ -35,7 +35,11 @@ async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
 
 #[allow(clippy::needless_pass_by_value)]
 pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
-    let config = load_config(global.config.as_ref())?;
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let config = load_config(global.config.as_ref(), &working_dir)?;
     let data_dir = config.data_dir;
 
     let db_path = data_dir.join("yomi.db");

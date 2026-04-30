@@ -58,7 +58,9 @@ pub struct PickerConfig {
     pub title: String,
     pub placeholder: String,
     pub max_list_height: u16,
-    pub width_percent: f32, // 0.0-1.0, defaults to 0.6
+    pub width_percent: f32,  // 0.0-1.0, defaults to 0.6
+    pub min_width: u16,      // Minimum width in columns, default 40
+    pub min_height: u16,     // Minimum height in rows, default 10
 }
 
 impl Default for PickerConfig {
@@ -68,6 +70,8 @@ impl Default for PickerConfig {
             placeholder: "Search...".to_string(),
             max_list_height: 10,
             width_percent: 0.6,
+            min_width: 60,
+            min_height: 20,
         }
     }
 }
@@ -95,6 +99,18 @@ impl PickerConfig {
     #[must_use]
     pub fn with_width_percent(mut self, percent: f32) -> Self {
         self.width_percent = percent.clamp(0.1, 1.0);
+        self
+    }
+
+    #[must_use]
+    pub fn with_min_width(mut self, width: u16) -> Self {
+        self.min_width = width;
+        self
+    }
+
+    #[must_use]
+    pub fn with_min_height(mut self, height: u16) -> Self {
+        self.min_height = height;
         self
     }
 }
@@ -270,12 +286,19 @@ impl FuzzyPicker {
     }
 
     fn render_picker(&self, frame: &mut Frame, area: Rect) {
-        let palette_width =
-            (f32::from(area.width) * self.config.width_percent).clamp(40.0, 80.0) as u16;
-        let palette_width = palette_width.min(area.width.saturating_sub(4)); // Ensure fits with padding
+        // Calculate width: percentage-based with min/max constraints
+        let percent_width = (f32::from(area.width) * self.config.width_percent) as u16;
+        let palette_width = percent_width
+            .max(self.config.min_width)
+            .min(area.width.saturating_sub(4));
+
+        // Calculate height: content-based with min constraint
         let search_height = 3u16;
         let list_height = (self.filtered.len() as u16).min(self.config.max_list_height);
-        let palette_height = (search_height + list_height + 2).min(area.height.saturating_sub(4));
+        let content_height = search_height + list_height + 2; // +2 for borders
+        let palette_height = content_height
+            .max(self.config.min_height)
+            .min(area.height.saturating_sub(4));
 
         let palette_area = Rect {
             x: area.x + (area.width - palette_width) / 2,
