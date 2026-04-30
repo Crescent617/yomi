@@ -81,7 +81,7 @@ impl Tool for EditTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path to the file"
+                    "description": "Relative to the working directory or absolute path"
                 },
                 "old_str": {
                     "type": "string",

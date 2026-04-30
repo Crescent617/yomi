@@ -1740,7 +1740,7 @@ impl Component for InputComponent {
                     self.set_working_dir(path);
                 }
             }
-            Attribute::Custom(attr::SET_CONTENT) => {
+            Attribute::Custom(attr::INPUT_CONTENT) => {
                 if let AttrValue::String(content) = value {
                     self.component.clear();
                     self.component.insert_str(&content);

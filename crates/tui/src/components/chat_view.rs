@@ -143,6 +143,8 @@ pub struct ChatView {
     expand_all: bool,
     // Banner data (rendered as first content, scrolls with messages)
     banner: Option<crate::components::BannerData>,
+    // Queued message waiting to be sent (displayed at bottom during streaming)
+    queued_message: Option<Vec<ContentBlock>>,
     // Mascot animator for blinking animation
     mascot_animator: MascotAnimator,
     // Track visible height for scroll calculations
@@ -160,8 +162,6 @@ pub struct ChatView {
     last_viewport: (usize, usize), // (start_line, end_line)
     // First visible row within the first viewport line (for accurate mouse coord conversion)
     viewport_first_row_offset: usize,
-    // Line height cache for wrapped lines (cached_width, Vec<height>)
-    cached_line_heights: Option<(usize, Vec<usize>)>,
     // Text selection state
     selection: Option<Selection>,
     is_selecting: bool,
@@ -174,8 +174,6 @@ pub struct ChatView {
     scroll_button_area: Option<Rect>,
     // Cached total visual line count (updated in view)
     total_visual_lines: usize,
-    // Cached width used for visual line calculation
-    last_width: usize,
 }
 
 impl Default for ChatView {
@@ -193,6 +191,7 @@ impl Default for ChatView {
             active_tools: std::collections::HashMap::new(),
             expand_all: false,
             banner: Some(crate::components::BannerData::default()),
+            queued_message: None,
             mascot_animator: MascotAnimator::default(),
             last_visible_height: 0,
             msg_cache: Vec::new(),
@@ -203,7 +202,6 @@ impl Default for ChatView {
             viewport_lines: Vec::new(),
             last_viewport: (0, 0),
             viewport_first_row_offset: 0,
-            cached_line_heights: None,
             selection: None,
             is_selecting: false,
             last_click_time: None,
@@ -211,7 +209,6 @@ impl Default for ChatView {
             current_area: None,
             scroll_button_area: None,
             total_visual_lines: 0,
-            last_width: 0,
         }
     }
 }
@@ -242,8 +239,6 @@ impl ChatView {
         }
         self.msg_lines.clear();
         self.msg_cache_dirty = true;
-        // Clear line height cache since content changed
-        self.cached_line_heights = None;
     }
 
     /// Clear all caches and messages.
@@ -256,7 +251,6 @@ impl ChatView {
         self.viewport_first_row_offset = 0;
         self.msg_cache_dirty = true;
         self.banner_dirty = true;
-        self.cached_line_heights = None;
         self.selection = None;
         self.is_selecting = false;
     }
@@ -295,6 +289,18 @@ impl ChatView {
     pub fn set_banner(&mut self, banner: crate::components::BannerData) {
         self.banner = Some(banner);
         self.banner_dirty = true;
+    }
+
+    /// Set queued message to display during streaming
+    pub fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
+        self.queued_message = Some(blocks);
+        self.msg_cache_dirty = true;
+    }
+
+    /// Clear the queued message
+    pub fn clear_queued_message(&mut self) {
+        self.queued_message = None;
+        self.msg_cache_dirty = true;
     }
 
     pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
@@ -890,7 +896,7 @@ impl ChatView {
                         if !args.is_empty() {
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
-                                    chars::TOOL_BORDER,
+                                    chars::MSG_INDENT_GUIDE,
                                     Style::default().fg(colors::text_secondary()),
                                 ),
                                 Span::styled(
@@ -903,7 +909,7 @@ impl ChatView {
                             for line in args.lines() {
                                 lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
-                                        chars::TOOL_BORDER_INDENT,
+                                        chars::MSG_INDENT2_GUIDE,
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
@@ -919,7 +925,7 @@ impl ChatView {
                         for line in err.lines() {
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
-                                    chars::TOOL_BORDER,
+                                    chars::MSG_INDENT_GUIDE,
                                     Style::default().fg(colors::accent_error()),
                                 ),
                                 Span::styled(
@@ -931,7 +937,7 @@ impl ChatView {
                     } else if let Some(out) = output {
                         lines.push(Arc::new(Line::from(vec![
                             Span::styled(
-                                chars::TOOL_BORDER,
+                                chars::MSG_INDENT_GUIDE,
                                 Style::default().fg(colors::text_secondary()),
                             ),
                             Span::styled(
@@ -944,7 +950,7 @@ impl ChatView {
                         for line in out.lines() {
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
-                                    chars::TOOL_BORDER,
+                                    chars::MSG_INDENT_GUIDE,
                                     Style::default().fg(colors::accent_system()),
                                 ),
                                 Span::styled(
@@ -960,7 +966,7 @@ impl ChatView {
                         );
                         lines.push(Arc::new(Line::from(vec![
                             Span::styled(
-                                chars::TOOL_BORDER,
+                                chars::MSG_INDENT_GUIDE,
                                 Style::default().fg(colors::text_secondary()),
                             ),
                             Span::styled(
@@ -973,7 +979,7 @@ impl ChatView {
                     } else if *status == ToolStatus::Cancelled {
                         lines.push(Arc::new(Line::from(vec![
                             Span::styled(
-                                chars::TOOL_BORDER,
+                                chars::MSG_INDENT_GUIDE,
                                 Style::default().fg(colors::text_secondary()),
                             ),
                             Span::styled(
@@ -990,7 +996,7 @@ impl ChatView {
                         if let ToolOutputBlock::Image { url, mime_type, .. } = block {
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
-                                    chars::TOOL_BORDER,
+                                    chars::MSG_INDENT_GUIDE,
                                     Style::default().fg(colors::text_secondary()),
                                 ),
                                 Span::styled(
@@ -1003,7 +1009,7 @@ impl ChatView {
                             let url_display = truncate_by_chars(url, 100);
                             lines.push(Arc::new(Line::from(vec![
                                 Span::styled(
-                                    chars::TOOL_BORDER_INDENT,
+                                    chars::MSG_INDENT2_GUIDE,
                                     Style::default().fg(colors::text_secondary()),
                                 ),
                                 Span::styled(
@@ -1014,7 +1020,7 @@ impl ChatView {
                             if let Some(mime) = mime_type {
                                 lines.push(Arc::new(Line::from(vec![
                                     Span::styled(
-                                        chars::TOOL_BORDER_INDENT,
+                                        chars::MSG_INDENT2_GUIDE,
                                         Style::default().fg(colors::text_secondary()),
                                     ),
                                     Span::styled(
@@ -1066,6 +1072,49 @@ impl ChatView {
         lines
     }
 
+    /// Extract text content from content blocks
+    fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
+        blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Render queued message to be displayed at the bottom during streaming
+    fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
+        let mut lines = Vec::new();
+
+        let text_content = Self::extract_text_from_blocks(blocks);
+
+        // Render header with indicator
+        lines.push(Arc::new(Line::from(vec![Span::styled(
+            "󰔟 Queued (will send when streaming ends)",
+            Style::default()
+                .fg(colors::text_secondary())
+                .add_modifier(Modifier::ITALIC),
+        )])));
+
+        // Render content with dimmed style
+        for line in text_content.lines() {
+            lines.push(Arc::new(Line::from(vec![
+                Span::styled(
+                    chars::MSG_INDENT_GUIDE,
+                    Style::default().fg(colors::text_secondary()),
+                ),
+                Span::styled(
+                    preprocess(line),
+                    Style::default().fg(colors::text_secondary()),
+                ),
+            ])));
+        }
+
+        lines
+    }
+
     /// Render thinking content with optional elapsed time
     ///
     /// Returns true if thinking was rendered (i.e., thinking was non-empty)
@@ -1096,7 +1145,7 @@ impl ChatView {
             for line in thinking.lines() {
                 lines.push(Arc::new(Line::from(vec![
                     Span::styled(
-                        chars::TOOL_BORDER,
+                        chars::MSG_INDENT_GUIDE,
                         Style::default().fg(colors::text_secondary()),
                     ),
                     Span::styled(
@@ -1184,6 +1233,12 @@ impl ChatView {
         }
         if has_streaming {
             result.extend(self.render_streaming());
+        }
+
+        // Add queued message if any (displayed at bottom during streaming)
+        if let Some(ref queued) = self.queued_message {
+            result.push(Arc::new(Line::from("")));
+            result.extend(Self::render_queued_message(queued));
         }
 
         result
@@ -1686,7 +1741,6 @@ impl Component for ChatView {
         let width = area.width as usize;
         self.last_visible_height = visible_height;
         self.current_area = Some(area);
-        self.last_width = width;
         // Reset scroll button area at start of each frame
         self.scroll_button_area = None;
 
@@ -1805,7 +1859,7 @@ impl Component for ChatView {
         };
 
         match cmd {
-            "add_user_message" => {
+            attr::ADD_USER_MESSAGE => {
                 if let AttrValue::String(blocks_json) = value {
                     // Try parsing as JSON first (for ContentBlock array)
                     if let Ok(content_blocks) =
@@ -1818,12 +1872,12 @@ impl Component for ChatView {
                     }
                 }
             }
-            "add_error_message" => {
+            attr::ADD_ERROR_MESSAGE => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
                 }
             }
-            "add_assistant_with_thinking" => {
+            attr::ADD_ASSISTANT_MSG => {
                 if let AttrValue::String(combined) = value {
                     let parts: Vec<&str> = combined.split('\x00').collect();
                     let content = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1835,7 +1889,7 @@ impl Component for ChatView {
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
             }
-            "set_banner" => {
+            attr::SET_BANNER => {
                 if let AttrValue::String(banner_str) = value {
                     let parts: Vec<&str> = banner_str.split('\x00').collect();
                     let working_dir = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1853,78 +1907,28 @@ impl Component for ChatView {
                     ));
                 }
             }
-            "start_streaming" => self.start_streaming(),
-            "stop_streaming" => self.stop_streaming(),
-            "cancel_streaming" => self.cancel_streaming(),
-            "cancel_streaming_with_content" => {
-                if let AttrValue::String(combined) = value {
-                    let parts: Vec<&str> = combined.split('\x00').collect();
-                    let content = parts.first().map_or(String::new(), |s| (*s).to_string());
-                    let thinking = parts
-                        .get(1)
-                        .filter(|s| !s.is_empty())
-                        .map(|s| (*s).to_string());
-
-                    // Add to history with cancelled flag
-                    self.messages.push(HistoryMessage::Assistant {
-                        content,
-                        thinking,
-                        thinking_folded: !self.expand_all,
-                        thinking_elapsed_ms: parts.get(2).and_then(|s| s.parse().ok()),
-                    });
-                    self.push_new_msg_cache();
-
-                    // Mark running tools as cancelled and invalidate their caches
-                    let mut indices_to_invalidate = Vec::new();
-                    for (tool_id, (_, status)) in &mut self.active_tools {
-                        if *status == ToolStatus::Running {
-                            *status = ToolStatus::Cancelled;
-                            for (i, msg) in self.messages.iter().enumerate().rev() {
-                                if let HistoryMessage::Tool { tool_id: id, .. } = msg {
-                                    if id == tool_id {
-                                        indices_to_invalidate.push(i);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Update message statuses and invalidate caches
-                    for idx in indices_to_invalidate {
-                        if let Some(HistoryMessage::Tool { status, .. }) =
-                            self.messages.get_mut(idx)
-                        {
-                            *status = ToolStatus::Cancelled;
-                        }
-                        self.invalidate_msg_cache(idx);
-                    }
-
-                    // Clear streaming state
-                    self.streaming_content.clear();
-                    self.streaming_thinking.clear();
-                    self.md_renderer = StreamingMarkdownRenderer::new();
-                    self.is_streaming = false;
-                }
-            }
-            "append_content" => {
+            attr::START_STREAMING => self.start_streaming(),
+            attr::STOP_STREAMING => self.stop_streaming(),
+            attr::CANCEL_STREAMING => self.cancel_streaming(),
+            attr::APPEND_CONTENT => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_content(&text);
                 }
             }
-            "append_thinking" => {
+            attr::APPEND_THINKING => {
                 if let AttrValue::String(text) = value {
                     self.append_streaming_thinking(&text);
                 }
             }
-            "scroll_up" => self.scroll_up(Self::MOUSE_SCROLL_LINES),
-            "scroll_down" => self.scroll_down(Self::MOUSE_SCROLL_LINES),
-            "scroll_to_bottom" => self.scroll_to_bottom(),
-            "scroll_to_top" => self.scroll_to_top(),
-            "toggle_thinking" => self.toggle_last_thinking(),
-            "toggle_expand_all" => self.toggle_expand_all(),
-            "expand_all" => self.expand_all(),
-            "collapse_all" => self.collapse_all(),
-            "start_tool" => {
+            attr::SCROLL_UP => self.scroll_up(Self::MOUSE_SCROLL_LINES),
+            attr::SCROLL_DOWN => self.scroll_down(Self::MOUSE_SCROLL_LINES),
+            attr::SCROLL_TO_BOTTOM => self.scroll_to_bottom(),
+            attr::SCROLL_TO_TOP => self.scroll_to_top(),
+            attr::TOGGLE_THINKING => self.toggle_last_thinking(),
+            attr::TOGGLE_EXPAND_ALL => self.toggle_expand_all(),
+            attr::EXPAND_ALL => self.expand_all(),
+            attr::COLLAPSE_ALL => self.collapse_all(),
+            attr::START_TOOL => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1935,7 +1939,7 @@ impl Component for ChatView {
                     self.start_tool(tool_id, tool_name, arguments);
                 }
             }
-            "complete_tool" => {
+            attr::COMPLETE_TOOL => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1949,7 +1953,7 @@ impl Component for ChatView {
                     self.complete_tool(tool_id, output, elapsed_ms, content_blocks);
                 }
             }
-            "fail_tool" => {
+            attr::FAIL_TOOL => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1958,7 +1962,7 @@ impl Component for ChatView {
                     self.fail_tool(tool_id, error, elapsed_ms);
                 }
             }
-            "update_tool_progress" => {
+            attr::UPDATE_TOOL_PROGRESS => {
                 if let AttrValue::String(text) = value {
                     let parts: Vec<&str> = text.split('\x00').collect();
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
@@ -1967,20 +1971,33 @@ impl Component for ChatView {
                     self.update_tool_progress(&tool_id, &message, tokens);
                 }
             }
-            "page_up" | "page_down" => {
+            attr::PAGE_UP | attr::PAGE_DOWN => {
                 if let AttrValue::Number(height) = value {
                     match cmd {
-                        "page_up" => self.scroll_up(height as usize),
-                        "page_down" => self.scroll_down(height as usize),
+                        attr::PAGE_UP => self.scroll_up(height as usize),
+                        attr::PAGE_DOWN => self.scroll_down(height as usize),
                         _ => {}
                     }
                 }
             }
-            "clear_history" => {
+            attr::CLEAR_HISTORY => {
                 self.clear_all_caches();
                 self.messages.clear();
                 self.scroll_offset = 0;
                 self.banner = None;
+                self.queued_message = None;
+            }
+            attr::SET_QUEUED_MESSAGE => {
+                if let AttrValue::String(blocks_json) = value {
+                    if let Ok(content_blocks) =
+                        serde_json::from_str::<Vec<ContentBlock>>(&blocks_json)
+                    {
+                        self.set_queued_message(content_blocks);
+                    }
+                }
+            }
+            attr::CLEAR_QUEUED_MESSAGE => {
+                self.clear_queued_message();
             }
             _ => {}
         }

@@ -109,8 +109,7 @@ pub struct Model {
     input_history: Vec<String>,
     /// Initial history length (to identify new entries on exit)
     initial_history_len: usize,
-    /// Working directory (kept for future use)
-    #[allow(dead_code)]
+    /// Working directory (for file completion and session listing)
     working_dir: std::path::PathBuf,
     /// Session messages to display on startup (for resumed sessions)
     session_messages: Vec<Message>,
@@ -120,6 +119,8 @@ pub struct Model {
     data_dir: std::path::PathBuf,
     /// Current session ID
     session_id: String,
+    /// Queued message waiting to be sent when streaming ends (only one allowed)
+    queued_message: Option<Vec<ContentBlock>>,
 }
 
 impl Model {
@@ -167,6 +168,7 @@ impl Model {
             permission_level,
             data_dir,
             session_id,
+            queued_message: None,
         })
     }
 
@@ -516,7 +518,7 @@ impl Model {
             };
             self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom(attr::ADD_ASSISTANT_WITH_THINKING),
+                Attribute::Custom(attr::ADD_ASSISTANT_MSG),
                 AttrValue::String(combined),
             )?;
         }
@@ -582,6 +584,8 @@ impl Model {
                     Attribute::Custom(attr::STOP_STREAMING),
                     AttrValue::Flag(true),
                 );
+                // Send queued message if any
+                self.send_queued_message();
             }
             StreamingStatus::Cancelled
             | StreamingStatus::Failed
@@ -597,6 +601,8 @@ impl Model {
                     Attribute::Custom(attr::CANCEL_STREAMING),
                     AttrValue::Flag(true),
                 );
+                // Clear queued message on interruption
+                self.clear_queued_message();
             }
         }
         self.clear_streaming_state();
@@ -681,7 +687,7 @@ impl Model {
             };
             let _ = self.app.attr(
                 &Id::ChatView,
-                Attribute::Custom(attr::ADD_ASSISTANT_WITH_THINKING),
+                Attribute::Custom(attr::ADD_ASSISTANT_MSG),
                 AttrValue::String(combined),
             );
         }
@@ -719,6 +725,78 @@ impl Model {
         let message =
             operation.map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
         self.handle_streaming_error(StreamingStatus::Cancelled, message);
+    }
+
+    /// Set a queued message to be sent when streaming ends
+    fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
+        // Check if there's already a queued message
+        if self.queued_message.is_some() {
+            tracing::info!("Overwriting existing queued message with new one");
+        }
+        // Serialize the queued message for display in ChatView
+        let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
+        if let Err(e) = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom(attr::SET_QUEUED_MESSAGE),
+            AttrValue::String(blocks_json),
+        ) {
+            tracing::warn!("Failed to set queued message in ChatView: {}", e);
+        }
+        self.queued_message = Some(blocks);
+        self.state.should_redraw = true;
+    }
+
+    /// Clear the queued message (e.g., when session is interrupted)
+    fn clear_queued_message(&mut self) {
+        if let Err(e) = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom(attr::CLEAR_QUEUED_MESSAGE),
+            AttrValue::Flag(true),
+        ) {
+            tracing::warn!("Failed to clear queued message in ChatView: {}", e);
+        }
+        self.queued_message = None;
+        self.state.should_redraw = true;
+    }
+
+    /// Send the queued message if any, returns true if a message was sent
+    fn send_queued_message(&mut self) -> bool {
+        if let Some(blocks) = self.queued_message.take() {
+            // Clear the queued message display in ChatView
+            if let Err(e) = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom(attr::CLEAR_QUEUED_MESSAGE),
+                AttrValue::Flag(true),
+            ) {
+                tracing::warn!("Failed to clear queued message in ChatView: {}", e);
+            }
+            // Add user message to chat view
+            let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
+            if let Err(e) = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom(attr::ADD_USER_MESSAGE),
+                AttrValue::String(blocks_json),
+            ) {
+                tracing::warn!("Failed to add user message in ChatView: {}", e);
+            }
+            self.scroll_chat_to_bottom();
+            // Start streaming status
+            if let Err(e) = self.app.attr(
+                &Id::InfoBar,
+                Attribute::Custom(attr::START_STREAMING),
+                AttrValue::Flag(true),
+            ) {
+                tracing::warn!("Failed to start streaming in InfoBar: {}", e);
+            }
+            // Send to kernel
+            if let Err(e) = self.input_tx.try_send(blocks) {
+                tracing::error!("Failed to send queued message to kernel: {}", e);
+            }
+            self.state.should_redraw = true;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn view(&mut self) {
@@ -1129,7 +1207,7 @@ impl Model {
                     tracing::debug!("Showing dialog with data: {dialog_data}",);
                     let _ = self.app.attr(
                         &Id::Dialog,
-                        Attribute::Custom(attr::SHOW),
+                        Attribute::Custom(attr::DIALOG_SHOW),
                         AttrValue::String(dialog_data),
                     );
                     // Give focus to dialog so it receives keyboard events
@@ -1276,26 +1354,35 @@ impl Model {
                         .join("\n");
                     // Save to history for C-n/C-p navigation
                     if !text_content.trim().is_empty() {
+                        // Remove duplicate if exists, keeping only the most recent
+                        self.input_history.retain(|h| h != &text_content);
                         self.input_history.push(text_content.clone());
                         let _ = self.init_input_history();
                     }
-                    // Add user message to chat view with content blocks
-                    let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::ADD_USER_MESSAGE),
-                        AttrValue::String(blocks_json),
-                    );
-                    self.scroll_chat_to_bottom();
-                    // Start streaming status immediately when sending request
-                    // (ChatView streaming will be started by ModelEvent::Request)
-                    let _ = self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom(attr::START_STREAMING),
-                        AttrValue::Flag(true),
-                    );
-                    // Send to kernel (supports multi-modal content)
-                    let _ = self.input_tx.try_send(blocks);
+
+                    // Check if we're currently streaming
+                    if self.state.is_streaming {
+                        // Queue the message to be sent when streaming ends (only one allowed)
+                        self.set_queued_message(blocks);
+                    } else {
+                        // Add user message to chat view with content blocks
+                        let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
+                        let _ = self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom(attr::ADD_USER_MESSAGE),
+                            AttrValue::String(blocks_json),
+                        );
+                        self.scroll_chat_to_bottom();
+                        // Start streaming status immediately when sending request
+                        // (ChatView streaming will be started by ModelEvent::Request)
+                        let _ = self.app.attr(
+                            &Id::InfoBar,
+                            Attribute::Custom(attr::START_STREAMING),
+                            AttrValue::Flag(true),
+                        );
+                        // Send to kernel (supports multi-modal content)
+                        let _ = self.input_tx.try_send(blocks);
+                    }
                     None
                 }
                 // Scrolling - works in both modes
@@ -1303,7 +1390,7 @@ impl Model {
                     let amount = if self.mode == AppMode::Browse { 1 } else { 3 };
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("scroll_up"),
+                        Attribute::Custom(attr::SCROLL_UP),
                         AttrValue::Number(amount as isize),
                     );
                     None
@@ -1312,7 +1399,7 @@ impl Model {
                     let amount = if self.mode == AppMode::Browse { 1 } else { 3 };
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("scroll_down"),
+                        Attribute::Custom(attr::SCROLL_DOWN),
                         AttrValue::Number(amount as isize),
                     );
                     None
@@ -1389,13 +1476,13 @@ impl Model {
                             // Clear tip
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("clear_tip"),
+                                Attribute::Custom(attr::CLEAR_TIP),
                                 AttrValue::Flag(true),
                             );
                             // Clear scroll progress (restore context usage display)
                             let _ = self.app.attr(
                                 &Id::StatusBar,
-                                Attribute::Custom("clear_scroll_progress"),
+                                Attribute::Custom(attr::CLEAR_SCROLL_PROGRESS),
                                 AttrValue::Flag(true),
                             );
                         }
@@ -1410,7 +1497,7 @@ impl Model {
                         .map_or(20, |s| (s.height / 2) as usize);
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("page_up"),
+                        Attribute::Custom(attr::PAGE_UP),
                         AttrValue::Number(height as isize),
                     );
                     None
@@ -1423,7 +1510,7 @@ impl Model {
                         .map_or(20, |s| (s.height / 2) as usize);
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("page_down"),
+                        Attribute::Custom(attr::PAGE_DOWN),
                         AttrValue::Number(height as isize),
                     );
                     None
@@ -1431,7 +1518,7 @@ impl Model {
                 Msg::GoToTop => {
                     let _ = self.app.attr(
                         &Id::ChatView,
-                        Attribute::Custom("scroll_to_top"),
+                        Attribute::Custom(attr::SCROLL_TO_TOP),
                         AttrValue::Flag(true),
                     );
                     None
@@ -1595,12 +1682,12 @@ impl Model {
                     // Show the picker with history items
                     let _ = self.app.attr(
                         &Id::HistoryPicker,
-                        Attribute::Custom(attr::ITEMS),
+                        Attribute::Custom(attr::PICKER_ITEMS),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
                     );
                     let _ = self.app.attr(
                         &Id::HistoryPicker,
-                        Attribute::Custom(attr::SHOW),
+                        Attribute::Custom(attr::DIALOG_SHOW),
                         AttrValue::Flag(true),
                     );
                     // Give focus to history picker
@@ -1616,7 +1703,7 @@ impl Model {
                                 // Set the input box content using custom attribute
                                 let _ = self.app.attr(
                                     &Id::InputBox,
-                                    Attribute::Custom(attr::SET_CONTENT),
+                                    Attribute::Custom(attr::INPUT_CONTENT),
                                     AttrValue::String(selected_text),
                                 );
                             }
@@ -1639,7 +1726,7 @@ impl Model {
                     let sections = default_help_sections();
                     if let Err(e) = self.app.attr(
                         &Id::HelpDialog,
-                        Attribute::Custom(attr::SHOW),
+                        Attribute::Custom(attr::DIALOG_SHOW),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(sections))),
                     ) {
                         tracing::warn!("Failed to show help dialog: {}", e);
@@ -1673,14 +1760,14 @@ impl Model {
                     // Show the session picker
                     if let Err(e) = self.app.attr(
                         &Id::SessionPicker,
-                        Attribute::Custom(attr::ITEMS),
+                        Attribute::Custom(attr::PICKER_ITEMS),
                         AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
                     ) {
                         tracing::warn!("Failed to set session picker items: {}", e);
                     }
                     if let Err(e) = self.app.attr(
                         &Id::SessionPicker,
-                        Attribute::Custom(attr::SHOW),
+                        Attribute::Custom(attr::DIALOG_SHOW),
                         AttrValue::Flag(true),
                     ) {
                         tracing::warn!("Failed to show session picker: {}", e);
@@ -1696,7 +1783,7 @@ impl Model {
                     // Hide picker and set switch target
                     let _ = self.app.attr(
                         &Id::SessionPicker,
-                        Attribute::Custom(attr::HIDE),
+                        Attribute::Custom(attr::DIALOG_HIDE),
                         AttrValue::Flag(true),
                     );
                     self.state.switch_to_session = Some(session_id);
@@ -1707,7 +1794,7 @@ impl Model {
                     // Hide session picker and return focus to input box
                     let _ = self.app.attr(
                         &Id::SessionPicker,
-                        Attribute::Custom(attr::HIDE),
+                        Attribute::Custom(attr::DIALOG_HIDE),
                         AttrValue::Flag(true),
                     );
                     let _ = self.app.active(&Id::InputBox);
@@ -1718,7 +1805,7 @@ impl Model {
                     // Hide help dialog and return focus to input box
                     if let Err(e) = self.app.attr(
                         &Id::HelpDialog,
-                        Attribute::Custom(attr::HIDE),
+                        Attribute::Custom(attr::DIALOG_HIDE),
                         AttrValue::Flag(true),
                     ) {
                         tracing::warn!("Failed to hide help dialog: {}", e);

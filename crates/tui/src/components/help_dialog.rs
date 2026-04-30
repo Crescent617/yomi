@@ -198,7 +198,7 @@ impl Component for HelpDialog {
 
     fn attr(&mut self, attr: Attribute, value: AttrValue) {
         match attr {
-            Attribute::Custom(attr::SHOW) => {
+            Attribute::Custom(attr::DIALOG_SHOW) => {
                 if let AttrValue::Payload(payload) = value {
                     if let Some(any_ref) = payload.as_any() {
                         if let Some(sections) = any_ref.downcast_ref::<Vec<HelpSection>>() {
@@ -207,7 +207,7 @@ impl Component for HelpDialog {
                     }
                 }
             }
-            Attribute::Custom(attr::HIDE) => {
+            Attribute::Custom(attr::DIALOG_HIDE) => {
                 self.hide();
             }
             _ => {
