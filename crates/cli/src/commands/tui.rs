@@ -109,7 +109,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let coordinator = Arc::new(Coordinator::new(
         storage.clone(),
         provider,
-        config.model.clone(),
+        config.agent.model.clone(),
         Some(task_store),
         Some(todo_storage),
         project_memory,
@@ -118,7 +118,6 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     ));
 
     let mk_agent_config = || AgentConfig {
-        model: config.model.clone(),
         skills: skills.clone(),
         ..config.agent.clone()
     };
@@ -305,7 +304,7 @@ fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
         std::process::exit(1);
     }
 
-    let provider: Arc<dyn kernel::Provider> = match config.model.provider {
+    let provider: Arc<dyn kernel::Provider> = match config.agent.model.provider {
         ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
         ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
     };
@@ -315,9 +314,9 @@ fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
 
 fn print_startup_info(config: &Config) {
     if *DEBUG_MODE {
-        println!("Provider: {}", config.model.provider);
-        println!("Model: {}", config.model.model_id);
-        println!("Endpoint: {}", config.model.endpoint);
+        println!("Provider: {}", config.agent.model.provider);
+        println!("Model: {}", config.agent.model.model_id);
+        println!("Endpoint: {}", config.agent.model.endpoint);
         let api_key = config.api_key();
         let key_preview = if api_key.len() > 8 {
             strs::truncate_with_suffix(api_key, 11, "...")
