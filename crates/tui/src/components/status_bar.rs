@@ -17,6 +17,9 @@ use tuirealm::{
     },
     state::State,
 };
+use unicode_width::UnicodeWidthStr;
+
+use crate::utils::text::truncate_by_width;
 
 use crate::{attr, msg::Msg, theme::colors};
 use kernel::permissions::Level;
@@ -147,14 +150,24 @@ impl StatusBar {
         )
     }
 
-    fn render_center_section(&self) -> Span<'static> {
+    fn render_center_section(&self, width: usize) -> Paragraph<'static> {
         let text = self.tip.as_ref().map_or("", |t| t.content.as_str());
-        Span::styled(
-            text.to_string(),
-            Style::default()
-                .fg(colors::text_secondary())
-                .add_modifier(Modifier::ITALIC),
-        )
+
+        // Truncate if too long (using display width for CJK)
+        let text_width = text.width_cjk();
+        let display = if text_width > width {
+            truncate_by_width(text, width, "...")
+        } else {
+            text.to_string()
+        };
+
+        Paragraph::new(display)
+            .style(
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            )
+            .alignment(Alignment::Center)
     }
 
     fn render_scroll_progress_section(&self) -> Span<'static> {
@@ -219,10 +232,9 @@ impl Component for StatusBar {
         );
 
         // Center tip
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![self.render_center_section()])),
-            chunks[1],
-        );
+        let center_width = chunks[1].width as usize;
+        let center_para = self.render_center_section(center_width);
+        frame.render_widget(center_para, chunks[1]);
 
         // Right side content: scroll (optional) + context (right-aligned)
         let right_spans = if has_scroll {
