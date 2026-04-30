@@ -136,8 +136,7 @@ pub struct ChatView {
     is_streaming: bool,
     tick_frame: usize,
     md_renderer: StreamingMarkdownRenderer,
-    // Track if user manually scrolled up (to pause auto-scroll)
-    user_scrolled: bool,
+
     // Track active tool executions
     active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
     // Expand all mode (ctrl-o): show all thinking and tool details
@@ -190,7 +189,7 @@ impl Default for ChatView {
             is_streaming: false,
             tick_frame: 0,
             md_renderer: StreamingMarkdownRenderer::new(),
-            user_scrolled: false,
+
             active_tools: std::collections::HashMap::new(),
             expand_all: false,
             banner: Some(crate::components::BannerData::default()),
@@ -301,15 +300,11 @@ impl ChatView {
     pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
         self.messages.push(HistoryMessage::User(content_blocks));
         self.push_new_msg_cache();
-        // Auto scroll to bottom on new message
-        self.scroll_to_bottom();
     }
 
     pub fn add_error_message(&mut self, error: String) {
         self.messages.push(HistoryMessage::Error(error));
         self.push_new_msg_cache();
-        // Auto scroll to bottom on new message
-        self.scroll_to_bottom();
     }
 
     pub fn add_assistant_message(
@@ -325,8 +320,6 @@ impl ChatView {
             thinking_elapsed_ms: elapsed_ms,
         });
         self.push_new_msg_cache();
-        // Auto scroll to bottom on new message
-        self.scroll_to_bottom();
     }
 
     pub fn start_tool(&mut self, tool_id: String, tool_name: String, arguments: Option<String>) {
@@ -349,9 +342,6 @@ impl ChatView {
             content_blocks: Vec::new(),
         });
         self.push_new_msg_cache();
-        if !self.user_scrolled {
-            self.scroll_offset = 0;
-        }
     }
 
     pub fn complete_tool(
@@ -387,9 +377,6 @@ impl ChatView {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Completed));
         }
-        if !self.user_scrolled {
-            self.scroll_offset = 0;
-        }
     }
 
     pub fn fail_tool(&mut self, tool_id: String, error: String, elapsed_ms: u64) {
@@ -416,9 +403,6 @@ impl ChatView {
         if let Some((name, _)) = self.active_tools.remove(&tool_id) {
             self.active_tools
                 .insert(tool_id, (name, ToolStatus::Failed));
-        }
-        if !self.user_scrolled {
-            self.scroll_offset = 0;
         }
     }
 
@@ -477,9 +461,7 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.tick_frame = 0;
-        self.scroll_offset = 0;
-        // Reset user scrolled state for new streaming session
-        self.user_scrolled = false;
+        // Note: Don't reset scroll_offset here - respect user's scroll position
     }
 
     pub fn stop_streaming(&mut self) {
@@ -526,20 +508,12 @@ impl ChatView {
     pub fn append_streaming_content(&mut self, text: &str) {
         self.streaming_content.push_str(text);
         self.md_renderer.append(text);
-        // Auto scroll to bottom only if user hasn't manually scrolled up
-        if !self.user_scrolled {
-            self.scroll_offset = 0;
-        }
         // Streaming content affects rendered output
         self.msg_cache_dirty = true;
     }
 
     pub fn append_streaming_thinking(&mut self, text: &str) {
         self.streaming_thinking.push_str(text);
-        // Auto scroll to bottom only if user hasn't manually scrolled up
-        if !self.user_scrolled {
-            self.scroll_offset = 0;
-        }
         // Streaming content affects rendered output
         self.msg_cache_dirty = true;
     }
@@ -555,23 +529,15 @@ impl ChatView {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        // User manually scrolled up, pause auto-scroll
-        self.user_scrolled = true;
         self.scroll_offset += amount;
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-        // If scrolled to bottom, resume auto-scroll
-        if self.scroll_offset == 0 {
-            self.user_scrolled = false;
-        }
     }
 
     pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
-        // User scrolled to bottom, resume auto-scroll
-        self.user_scrolled = false;
     }
 
     pub fn scroll_to_top(&mut self) {
@@ -579,8 +545,6 @@ impl ChatView {
         // To scroll to top, we need to set offset to total_visual_lines - visible_height
         let visible = self.last_visible_height.max(1);
         self.scroll_offset = self.total_visual_lines.saturating_sub(visible);
-        // User manually scrolled, pause auto-scroll
-        self.user_scrolled = true;
     }
 
     pub fn toggle_last_thinking(&mut self) {
@@ -1726,12 +1690,23 @@ impl Component for ChatView {
         // Reset scroll button area at start of each frame
         self.scroll_button_area = None;
 
+        // Remember previous total lines to detect content growth
+        let prev_total_lines = self.total_visual_lines;
+
         // Build text content
         let all_lines = self.all_lines();
         let text = Text::from(all_lines.iter().map(|l| (**l).clone()).collect::<Vec<_>>());
 
         // Calculate and cache total visual lines
         self.total_visual_lines = WrapParagraph::new(text.clone()).wrapped_line_count(width);
+
+        // If user has scrolled up, adjust scroll_offset to keep view stable
+        // Content grew: increase offset to stay in place
+        // Content shrank (streaming ended): decrease offset to stay in place
+        if self.is_scrolled_up() && prev_total_lines > 0 {
+            let lines_delta = self.total_visual_lines as i64 - prev_total_lines as i64;
+            self.scroll_offset = (self.scroll_offset as i64 + lines_delta).max(0) as usize;
+        }
 
         // Clamp scroll_offset to valid range
         // scroll_offset is visual lines from bottom, max is total - visible
