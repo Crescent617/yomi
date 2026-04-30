@@ -1075,6 +1075,8 @@ impl Model {
                     elapsed_ms,
                     ..
                 }) => {
+                    // Clear tool call state from info bar (tool execution is complete)
+                    self.clear_tool_call_delta();
                     // Show tool output in chat view
                     // Format: tool_id\x00output\x00elapsed_ms\x00content_blocks_json
                     let blocks_json = serde_json::to_string(&content_blocks).unwrap_or_default();
@@ -1099,6 +1101,8 @@ impl Model {
                     elapsed_ms,
                     ..
                 }) => {
+                    // Clear tool call state from info bar (tool execution failed)
+                    self.clear_tool_call_delta();
                     // Show tool error in chat view
                     let combined = format!("{tool_id}\x00{error}\x00{elapsed_ms}");
                     self.app.attr(
