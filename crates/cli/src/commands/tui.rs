@@ -81,7 +81,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let working_dir = working_dir.canonicalize()?;
 
-    let mut config = crate::utils::load_config(args.global.config.as_ref())?;
+    let mut config = crate::utils::load_config(args.global.config.as_ref(), &working_dir)?;
 
     if args.yolo {
         config.auto_approve = Level::Dangerous;
@@ -93,7 +93,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
     init_logging(&config)?;
 
-    let skills = load_skills(&config).await;
+    let skills = load_skills(&config, &working_dir).await;
 
     // Create SQLite pool for session metadata
     let db_path = config.data_dir.join("yomi.db");
@@ -104,6 +104,8 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let todo_storage = Arc::new(TodoStorage::new(&config.data_dir));
     let project_memory = kernel::project_memory::load(&working_dir).await?;
 
+    let coordinator_skill_folders = resolve_skill_folders(&config, &working_dir);
+
     let coordinator = Arc::new(Coordinator::new(
         storage.clone(),
         provider,
@@ -112,11 +114,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         Some(todo_storage),
         project_memory,
         Some(config.agent.compactor.clone()),
-        config
-            .skill_folders()
-            .into_iter()
-            .map(PathBuf::from)
-            .collect(),
+        coordinator_skill_folders,
     ));
 
     let mk_agent_config = || AgentConfig {
@@ -201,13 +199,25 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     Ok(())
 }
 
-async fn load_skills(config: &Config) -> Vec<Arc<kernel::skill::Skill>> {
-    let skill_folders: Vec<PathBuf> = config
+/// Resolve skill folders against working directory.
+/// Relative paths are joined with `working_dir`, absolute paths are kept as-is.
+pub fn resolve_skill_folders(config: &Config, working_dir: &Path) -> Vec<PathBuf> {
+    config
         .skill_folders()
-        .into_iter()
+        .iter()
         .map(PathBuf::from)
-        .collect();
+        .map(|p| {
+            if p.is_relative() {
+                working_dir.join(p)
+            } else {
+                p
+            }
+        })
+        .collect()
+}
 
+async fn load_skills(config: &Config, working_dir: &Path) -> Vec<Arc<kernel::skill::Skill>> {
+    let skill_folders = resolve_skill_folders(config, working_dir);
     tracing::debug!("Loading skills from folders: {:?}", skill_folders);
 
     let mut skills = {

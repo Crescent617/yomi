@@ -1,6 +1,6 @@
 use anyhow::Result;
 use kernel::{config::Config, expand_tilde, DEFAULT_DATA_DIR};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Global debug mode flag, initialized from DEBUG=1 environment variable
@@ -9,7 +9,7 @@ pub static DEBUG_MODE: LazyLock<bool> = LazyLock::new(|| {
 });
 
 /// Load configuration from the specified path or search default locations
-pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
+pub fn load_config(config_path: Option<&PathBuf>, working_dir: &Path) -> Result<Config> {
     let mut config = if let Some(path) = config_path {
         Config::from_file(path)?
     } else {
@@ -25,7 +25,7 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
     };
 
     config.apply_env_overrides();
-    config.finalize();
+    config.finalize(working_dir);
     Ok(config)
 }
 

@@ -20,10 +20,10 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
 /// Default data directory path
 pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
-/// Generate default skill folders based on a given `data_dir`
-pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
+/// Generate default skill folders based on `working_dir` and `data_dir`
+pub fn default_skill_folders(working_dir: &std::path::Path, data_dir: &std::path::Path) -> Vec<PathBuf> {
     vec![
-        PathBuf::from(".agents/skills"),
+        working_dir.join(".agents/skills"),
         data_dir.join("skills"),
         expand_tilde("~/.agents/skills"),
         expand_tilde("~/.claude/skills"),
@@ -174,7 +174,7 @@ pub struct Config {
 impl Config {
     /// Finalize configuration by computing and filling in default values.
     /// Call this after all configuration sources are loaded.
-    pub fn finalize(&mut self) {
+    pub fn finalize(&mut self, working_dir: &std::path::Path) {
         // Fill log_dir default if not set
         if self.log_dir.is_none() {
             self.log_dir = Some(self.data_dir.join("logs"));
@@ -183,7 +183,7 @@ impl Config {
         // Fill skill_folders default if not set
         if self.skill_folders.is_none() {
             self.skill_folders = Some(
-                default_skill_folders(&self.data_dir)
+                default_skill_folders(working_dir, &self.data_dir)
                     .into_iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect(),
@@ -198,14 +198,14 @@ impl Config {
             .unwrap_or_else(|| self.data_dir.join("logs"))
     }
 
-    /// Get the skill folders (defaults based on `data_dir`)
-    pub fn skill_folders(&self) -> Vec<String> {
-        self.skill_folders.clone().unwrap_or_else(|| {
-            default_skill_folders(&self.data_dir)
-                .into_iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect()
-        })
+    /// Get the skill folders.
+    ///
+    /// # Panics
+    /// Panics if `finalize` was not called (`skill_folders` is `None`).
+    pub fn skill_folders(&self) -> &[String] {
+        self.skill_folders
+            .as_ref()
+            .expect("Config::finalize must be called before using skill_folders")
     }
 }
 

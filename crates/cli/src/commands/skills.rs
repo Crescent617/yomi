@@ -1,17 +1,19 @@
 use crate::args::GlobalArgs;
+use crate::commands::tui::resolve_skill_folders;
 use crate::utils::load_config;
 use anyhow::Result;
 use kernel::skill::SkillLoader;
-use std::path::PathBuf;
 
 #[allow(clippy::needless_pass_by_value)]
 pub async fn list(global: GlobalArgs) -> Result<()> {
-    let config = load_config(global.config.as_ref())?;
-    let skill_folders: Vec<PathBuf> = config
-        .skill_folders()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let working_dir = working_dir.canonicalize()?;
+
+    let config = load_config(global.config.as_ref(), &working_dir)?;
+    let skill_folders = resolve_skill_folders(&config, &working_dir);
 
     let loader = SkillLoader::new(skill_folders);
     let skills = loader.load_all().unwrap_or_default();

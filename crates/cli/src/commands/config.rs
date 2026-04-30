@@ -13,7 +13,11 @@ fn config_path(global: &GlobalArgs) -> PathBuf {
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn show(global: GlobalArgs) -> Result<()> {
-    let config = load_config(global.config.as_ref())?;
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let config = load_config(global.config.as_ref(), &working_dir)?;
     let toml_str = toml::to_string_pretty(&config)?;
     println!("{toml_str}");
     Ok(())
@@ -21,7 +25,11 @@ pub fn show(global: GlobalArgs) -> Result<()> {
 
 #[allow(clippy::needless_pass_by_value)]
 pub fn get(global: GlobalArgs, key: &str) -> Result<()> {
-    let config = load_config(global.config.as_ref())?;
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let config = load_config(global.config.as_ref(), &working_dir)?;
     let value = serde_json::to_value(&config)?;
     match get_nested_value(&value, key) {
         Some(v) => println!("{v}"),
