@@ -7,11 +7,10 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::skill::Skill;
 use crate::tools::{
-    EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx, SkillTool,
-    SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
+    EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx, SubagentTool,
+    ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -22,7 +21,6 @@ pub struct ToolRegistryConfig<'a> {
     pub event_tx: &'a mpsc::Sender<Event>,
     pub skills: Vec<Arc<Skill>>,
     pub session_id: &'a str,
-    pub skill_folders: Vec<PathBuf>,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
     pub parent_session_id: Option<&'a str>,
     pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
@@ -46,7 +44,6 @@ impl<'a> ToolRegistryConfig<'a> {
             event_tx,
             skills,
             session_id,
-            skill_folders: shared.skill_folders.clone(),
             input_tx: Some(input_tx),
             parent_session_id: None,
             file_state_store: None,
@@ -70,7 +67,6 @@ impl<'a> ToolRegistryConfig<'a> {
             event_tx,
             skills,
             session_id,
-            skill_folders: shared.skill_folders.clone(),
             input_tx: None,
             parent_session_id: Some(parent_session_id),
             file_state_store: None,
@@ -140,9 +136,6 @@ impl ToolRegistryFactory {
 
         // Register WebSearch tool
         registry.register(WebSearchTool::new());
-
-        // Register SkillLoad tool
-        registry.register(SkillTool::new(config.skill_folders));
 
         // Register SubAgent tool if enabled
         if config.enable_sub_agents {

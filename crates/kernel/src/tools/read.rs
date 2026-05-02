@@ -4,8 +4,7 @@ use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
-use crate::utils::line_numbers::format_file_lines;
-use crate::utils::strs::truncate_with_suffix;
+use crate::utils::line_numbers::add_line_numbers;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -13,10 +12,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
-
-/// Truncation message for read tool output
-const READ_TRUNCATION_MESSAGE: &str =
-    "\n\n[Content truncated due to length. Use offset/limit to read specific sections.]";
 
 pub struct ReadTool {
     file_state_store: Option<Arc<FileStateStore>>,
@@ -82,65 +77,67 @@ impl ReadTool {
     async fn read_text(
         &self,
         path: &Path,
-        path_str: &str,
         offset: usize,
         limit: Option<usize>,
+        line_numbers: bool,
     ) -> Result<ToolOutput> {
-        // Acquire shared lock before reading to coordinate with writers
         let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
 
         let content = tokio::fs::read_to_string(path).await?;
-
-        // Check content size and truncate if too large
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
 
-        let start = offset.saturating_sub(1); // Convert to 0-based
-        let end = limit.map_or(total_lines, |l| start + l).min(total_lines);
-
+        let start = offset.saturating_sub(1);
         if start >= total_lines {
             return Ok(ToolOutput::error(format!(
                 "File has {total_lines} lines, offset {offset} is out of range"
             )));
         }
 
-        let mut result_content = if start == 0 && end == total_lines {
-            // Reading whole file
-            content.clone()
+        let end = limit.map_or(total_lines, |l| start + l).min(total_lines);
+        let text = lines[start..end].join("\n");
+
+        let output = if line_numbers {
+            add_line_numbers(&text, offset)
         } else {
-            // Reading partial content
-            lines[start..end].join("\n")
+            text
         };
 
-        // Truncate if content exceeds max size
-        result_content = truncate_with_suffix(
-            &result_content,
-            MAX_TOOL_OUTPUT_LENGTH,
-            READ_TRUNCATION_MESSAGE,
-        );
-
-        // Add line numbers to the result
-        let formatted_result = format_file_lines(&result_content, offset);
-
-        // Track file mtime if store is available
         if let Some(ref store) = self.file_state_store {
-            let mtime = get_mtime(path).await;
-            store.record(path.to_path_buf(), mtime);
+            store.record(path.to_path_buf(), get_mtime(path).await);
         }
 
-        // Build response with file info
-        let response = if start == 0 && end == total_lines {
-            format!("{formatted_result}\n\n[File: {path_str} | Lines: {total_lines}]")
-        } else {
-            format!(
-                "{formatted_result}\n\n[File: {path_str} | Lines: {offset}-{end} of {total_lines}]"
-            )
-        };
-
-        Ok(ToolOutput::text(response))
+        Ok(ToolOutput::text(maybe_truncate(output, offset)))
     }
+}
+
+/// Truncate text if it exceeds max length, adding a notice with the line number.
+fn maybe_truncate(mut text: String, offset: usize) -> String {
+    if text.len() <= MAX_TOOL_OUTPUT_LENGTH {
+        return text;
+    }
+
+    // Truncate at a safe UTF-8 boundary near the limit
+    let truncate_at = find_utf8_boundary(&text, MAX_TOOL_OUTPUT_LENGTH);
+    text.truncate(truncate_at);
+    
+    // Calculate line number at truncation point
+    let lines_count = text.lines().count();
+    let truncation_line = offset + lines_count.saturating_sub(1);
+    
+    let notice = format!("\n\n[Content truncated at line {truncation_line}. Use offset/limit to read more.]");
+    text.push_str(&notice);
+    text
+}
+
+/// Find a valid UTF-8 boundary at or before the target byte position.
+fn find_utf8_boundary(text: &str, target: usize) -> usize {
+    text.char_indices()
+        .rev()
+        .find(|&(i, _)| i <= target)
+        .map_or(0, |(i, _)| i)
 }
 
 #[async_trait]
@@ -169,6 +166,11 @@ impl Tool for ReadTool {
                 "limit": {
                     "type": "integer",
                     "description": "Number of lines to read. Default: read all. Only applies to text files.",
+                },
+                "line_numbers": {
+                    "type": "boolean",
+                    "description": "Whether to include line numbers in the output. Default: false.",
+                    "default": false
                 }
             },
             "required": ["path"]
@@ -181,6 +183,7 @@ impl Tool for ReadTool {
             .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
         let offset = args["offset"].as_u64().map_or(1, |n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n as usize);
+        let line_numbers = args["line_numbers"].as_bool().unwrap_or(false);
 
         let path = ctx.working_dir.join(path_str);
 
@@ -205,7 +208,197 @@ impl Tool for ReadTool {
         if is_image_extension(&path) {
             self.read_image(&path, path_str).await
         } else {
-            self.read_text(&path, path_str, offset, limit).await
+            self.read_text(&path, offset, limit, line_numbers)
+                .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_read_basic() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create test file
+        tokio::fs::write(base_path.join("test.txt"), "Hello, World!").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt"});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        assert!(result.text_content().contains("Hello, World!"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "offset": 2});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        assert!(!content.contains("line1"));
+        assert!(content.contains("line2"));
+        assert!(content.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "limit": 2});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        assert!(content.contains("line1"));
+        assert!(content.contains("line2"));
+        assert!(!content.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset_and_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc\nd\ne").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        assert!(content.contains('b'));
+        assert!(content.contains('c'));
+        assert!(!content.contains('a'));
+        assert!(!content.contains('d'));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_line_numbers() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "line_numbers": true});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        assert!(content.contains("1\tline1"));
+        assert!(content.contains("2\tline2"));
+    }
+
+    #[tokio::test]
+    async fn test_read_offset_with_line_numbers() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "offset": 2, "line_numbers": true});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        // Line numbers should start from offset
+        assert!(content.contains("2\tb"));
+        assert!(content.contains("3\tc"));
+        assert!(!content.contains("1\ta"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "nonexistent.txt"});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.is_error);
+        assert!(result.error_text().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_read_offset_out_of_range() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2").await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "test.txt", "offset": 10});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.is_error);
+        assert!(result.error_text().contains("out of range"));
+    }
+
+    #[tokio::test]
+    async fn test_read_truncation() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create a large file that will trigger truncation
+        // Each line is about 100 chars, create enough lines to exceed limit
+        let line = "x".repeat(100);
+        let lines_needed = MAX_TOOL_OUTPUT_LENGTH / 100 + 10;
+        let mut content = String::with_capacity(line.len() * lines_needed + lines_needed);
+        for _ in 0..lines_needed {
+            content.push_str(&line);
+            content.push('\n');
+        }
+        tokio::fs::write(base_path.join("large.txt"), content).await.unwrap();
+
+        let tool = ReadTool::new();
+        let args = serde_json::json!({"path": "large.txt"});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let text = result.text_content();
+        // Should contain truncation notice
+        assert!(text.contains("Content truncated"));
+        // Should indicate line number where truncated
+        assert!(text.contains("at line"));
+        // Length should be close to limit (allowing for truncation notice overhead)
+        assert!(text.len() <= MAX_TOOL_OUTPUT_LENGTH + 100);
     }
 }

@@ -649,22 +649,27 @@ mod tests {
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
 
-        // Should not emit anything yet (tool call not complete)
-        assert!(items.is_empty());
+        // ToolCallDelta is emitted for UI feedback since id is available
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_123"));
 
         // Second chunk: arguments continue
         let delta = create_tool_call_delta(0, None, None, Some("ls"));
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
 
-        assert!(items.is_empty());
+        // ToolCallDelta is emitted for the argument delta
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "ls"));
 
         // Third chunk: arguments complete
         let delta = create_tool_call_delta(0, None, None, Some("\"}"));
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
 
-        assert!(items.is_empty());
+        // ToolCallDelta is emitted for the argument delta
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "\"}"));
 
         // Finish should emit the completed tool call
         let items = assembler.finish();
@@ -694,7 +699,9 @@ mod tests {
         );
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
-        assert!(items.is_empty());
+        // ToolCallDelta is emitted for UI feedback
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_1"));
 
         // Second tool call starts - this should complete the first one
         let delta = create_tool_call_delta(
@@ -706,15 +713,11 @@ mod tests {
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
 
-        // Should emit first tool call immediately when second starts
-        assert_eq!(items.len(), 1);
-        match &items[0] {
-            ModelStreamItem::ToolCall(call) => {
-                assert_eq!(call.id, "call_1");
-                assert_eq!(call.name, "read");
-            }
-            _ => panic!("Expected ToolCall"),
-        }
+        // Should emit first tool call immediately when second starts (ToolCall)
+        // and ToolCallDelta for the second call
+        assert_eq!(items.len(), 2);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCall(call) if call.id == "call_1"));
+        assert!(matches!(&items[1], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_2"));
 
         // Finish should emit second tool call
         let items = assembler.finish();
@@ -926,7 +929,9 @@ mod tests {
         let delta = create_tool_call_delta(0, Some("call_1"), Some("bash"), Some("{}"));
         let json = serde_json::to_string(&create_test_response(delta)).unwrap();
         let items = assembler.process(&json).unwrap();
-        assert!(items.is_empty());
+        // ToolCallDelta is emitted for UI feedback
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_1"));
 
         // Finish
         let items = assembler.finish();

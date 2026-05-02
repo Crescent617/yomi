@@ -913,9 +913,7 @@ impl Model {
 
         // Mount history picker component (hidden by default, for C-r history search)
         let history_picker = FuzzyPickerComponent::new(
-            PickerConfig::new("History")
-                .with_placeholder("Search history...")
-                .with_max_height(12),
+            PickerConfig::new("History").with_placeholder("Search history..."),
         )
         .with_callbacks(crate::msg::Msg::HistorySelected, || {
             crate::msg::Msg::CloseHistoryPicker
