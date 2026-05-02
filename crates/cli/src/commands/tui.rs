@@ -192,6 +192,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             continue;
         }
 
+        // Dedup input history on clean exit
+        if let Err(e) = app_storage.dedup_input_history(&working_dir).await {
+            tracing::warn!("Failed to dedup input history: {}", e);
+        }
+
         break;
     }
 

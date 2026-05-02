@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 pub const SKILL_TOOL_NAME: &str = "skill";
+pub const SKILL_FILENAME: &str = "SKILL.md";
 
 /// Tool for loading skill content
 pub struct SkillTool {

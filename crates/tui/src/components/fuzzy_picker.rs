@@ -216,8 +216,6 @@ impl FuzzyPicker {
         } else if !self.filtered.is_empty() {
             self.selected = self.filtered.len() - 1;
         }
-        // Sticky scroll: ensure selected item is visible
-        self.ensure_selected_visible();
     }
 
     fn select_down(&mut self) {
@@ -225,27 +223,6 @@ impl FuzzyPicker {
             self.selected += 1;
         } else {
             self.selected = 0;
-        }
-        // Sticky scroll: ensure selected item is visible
-        self.ensure_selected_visible();
-    }
-
-    /// Ensure the selected item is within the visible range (sticky scrolling)
-    fn ensure_selected_visible(&mut self) {
-        let max_visible = self.config.max_list_height as usize;
-
-        if self.selected < self.scroll_offset {
-            // Selection moved above visible area, scroll up
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + max_visible {
-            // Selection moved below visible area, scroll down
-            self.scroll_offset = self.selected.saturating_sub(max_visible - 1);
-        }
-
-        // Clamp scroll offset to valid range
-        let max_scroll = self.filtered.len().saturating_sub(max_visible);
-        if self.scroll_offset > max_scroll {
-            self.scroll_offset = max_scroll;
         }
     }
 
@@ -285,24 +262,19 @@ impl FuzzyPicker {
         self.update_filtered();
     }
 
-    fn render_picker(&self, frame: &mut Frame, area: Rect) {
+    fn render_picker(&mut self, frame: &mut Frame, area: Rect) {
         // Calculate width: percentage-based with min/max constraints
         let percent_width = (f32::from(area.width) * self.config.width_percent) as u16;
         let palette_width = percent_width
             .max(self.config.min_width)
             .min(area.width.saturating_sub(4));
 
-        // Calculate height: content-based with min constraint
-        let search_height = 3u16;
-        let list_height = (self.filtered.len() as u16).min(self.config.max_list_height);
-        let content_height = search_height + list_height + 2; // +2 for borders
-        let palette_height = content_height
-            .max(self.config.min_height)
-            .min(area.height.saturating_sub(4));
+        // Calculate height: fill most of available height (leave 2 rows margin)
+        let palette_height = area.height.saturating_sub(2);
 
         let palette_area = Rect {
             x: area.x + (area.width - palette_width) / 2,
-            y: area.y + (area.height - palette_height) / 3,
+            y: area.y + 1, // Just 1 row margin from top
             width: palette_width,
             height: palette_height,
         };
@@ -358,16 +330,26 @@ impl FuzzyPicker {
         };
         frame.render_widget(separator, separator_area);
 
-        // Filtered items list (with sticky scrolling)
+        // Filtered items list: fill available height
+        // -4: 2 (top/bottom borders) + 2 (search input + separator)
+        let max_visible = (palette_area.height.saturating_sub(4)) as usize;
+        
+        // Auto-calculate scroll_offset to keep selected item visible
+        if self.selected >= self.scroll_offset + max_visible {
+            self.scroll_offset = self.selected.saturating_sub(max_visible - 1);
+        } else if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+        // Clamp scroll_offset to valid range
+        let max_scroll = self.filtered.len().saturating_sub(max_visible);
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+        
         if !self.filtered.is_empty() {
-            let max_visible = self.config.max_list_height as usize;
-            // Ensure scroll_offset is valid
-            let max_scroll = self.filtered.len().saturating_sub(max_visible);
-            let scroll = self.scroll_offset.min(max_scroll);
+            let scroll = self.scroll_offset;
             let start = scroll;
             let end = (start + max_visible).min(self.filtered.len());
 
-            let items: Vec<ListItem> = self
+            let mut items: Vec<ListItem> = self
                 .filtered
                 .iter()
                 .skip(start)
@@ -396,7 +378,12 @@ impl FuzzyPicker {
                     ListItem::new(content).style(style)
                 })
                 .collect();
-
+            
+            // Fill remaining space with empty items
+            for _ in items.len()..max_visible {
+                items.push(ListItem::new("").style(Style::default()));
+            }
+            
             let list = List::new(items).block(Block::default());
             frame.render_widget(list, chunks[1]);
         } else if !self.input.is_empty() {

@@ -46,7 +46,7 @@ pub struct SystemPromptBuilder<'a> {
     working_dir: Option<&'a std::path::Path>,
 }
 
-const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill when task hits its description.\n\n";
+const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill content with `read` tool when task hits its description.\n\n";
 
 impl<'a> SystemPromptBuilder<'a> {
     pub fn new() -> Self {

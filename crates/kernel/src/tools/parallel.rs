@@ -1,6 +1,6 @@
 use crate::event::ToolEvent;
 use crate::tools::base::MAX_TOOL_OUTPUT_LENGTH;
-use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
+use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
 use crate::utils::strs;
 use std::sync::Arc;
@@ -22,15 +22,28 @@ fn truncate_output(output: &str) -> String {
     strs::truncate_with_suffix(output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
+/// Check if a tool handles its own truncation
+fn tool_handles_truncation(tool_name: &str) -> bool {
+    tool_name == READ_TOOL_NAME
+}
+
 /// Truncate and convert `ToolOutputBlock` to `ContentBlock`
 fn truncate_and_convert_blocks(
     blocks: &[crate::types::ToolOutputBlock],
+    tool_name: &str,
 ) -> Vec<crate::types::ToolOutputBlock> {
+    // Skip truncation for tools that handle it themselves
+    let should_truncate = !tool_handles_truncation(tool_name);
+    
     blocks
         .iter()
         .map(|block| match block {
             crate::types::ToolOutputBlock::Text { text } => crate::types::ToolOutputBlock::Text {
-                text: truncate_output(text),
+                text: if should_truncate {
+                    truncate_output(text)
+                } else {
+                    text.clone()
+                },
             },
             crate::types::ToolOutputBlock::Image { url, mime_type } => {
                 crate::types::ToolOutputBlock::Image {
@@ -64,12 +77,18 @@ fn to_content_blocks(blocks: &[crate::types::ToolOutputBlock]) -> Vec<ContentBlo
 fn build_success_result(
     agent_id: &AgentId,
     call_id: &str,
+    tool_name: &str,
     result: &ToolOutput,
     elapsed_ms: u64,
 ) -> (ToolEvent, Message) {
-    let truncated = truncate_and_convert_blocks(&result.contents);
+    let truncated = truncate_and_convert_blocks(&result.contents, tool_name);
     let content_blocks = to_content_blocks(&truncated);
-    let output = truncate_output(&result.text_content());
+    // Skip truncation for tools that handle it themselves
+    let output = if tool_handles_truncation(tool_name) {
+        result.text_content()
+    } else {
+        truncate_output(&result.text_content())
+    };
 
     let event = ToolEvent::Output {
         agent_id: agent_id.clone(),
@@ -203,7 +222,7 @@ pub async fn execute_tools_parallel(
             let elapsed = start.elapsed().as_millis() as u64;
 
             let (event, message) = if result.success() {
-                build_success_result(&agent_id, &call_id, &result, elapsed)
+                build_success_result(&agent_id, &call_id, &call_name, &result, elapsed)
             } else {
                 build_error_result(&agent_id, &call_id, &result, elapsed)
             };

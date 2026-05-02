@@ -26,12 +26,12 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::{chars, colors},
-    utils::text::{char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars},
+    utils::text::{char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars, truncate_by_width},
 };
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
-    SHELL_TOOL_NAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_READ_TOOL_NAME, WEBFETCH_TOOL_NAME,
-    WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
+    SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_READ_TOOL_NAME,
+    WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -661,7 +661,7 @@ impl ChatView {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    fn render_message(msg: &HistoryMessage) -> Vec<Arc<Line<'static>>> {
+    fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         match msg {
@@ -873,20 +873,20 @@ impl ChatView {
                         )])));
                     }
 
-                    let peek_output = error.as_ref().or(output.as_ref()).and_then(|out| {
+                    // Show output peek in folded mode (max 2 lines based on width)
+                    if let Some(out) = error.as_ref().or(output.as_ref()) {
                         let trimmed = out.trim();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            let peek = truncate_by_chars(trimmed, 200);
-                            Some(peek.split_whitespace().collect::<Vec<_>>().join(" "))
+                        if !trimmed.is_empty() {
+                            // Compact whitespace first, then truncate to 2 lines width
+                            let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+                            // Total width for 2 lines, minus the " ⎿ " prefix
+                            let max_width = width * 2 - 3;
+                            let peek = truncate_by_width(&compact, max_width, "...");
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(peek, Style::default().fg(colors::text_secondary())),
+                            ])));
                         }
-                    });
-                    if let Some(peek) = peek_output {
-                        lines.push(Arc::new(Line::from(vec![
-                            Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                            Span::styled(peek, Style::default().fg(colors::text_secondary())),
-                        ])));
                     }
                 }
 
@@ -1208,11 +1208,14 @@ impl ChatView {
         }
         self.msg_lines.clear();
 
+        // Get width from current area for calculating output peek (2 lines max)
+        let width = self.current_area.map_or(80, |a| a.width as usize);
+
         for (i, msg) in self.messages.iter().enumerate() {
             let msg_lines = match &self.msg_cache[i] {
                 Some(lines) => lines,
                 None => {
-                    let rendered = Self::render_message(msg);
+                    let rendered = Self::render_message(msg, width);
                     self.msg_cache[i] = Some(rendered);
                     self.msg_cache[i].as_ref().unwrap()
                 }
@@ -2214,6 +2217,8 @@ fn sanitize_single_line(s: &str) -> String {
     s.replace(['\n', '\r', '\t'], " ")
 }
 
+
+
 /// Extract a concise description from tool arguments for the title
 /// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"
 /// Results are truncated to 100 characters (Unicode-safe).
@@ -2225,7 +2230,20 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
     let f = |s: &str| truncate_by_chars(&sanitize_single_line(s), MAX_LEN);
 
     let target = match tool_name {
-        READ_TOOL_NAME | EDIT_TOOL_NAME => value["path"].as_str().map(f),
+        READ_TOOL_NAME | EDIT_TOOL_NAME => {
+            value["path"].as_str().map(|path| {
+                // For skill files, show the parent directory name
+                if path.ends_with(SKILL_FILENAME) {
+                    std::path::Path::new(path)
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .map_or_else(|| f(path), |s| format!("{s}/{SKILL_FILENAME}"))
+                } else {
+                    f(path)
+                }
+            })
+        }
         WRITE_TOOL_NAME => value["file_path"].as_str().map(f),
         SHELL_TOOL_NAME => value["command"].as_str().map(f),
         GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(f),

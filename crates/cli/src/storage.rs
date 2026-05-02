@@ -16,7 +16,7 @@ use tokio::io::AsyncWriteExt;
 
 const APP_DATA_DIR: &str = "app_data";
 const PROJ_INDEX_DIR: &str = "projects";
-const DEFAULT_MAX_HISTORY: usize = 1000;
+const DEFAULT_MAX_HISTORY: usize = 2000;
 
 /// Re-export file state types from kernel
 pub use kernel::tools::file_state::FileStateSnapshot;
@@ -151,42 +151,97 @@ impl AppStorage {
         Ok(entries)
     }
 
-    /// Add an entry to input history
+    /// Add an entry to input history (append-only for performance)
     ///
-    /// Empty inputs are ignored. Duplicate consecutive entries are not added.
-    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries.
+    /// Empty inputs are ignored. Call `dedup_input_history` on exit to remove duplicates.
+    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries with hysteresis:
+    /// when limit is reached, we trim to 50% to avoid frequent rewrites.
     pub async fn add_input_entry(&self, working_dir: &Path, input: &str) -> Result<()> {
         if input.trim().is_empty() {
             return Ok(());
         }
 
         let path = self.input_hist_path(working_dir);
-        let mut entries = self.load_input_history(working_dir).await?;
 
-        // Avoid duplicates at the end
-        if entries.last() == Some(&input.to_string()) {
+        // Check if trim is needed
+        let needs_trim = Self::count_entries(&path).await? >= DEFAULT_MAX_HISTORY;
+
+        if needs_trim {
+            // Load, trim to 50% (hysteresis), and rewrite
+            let mut entries = self.load_input_history(working_dir).await?;
+            let keep_count = DEFAULT_MAX_HISTORY / 2;
+            if entries.len() > keep_count {
+                entries = entries.split_off(entries.len() - keep_count);
+            }
+            entries.push(input.to_string());
+            self.write_history(&path, &entries).await?;
+        } else {
+            // Simple append
+            Self::append_entry(&path, input).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove duplicate entries, keeping only the latest occurrence of each
+    pub async fn dedup_input_history(&self, working_dir: &Path) -> Result<()> {
+        let path = self.input_hist_path(working_dir);
+        if !path.exists() {
             return Ok(());
         }
 
-        entries.push(input.to_string());
-
-        // Trim to max size
-        if entries.len() > DEFAULT_MAX_HISTORY {
-            entries = entries.split_off(entries.len() - DEFAULT_MAX_HISTORY);
+        let mut entries = self.load_input_history(working_dir).await?;
+        if entries.len() < 2 {
+            return Ok(());
         }
 
-        // Atomic write
+        // Dedup: keep only last occurrence of each entry
+        // Process from end to keep the latest
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped: Vec<String> = entries
+            .into_iter()
+            .rev()
+            .filter(|e| seen.insert(e.clone()))
+            .collect();
+        deduped.reverse();
+        entries = deduped;
+
+        self.write_history(&path, &entries).await?;
+        Ok(())
+    }
+
+    async fn count_entries(path: &Path) -> Result<usize> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        let content = fs::read_to_string(path).await?;
+        Ok(content.lines().filter(|l| !l.trim().is_empty()).count())
+    }
+
+    async fn append_entry(path: &Path, input: &str) -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await?;
+        let line = serde_json::to_string(input)?;
+        file.write_all(line.as_bytes()).await?;
+        file.write_all(b"\n").await?;
+        file.flush().await?;
+        Ok(())
+    }
+
+    async fn write_history(&self, path: &Path, entries: &[String]) -> Result<()> {
         let temp_path = path.with_extension("tmp");
         let mut file = fs::File::create(&temp_path).await?;
-        for entry in &entries {
+        for entry in entries {
             let line = serde_json::to_string(entry)?;
             file.write_all(line.as_bytes()).await?;
             file.write_all(b"\n").await?;
         }
         file.flush().await?;
         drop(file);
-        fs::rename(&temp_path, &path).await?;
-
+        fs::rename(&temp_path, path).await?;
         Ok(())
     }
 }
@@ -253,19 +308,35 @@ mod tests {
         let history = storage.load_input_history(&working_dir).await.unwrap();
         assert_eq!(history, vec!["hello", "world"]);
 
-        // Duplicate should not be added
-        storage
-            .add_input_entry(&working_dir, "world")
-            .await
-            .unwrap();
-        let history = storage.load_input_history(&working_dir).await.unwrap();
-        assert_eq!(history, vec!["hello", "world"]);
-
         // Empty should be ignored
         storage.add_input_entry(&working_dir, "").await.unwrap();
         storage.add_input_entry(&working_dir, "   ").await.unwrap();
         let history = storage.load_input_history(&working_dir).await.unwrap();
         assert_eq!(history, vec!["hello", "world"]);
+    }
+
+    #[tokio::test]
+    async fn test_input_history_dedup() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
+
+        let working_dir = PathBuf::from("/path/to/project");
+
+        // Add entries with duplicates
+        storage.add_input_entry(&working_dir, "a").await.unwrap();
+        storage.add_input_entry(&working_dir, "b").await.unwrap();
+        storage.add_input_entry(&working_dir, "a").await.unwrap();
+        storage.add_input_entry(&working_dir, "c").await.unwrap();
+        storage.add_input_entry(&working_dir, "b").await.unwrap();
+
+        let history = storage.load_input_history(&working_dir).await.unwrap();
+        assert_eq!(history, vec!["a", "b", "a", "c", "b"]);
+
+        // Dedup should keep only latest occurrence
+        storage.dedup_input_history(&working_dir).await.unwrap();
+
+        let history = storage.load_input_history(&working_dir).await.unwrap();
+        assert_eq!(history, vec!["a", "c", "b"]);
     }
 
     #[tokio::test]

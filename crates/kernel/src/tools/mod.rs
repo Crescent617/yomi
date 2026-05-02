@@ -33,7 +33,7 @@ pub use read::{ReadTool, READ_TOOL_NAME};
 pub use registry_factory::{ToolRegistryConfig, ToolRegistryFactory};
 pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
-pub use skill_load::{SkillTool, SKILL_TOOL_NAME};
+pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoReadTool, TodoWriteTool, TODO_READ_TOOL_NAME, TODO_WRITE_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
