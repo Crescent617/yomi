@@ -319,7 +319,7 @@ impl AgentShared {
 }
 
 /// Agent error type using thiserror
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum AgentError {
     /// Agent reached maximum iterations
     #[error("Agent reached maximum iterations: {count}")]

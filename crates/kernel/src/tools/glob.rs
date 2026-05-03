@@ -1,7 +1,6 @@
 use crate::tools::base::get_mtimes_concurrent;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -25,7 +24,7 @@ impl GlobTool {
     /// Build glob matcher for pattern
     fn build_matcher(pattern: &str) -> Result<globset::GlobMatcher> {
         let glob = globset::Glob::new(pattern)
-            .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{pattern}': {e}"))?;
+            .map_err(|e| KernelError::tool(format!("Invalid glob pattern '{pattern}': {e}")))?;
 
         Ok(glob.compile_matcher())
     }
@@ -88,7 +87,7 @@ impl GlobTool {
             files
         })
         .await
-        .map_err(|e| anyhow::anyhow!("Task join error: {e}"))?;
+        .map_err(|e| KernelError::tool(format!("Task join error: {e}")))?;
 
         // Get modification times concurrently with limited concurrency
         // to avoid file descriptor exhaustion on large directories
@@ -149,7 +148,7 @@ impl Tool for GlobTool {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'pattern' argument"))?;
         let path = args["path"].as_str();
         let include_ignored = args["include_ignored"].as_bool().unwrap_or(false);
         let include_hidden = args["include_hidden"].as_bool().unwrap_or(true);

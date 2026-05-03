@@ -16,7 +16,7 @@ pub struct MemoryFile {
 }
 
 /// Load CLAUDE.md and AGENTS.md from current directory
-pub async fn load(cwd: &Path) -> anyhow::Result<MemoryFiles> {
+pub async fn load(cwd: &Path) -> crate::types::Result<MemoryFiles> {
     let mut files = vec![];
 
     // Try AGENTS.md

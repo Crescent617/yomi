@@ -1,7 +1,6 @@
 use crate::storage::migrations::run_migrations;
 use crate::storage::{MetaStorage, SessionInfo, Storage};
-use crate::types::{Message, SessionId, SessionRecord};
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Message, Result, SessionId, SessionRecord};
 use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
@@ -18,12 +17,14 @@ impl FsStorage {
     /// Create new `FsStorage` with `SQLite` metadata
     pub async fn new(base_dir: impl Into<PathBuf>, pool: SqlitePool) -> Result<Self> {
         let base_dir = base_dir.into();
-        std::fs::create_dir_all(&base_dir).context("Failed to create storage directory")?;
+        std::fs::create_dir_all(&base_dir).map_err(|e| {
+            KernelError::storage(format!("Failed to create storage directory: {e}"))
+        })?;
 
         // Run database migrations before initializing MetaStorage
         run_migrations(&pool)
             .await
-            .context("Failed to run database migrations")?;
+            .map_err(|e| KernelError::storage(format!("Failed to run database migrations: {e}")))?;
 
         let meta = MetaStorage::new(pool);
 
@@ -98,9 +99,10 @@ impl Storage for FsStorage {
         if let Err(e) = fs::copy(&parent_path, &new_path).await {
             // Clean up metadata if file copy fails
             let _ = self.meta.delete(&new_id).await;
-            return Err(e).with_context(|| {
-                format!("Failed to fork session: parent {} not found", parent_id.0)
-            });
+            return Err(KernelError::storage(format!(
+                "Failed to fork session: parent {} not found: {e}",
+                parent_id.0
+            )));
         }
 
         // Update message count from copied file
@@ -145,7 +147,7 @@ impl Storage for FsStorage {
             .append(true)
             .open(&path)
             .await
-            .context("Failed to open session file")?;
+            .map_err(|e| KernelError::storage(format!("Failed to open session file: {e}")))?;
 
         // Track last user message for metadata update
         let mut last_user_message: Option<String> = None;

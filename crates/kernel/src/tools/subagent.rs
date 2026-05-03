@@ -3,9 +3,8 @@ use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
 use crate::storage::Storage;
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
-use crate::types::{AgentId, ContentBlock, Message, ToolOutput};
+use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, ToolOutput};
 use crate::utils::tokens::format_tokens;
-use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -182,11 +181,11 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         // Extract and clone all values from args first to avoid lifetime issues
         let description = args["description"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'description' argument"))?
+            .ok_or_else(|| KernelError::tool("Missing 'description' argument"))?
             .to_string();
         let prompt = args["prompt"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'prompt' argument"))?
+            .ok_or_else(|| KernelError::tool("Missing 'prompt' argument"))?
             .to_string();
 
         let mode_str = args["mode"].as_str().unwrap_or("sync");

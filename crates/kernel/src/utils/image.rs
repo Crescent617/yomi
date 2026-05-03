@@ -57,15 +57,16 @@ pub async fn is_image_file(path: &Path) -> bool {
 
 /// Read an image file and convert it to a base64 data URL
 /// Returns `Ok(Some(data_url))` for valid images, `Ok(None)` for non-images
-pub async fn image_to_data_url(path: &Path) -> anyhow::Result<Option<String>> {
+pub async fn image_to_data_url(path: &Path) -> crate::types::Result<Option<String>> {
+    use crate::types::KernelError;
     // Check file size
-    let metadata = tokio::fs::metadata(path).await?;
+    let metadata = tokio::fs::metadata(path).await.map_err(KernelError::from)?;
     if metadata.len() > MAX_IMAGE_SIZE {
-        anyhow::bail!(
+        return Err(KernelError::io(format!(
             "Image file too large: {} bytes (max: {})",
             metadata.len(),
             MAX_IMAGE_SIZE
-        );
+        )));
     }
 
     // Read file

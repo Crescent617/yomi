@@ -1,6 +1,6 @@
 use crate::task::sqlite_storage::SqliteTaskStorage;
 use crate::task::types::{CreateTaskInput, Task, TaskUpdates};
-use anyhow::Result;
+use crate::types::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

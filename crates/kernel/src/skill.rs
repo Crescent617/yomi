@@ -1,5 +1,5 @@
 use crate::misc::plugin::Plugin;
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -45,8 +45,12 @@ impl SkillLoader {
 
         for folder in &self.folders {
             if folder.exists() {
-                Self::load_from_folder(folder, &mut skills)
-                    .with_context(|| format!("Failed to load skills from {}", folder.display()))?;
+                Self::load_from_folder(folder, &mut skills).map_err(|e| {
+                    KernelError::skill(format!(
+                        "Failed to load skills from {}: {e}",
+                        folder.display()
+                    ))
+                })?;
             } else {
                 tracing::warn!("Skill folder does not exist: {}", folder.display());
             }
@@ -116,8 +120,12 @@ impl SkillLoader {
     fn load_skill(path: &Path, root_folder: &Path) -> Result<Skill> {
         use std::io::{BufRead, BufReader};
 
-        let file = std::fs::File::open(path)
-            .with_context(|| format!("Failed to open skill file: {}", path.display()))?;
+        let file = std::fs::File::open(path).map_err(|e| {
+            KernelError::skill(format!(
+                "Failed to open skill file: {}: {e}",
+                path.display()
+            ))
+        })?;
         let reader = BufReader::new(file);
 
         let mut lines = reader.lines();
@@ -125,7 +133,9 @@ impl SkillLoader {
         // Check if file starts with ---
         let first_line = lines.next().transpose()?;
         if first_line.as_deref() != Some("---") {
-            anyhow::bail!("Skill file must start with frontmatter delimiter ---");
+            return Err(KernelError::skill(
+                "Skill file must start with frontmatter delimiter ---",
+            ));
         }
 
         // Collect frontmatter lines until second ---
@@ -142,13 +152,14 @@ impl SkillLoader {
         }
 
         if !found_end {
-            anyhow::bail!("Frontmatter end delimiter not found");
+            return Err(KernelError::skill("Frontmatter end delimiter not found"));
         }
 
         // Parse just the frontmatter YAML
         let yaml_content = yaml_lines.join("\n");
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content)
-            .context("Failed to parse skill frontmatter YAML")?;
+        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content).map_err(|e| {
+            KernelError::skill(format!("Failed to parse skill frontmatter YAML: {e}"))
+        })?;
 
         // Derive skill name from relative path
         // e.g., ~/.claude/skills/superpowers/writing/SKILL.md -> superpowers:writing
@@ -224,9 +235,12 @@ impl SkillLoader {
 
     /// Read skill file content asynchronously
     pub async fn read_skill_content(path: &Path) -> Result<String> {
-        tokio::fs::read_to_string(path)
-            .await
-            .with_context(|| format!("Failed to read skill file: {}", path.display()))
+        tokio::fs::read_to_string(path).await.map_err(|e| {
+            KernelError::skill(format!(
+                "Failed to read skill file: {}: {e}",
+                path.display()
+            ))
+        })
     }
 
     /// Load skills from a plugin
@@ -291,8 +305,12 @@ impl SkillLoader {
 
         let skill_name = Self::derive_plugin_skill_name(path, plugin_name)?;
 
-        let file = std::fs::File::open(path)
-            .with_context(|| format!("Failed to open skill file: {}", path.display()))?;
+        let file = std::fs::File::open(path).map_err(|e| {
+            KernelError::skill(format!(
+                "Failed to open skill file: {}: {e}",
+                path.display()
+            ))
+        })?;
         let reader = BufReader::new(file);
 
         let mut lines = reader.lines();
@@ -300,7 +318,9 @@ impl SkillLoader {
         // Check if file starts with ---
         let first_line = lines.next().transpose()?;
         if first_line.as_deref() != Some("---") {
-            anyhow::bail!("Skill file must start with frontmatter delimiter ---");
+            return Err(KernelError::skill(
+                "Skill file must start with frontmatter delimiter ---",
+            ));
         }
 
         // Collect frontmatter lines until second ---
@@ -317,13 +337,14 @@ impl SkillLoader {
         }
 
         if !found_end {
-            anyhow::bail!("Frontmatter end delimiter not found");
+            return Err(KernelError::skill("Frontmatter end delimiter not found"));
         }
 
         // Parse just the frontmatter YAML
         let yaml_content = yaml_lines.join("\n");
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content)
-            .context("Failed to parse skill frontmatter YAML")?;
+        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content).map_err(|e| {
+            KernelError::skill(format!("Failed to parse skill frontmatter YAML: {e}"))
+        })?;
 
         Ok(Skill {
             name: skill_name,
@@ -338,7 +359,7 @@ impl SkillLoader {
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid skill path: {}", path.display()))?;
+            .ok_or_else(|| KernelError::skill(format!("Invalid skill path: {}", path.display())))?;
 
         Ok(format!("{plugin_name}:{skill_dir}"))
     }

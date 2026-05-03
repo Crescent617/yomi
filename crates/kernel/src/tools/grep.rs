@@ -1,7 +1,6 @@
 use crate::tools::base::get_mtimes_concurrent;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::fmt::Write;
@@ -216,10 +215,10 @@ impl GrepTool {
         tracing::debug!("Running ripgrep: rg {}", args.join(" "));
 
         let output_result = timeout(RIPGREP_TIMEOUT, cmd.output()).await.map_err(|_| {
-            anyhow::anyhow!(
+            KernelError::tool(format!(
                 "ripgrep timed out after {} seconds",
                 RIPGREP_TIMEOUT.as_secs()
-            )
+            ))
         })?;
 
         let output = output_result?;
@@ -234,7 +233,7 @@ impl GrepTool {
         let code = output.status.code().unwrap_or(-1);
 
         if code == 2 && !stderr.is_empty() {
-            return Err(anyhow::anyhow!("ripgrep error: {stderr}"));
+            return Err(KernelError::tool(format!("ripgrep error: {stderr}")));
         }
 
         Ok((stdout, stderr, code))
@@ -424,7 +423,7 @@ impl Tool for GrepTool {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let pattern = args["pattern"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'pattern' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'pattern' argument"))?;
         let path = args["path"].as_str();
         let glob_pattern = args["glob"].as_str();
         let file_type = args["type"].as_str();

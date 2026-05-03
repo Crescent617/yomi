@@ -15,22 +15,19 @@ use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::permissions::Checker;
 use crate::providers::{ModelConfig, Provider};
 use crate::tools::{ToolExecCtx, ToolRegistry};
-use crate::types::{AgentId, Message, ToolCall};
+use crate::types::{AgentId, KernelError, Message, Result, ToolCall};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-/// Error message prefix for cancellation errors
-pub const CANCELLED_ERROR_PREFIX: &str = "[CANCELLED]";
-
 /// Create a cancellation error
-pub fn cancelled_error(msg: &str) -> anyhow::Error {
-    anyhow::anyhow!("{CANCELLED_ERROR_PREFIX} {msg}")
+pub fn cancelled_error(msg: &str) -> KernelError {
+    KernelError::cancelled(msg)
 }
 
 /// Check if an error is a cancellation error
-pub fn is_cancelled_error(err: &anyhow::Error) -> bool {
-    err.to_string().contains(CANCELLED_ERROR_PREFIX)
+pub fn is_cancelled_error(err: &KernelError) -> bool {
+    err.is_cancelled()
 }
 
 /// Metrics collected during execution
@@ -130,7 +127,7 @@ impl SimpleAgent {
         user_prompt: String,
         cancel_token: CancellationToken,
         mut on_event: F,
-    ) -> anyhow::Result<(Vec<Arc<Message>>, ExecuteMetrics)>
+    ) -> Result<(Vec<Arc<Message>>, ExecuteMetrics)>
     where
         F: FnMut(Event),
     {
@@ -275,7 +272,7 @@ impl SimpleAgent {
         messages: &[Arc<Message>],
         cancel_token: &CancellationToken,
         on_event: &mut F,
-    ) -> anyhow::Result<(Message, Option<(u32, u32)>)>
+    ) -> Result<(Message, Option<(u32, u32)>)>
     where
         F: FnMut(Event),
     {
@@ -288,7 +285,8 @@ impl SimpleAgent {
         let mut stream = self
             .provider
             .stream(messages, &tools, &self.model_config)
-            .await?;
+            .await
+            .map_err(crate::agent::AgentError::from)?;
 
         let mut state = StreamCollectorState::default();
 
@@ -335,7 +333,7 @@ impl SimpleAgent {
                         }
                     },
                     Ok(None) => break,
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(crate::agent::AgentError::from(e).into()),
                 }
             }
         }
@@ -361,11 +359,11 @@ impl SimpleAgent {
         &self,
         call: &ToolCall,
         cancel_token: &CancellationToken,
-    ) -> anyhow::Result<Message> {
+    ) -> Result<Message> {
         let tool = self
             .tool_registry
             .get(&call.name)
-            .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
+            .ok_or_else(|| KernelError::tool(format!("Tool '{}' not found", call.name)))?;
 
         let ctx = ToolExecCtx::with_parent_ctx(
             &call.id,

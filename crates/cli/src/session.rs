@@ -50,7 +50,7 @@ pub async fn resolve_session(
 ) -> Result<SessionId> {
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
     if !is_launch {
-        return coordinator.create_session(mk_config()).await;
+        return Ok(coordinator.create_session(mk_config()).await?);
     }
 
     match session_arg {
@@ -59,15 +59,12 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator
-                .restore_session(&session_id, mk_config())
-                .await
-            {
+            match coordinator.restore_session(&session_id, mk_config()).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    coordinator.create_session(mk_config()).await
+                    Ok(coordinator.create_session(mk_config()).await?)
                 }
             }
         }
@@ -77,46 +74,39 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator
-                    .restore_session(&session_id, mk_config())
-                    .await
-                {
+                match coordinator.restore_session(&session_id, mk_config()).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        coordinator.create_session(mk_config()).await
+                        Ok(coordinator.create_session(mk_config()).await?)
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                coordinator.create_session(mk_config()).await
+                Ok(coordinator.create_session(mk_config()).await?)
             }
         },
         // No --session: create new session
-        SessionArg::New => coordinator.create_session(mk_config()).await,
+        SessionArg::New => Ok(coordinator.create_session(mk_config()).await?),
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let source_id = SessionId(entry.session_id);
                 println!("Forking last session: {}", source_id.0);
-                coordinator
-                    .fork_session(&source_id, mk_config())
-                    .await
+                Ok(coordinator.fork_session(&source_id, mk_config()).await?)
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                coordinator.create_session(mk_config()).await
+                Ok(coordinator.create_session(mk_config()).await?)
             }
         },
         // --fork <id>: fork specific session
         SessionArg::ForkSpecific(id) => {
             let source_id = SessionId(id.clone());
             println!("Forking session: {}", source_id.0);
-            coordinator
-                .fork_session(&source_id, mk_config())
-                .await
+            Ok(coordinator.fork_session(&source_id, mk_config()).await?)
         }
     }
 }

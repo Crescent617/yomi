@@ -619,46 +619,47 @@ impl Agent {
         result: Result<Option<Vec<Arc<Message>>>, CompactionError>,
         old_count: usize,
     ) -> Result<String, String> {
-        let compact_result = match result {
-            Ok(None) => Ok("No compaction needed".to_string()),
-            Ok(Some(messages)) => {
-                self.apply_compacted_messages(messages).await;
-                let new_count = self.message_buffer.len();
-                let compacted_count = old_count.saturating_sub(new_count);
+        let compact_result =
+            match result {
+                Ok(None) => Ok("No compaction needed".to_string()),
+                Ok(Some(messages)) => {
+                    self.apply_compacted_messages(messages).await;
+                    let new_count = self.message_buffer.len();
+                    let compacted_count = old_count.saturating_sub(new_count);
 
-                // Clear file state only if messages were actually reduced (real compaction)
-                if compacted_count > 0 {
-                    if let Some(ref file_state_store) = self.shared.file_state_store {
-                        tracing::info!(
+                    // Clear file state only if messages were actually reduced (real compaction)
+                    if compacted_count > 0 {
+                        if let Some(ref file_state_store) = self.shared.file_state_store {
+                            tracing::info!(
                             "Agent {} clearing file state due to compaction ({} -> {} messages)",
                             self.id, old_count, new_count
                         );
-                        file_state_store.clear();
+                            file_state_store.clear();
+                        }
                     }
-                }
 
-                Ok(if compacted_count > 0 {
-                    info!(
-                        "Agent {} compaction completed: {} -> {} messages (compacted {})",
-                        self.id, old_count, new_count, compacted_count
-                    );
-                    format!("Compacted {compacted_count} messages")
-                } else {
-                    "Micro-compaction completed".to_string()
-                })
-            }
-            Err(CompactionError::Cancelled) => {
-                tracing::info!("Agent {} compaction cancelled", self.id);
-                self.emit_operation_cancelled("compaction").await;
-                Err("Compaction was cancelled".to_string())
-            }
-            Err(CompactionError::Api(e)) => {
-                tracing::warn!("Agent {} compaction failed: {}", self.id, e);
-                self.emit_error(crate::event::ErrorPhase::Compaction, &e.to_string(), false)
-                    .await;
-                Err(format!("Compaction failed: {e}"))
-            }
-        };
+                    Ok(if compacted_count > 0 {
+                        info!(
+                            "Agent {} compaction completed: {} -> {} messages (compacted {})",
+                            self.id, old_count, new_count, compacted_count
+                        );
+                        format!("Compacted {compacted_count} messages")
+                    } else {
+                        "Micro-compaction completed".to_string()
+                    })
+                }
+                Err(CompactionError::Cancelled) => {
+                    tracing::info!("Agent {} compaction cancelled", self.id);
+                    self.emit_operation_cancelled("compaction").await;
+                    Err("Compaction was cancelled".to_string())
+                }
+                Err(CompactionError::Api(e)) => {
+                    tracing::warn!("Agent {} compaction failed: {}", self.id, e);
+                    self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false)
+                        .await;
+                    Err(format!("Compaction failed: {e}"))
+                }
+            };
 
         self.emit_compaction_event(false).await;
         compact_result

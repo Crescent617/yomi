@@ -1,9 +1,8 @@
 use crate::agent::AgentInput;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{AgentId, ToolOutput};
+use crate::types::{AgentId, KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
@@ -109,7 +108,7 @@ impl Tool for ShellTool {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let command = args["command"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'command' argument"))?;
         let timeout_secs = args["timeout"].as_u64();
         let background = args["background"].as_bool().unwrap_or(false);
 
@@ -202,13 +201,13 @@ impl ShellTool {
         let ctx = self
             .ctx
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Background mode requires context"))?;
+            .ok_or_else(|| KernelError::tool("Background mode requires context"))?;
 
         // Check if input_tx is available (subagents don't have this)
         let input_tx = ctx
             .input_tx
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Background mode not supported in subagents"))?;
+            .ok_or_else(|| KernelError::tool("Background mode not supported in subagents"))?;
 
         let task_id = Self::gen_task_id();
         let output_path = Self::log_path(&task_id);
@@ -338,7 +337,7 @@ async fn wait_for_child(
     let result = if let Some(secs) = timeout_secs {
         match timeout(Duration::from_secs(secs), child.wait()).await {
             Ok(Ok(status)) => Ok((status.code().unwrap_or(-1), false)),
-            Ok(Err(e)) => Err(anyhow::anyhow!("Process error: {e}")),
+            Ok(Err(e)) => Err(KernelError::tool(format!("Process error: {e}"))),
             Err(_) => {
                 let _ = child.kill().await;
                 Ok((-1, true))

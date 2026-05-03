@@ -1,5 +1,5 @@
 use crate::task::types::{CreateTaskInput, Task, TaskStatus, TaskUpdates};
-use anyhow::Result;
+use crate::types::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite};
 use std::path::Path;

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -141,8 +141,12 @@ impl PluginLoader {
             }
 
             // Fall back to directory scanning
-            Self::load_from_dir(dir, &mut plugins, &mut loaded_paths)
-                .with_context(|| format!("Failed to load plugins from {}", dir.display()))?;
+            Self::load_from_dir(dir, &mut plugins, &mut loaded_paths).map_err(|e| {
+                KernelError::plugin(format!(
+                    "Failed to load plugins from {}: {e}",
+                    dir.display()
+                ))
+            })?;
         }
 
         // Apply enabled_plugins filter
@@ -159,10 +163,12 @@ impl PluginLoader {
         index_path: &Path,
         loaded_paths: &mut std::collections::HashSet<PathBuf>,
     ) -> Result<Vec<Plugin>> {
-        let content = std::fs::read_to_string(index_path)
-            .with_context(|| format!("Failed to read {}", index_path.display()))?;
-        let index: InstalledPluginsIndex = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {}", index_path.display()))?;
+        let content = std::fs::read_to_string(index_path).map_err(|e| {
+            KernelError::plugin(format!("Failed to read {}: {e}", index_path.display()))
+        })?;
+        let index: InstalledPluginsIndex = serde_json::from_str(&content).map_err(|e| {
+            KernelError::plugin(format!("Failed to parse {}: {e}", index_path.display()))
+        })?;
 
         let mut plugins = Vec::new();
 
@@ -325,11 +331,11 @@ impl PluginLoader {
         manifest_path: &Path,
     ) -> Result<(String, Option<PathBuf>, Vec<PathBuf>)> {
         let content = std::fs::read_to_string(manifest_path)?;
-        let manifest: PluginManifest = serde_json::from_str(&content).with_context(|| {
-            format!(
-                "Failed to parse plugin manifest: {}",
+        let manifest: PluginManifest = serde_json::from_str(&content).map_err(|e| {
+            KernelError::plugin(format!(
+                "Failed to parse plugin manifest: {}: {e}",
                 manifest_path.display()
-            )
+            ))
         })?;
 
         // Use name from manifest, or derive from path

@@ -1,8 +1,7 @@
 use super::level::{exceeds_threshold, Level};
 use crate::event::{AgentEvent, Event};
 use crate::tools::{EDIT_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME};
-use crate::types::{AgentId, ToolCall};
-use anyhow::Result;
+use crate::types::{AgentId, KernelError, Result, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -266,7 +265,8 @@ impl Checker {
                     tool_call.name, current_level
                 ),
             }))
-            .await?;
+            .await
+            .map_err(|e| KernelError::io(format!("Failed to send permission request: {e}")))?;
         tracing::info!(
             "Permission request sent with req_id={req_id} for tool {}",
             tool_call.name
