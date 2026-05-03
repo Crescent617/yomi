@@ -220,39 +220,34 @@ impl Agent {
             }
 
             // Note: cancel is handled during streaming via select!, not here
-            // This prevents the token from getting stuck in cancelled state
-
-            match state {
+            let result = match state {
                 AgentState::Idle => {
                     self.context.reset_iteration();
                     tracing::debug!("Agent {} waiting for input", self.id);
-                    if let Err(e) = self.handle_wait_for_input().await {
-                        self.emit_error(crate::event::ErrorPhase::Idle, &e.to_string(), false)
-                            .await;
-                    }
+                    self.handle_wait_for_input().await
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id);
-                    if let Err(e) = self.handle_streaming_with_retry().await {
-                        self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
-                            .await;
-                        self.context.transition_to(AgentState::Idle);
-                    }
+                    self.handle_streaming_with_retry().await
                 }
                 AgentState::ExecutingTool => {
                     tracing::debug!("Agent {} executing tools", self.id);
-                    if let Err(e) = self.handle_execute_tool().await {
-                        self.emit_error(
-                            crate::event::ErrorPhase::ToolExecution,
-                            &e.to_string(),
-                            false,
-                        )
-                        .await;
-                        self.context.transition_to(AgentState::Idle);
-                    }
+                    self.handle_execute_tool().await
                 }
-                AgentState::Closed => {
-                    break;
+                AgentState::Closed => break,
+            };
+
+            if let Err(e) = result {
+                let phase = match state {
+                    AgentState::Idle => crate::event::ErrorPhase::Idle,
+                    AgentState::Streaming => crate::event::ErrorPhase::Streaming,
+                    AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
+                    AgentState::Closed => unreachable!(),
+                };
+                self.emit_error(phase, &e.to_string(), false).await;
+                // Recover to Idle for non-Idle states
+                if state != AgentState::Idle {
+                    self.context.transition_to(AgentState::Idle);
                 }
             }
 
@@ -356,17 +351,10 @@ impl Agent {
                 }
 
                 self.cancel_token.reset_if_cancelled();
-                let text_content: String = content
-                    .iter()
-                    .filter_map(|block| match block {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect();
                 let _ = self
                     .event_tx
                     .send(Event::User(crate::event::UserEvent::Message {
-                        content: text_content,
+                        content: content.clone(),
                     }))
                     .await;
                 let msg = Message::with_blocks(Role::User, content);

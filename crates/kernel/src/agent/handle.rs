@@ -23,7 +23,10 @@ impl std::fmt::Debug for AgentHandle {
             .field("id", &self.id)
             .field("cancel_token", &self.cancel_token)
             .field("permission_responder", &self.permission_responder.is_some())
-            .field("input_generation", &self.input_stale_since.load(Ordering::Relaxed))
+            .field(
+                "input_generation",
+                &self.input_stale_since.load(Ordering::Relaxed),
+            )
             .finish_non_exhaustive()
     }
 }
