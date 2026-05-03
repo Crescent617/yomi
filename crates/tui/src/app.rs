@@ -26,10 +26,7 @@ pub struct FeatureGates {
 impl FeatureGates {
     pub fn from_env() -> Self {
         let var_name = format!("{}DESKTOP_NOTIFY", kernel::ENV_PREFIX);
-        let desktop_notify = matches!(
-            std::env::var(&var_name).as_deref(),
-            Ok("1" | "true")
-        );
+        let desktop_notify = matches!(std::env::var(&var_name).as_deref(), Ok("1" | "true"));
         if desktop_notify {
             tracing::info!("Desktop notifications enabled ({var_name})");
         }
@@ -1226,8 +1223,8 @@ impl Model {
                     ..
                 }) => {
                     let message = format!("Task completed ({iteration_count} iterations)");
-                    self.show_notification(&Notification::success(message.clone(), 3000));
                     Self::send_desktop_notification("Yomi", &message);
+                    self.show_notification(&Notification::success(&message, 5000));
                     self.state.should_redraw = true;
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise
