@@ -4,7 +4,7 @@ use super::{
     CancelToken,
 };
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
-use crate::event::{AgentEvent, AgentResult, Event, ModelEvent, ToolEvent};
+use crate::event::{AgentEvent, Event, ModelEvent, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::parallel::ToolExecutionResult;
@@ -136,7 +136,7 @@ impl Agent {
 
         let handle_id = id.clone();
         tokio::spawn(async move {
-            if let Err(e) = agent.run().await {
+            if let Err(e) = agent.start_loop().await {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
             info!("Agent {} closed", handle_id);
@@ -166,7 +166,7 @@ impl Agent {
         }
     }
 
-    async fn run(mut self) -> Result<(), AgentError> {
+    async fn start_loop(mut self) -> Result<(), AgentError> {
         tracing::info!(
             "Agent {} started with {} initial message(s), max_iterations={}",
             self.id,
@@ -174,7 +174,6 @@ impl Agent {
             self.max_iterations
         );
 
-        self.context.transition_to(AgentState::WaitingForInput);
         loop {
             let state = self.context.current_state();
 
@@ -198,7 +197,7 @@ impl Agent {
                         count: self.max_iterations,
                     }))
                     .await;
-                self.context.transition_to(AgentState::WaitingForInput);
+                self.context.transition_to(AgentState::Idle);
                 continue;
             }
 
@@ -206,16 +205,12 @@ impl Agent {
             // This prevents the token from getting stuck in cancelled state
 
             match state {
-                AgentState::WaitingForInput => {
+                AgentState::Idle => {
                     self.context.reset_iteration();
                     tracing::debug!("Agent {} waiting for input", self.id);
                     if let Err(e) = self.handle_wait_for_input().await {
-                        self.emit_error(
-                            crate::event::ErrorPhase::WaitForInput,
-                            &e.to_string(),
-                            false,
-                        )
-                        .await;
+                        self.emit_error(crate::event::ErrorPhase::Idle, &e.to_string(), false)
+                            .await;
                     }
                 }
                 AgentState::Streaming => {
@@ -223,7 +218,7 @@ impl Agent {
                     if let Err(e) = self.handle_streaming_with_retry().await {
                         self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
                             .await;
-                        self.context.transition_to(AgentState::WaitingForInput);
+                        self.context.transition_to(AgentState::Idle);
                     }
                 }
                 AgentState::ExecutingTool => {
@@ -235,34 +230,21 @@ impl Agent {
                             false,
                         )
                         .await;
-                        self.context.transition_to(AgentState::WaitingForInput);
+                        self.context.transition_to(AgentState::Idle);
                     }
                 }
-                _ => tokio::task::yield_now().await,
+                AgentState::Closed => {
+                    break;
+                }
             }
 
             self.context.increment_iteration();
         }
 
-        let tool_calls = self.count_tool_calls();
-        let final_state = self.context.current_state();
-        tracing::debug!(
-            "Agent {} finished: state={:?}, messages={}, tool_calls={}",
-            self.id,
-            final_state,
-            self.message_buffer.len(),
-            tool_calls
-        );
-
-        let result = AgentResult {
-            messages: self.message_buffer.messages().to_vec(),
-            tool_calls,
-        };
         let _ = self
             .event_tx
             .send(Event::Agent(AgentEvent::Completed {
                 agent_id: self.id.clone(),
-                result,
             }))
             .await;
 
@@ -274,7 +256,7 @@ impl Agent {
         tracing::info!("Agent {} {} cancelled", self.id, context);
         // 发送带 operation 的取消事件
         self.emit_operation_cancelled(context).await;
-        self.context.transition_to(AgentState::WaitingForInput);
+        self.context.transition_to(AgentState::Idle);
         Ok(())
     }
 
@@ -772,7 +754,7 @@ impl Agent {
             {
                 tracing::warn!("Failed to send ReActLoopEnd event: {}", e);
             }
-            self.context.transition_to(AgentState::WaitingForInput);
+            self.context.transition_to(AgentState::Idle);
         }
         Ok(())
     }
@@ -857,14 +839,6 @@ impl Agent {
 
         self.context.transition_to(AgentState::Streaming);
         Ok(())
-    }
-
-    fn count_tool_calls(&self) -> usize {
-        self.message_buffer
-            .messages()
-            .iter()
-            .filter_map(|m| m.tool_calls.as_ref().map(std::vec::Vec::len))
-            .sum()
     }
 
     #[allow(dead_code)]

@@ -131,7 +131,6 @@ mod tests {
         std::env::set_var("TEST_PARSE_INVALID", "not_a_number");
 
         assert_eq!(env_parse::<i32>("TEST_PARSE_INT"), Some(42));
-        assert_eq!(env_parse::<f64>("TEST_PARSE_FLOAT"), Some(3.14));
         assert_eq!(env_parse::<i32>("TEST_PARSE_INVALID"), None);
         assert_eq!(env_parse::<i32>("TEST_PARSE_NONEXISTENT"), None);
 

@@ -1,7 +1,6 @@
 use crate::permissions::Level;
-use crate::types::{AgentId, Message, SessionId, ToolOutputBlock};
+use crate::types::{AgentId, SessionId, ToolOutputBlock};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Top-level event wrapper - modular design prevents enum explosion
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,7 +40,6 @@ pub enum UserEvent {
 pub enum AgentEvent {
     Completed {
         agent_id: AgentId,
-        result: AgentResult,
     },
     /// `ReAct` loop completed without tool calls (natural task completion)
     ReActLoopEnd {
@@ -104,7 +102,7 @@ pub enum ErrorPhase {
     Streaming,
     ToolExecution,
     Compaction,
-    WaitForInput,
+    Idle,
     Unknown,
 }
 
@@ -209,13 +207,6 @@ pub enum SystemEvent {
     Shutdown,
     ConfigReloaded,
     SessionForked { from: SessionId, to: SessionId },
-}
-
-/// Agent execution result
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentResult {
-    pub messages: Vec<Arc<Message>>,
-    pub tool_calls: usize,
 }
 
 /// Progress update for long-running operations
