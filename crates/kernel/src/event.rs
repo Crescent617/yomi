@@ -31,7 +31,10 @@ pub enum ControlCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UserEvent {
-    Message { content: String },
+    /// User message with multi-modal content blocks
+    Message {
+        content: Vec<crate::types::ContentBlock>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
