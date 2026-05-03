@@ -1,63 +1,18 @@
 use crate::agent::AgentConfig;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
+use crate::types::KernelError;
+use crate::utils::env::{
+    env_bool, env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit,
+};
+use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
-use thiserror::Error;
-
-/// Configuration error type
-#[derive(Error, Debug, Clone)]
-pub enum ConfigError {
-    #[error("Failed to read config file: {0}")]
-    ReadError(String),
-    #[error("Failed to parse config file: {0}")]
-    ParseError(String),
-}
-
-impl From<std::io::Error> for ConfigError {
-    fn from(e: std::io::Error) -> Self {
-        Self::ReadError(e.to_string())
-    }
-}
-
-impl From<toml::de::Error> for ConfigError {
-    fn from(e: toml::de::Error) -> Self {
-        Self::ParseError(e.to_string())
-    }
-}
-
-/// Expand `~` to the user's home directory
-pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
-    let path = path.as_ref();
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-            return PathBuf::from(home).join(stripped);
-        }
-    }
-    PathBuf::from(path)
-}
-
-/// Default data directory path
-pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
-
-/// Generate default skill folders based on `working_dir` and `data_dir`
-pub fn default_skill_folders(
-    working_dir: &std::path::Path,
-    data_dir: &std::path::Path,
-) -> Vec<PathBuf> {
-    vec![
-        working_dir.join(".agents/skills"),
-        data_dir.join("skills"),
-        expand_tilde("~/.agents/skills"),
-        expand_tilde("~/.claude/skills"),
-    ]
-}
 
 /// Environment variable names (for easy reference and IDE completion)
 pub mod env_names {
-
     /// Provider selection
     pub const PROVIDER: &str = env_name!("PROVIDER");
 
@@ -264,7 +219,7 @@ impl Config {
     }
 
     /// Load configuration from file, then apply environment variable overrides
-    pub fn from_file(path: &PathBuf) -> std::result::Result<Self, ConfigError> {
+    pub fn from_file(path: &PathBuf) -> std::result::Result<Self, KernelError> {
         let content = std::fs::read_to_string(path)?;
         let mut config: Self = toml::from_str(&content)?;
         // Env vars always override file config
@@ -368,7 +323,7 @@ impl Config {
 
         // Context window size (supports formats like "131072", "128k", "200k", "200000")
         if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
-            if let Some(tokens) = parse_context_window(&context_window) {
+            if let Some(tokens) = parse_number_with_unit(&context_window) {
                 self.agent.compactor.context_window = tokens;
                 // Also update compact_threshold to 80% of context window
                 self.agent.compactor.compact_threshold = tokens * 8 / 10;
@@ -394,59 +349,6 @@ impl Config {
         self.data_dir = data_dir;
         self
     }
-}
-
-/// Get environment variable - inlined for performance
-#[inline]
-fn env_var(name: &str) -> Option<String> {
-    std::env::var(name).ok()
-}
-
-/// Try multiple env vars in order, return first set value
-#[inline]
-fn env_first(names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| env_var(name))
-}
-
-/// Parse environment variable as a specific type
-#[inline]
-fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
-    env_var(name).and_then(|s| s.parse().ok())
-}
-
-/// Parse boolean from environment variable
-#[inline]
-fn env_bool(name: &str) -> bool {
-    std::env::var(name)
-        .is_ok_and(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
-}
-
-#[inline]
-fn env_bool_opt(name: &str) -> Option<bool> {
-    std::env::var(name)
-        .ok()
-        .map(|s| matches!(s.as_bytes(), b"true" | b"1" | b"yes" | b"TRUE" | b"YES"))
-}
-
-/// Parse context window size from string
-/// Supports formats like "131072", "128k", "200k", "1m"
-fn parse_context_window(s: &str) -> Option<u32> {
-    let s = s.trim().to_lowercase();
-
-    // Check for 'k' suffix (thousands)
-    if let Some(num_str) = s.strip_suffix('k') {
-        let num: f32 = num_str.parse().ok()?;
-        return Some((num * 1000.0) as u32);
-    }
-
-    // Check for 'm' suffix (millions)
-    if let Some(num_str) = s.strip_suffix('m') {
-        let num: f32 = num_str.parse().ok()?;
-        return Some((num * 1_000_000.0) as u32);
-    }
-
-    // Plain number
-    s.parse().ok()
 }
 
 #[cfg(test)]
@@ -521,96 +423,6 @@ mod tests {
     fn test_with_data_dir() {
         let config = Config::default().with_data_dir(PathBuf::from("/custom/path"));
         assert_eq!(config.data_dir, PathBuf::from("/custom/path"));
-    }
-
-    #[test]
-    fn test_env_bool_parsing() {
-        // Test via actual env var manipulation
-        std::env::set_var("TEST_BOOL_TRUE", "true");
-        std::env::set_var("TEST_BOOL_1", "1");
-        std::env::set_var("TEST_BOOL_YES", "yes");
-        std::env::set_var("TEST_BOOL_UPPER", "TRUE");
-        std::env::set_var("TEST_BOOL_FALSE", "false");
-        std::env::set_var("TEST_BOOL_0", "0");
-        std::env::set_var("TEST_BOOL_EMPTY", "");
-
-        assert!(env_bool("TEST_BOOL_TRUE"));
-        assert!(env_bool("TEST_BOOL_1"));
-        assert!(env_bool("TEST_BOOL_YES"));
-        assert!(env_bool("TEST_BOOL_UPPER"));
-        assert!(!env_bool("TEST_BOOL_FALSE"));
-        assert!(!env_bool("TEST_BOOL_0"));
-        assert!(!env_bool("TEST_BOOL_EMPTY"));
-        assert!(!env_bool("TEST_BOOL_NONEXISTENT"));
-
-        // Cleanup
-        for key in [
-            "TEST_BOOL_TRUE",
-            "TEST_BOOL_1",
-            "TEST_BOOL_YES",
-            "TEST_BOOL_UPPER",
-            "TEST_BOOL_FALSE",
-            "TEST_BOOL_0",
-            "TEST_BOOL_EMPTY",
-        ] {
-            std::env::remove_var(key);
-        }
-    }
-
-    #[test]
-    fn test_expand_tilde() {
-        let home = std::env::var("HOME").unwrap_or_default();
-
-        // Test tilde expansion
-        assert_eq!(expand_tilde("~/foo"), PathBuf::from(format!("{home}/foo")));
-        assert_eq!(
-            expand_tilde("~/.yomi"),
-            PathBuf::from(format!("{home}/.yomi"))
-        );
-
-        // Test paths without tilde are unchanged
-        assert_eq!(
-            expand_tilde("/absolute/path"),
-            PathBuf::from("/absolute/path")
-        );
-        assert_eq!(
-            expand_tilde("relative/path"),
-            PathBuf::from("relative/path")
-        );
-
-        // Test tilde not at start
-        assert_eq!(expand_tilde("/foo~/bar"), PathBuf::from("/foo~/bar"));
-    }
-
-    #[test]
-    fn test_default_data_dir_expanded() {
-        let config = Config::default();
-        let home = std::env::var("HOME").unwrap_or_default();
-        assert_eq!(config.data_dir, PathBuf::from(format!("{home}/.yomi")));
-    }
-
-    #[test]
-    fn test_parse_context_window() {
-        // Plain numbers
-        assert_eq!(parse_context_window("131072"), Some(131_072));
-        assert_eq!(parse_context_window("200000"), Some(200_000));
-        assert_eq!(parse_context_window("1000"), Some(1000));
-
-        // k suffix
-        assert_eq!(parse_context_window("128k"), Some(128_000));
-        assert_eq!(parse_context_window("200k"), Some(200_000));
-        assert_eq!(parse_context_window("1.5k"), Some(1500));
-
-        // m suffix
-        assert_eq!(parse_context_window("1m"), Some(1_000_000));
-        assert_eq!(parse_context_window("2m"), Some(2_000_000));
-
-        // With whitespace
-        assert_eq!(parse_context_window(" 128k "), Some(128_000));
-
-        // Invalid values
-        assert_eq!(parse_context_window("invalid"), None);
-        assert_eq!(parse_context_window(""), None);
     }
 
     #[test]

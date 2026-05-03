@@ -26,9 +26,9 @@ pub struct FeatureGates {
 impl FeatureGates {
     pub fn from_env() -> Self {
         let var_name = format!("{}DESKTOP_NOTIFY", kernel::ENV_PREFIX);
-        let desktop_notify = matches!(std::env::var(&var_name).as_deref(), Ok("1" | "true"));
+        let desktop_notify = kernel::utils::env::env_bool_opt(&var_name).unwrap_or(true);
         if desktop_notify {
-            tracing::info!("Desktop notifications enabled ({var_name})");
+            tracing::debug!("Desktop notifications enabled ({var_name})");
         }
         Self { desktop_notify }
     }

@@ -11,6 +11,7 @@ lint:
 # Auto-fix clippy warnings where possible
 lint-fix:
     cargo clippy --fix --allow-dirty
+    cargo fmt
 
 # Format all code
 fmt:
