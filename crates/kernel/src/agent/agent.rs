@@ -473,6 +473,12 @@ impl Agent {
             self.message_buffer.push(msg);
         }
 
+        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Completed {
+            agent_id: self.id.clone(),
+        })) {
+            tracing::warn!("Failed to send completed event: {}", e);
+        }
+
         self.transition_after_streaming().await
     }
 
@@ -754,11 +760,6 @@ impl Agent {
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
-            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Completed {
-                agent_id: self.id.clone(),
-            })) {
-                tracing::warn!("Failed to send completed event: {}", e);
-            }
             if let Err(e) = self
                 .event_tx
                 .try_send(Event::Agent(AgentEvent::ReActLoopEnd {
