@@ -815,15 +815,7 @@ impl Model {
                 tracing::warn!("Failed to add user message in ChatView: {}", e);
             }
             self.scroll_chat_to_bottom();
-            // Start streaming status
-            if let Err(e) = self.app.attr(
-                &Id::InfoBar,
-                Attribute::Custom(attr::START_STREAMING),
-                AttrValue::Flag(true),
-            ) {
-                tracing::warn!("Failed to start streaming in InfoBar: {}", e);
-            }
-            // Send to kernel
+            // Send to kernel (streaming will be started by ModelEvent::Request)
             if let Err(e) = self.input_tx.try_send(blocks) {
                 tracing::error!("Failed to send queued message to kernel: {}", e);
             }
@@ -1009,6 +1001,17 @@ impl Model {
     pub fn process_kernel_events(&mut self) -> Result<()> {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
+                // User message from kernel (render after kernel accepts it)
+                AppEvent::User(kernel::event::UserEvent::Message { content }) => {
+                    let blocks_json = serde_json::to_string(&content).unwrap_or_default();
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom(attr::ADD_USER_MESSAGE),
+                        AttrValue::String(blocks_json),
+                    );
+                    self.scroll_chat_to_bottom();
+                    self.state.should_redraw = true;
+                }
                 AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                     self.state.is_streaming = true;
                     // Clear tool call delta when receiving regular content
@@ -1033,11 +1036,6 @@ impl Model {
                     let value = AttrValue::String(format!("{tool_name}\x00{arguments_delta}"));
                     self.app.attr(&Id::InfoBar, attr, value)?;
                     self.state.should_redraw = true;
-                }
-                AppEvent::Model(kernel::event::ModelEvent::Completed { .. }) => {
-                    self.finalize_assistant_message();
-                    self.stop_streaming(StreamingStatus::Completed);
-                    // Note: Don't scroll to bottom here - respect user's scroll position
                 }
                 AppEvent::Model(kernel::event::ModelEvent::Error { error, .. }) => {
                     // Model-level error: stop streaming and show error
@@ -1222,6 +1220,8 @@ impl Model {
                     iteration_count,
                     ..
                 }) => {
+                    self.finalize_assistant_message();
+                    self.stop_streaming(StreamingStatus::Completed);
                     let message = format!("Task completed ({iteration_count} iterations)");
                     Self::send_desktop_notification("Yomi", &message);
                     self.show_notification(&Notification::success(&message, 5000));
@@ -1316,17 +1316,12 @@ impl Model {
                 tracing::error!("Failed to send initial message: {}", e);
             }
             // Display user message in chat with content blocks
+            // (streaming will be started by ModelEvent::Request)
             let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
             let _ = self.app.attr(
                 &Id::ChatView,
                 Attribute::Custom(attr::ADD_USER_MESSAGE),
                 AttrValue::String(blocks_json),
-            );
-            // Start streaming indicator (InfoBar only - ChatView will be started by ModelEvent::Request)
-            let _ = self.app.attr(
-                &Id::InfoBar,
-                Attribute::Custom(attr::START_STREAMING),
-                AttrValue::Flag(true),
             );
         }
 
@@ -1416,22 +1411,8 @@ impl Model {
                         // Queue the message to be sent when streaming ends (only one allowed)
                         self.set_queued_message(blocks);
                     } else {
-                        // Add user message to chat view with content blocks
-                        let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
-                        let _ = self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom(attr::ADD_USER_MESSAGE),
-                            AttrValue::String(blocks_json),
-                        );
-                        self.scroll_chat_to_bottom();
-                        // Start streaming status immediately when sending request
-                        // (ChatView streaming will be started by ModelEvent::Request)
-                        let _ = self.app.attr(
-                            &Id::InfoBar,
-                            Attribute::Custom(attr::START_STREAMING),
-                            AttrValue::Flag(true),
-                        );
                         // Send to kernel (supports multi-modal content)
+                        // User message will be rendered when kernel sends back UserEvent::Message
                         let _ = self.input_tx.try_send(blocks);
                     }
                     None
