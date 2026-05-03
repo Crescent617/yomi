@@ -37,8 +37,7 @@ pub use permissions::{Checker, Level, ToolLevelResolver};
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{
-    AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
-    ToolEvent, UserEvent,
+    AgentEvent, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent, ToolEvent, UserEvent,
 };
 pub use misc::plugin::{Plugin, PluginLoader};
 pub use prompt::{PromptBuilder, SystemPromptBuilder};
