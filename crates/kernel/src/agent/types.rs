@@ -285,6 +285,8 @@ pub struct AgentShared {
     pub permission_state: Option<crate::permissions::PermissionState>,
     /// Skill folders for the `skill_load` tool
     pub skill_folders: Vec<std::path::PathBuf>,
+    /// File state store for tracking file modification times (cleared on compaction)
+    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
 }
 
 impl AgentShared {
@@ -299,6 +301,7 @@ impl AgentShared {
         storage: Option<Arc<dyn crate::storage::Storage>>,
         permission_state: Option<crate::permissions::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
+        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
     ) -> Self {
         Self {
             provider,
@@ -310,6 +313,7 @@ impl AgentShared {
             storage,
             permission_state,
             skill_folders,
+            file_state_store,
         }
     }
 }

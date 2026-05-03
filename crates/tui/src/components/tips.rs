@@ -7,6 +7,7 @@ pub const TIPS: &[&str] = &[
     "Press Ctrl+O to enter browse mode",
     "Press Ctrl+C twice to exit",
     "Press Ctrl+P/Ctrl+N/Up/Down to navigate history",
+    "Press ESC to interrupt current response",
     "Use Ctrl+V to paste image in clipboard",
     "Type /new to start a new session",
     "Type /sessions to switch between sessions",

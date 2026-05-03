@@ -613,6 +613,7 @@ impl Agent {
     }
 
     /// Handle compaction result, update state, and return user message.
+    /// Clears file state store only if messages were actually reduced (real compaction).
     async fn handle_compaction_result(
         &mut self,
         result: Result<Option<Vec<Arc<Message>>>, CompactionError>,
@@ -624,6 +625,17 @@ impl Agent {
                 self.apply_compacted_messages(messages).await;
                 let new_count = self.message_buffer.len();
                 let compacted_count = old_count.saturating_sub(new_count);
+
+                // Clear file state only if messages were actually reduced (real compaction)
+                if compacted_count > 0 {
+                    if let Some(ref file_state_store) = self.shared.file_state_store {
+                        tracing::info!(
+                            "Agent {} clearing file state due to compaction ({} -> {} messages)",
+                            self.id, old_count, new_count
+                        );
+                        file_state_store.clear();
+                    }
+                }
 
                 Ok(if compacted_count > 0 {
                     info!(
