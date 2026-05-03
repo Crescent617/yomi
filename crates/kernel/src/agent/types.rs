@@ -192,6 +192,15 @@ impl AgentState {
         }
     }
 
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Streaming => "streaming",
+            Self::ExecutingTool => "executing_tool",
+            Self::Closed => "completed",
+        }
+    }
+
     pub fn can_transition_to(&self, target: Self) -> bool {
         self.valid_transitions().contains(&target)
     }
