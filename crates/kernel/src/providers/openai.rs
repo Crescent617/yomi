@@ -660,7 +660,9 @@ mod tests {
 
         // ToolCallDelta is emitted for the argument delta
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "ls"));
+        assert!(
+            matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "ls")
+        );
 
         // Third chunk: arguments complete
         let delta = create_tool_call_delta(0, None, None, Some("\"}"));
@@ -669,7 +671,9 @@ mod tests {
 
         // ToolCallDelta is emitted for the argument delta
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "\"}"));
+        assert!(
+            matches!(&items[0], ModelStreamItem::ToolCallDelta { arguments_delta, .. } if arguments_delta == "\"}")
+        );
 
         // Finish should emit the completed tool call
         let items = assembler.finish();

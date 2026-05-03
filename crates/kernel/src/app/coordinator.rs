@@ -70,6 +70,29 @@ impl Coordinator {
         Ok(session_id)
     }
 
+    /// Common logic to initialize a session in memory
+    async fn init_session(
+        &self,
+        session_id: SessionId,
+        config: SessionConfig,
+        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
+    ) -> Result<SessionId> {
+        let mut session = Session::new(
+            session_id.clone(),
+            config,
+            self.storage.clone(),
+            Arc::clone(&self.agent_shared),
+            file_state_store,
+        );
+        session.init().await?;
+
+        self.sessions
+            .write()
+            .await
+            .insert(session_id.clone(), Arc::new(RwLock::new(session)));
+        Ok(session_id)
+    }
+
     /// Restore a session from storage by its ID
     pub async fn restore_session(
         &self,
@@ -85,22 +108,28 @@ impl Coordinator {
             .ok_or_else(|| anyhow::anyhow!("Session not found in storage: {}", session_id.0))?;
 
         tracing::info!("Restoring session {} from storage", session_id.0);
+        let id = self
+            .init_session(session_record.id, config, file_state_store)
+            .await?;
+        tracing::info!("Session {} restored", id.0);
+        Ok(id)
+    }
 
-        let mut session = Session::new(
-            session_record.id.clone(),
-            config,
-            self.storage.clone(),
-            Arc::clone(&self.agent_shared),
-            file_state_store,
-        );
-        session.init().await?;
+    /// Fork a session: create new session with copied history from parent
+    pub async fn fork_session(
+        &self,
+        parent_id: &SessionId,
+        config: SessionConfig,
+        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
+    ) -> Result<SessionId> {
+        // Create new session with copied history in storage
+        let new_id = self.storage.fork_session(parent_id).await?;
+        tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
 
-        self.sessions
-            .write()
-            .await
-            .insert(session_record.id.clone(), Arc::new(RwLock::new(session)));
-        tracing::info!("Session {} restored", session_record.id.0);
-        Ok(session_record.id)
+        // Initialize the new session in memory
+        let id = self.init_session(new_id, config, file_state_store).await?;
+        tracing::info!("Forked session {} initialized", id.0);
+        Ok(id)
     }
 
     pub async fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {

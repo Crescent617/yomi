@@ -71,6 +71,17 @@ pub struct TuiArgs {
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub resume: Option<Option<String>>,
+
+    /// Fork a session: --fork (last session) or --fork <id> (specific)
+    ///
+    /// Creates a new session with copied history from the source session.
+    /// Uses `Option<Option<String>>` to distinguish three cases:
+    /// - `None`: --fork not provided
+    /// - `Some(None)`: --fork provided without value (fork last session)
+    /// - `Some(Some(id))`: --fork <id> provided (fork specific session)
+    #[arg(short, long, value_name = "SESSION_ID")]
+    #[allow(clippy::option_option)]
+    pub fork: Option<Option<String>>,
 }
 
 pub async fn run(args: TuiArgs) -> Result<()> {
@@ -143,10 +154,18 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         .await
         .unwrap_or_default();
 
-    let mut session_arg = match args.resume {
-        Some(None) => SessionArg::Last,
-        Some(Some(id)) => SessionArg::Specific(id),
-        None => SessionArg::New,
+    let mut session_arg = if let Some(fork) = args.fork {
+        // --fork takes precedence
+        match fork {
+            None => SessionArg::ForkLast,
+            Some(id) => SessionArg::ForkSpecific(id),
+        }
+    } else {
+        match args.resume {
+            Some(None) => SessionArg::Last,
+            Some(Some(id)) => SessionArg::Specific(id),
+            None => SessionArg::New,
+        }
     };
 
     loop {

@@ -1,5 +1,6 @@
 //! Session management for CLI
 
+use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
     event::ControlCommand,
@@ -9,9 +10,7 @@ use kernel::{
 };
 use std::path::Path;
 use std::sync::Arc;
-use tui::run_tui;
-
-use crate::{storage::AppStorage, utils::DEBUG_MODE};
+use tui::{run_tui, OnInputHook};
 
 /// Context needed to run a session
 #[derive(Clone)]
@@ -35,6 +34,10 @@ pub enum SessionArg {
     Last,
     /// --session <id>, resume specific session
     Specific(String),
+    /// --fork without value, fork last session
+    ForkLast,
+    /// --fork <id>, fork specific session
+    ForkSpecific(String),
 }
 
 /// Resolve session from command line arguments
@@ -61,20 +64,8 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            // Load file state from session entry if available
-            let file_state = match app_storage.load_session(working_dir).await? {
-                Some(entry) => match entry.file_state {
-                    Some(snapshot) => {
-                        tracing::info!("Loaded file state with {} entries", snapshot.entries.len());
-                        Arc::new(FileStateStore::from_snapshot(snapshot))
-                    }
-                    None => Arc::new(FileStateStore::new()),
-                },
-                None => Arc::new(FileStateStore::new()),
-            };
-
             match coordinator
-                .restore_session(&session_id, mk_config(), file_state)
+                .restore_session(&session_id, mk_config(), empty_file_state.clone())
                 .await
             {
                 Ok(_) => Ok(session_id),
@@ -82,7 +73,7 @@ pub async fn resolve_session(
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
                     coordinator
-                        .create_session(mk_config(), empty_file_state)
+                        .create_session(mk_config(), empty_file_state.clone())
                         .await
                 }
             }
@@ -93,16 +84,8 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                let file_state = match entry.file_state {
-                    Some(snapshot) => {
-                        tracing::info!("Loaded file state with {} entries", snapshot.entries.len());
-                        Arc::new(FileStateStore::from_snapshot(snapshot))
-                    }
-                    None => Arc::new(FileStateStore::new()),
-                };
-
                 match coordinator
-                    .restore_session(&session_id, mk_config(), file_state)
+                    .restore_session(&session_id, mk_config(), empty_file_state.clone())
                     .await
                 {
                     Ok(_) => Ok(session_id),
@@ -110,7 +93,7 @@ pub async fn resolve_session(
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
                         coordinator
-                            .create_session(mk_config(), empty_file_state)
+                            .create_session(mk_config(), empty_file_state.clone())
                             .await
                     }
                 }
@@ -118,14 +101,38 @@ pub async fn resolve_session(
             None => {
                 println!("No previous session found, starting new session");
                 coordinator
-                    .create_session(mk_config(), empty_file_state)
+                    .create_session(mk_config(), empty_file_state.clone())
                     .await
             }
         },
         // No --session: create new session
         SessionArg::New => {
             coordinator
-                .create_session(mk_config(), empty_file_state)
+                .create_session(mk_config(), empty_file_state.clone())
+                .await
+        }
+        // --fork (no value): fork last session for this directory
+        SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
+            Some(entry) => {
+                let source_id = SessionId(entry.session_id);
+                println!("Forking last session: {}", source_id.0);
+                coordinator
+                    .fork_session(&source_id, mk_config(), empty_file_state.clone())
+                    .await
+            }
+            None => {
+                println!("No previous session found to fork, starting new session");
+                coordinator
+                    .create_session(mk_config(), empty_file_state.clone())
+                    .await
+            }
+        },
+        // --fork <id>: fork specific session
+        SessionArg::ForkSpecific(id) => {
+            let source_id = SessionId(id.clone());
+            println!("Forking session: {}", source_id.0);
+            coordinator
+                .fork_session(&source_id, mk_config(), empty_file_state.clone())
                 .await
         }
     }
@@ -218,6 +225,20 @@ pub async fn run_session_loop(
         .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 
+    // On input: update "last session" for current directory
+    let on_input_hook: OnInputHook = Box::new({
+        let storage = app_storage.clone();
+        let dir = ctx.working_dir.clone();
+        move |sid: &str| {
+            let s = storage.clone();
+            let d = dir.clone();
+            let id = sid.to_string();
+            tokio::spawn(async move {
+                s.update_last_session(&d, &id).await.ok();
+            });
+        }
+    });
+
     let tui_result = run_tui(
         event_rx,
         input_tx,
@@ -228,6 +249,7 @@ pub async fn run_session_loop(
         session_messages,
         initial_message,
         session_id.0.clone(),
+        Some(on_input_hook),
     )
     .await?;
 
@@ -238,16 +260,9 @@ pub async fn run_session_loop(
         .unwrap_or_default();
     let has_conversation = !session_messages.is_empty();
     if has_conversation {
-        // Get file state snapshot and save with session
-        let file_state = coordinator
-            .get_file_state_snapshot(&session_id)
-            .await
-            .filter(|s| !s.is_empty());
-        if let Some(file_state) = &file_state {
-            tracing::info!("Saved file state with {} entries", file_state.entries.len());
-        }
+        // Save last session for this directory
         app_storage
-            .save_session(&ctx.working_dir, &session_id.0, file_state.as_ref())
+            .save_session(&ctx.working_dir, &session_id.0)
             .await?;
         println!("Goodbye~ You can resume this session later with:");
         println!("yomi --resume {}", session_id.0);

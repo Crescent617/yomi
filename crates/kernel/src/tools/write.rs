@@ -37,19 +37,14 @@ impl WriteTool {
     }
 
     /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &Path) -> Option<String> {
-        let store = self.file_state_store.as_ref()?;
+    async fn check_staleness(&self, path: &Path) -> Result<(), String> {
+        let store = self
+            .file_state_store
+            .as_ref()
+            .ok_or("File state store not initialized")?;
 
-        // Check if file has been modified (mtime changed)
         let current_mtime = get_mtime(path).await;
-        if store.is_stale(path, current_mtime) {
-            return Some(
-                "File has been modified since it was read. Read the file again before writing."
-                    .to_string(),
-            );
-        }
-
-        None
+        store.check_staleness(path, current_mtime)
     }
 }
 
@@ -120,7 +115,7 @@ impl Tool for WriteTool {
                 }
 
                 // Check for staleness
-                if let Some(error) = self.check_staleness(&path).await {
+                if let Err(error) = self.check_staleness(&path).await {
                     return Ok(ToolOutput::error(error));
                 }
             }
@@ -134,7 +129,7 @@ impl Tool for WriteTool {
         }
 
         // Write the file (with exclusive lock for existing files)
-        let original_content = if file_exists && !is_append {
+        let _original_content = if file_exists && !is_append {
             // For existing files in overwrite mode, acquire exclusive lock first, then read and write
             let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
                 .await
@@ -181,7 +176,7 @@ impl Tool for WriteTool {
         // Build response
         let response = if is_append && file_exists {
             format!("File appended: {file_path_str}")
-        } else if original_content.is_some() {
+        } else if file_exists {
             format!("File updated: {file_path_str}")
         } else {
             format!("File created: {file_path_str}")

@@ -26,7 +26,9 @@ use crate::{
     markdown_stream::StreamingMarkdownRenderer,
     msg::Msg,
     theme::{chars, colors},
-    utils::text::{char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars, truncate_by_width},
+    utils::text::{
+        char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars, truncate_by_width,
+    },
 };
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
@@ -1186,10 +1188,7 @@ impl ChatView {
                 let mut combined_spans: Vec<Span<'static>> = vec![mascot_span];
                 if let Some(info_line) = info_lines.get(i) {
                     for span in &info_line.spans {
-                        let cloned_span = Span::styled(
-                            span.content.to_string(),
-                            span.style,
-                        );
+                        let cloned_span = Span::styled(span.content.to_string(), span.style);
                         combined_spans.push(cloned_span);
                     }
                 }
@@ -2216,8 +2215,6 @@ fn tool_icon(tool_name: &str) -> &'static str {
 fn sanitize_single_line(s: &str) -> String {
     s.replace(['\n', '\r', '\t'], " ")
 }
-
-
 
 /// Extract a concise description from tool arguments for the title
 /// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"

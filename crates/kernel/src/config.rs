@@ -21,7 +21,10 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
 pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
 
 /// Generate default skill folders based on `working_dir` and `data_dir`
-pub fn default_skill_folders(working_dir: &std::path::Path, data_dir: &std::path::Path) -> Vec<PathBuf> {
+pub fn default_skill_folders(
+    working_dir: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Vec<PathBuf> {
     vec![
         working_dir.join(".agents/skills"),
         data_dir.join("skills"),

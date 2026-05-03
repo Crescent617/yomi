@@ -750,7 +750,9 @@ mod tests {
         let event = r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"ls\"}"}}"#;
         let items = state.process(event).unwrap();
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, arguments_delta, .. } if id == "tool_123" && arguments_delta == "{\"cmd\":\"ls\"}"));
+        assert!(
+            matches!(&items[0], ModelStreamItem::ToolCallDelta { id, arguments_delta, .. } if id == "tool_123" && arguments_delta == "{\"cmd\":\"ls\"}")
+        );
 
         // Content block stop - should emit tool call
         let event = r#"{"type":"content_block_stop","index":0}"#;

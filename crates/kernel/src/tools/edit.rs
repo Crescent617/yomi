@@ -3,8 +3,6 @@ use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::ToolOutput;
-use crate::utils::diff::generate_diff;
-use crate::utils::line_numbers::format_file_lines;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -38,19 +36,14 @@ impl EditTool {
     }
 
     /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &Path) -> Option<String> {
-        let store = self.file_state_store.as_ref()?;
+    async fn check_staleness(&self, path: &Path) -> Result<(), String> {
+        let store = self
+            .file_state_store
+            .as_ref()
+            .ok_or("File state store not initialized")?;
 
-        // Check if file has been modified (mtime changed)
         let current_mtime = get_mtime(path).await;
-        if store.is_stale(path, current_mtime) {
-            return Some(
-                "File has been modified since it was read. Read the file again before editing."
-                    .to_string(),
-            );
-        }
-
-        None
+        store.check_staleness(path, current_mtime)
     }
 }
 /// Find the actual string in file content.
@@ -139,7 +132,7 @@ impl Tool for EditTool {
             }
 
             // Check for staleness
-            if let Some(error) = self.check_staleness(&path).await {
+            if let Err(error) = self.check_staleness(&path).await {
                 return Ok(ToolOutput::error(error));
             }
         }
@@ -187,8 +180,7 @@ impl Tool for EditTool {
             return Ok(ToolOutput::error(format!(
                 "Found {occurrences} matches of the string to replace, but replace_all is false. \
                  To replace all occurrences, set replace_all to true. \
-                 To replace only one occurrence, please provide more context to uniquely identify the instance.\n\
-                 String: {old_str}"
+                 To replace only one occurrence, please provide more context to uniquely identify the instance."
             )));
         }
 
@@ -208,24 +200,14 @@ impl Tool for EditTool {
             store.record(path.clone(), mtime);
         }
 
-        // Generate diff
-        let diff = generate_diff(&content, &new_content, 3);
-
         // Build success message
-        let action = if replace_all {
+        let resp = if replace_all {
             format!("Replaced all {occurrences} occurrences")
         } else {
             "Replaced 1 occurrence".to_string()
         };
 
-        let response = format!(
-            "{} in {}\n\nDiff:\n{}",
-            action,
-            path_str,
-            format_file_lines(&diff, 1)
-        );
-
-        Ok(ToolOutput::text_with_summary(response, ""))
+        Ok(ToolOutput::text_with_summary(resp, ""))
     }
 }
 

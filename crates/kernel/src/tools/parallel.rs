@@ -34,7 +34,7 @@ fn truncate_and_convert_blocks(
 ) -> Vec<crate::types::ToolOutputBlock> {
     // Skip truncation for tools that handle it themselves
     let should_truncate = !tool_handles_truncation(tool_name);
-    
+
     blocks
         .iter()
         .map(|block| match block {

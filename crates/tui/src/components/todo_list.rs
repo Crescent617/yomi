@@ -119,7 +119,7 @@ const MAX_DISPLAY_TODOS: usize = 12;
 /// Maximum panel width
 const MAX_PANEL_WIDTH: u16 = 40;
 /// Minimum screen width to show the panel
-const MIN_SCREEN_WIDTH: u16 = 80;
+const MIN_SCREEN_WIDTH: u16 = 60;
 /// Margin for borders: border(2) + `right_spacing(1)` = 3
 const PANEL_MARGIN: u16 = 3;
 /// Icon width: "○ " or "● " = 2 chars

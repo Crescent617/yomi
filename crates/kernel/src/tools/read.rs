@@ -122,12 +122,14 @@ fn maybe_truncate(mut text: String, offset: usize) -> String {
     // Truncate at a safe UTF-8 boundary near the limit
     let truncate_at = find_utf8_boundary(&text, MAX_TOOL_OUTPUT_LENGTH);
     text.truncate(truncate_at);
-    
+
     // Calculate line number at truncation point
     let lines_count = text.lines().count();
     let truncation_line = offset + lines_count.saturating_sub(1);
-    
-    let notice = format!("\n\n[Content truncated at line {truncation_line}. Use offset/limit to read more.]");
+
+    let notice = format!(
+        "\n\n[Content truncated at line {truncation_line}. Use offset/limit to read more.]"
+    );
     text.push_str(&notice);
     text
 }
@@ -208,8 +210,7 @@ impl Tool for ReadTool {
         if is_image_extension(&path) {
             self.read_image(&path, path_str).await
         } else {
-            self.read_text(&path, offset, limit, line_numbers)
-                .await
+            self.read_text(&path, offset, limit, line_numbers).await
         }
     }
 }
@@ -225,7 +226,9 @@ mod tests {
         let base_path = temp_dir.path();
 
         // Create test file
-        tokio::fs::write(base_path.join("test.txt"), "Hello, World!").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "Hello, World!")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt"});
@@ -242,7 +245,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "offset": 2});
@@ -262,7 +267,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2\nline3")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "limit": 2});
@@ -282,7 +289,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc\nd\ne").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc\nd\ne")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2});
@@ -303,7 +312,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "line1\nline2").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "line_numbers": true});
@@ -322,7 +333,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "line_numbers": true});
@@ -358,7 +371,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        tokio::fs::write(base_path.join("test.txt"), "line1\nline2").await.unwrap();
+        tokio::fs::write(base_path.join("test.txt"), "line1\nline2")
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "test.txt", "offset": 10});
@@ -384,7 +399,9 @@ mod tests {
             content.push_str(&line);
             content.push('\n');
         }
-        tokio::fs::write(base_path.join("large.txt"), content).await.unwrap();
+        tokio::fs::write(base_path.join("large.txt"), content)
+            .await
+            .unwrap();
 
         let tool = ReadTool::new();
         let args = serde_json::json!({"path": "large.txt"});

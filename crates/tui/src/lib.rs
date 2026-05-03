@@ -16,7 +16,7 @@ pub mod theme;
 pub mod utils;
 
 // Re-export main entry point
-pub use app::{run_tui, TuiResult};
+pub use app::{run_tui, OnInputHook, TuiResult};
 
 // Global configuration
 static CONFIG: OnceLock<Config> = OnceLock::new();
