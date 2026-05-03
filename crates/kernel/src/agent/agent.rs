@@ -762,6 +762,13 @@ impl Agent {
             })) {
                 tracing::warn!("Failed to send completed event: {}", e);
             }
+            if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::ReActLoopEnd {
+                agent_id: self.id.clone(),
+                iteration_count: self.context.iteration_count(),
+                message_count: self.message_buffer.len(),
+            })) {
+                tracing::warn!("Failed to send ReActLoopEnd event: {}", e);
+            }
             self.context.transition_to(AgentState::WaitingForInput);
         }
         Ok(())

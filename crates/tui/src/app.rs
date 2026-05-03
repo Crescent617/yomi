@@ -16,6 +16,27 @@ pub struct TuiResult {
     pub switch_to_session: Option<String>,
 }
 
+/// Feature gates for optional functionality
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FeatureGates {
+    /// Enable desktop notifications when agent loop completes
+    pub desktop_notify: bool,
+}
+
+impl FeatureGates {
+    pub fn from_env() -> Self {
+        let var_name = format!("{}DESKTOP_NOTIFY", kernel::ENV_PREFIX);
+        let desktop_notify = matches!(
+            std::env::var(&var_name).as_deref(),
+            Ok("1" | "true")
+        );
+        if desktop_notify {
+            tracing::info!("Desktop notifications enabled ({var_name})");
+        }
+        Self { desktop_notify }
+    }
+}
+
 /// Callback type for input hook - called when user submits input
 pub type OnInputHook = Box<dyn Fn(&str) + Send + Sync>;
 use tokio::sync::mpsc;
@@ -704,6 +725,27 @@ impl Model {
         );
     }
 
+    /// Send desktop notification via notify-rust (if enabled in feature gates)
+    fn send_desktop_notification(title: &str, message: &str) {
+        // Only send if desktop notifications are enabled
+        if !crate::feature_gates().desktop_notify {
+            return;
+        }
+
+        let title = title.to_string();
+        let message = message.to_string();
+
+        // Run in blocking task to avoid blocking async runtime
+        tokio::task::spawn_blocking(move || {
+            let _ = notify_rust::Notification::new()
+                .summary(&title)
+                .body(&message)
+                .appname("Yomi")
+                .timeout(notify_rust::Timeout::Milliseconds(5000))
+                .show();
+        });
+    }
+
     /// Handle streaming error by stopping streaming and showing error message
     fn handle_streaming_error(
         &mut self,
@@ -1178,6 +1220,15 @@ impl Model {
                         StreamingStatus::MaxIterations,
                         format!("Reached maximum iterations ({count})"),
                     );
+                }
+                AppEvent::Agent(kernel::event::AgentEvent::ReActLoopEnd {
+                    iteration_count,
+                    ..
+                }) => {
+                    let message = format!("Task completed ({iteration_count} iterations)");
+                    self.show_notification(&Notification::success(message.clone(), 3000));
+                    Self::send_desktop_notification("Yomi", &message);
+                    self.state.should_redraw = true;
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed

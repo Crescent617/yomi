@@ -43,6 +43,12 @@ pub enum AgentEvent {
         agent_id: AgentId,
         result: AgentResult,
     },
+    /// `ReAct` loop completed without tool calls (natural task completion)
+    ReActLoopEnd {
+        agent_id: AgentId,
+        iteration_count: usize,
+        message_count: usize,
+    },
     Failed {
         agent_id: AgentId,
         error: String,
