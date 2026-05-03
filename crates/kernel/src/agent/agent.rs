@@ -870,17 +870,11 @@ impl Agent {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
                 Err(e) if attempt >= max_retries => {
-                    // 发送不可恢复错误事件
-                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
-                        .await;
                     return self
                         .fail_agent("Streaming failed after max retries", e)
                         .await;
                 }
                 Err(e) if !Self::is_retryable_error(&e) => {
-                    // 发送不可恢复错误事件
-                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), false)
-                        .await;
                     return self
                         .fail_agent("Streaming failed with non-retryable error", e)
                         .await;
