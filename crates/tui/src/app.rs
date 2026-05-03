@@ -1222,7 +1222,7 @@ impl Model {
                 }) => {
                     self.finalize_assistant_message();
                     self.stop_streaming(StreamingStatus::Completed);
-                    let message = format!("Task completed ({iteration_count} iterations)");
+                    let message = format!("😸 Task completed ({iteration_count} iterations)");
                     Self::send_desktop_notification("Yomi", &message);
                     self.show_notification(&Notification::success(&message, 5000));
                     self.state.should_redraw = true;

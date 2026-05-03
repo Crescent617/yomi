@@ -269,12 +269,12 @@ impl FuzzyPicker {
             .max(self.config.min_width)
             .min(area.width.saturating_sub(4));
 
-        // Calculate height: fill most of available height (leave 2 rows margin)
-        let palette_height = area.height.saturating_sub(2);
+        // Calculate height: leave 2 rows margin top + 4 rows margin bottom
+        let palette_height = area.height.saturating_sub(6);
 
         let palette_area = Rect {
             x: area.x + (area.width - palette_width) / 2,
-            y: area.y + 1, // Just 1 row margin from top
+            y: area.y + 2, // 2 rows margin from top
             width: palette_width,
             height: palette_height,
         };

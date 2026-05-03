@@ -154,7 +154,7 @@ impl Component for TodoList {
 
         // Panel width: content + margin, but not exceeding max or screen limit
         let content_with_margin = (max_content_width as u16) + PANEL_MARGIN;
-        let panel_width = content_with_margin.min(MAX_PANEL_WIDTH).min(area.width / 3);
+        let panel_width = content_with_margin.min(MAX_PANEL_WIDTH).min(area.width / 2);
 
         // Calculate height: items + border(2) + optional more indicator(1)
         let panel_height =
