@@ -4,7 +4,6 @@ use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
     event::ControlCommand,
-    tools::file_state::FileStateStore,
     types::{ContentBlock, SessionId},
     Coordinator, SessionConfig,
 };
@@ -43,19 +42,15 @@ pub enum SessionArg {
 /// Resolve session from command line arguments
 pub async fn resolve_session(
     session_arg: &SessionArg,
-    is_first_session: bool,
+    is_launch: bool,
     coordinator: &Coordinator,
     app_storage: &AppStorage,
     working_dir: &Path,
     mk_config: impl Fn() -> SessionConfig,
 ) -> Result<SessionId> {
-    // Create empty file state store for new sessions
-    let empty_file_state = Arc::new(FileStateStore::new());
-
-    if !is_first_session {
-        return coordinator
-            .create_session(mk_config(), empty_file_state)
-            .await;
+    // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
+    if !is_launch {
+        return coordinator.create_session(mk_config()).await;
     }
 
     match session_arg {
@@ -65,16 +60,14 @@ pub async fn resolve_session(
             println!("Restoring session: {}", session_id.0);
 
             match coordinator
-                .restore_session(&session_id, mk_config(), empty_file_state.clone())
+                .restore_session(&session_id, mk_config())
                 .await
             {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    coordinator
-                        .create_session(mk_config(), empty_file_state.clone())
-                        .await
+                    coordinator.create_session(mk_config()).await
                 }
             }
         }
@@ -85,46 +78,36 @@ pub async fn resolve_session(
                 println!("Restoring previous session: {}", session_id.0);
 
                 match coordinator
-                    .restore_session(&session_id, mk_config(), empty_file_state.clone())
+                    .restore_session(&session_id, mk_config())
                     .await
                 {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        coordinator
-                            .create_session(mk_config(), empty_file_state.clone())
-                            .await
+                        coordinator.create_session(mk_config()).await
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                coordinator
-                    .create_session(mk_config(), empty_file_state.clone())
-                    .await
+                coordinator.create_session(mk_config()).await
             }
         },
         // No --session: create new session
-        SessionArg::New => {
-            coordinator
-                .create_session(mk_config(), empty_file_state.clone())
-                .await
-        }
+        SessionArg::New => coordinator.create_session(mk_config()).await,
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let source_id = SessionId(entry.session_id);
                 println!("Forking last session: {}", source_id.0);
                 coordinator
-                    .fork_session(&source_id, mk_config(), empty_file_state.clone())
+                    .fork_session(&source_id, mk_config())
                     .await
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                coordinator
-                    .create_session(mk_config(), empty_file_state.clone())
-                    .await
+                coordinator.create_session(mk_config()).await
             }
         },
         // --fork <id>: fork specific session
@@ -132,7 +115,7 @@ pub async fn resolve_session(
             let source_id = SessionId(id.clone());
             println!("Forking session: {}", source_id.0);
             coordinator
-                .fork_session(&source_id, mk_config(), empty_file_state.clone())
+                .fork_session(&source_id, mk_config())
                 .await
         }
     }
@@ -147,12 +130,12 @@ pub async fn run_session_loop(
     app_storage: Arc<AppStorage>,
     input_history: Vec<String>,
     session_messages: Vec<kernel::types::Message>,
-    is_first_session: bool,
+    is_launch: bool,
     initial_message: Option<String>,
 ) -> Result<SessionResult> {
     // Print startup info only in debug mode (DEBUG=1)
     if *DEBUG_MODE {
-        if is_first_session {
+        if is_launch {
             println!("yomi session started: {}", session_id.0);
             println!("Working directory: {}", ctx.working_dir.display());
         } else {

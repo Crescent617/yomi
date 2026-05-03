@@ -133,10 +133,12 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         ..config.agent.clone()
     };
 
+    let data_dir = config.data_dir.clone();
     let mk_config = || SessionConfig {
         agent: mk_agent_config(),
         project_path: working_dir.clone(),
         auto_approve_level: config.auto_approve,
+        data_dir: data_dir.clone(),
     };
 
     print_startup_info(&config);
@@ -148,7 +150,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         working_dir: working_dir.clone(),
     };
 
-    let mut is_first_session = true;
+    let mut is_launch = true; // First session in this process, should respect --resume/--fork args
     let mut input_history = app_storage
         .load_input_history(&working_dir)
         .await
@@ -171,7 +173,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     loop {
         let session_id = resolve_session(
             &session_arg,
-            is_first_session,
+            is_launch,
             &coordinator,
             &app_storage,
             &working_dir,
@@ -188,7 +190,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             app_storage.clone(),
             input_history.clone(),
             session_messages,
-            is_first_session,
+            is_launch,
             args.prompt.clone(),
         )
         .await?;
@@ -201,12 +203,12 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         // Handle session switching (/sessions command)
         if let Some(switch_to_id) = result.switch_to_session {
             session_arg = SessionArg::Specific(switch_to_id);
-            is_first_session = true; // Treat as first session to trigger restore flow
+            is_launch = true; // Treat as launch to trigger restore flow
             continue;
         }
 
         if result.should_create_new_session {
-            is_first_session = false;
+            is_launch = false; // Subsequent session, ignore --resume/--fork args
             session_arg = SessionArg::New;
             continue;
         }

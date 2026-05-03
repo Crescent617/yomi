@@ -1,4 +1,5 @@
 use crate::permissions::{Level, PermissionState};
+use crate::storage::SessionStateManager;
 use crate::types::{AgentId, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
@@ -27,17 +28,34 @@ pub struct SessionConfig {
     pub agent: AgentConfig,
     pub project_path: std::path::PathBuf,
     pub auto_approve_level: Level,
+    pub data_dir: std::path::PathBuf,
 }
 
 impl Session {
-    pub fn new(
+    pub async fn new(
         id: SessionId,
         config: SessionConfig,
         storage: Arc<dyn Storage>,
         agent_shared: Arc<AgentShared>,
-        file_state_store: Arc<crate::tools::file_state::FileStateStore>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        // Create file state store internally (kernel闭环)
+        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+
+        // Create session state manager for persistent storage
+        let state_manager = Arc::new(tokio::sync::Mutex::new(
+            SessionStateManager::new(&id, &config.data_dir).await?,
+        ));
+
+        // Load previous file states from disk into memory
+        let states = state_manager.lock().await.get_file_states().await?;
+        for (path, mtime) in states {
+            file_state_store.record(path, mtime);
+        }
+
+        // Inject state manager into file state store for persistence
+        file_state_store.set_state_manager(Arc::clone(&state_manager));
+
+        Ok(Self {
             id,
             config,
             storage,
@@ -46,7 +64,7 @@ impl Session {
             event_rx: None,
             permission_state: None,
             file_state_store,
-        }
+        })
     }
 
     pub async fn init(&mut self) -> Result<()> {
@@ -80,7 +98,7 @@ impl Session {
                 .with_subagent(self.config.agent.enable_subagent)
                 .with_file_state_store(Arc::clone(&self.file_state_store));
 
-        // Create AgentShared with permission state
+        // Create AgentShared with permission state and file state store
         let shared = Arc::new(AgentShared::new(
             self.agent_shared.provider.clone(),
             self.agent_shared.model_config.clone(),
@@ -91,6 +109,7 @@ impl Session {
             self.agent_shared.storage.clone(),
             permission_state,
             self.agent_shared.skill_folders.clone(),
+            Some(Arc::clone(&self.file_state_store)),
         ));
 
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, config);
@@ -195,10 +214,5 @@ impl Session {
             }
             None => Err(anyhow::anyhow!("Session not initialized")),
         }
-    }
-
-    /// Get a snapshot of the file state store
-    pub fn file_state_snapshot(&self) -> crate::tools::file_state::FileStateSnapshot {
-        self.file_state_store.snapshot()
     }
 }
