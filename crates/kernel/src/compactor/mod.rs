@@ -6,7 +6,6 @@
 
 use crate::providers::{ModelConfig, ModelStreamItem, Provider};
 use crate::types::{ContentBlock, Message, Role};
-use anyhow::Result;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -29,12 +28,12 @@ pub enum CompactionError {
     #[error("Compaction was cancelled")]
     Cancelled,
     #[error("API error: {0}")]
-    Api(#[from] anyhow::Error),
+    Api(String),
 }
 
 impl From<crate::providers::ProviderError> for CompactionError {
     fn from(e: crate::providers::ProviderError) -> Self {
-        CompactionError::Api(e.into())
+        CompactionError::Api(e.to_string())
     }
 }
 

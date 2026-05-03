@@ -1,12 +1,11 @@
 use crate::permissions::{Level, PermissionState};
 use crate::storage::SessionStateManager;
-use crate::types::{AgentId, SessionId};
+use crate::types::{AgentId, KernelError, Result, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
     event::Event,
     storage::Storage,
 };
-use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -131,7 +130,7 @@ impl Session {
                 handle.send_text(content).await?;
                 Ok(())
             }
-            None => Err(anyhow::anyhow!("Session not initialized")),
+            None => Err(KernelError::session("Session not initialized")),
         }
     }
 
@@ -147,7 +146,7 @@ impl Session {
                 handle.send_message(blocks).await?;
                 Ok(())
             }
-            None => Err(anyhow::anyhow!("Session not initialized")),
+            None => Err(KernelError::session("Session not initialized")),
         }
     }
 
@@ -169,8 +168,10 @@ impl Session {
             Some(handle) => handle
                 .send_permission_response(req_id, approved, remember)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to send permission response: {e}")),
-            None => Err(anyhow::anyhow!("Session not initialized")),
+                .map_err(|e| {
+                    KernelError::session(format!("Failed to send permission response: {e}"))
+                }),
+            None => Err(KernelError::session("Session not initialized")),
         }
     }
 
@@ -212,7 +213,7 @@ impl Session {
                 handle.force_compact().await?;
                 Ok(())
             }
-            None => Err(anyhow::anyhow!("Session not initialized")),
+            None => Err(KernelError::session("Session not initialized")),
         }
     }
 }

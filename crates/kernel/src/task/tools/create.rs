@@ -1,8 +1,7 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::{CreateTaskInput, CreateTaskOutput, TaskSummary};
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -56,12 +55,12 @@ impl Tool for TaskCreateTool {
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let subject = args["subject"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("subject is required"))?
+            .ok_or_else(|| KernelError::tool("subject is required"))?
             .to_string();
 
         let description = args["description"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("description is required"))?
+            .ok_or_else(|| KernelError::tool("description is required"))?
             .to_string();
 
         let metadata = args.get("metadata").and_then(|m| {

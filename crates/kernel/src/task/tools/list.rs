@@ -1,8 +1,7 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::{ListTasksOutput, TaskListItem};
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 

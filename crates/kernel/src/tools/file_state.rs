@@ -20,15 +20,9 @@ impl Default for FileStateStore {
 
 impl std::fmt::Debug for FileStateStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let has_manager = self
-            .state_manager
-            .read()
-            .is_ok_and(|m| m.is_some());
+        let has_manager = self.state_manager.read().is_ok_and(|m| m.is_some());
         f.debug_struct("FileStateStore")
-            .field(
-                "mtimes_count",
-                &self.mtimes.read().map_or(0, |m| m.len()),
-            )
+            .field("mtimes_count", &self.mtimes.read().map_or(0, |m| m.len()))
             .field("has_state_manager", &has_manager)
             .finish()
     }
@@ -105,7 +99,11 @@ impl FileStateStore {
     }
 
     /// Check staleness and return an error message if stale
-    pub fn check_staleness(&self, path: &Path, current_mtime: u64) -> Result<(), String> {
+    pub fn check_staleness(
+        &self,
+        path: &Path,
+        current_mtime: u64,
+    ) -> std::result::Result<(), String> {
         if self.is_stale(path, current_mtime) {
             Err(
                 "File has been modified since it was read. Read the file again before modifying."

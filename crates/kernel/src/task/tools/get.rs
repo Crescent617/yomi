@@ -1,8 +1,7 @@
 use crate::task::store::SharedTaskStore;
 use crate::task::types::GetTaskOutput;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -48,7 +47,7 @@ impl Tool for TaskGetTool {
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let task_id = args["taskId"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("taskId is required"))?
+            .ok_or_else(|| KernelError::tool("taskId is required"))?
             .to_string();
 
         let task = self.store.get_task(&self.task_list_id, &task_id).await?;

@@ -2,8 +2,7 @@ use crate::tools::base::get_mtime;
 use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -37,7 +36,7 @@ impl WriteTool {
     }
 
     /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &Path) -> Result<(), String> {
+    async fn check_staleness(&self, path: &Path) -> std::result::Result<(), String> {
         let store = self
             .file_state_store
             .as_ref()
@@ -84,10 +83,10 @@ impl Tool for WriteTool {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let file_path_str = args["file_path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'file_path' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'file_path' argument"))?;
         let content = args["content"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'content' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'content' argument"))?;
         let mode = args["mode"].as_str().unwrap_or("overwrite");
         let is_append = mode == "append";
 
@@ -136,7 +135,7 @@ impl Tool for WriteTool {
         if file_exists {
             let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+                .map_err(|e| KernelError::tool(format!("Failed to acquire write lock: {e}")))?;
 
             if is_append {
                 let mut file = tokio::fs::OpenOptions::new()

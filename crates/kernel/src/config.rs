@@ -1,10 +1,32 @@
 use crate::agent::AgentConfig;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
-use anyhow::Context;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
+use thiserror::Error;
+
+/// Configuration error type
+#[derive(Error, Debug, Clone)]
+pub enum ConfigError {
+    #[error("Failed to read config file: {0}")]
+    ReadError(String),
+    #[error("Failed to parse config file: {0}")]
+    ParseError(String),
+}
+
+impl From<std::io::Error> for ConfigError {
+    fn from(e: std::io::Error) -> Self {
+        Self::ReadError(e.to_string())
+    }
+}
+
+impl From<toml::de::Error> for ConfigError {
+    fn from(e: toml::de::Error) -> Self {
+        Self::ParseError(e.to_string())
+    }
+}
 
 /// Expand `~` to the user's home directory
 pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
@@ -128,7 +150,7 @@ impl std::str::FromStr for ModelProvider {
     type Err = String;
 
     #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         // Fast path: lowercase comparison without allocation
         match s.as_bytes() {
             b"openai" | b"OPENAI" | b"OpenAI" => Ok(Self::OpenAI),
@@ -242,11 +264,9 @@ impl Config {
     }
 
     /// Load configuration from file, then apply environment variable overrides
-    pub fn from_file(path: &PathBuf) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        let mut config: Self = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+    pub fn from_file(path: &PathBuf) -> std::result::Result<Self, ConfigError> {
+        let content = std::fs::read_to_string(path)?;
+        let mut config: Self = toml::from_str(&content)?;
         // Env vars always override file config
         config.load_from_env();
         Ok(config)

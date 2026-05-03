@@ -3,7 +3,6 @@
 //! This tool allows the main agent to schedule a reminder message
 //! that will be delivered after a specified delay.
 
-use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
@@ -12,7 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::AgentInput;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{ContentBlock, ToolOutput};
+use crate::types::{ContentBlock, KernelError, Result, ToolOutput};
 
 pub const REMINDER_TOOL_NAME: &str = "reminder";
 
@@ -60,11 +59,11 @@ impl Tool for ReminderTool {
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let delay = args["delay_seconds"]
             .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("delay_seconds must be a positive integer"))?;
+            .ok_or_else(|| KernelError::tool("delay_seconds must be a positive integer"))?;
 
         let message = args["message"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("message must be a string"))?
+            .ok_or_else(|| KernelError::tool("message must be a string"))?
             .to_string();
 
         let input_tx = self.input_tx.clone();

@@ -1,5 +1,4 @@
-use crate::types::{ToolDefinition, ToolOutput};
-use anyhow::Result;
+use crate::types::{Result, ToolDefinition, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;

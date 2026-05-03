@@ -4,9 +4,8 @@
 //! to clean text using html2text.
 
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
+use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::strs::truncate_with_suffix;
-use anyhow::Result;
 use async_trait::async_trait;
 use lru::LruCache;
 use serde_json::Value;
@@ -89,7 +88,7 @@ impl WebFetchTool {
     }
 
     /// Validate URL format and constraints
-    fn validate_url(url: &str) -> Result<String, String> {
+    fn validate_url(url: &str) -> std::result::Result<String, String> {
         if url.len() > MAX_URL_LENGTH {
             return Err(format!(
                 "URL exceeds maximum length of {MAX_URL_LENGTH} characters"
@@ -120,7 +119,7 @@ impl WebFetchTool {
     }
 
     /// Fetch content from URL
-    async fn fetch_content(&self, url: &str) -> Result<(String, usize), String> {
+    async fn fetch_content(&self, url: &str) -> std::result::Result<(String, usize), String> {
         // Check cache first
         {
             let mut cache = get_cache().lock().await;
@@ -231,7 +230,7 @@ impl Tool for WebFetchTool {
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let url = args["url"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'url' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'url' argument"))?;
 
         // Validate URL
         let validated_url = match Self::validate_url(url) {

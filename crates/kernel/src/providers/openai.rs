@@ -2,8 +2,7 @@ use crate::event::ContentChunk;
 use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
-use crate::types::{Message, Role, ToolDefinition};
-use anyhow::Result;
+use crate::types::{Message, Result, Role, ToolDefinition};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -152,7 +151,7 @@ impl Provider for OpenAIProvider {
         messages: &[Arc<Message>],
         tools: &[Arc<ToolDefinition>],
         config: &ModelConfig,
-    ) -> Result<ModelStream, ProviderError> {
+    ) -> std::result::Result<ModelStream, ProviderError> {
         let url = if config.endpoint.is_empty() {
             "https://api.openai.com/v1/chat/completions".to_string()
         } else {
@@ -301,13 +300,15 @@ impl Provider for OpenAIProvider {
                 }
             },
         )
-        .flat_map(|result: Result<Vec<ModelStreamItem>, ProviderError>| {
-            let items: Vec<Result<ModelStreamItem, ProviderError>> = match result {
-                Ok(items) => items.into_iter().map(Ok).collect(),
-                Err(e) => vec![Err(e)],
-            };
-            stream::iter(items)
-        })
+        .flat_map(
+            |result: std::result::Result<Vec<ModelStreamItem>, ProviderError>| {
+                let items: Vec<std::result::Result<ModelStreamItem, ProviderError>> = match result {
+                    Ok(items) => items.into_iter().map(Ok).collect(),
+                    Err(e) => vec![Err(e)],
+                };
+                stream::iter(items)
+            },
+        )
         .boxed();
 
         Ok(stream)
@@ -353,7 +354,7 @@ impl ToolCallAssembler {
     ///
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
-    fn process(&mut self, data: &str) -> Result<Vec<ModelStreamItem>, ProviderError> {
+    fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
         let response: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
             ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
         })?;

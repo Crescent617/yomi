@@ -1,5 +1,4 @@
-use crate::types::SessionId;
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Result, SessionId};
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqlitePool;
 
@@ -46,7 +45,7 @@ impl MetaStorage {
             .bind(working_dir)
             .execute(&self.pool)
             .await
-            .context("Failed to create session record")?;
+            .map_err(|e| KernelError::storage(format!("Failed to create session record: {e}")))?;
         Ok(())
     }
 
@@ -58,14 +57,16 @@ impl MetaStorage {
                 .bind(&parent_id.0)
                 .fetch_optional(&self.pool)
                 .await
-                .context("Failed to get parent session working_dir")?;
+                .map_err(|e| {
+                    KernelError::storage(format!("Failed to get parent session working_dir: {e}"))
+                })?;
 
         // Check if parent exists
         if parent_working_dir.is_none() {
-            return Err(anyhow::anyhow!(
+            return Err(KernelError::session(format!(
                 "Cannot fork session: parent session '{}' does not exist",
                 parent_id.0
-            ));
+            )));
         }
 
         sqlx::query("INSERT INTO sessions (id, parent_id, working_dir) VALUES (?, ?, ?)")
@@ -74,7 +75,9 @@ impl MetaStorage {
             .bind(parent_working_dir)
             .execute(&self.pool)
             .await
-            .context("Failed to create forked session record")?;
+            .map_err(|e| {
+                KernelError::storage(format!("Failed to create forked session record: {e}"))
+            })?;
         Ok(())
     }
 
@@ -90,7 +93,7 @@ impl MetaStorage {
         .bind(&id.0)
         .fetch_optional(&self.pool)
         .await
-        .context("Failed to get session record")?;
+        .map_err(|e| KernelError::storage(format!("Failed to get session record: {e}")))?;
 
         Ok(row.map(|r| r.into()))
     }
@@ -101,7 +104,7 @@ impl MetaStorage {
             .bind(&id.0)
             .execute(&self.pool)
             .await
-            .context("Failed to delete session record")?;
+            .map_err(|e| KernelError::storage(format!("Failed to delete session record: {e}")))?;
         Ok(())
     }
 
@@ -118,7 +121,7 @@ impl MetaStorage {
         .bind(&id.0)
         .execute(&self.pool)
         .await
-        .context("Failed to update message count")?;
+        .map_err(|e| KernelError::storage(format!("Failed to update message count: {e}")))?;
         Ok(())
     }
 
@@ -130,7 +133,7 @@ impl MetaStorage {
             .bind(&id.0)
             .execute(&self.pool)
             .await
-            .context("Failed to update session title")?;
+            .map_err(|e| KernelError::storage(format!("Failed to update session title: {e}")))?;
         Ok(())
     }
 
@@ -145,7 +148,7 @@ impl MetaStorage {
         )
         .fetch_all(&self.pool)
         .await
-        .context("Failed to list sessions")?;
+        .map_err(|e| KernelError::storage(format!("Failed to list sessions: {e}")))?;
 
         Ok(rows.into_iter().map(|r| r.into()).collect())
     }
@@ -163,7 +166,9 @@ impl MetaStorage {
         .bind(working_dir)
         .fetch_all(&self.pool)
         .await
-        .context("Failed to list sessions by working directory")?;
+        .map_err(|e| {
+            KernelError::storage(format!("Failed to list sessions by working directory: {e}"))
+        })?;
 
         Ok(rows.into_iter().map(|r| r.into()).collect())
     }

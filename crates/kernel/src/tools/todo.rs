@@ -1,7 +1,6 @@
 use crate::storage::TodoStorage;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
-use anyhow::Result;
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -84,19 +83,19 @@ Guidelines:
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let todos_array = args["todos"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("todos must be an array"))?;
+            .ok_or_else(|| KernelError::tool("todos must be an array"))?;
 
         // Validate todo items
         for item in todos_array {
             if item["id"].as_str().is_none() {
-                return Err(anyhow::anyhow!("todo id is required"));
+                return Err(KernelError::tool("todo id is required"));
             }
             if item["content"].as_str().is_none() {
-                return Err(anyhow::anyhow!("todo content is required"));
+                return Err(KernelError::tool("todo content is required"));
             }
             match item["status"].as_str() {
                 Some("pending" | "in_progress" | "completed") => {}
-                _ => return Err(anyhow::anyhow!("invalid status")),
+                _ => return Err(KernelError::tool("invalid status")),
             }
         }
 

@@ -4,8 +4,7 @@ use crate::event::Event;
 use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::Storage;
-use crate::types::SessionId;
-use anyhow::Result;
+use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -75,13 +74,15 @@ impl Coordinator {
     }
 
     /// Restore a session from storage by its ID
-    pub async fn restore_session(&self, session_id: &SessionId, config: SessionConfig) -> Result<SessionId> {
+    pub async fn restore_session(
+        &self,
+        session_id: &SessionId,
+        config: SessionConfig,
+    ) -> Result<SessionId> {
         // Verify session exists in storage
-        let session_record = self
-            .storage
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Session not found in storage: {}", session_id.0))?;
+        let session_record = self.storage.get_session(session_id).await?.ok_or_else(|| {
+            KernelError::session(format!("Session not found in storage: {}", session_id.0))
+        })?;
 
         tracing::info!("Restoring session {} from storage", session_id.0);
         self.init_session(session_record.id.clone(), config).await?;
@@ -90,7 +91,11 @@ impl Coordinator {
     }
 
     /// Fork a session: create new session with copied history from parent
-    pub async fn fork_session(&self, parent_id: &SessionId, config: SessionConfig) -> Result<SessionId> {
+    pub async fn fork_session(
+        &self,
+        parent_id: &SessionId,
+        config: SessionConfig,
+    ) -> Result<SessionId> {
         // Create new session with copied history in storage
         let new_id = self.storage.fork_session(parent_id).await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
@@ -117,7 +122,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         let result = session.read().await.send_message(content).await;
         if let Err(ref e) = result {
             tracing::error!("Failed to send message to session {}: {}", session_id.0, e);
@@ -139,7 +144,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         let result = session.read().await.send_blocks(blocks).await;
         if let Err(ref e) = result {
             tracing::error!("Failed to send blocks to session {}: {}", session_id.0, e);
@@ -160,7 +165,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         session.read().await.cancel();
         Ok(())
     }
@@ -175,7 +180,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         let result = session
             .read()
             .await
@@ -188,7 +193,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         session.read().await.set_permission_level(level).await;
         tracing::info!(
             "Permission level set to {:?} for session {}",
@@ -203,7 +208,7 @@ impl Coordinator {
         let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id.0))?;
+            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))?;
         let result = session.read().await.compact().await;
         if let Err(ref e) = result {
             tracing::error!("Failed to compact session {}: {}", session_id.0, e);

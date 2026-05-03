@@ -2,10 +2,9 @@ use crate::tools::base::{get_mtime, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
 use crate::tools::file_lock::{lock_shared_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
+use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
 use crate::utils::line_numbers::add_line_numbers;
-use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::Path;
@@ -42,7 +41,7 @@ impl ReadTool {
         // Acquire shared lock before reading to coordinate with writers
         let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+            .map_err(|e| KernelError::tool(format!("Failed to acquire read lock: {e}")))?;
 
         // Check file size
         let metadata = tokio::fs::metadata(path).await?;
@@ -83,7 +82,7 @@ impl ReadTool {
     ) -> Result<ToolOutput> {
         let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to acquire read lock: {e}"))?;
+            .map_err(|e| KernelError::tool(format!("Failed to acquire read lock for text: {e}")))?;
 
         let content = tokio::fs::read_to_string(path).await?;
         let lines: Vec<&str> = content.lines().collect();
@@ -182,7 +181,7 @@ impl Tool for ReadTool {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let path_str = args["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'path' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'path' argument"))?;
         let offset = args["offset"].as_u64().map_or(1, |n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n as usize);
         let line_numbers = args["line_numbers"].as_bool().unwrap_or(false);

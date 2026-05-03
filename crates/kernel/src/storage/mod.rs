@@ -10,8 +10,7 @@ pub use migrations::{run_migrations, CURRENT_SCHEMA_VERSION};
 pub use session_state::{FileState, SessionStateManager, StateEntry, STATE_VERSION};
 pub use todo::TodoStorage;
 
-use crate::types::{Message, SessionId, SessionRecord};
-use anyhow::Result;
+use crate::types::{Message, Result, SessionId, SessionRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

@@ -550,3 +550,178 @@ impl TokenUsage {
         self.total_tokens += other.total_tokens;
     }
 }
+
+/// Core error type for kernel operations
+#[derive(thiserror::Error, Debug, Clone)]
+pub enum KernelError {
+    /// I/O operation failed
+    #[error("IO error: {0}")]
+    Io(String),
+
+    /// Storage operation failed
+    #[error("Storage error: {0}")]
+    Storage(String),
+
+    /// Configuration error
+    #[error("Configuration error: {0}")]
+    Config(String),
+
+    /// Tool execution error
+    #[error("Tool error: {0}")]
+    Tool(String),
+
+    /// Serialization/deserialization error
+    #[error("Serialization error: {0}")]
+    Serde(String),
+
+    /// Permission denied
+    #[error("Permission denied: {0}")]
+    Permission(String),
+
+    /// Session not found or invalid
+    #[error("Session error: {0}")]
+    Session(String),
+
+    /// Task operation failed
+    #[error("Task error: {0}")]
+    Task(String),
+
+    /// Skill loading/parsing error
+    #[error("Skill error: {0}")]
+    Skill(String),
+
+    /// Plugin error
+    #[error("Plugin error: {0}")]
+    Plugin(String),
+
+    /// Cancellation error
+    #[error("Cancelled: {0}")]
+    Cancelled(String),
+
+    /// Agent execution error (nested for retry/cancellation checks)
+    #[error("Agent error: {0}")]
+    Agent(#[source] crate::agent::AgentError),
+}
+
+impl KernelError {
+    /// Create a new I/O error
+    pub fn io(msg: impl Into<String>) -> Self {
+        Self::Io(msg.into())
+    }
+
+    /// Create a new storage error
+    pub fn storage(msg: impl Into<String>) -> Self {
+        Self::Storage(msg.into())
+    }
+
+    /// Create a new configuration error
+    pub fn config(msg: impl Into<String>) -> Self {
+        Self::Config(msg.into())
+    }
+
+    /// Create a new tool error
+    pub fn tool(msg: impl Into<String>) -> Self {
+        Self::Tool(msg.into())
+    }
+
+    /// Create a new serialization error
+    pub fn serde(msg: impl Into<String>) -> Self {
+        Self::Serde(msg.into())
+    }
+
+    /// Create a new permission error
+    pub fn permission(msg: impl Into<String>) -> Self {
+        Self::Permission(msg.into())
+    }
+
+    /// Create a new session error
+    pub fn session(msg: impl Into<String>) -> Self {
+        Self::Session(msg.into())
+    }
+
+    /// Create a new task error
+    pub fn task(msg: impl Into<String>) -> Self {
+        Self::Task(msg.into())
+    }
+
+    /// Create a new skill error
+    pub fn skill(msg: impl Into<String>) -> Self {
+        Self::Skill(msg.into())
+    }
+
+    /// Create a new plugin error
+    pub fn plugin(msg: impl Into<String>) -> Self {
+        Self::Plugin(msg.into())
+    }
+
+    /// Create a new cancellation error
+    pub fn cancelled(msg: impl Into<String>) -> Self {
+        Self::Cancelled(msg.into())
+    }
+
+    /// Check if this is a cancellation error
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled(_) => true,
+            Self::Agent(e) => e.is_cancelled(),
+            _ => false,
+        }
+    }
+}
+
+impl From<std::io::Error> for KernelError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for KernelError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Serde(e.to_string())
+    }
+}
+
+impl From<toml::de::Error> for KernelError {
+    fn from(e: toml::de::Error) -> Self {
+        Self::Serde(e.to_string())
+    }
+}
+
+impl From<serde_yaml::Error> for KernelError {
+    fn from(e: serde_yaml::Error) -> Self {
+        Self::Serde(e.to_string())
+    }
+}
+
+impl From<crate::agent::AgentError> for KernelError {
+    fn from(e: crate::agent::AgentError) -> Self {
+        Self::Agent(e)
+    }
+}
+
+impl From<sqlx::Error> for KernelError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Storage(e.to_string())
+    }
+}
+
+impl From<chrono::ParseError> for KernelError {
+    fn from(e: chrono::ParseError) -> Self {
+        Self::Serde(e.to_string())
+    }
+}
+
+impl From<std::num::ParseIntError> for KernelError {
+    fn from(e: std::num::ParseIntError) -> Self {
+        Self::Serde(e.to_string())
+    }
+}
+
+impl From<reqwest::Error> for KernelError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Io(e.to_string())
+    }
+}
+
+/// Result type alias for kernel operations
+pub type Result<T> = std::result::Result<T, KernelError>;

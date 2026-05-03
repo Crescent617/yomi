@@ -1,6 +1,5 @@
 use super::entry::{StateEntry, STATE_VERSION};
-use crate::types::SessionId;
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs::{self, File};
@@ -33,9 +32,9 @@ impl SessionStateManager {
     /// If the file doesn't exist, creates it with a metadata header.
     pub async fn new(session_id: &SessionId, data_dir: &Path) -> Result<Self> {
         let sessions_dir = data_dir.join("sessions");
-        fs::create_dir_all(&sessions_dir)
-            .await
-            .context("Failed to create sessions directory")?;
+        fs::create_dir_all(&sessions_dir).await.map_err(|e| {
+            KernelError::storage(format!("Failed to create sessions directory: {e}"))
+        })?;
 
         let file_path = sessions_dir.join(format!("{}.state.jsonl", session_id.0));
 
@@ -45,7 +44,9 @@ impl SessionStateManager {
                 .append(true)
                 .open(&file_path)
                 .await
-                .context("Failed to open existing state file")?;
+                .map_err(|e| {
+                    KernelError::storage(format!("Failed to open existing state file: {e}"))
+                })?;
 
             Ok(Self {
                 file_path,
@@ -58,7 +59,7 @@ impl SessionStateManager {
                 .append(true)
                 .open(&file_path)
                 .await
-                .context("Failed to create state file")?;
+                .map_err(|e| KernelError::storage(format!("Failed to create state file: {e}")))?;
 
             let meta = StateEntry::Metadata {
                 v: STATE_VERSION,
@@ -86,7 +87,10 @@ impl SessionStateManager {
 
     /// Append a raw entry to the file.
     async fn append_entry(&mut self, entry: &StateEntry) -> Result<()> {
-        let file = self.file.as_mut().context("State file not open")?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| KernelError::storage("State file not open"))?;
 
         let line = serde_json::to_string(entry)?;
         file.write_all(line.as_bytes()).await?;
@@ -147,7 +151,7 @@ impl SessionStateManager {
             .write(true)
             .open(&self.file_path)
             .await
-            .context("Failed to truncate state file")?;
+            .map_err(|e| KernelError::storage(format!("Failed to truncate state file: {e}")))?;
 
         let meta = StateEntry::Metadata {
             v: STATE_VERSION,

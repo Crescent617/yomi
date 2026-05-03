@@ -3,7 +3,7 @@
 //! Tracks schema version in `_schema_migrations` table and applies
 //! pending migrations in order.
 
-use anyhow::{Context, Result};
+use crate::types::{KernelError, Result};
 use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
@@ -51,7 +51,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool
         .begin()
         .await
-        .context("Failed to begin migration transaction")?;
+        .map_err(|e| KernelError::storage(format!("Failed to begin migration transaction: {e}")))?;
 
     // Ensure migrations table exists (this is idempotent, safe inside transaction)
     sqlx::query(
@@ -63,14 +63,14 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     )
     .execute(&mut *tx)
     .await
-    .context("Failed to create _schema_migrations table")?;
+    .map_err(|e| KernelError::storage(format!("Failed to create _schema_migrations table: {e}")))?;
 
     // Get current version
     let current_version: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(version), -1) FROM _schema_migrations")
             .fetch_one(&mut *tx)
             .await
-            .context("Failed to query schema version")?;
+            .map_err(|e| KernelError::storage(format!("Failed to query schema version: {e}")))?;
 
     info!("Current database schema version: {}", current_version);
 
@@ -84,13 +84,13 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 
             // Execute each SQL statement in the migration
             for sql in migration.sqls {
-                sqlx::query(sql).execute(&mut *tx).await.with_context(|| {
-                    format!(
-                        "Failed to apply migration {} ({}): SQL: {}",
+                sqlx::query(sql).execute(&mut *tx).await.map_err(|e| {
+                    KernelError::storage(format!(
+                        "Failed to apply migration {} ({}): SQL: {}: {e}",
                         migration.version,
                         migration.name,
                         sql.trim()
-                    )
+                    ))
                 })?;
             }
 
@@ -102,7 +102,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .bind(migration.name)
             .execute(&mut *tx)
             .await
-            .context("Failed to update schema version")?;
+            .map_err(|e| KernelError::storage(format!("Failed to update schema version: {e}")))?;
 
             info!("Migration {} applied successfully", migration.version);
         }
@@ -113,7 +113,9 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
         sqlx::query_scalar("SELECT COALESCE(MAX(version), -1) FROM _schema_migrations")
             .fetch_one(&mut *tx)
             .await
-            .context("Failed to query final schema version")?;
+            .map_err(|e| {
+                KernelError::storage(format!("Failed to query final schema version: {e}"))
+            })?;
 
     if final_version == CURRENT_SCHEMA_VERSION {
         info!("Database schema is up to date (version {})", final_version);
@@ -126,9 +128,9 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     }
 
     // Commit all migration operations
-    tx.commit()
-        .await
-        .context("Failed to commit migration transaction")?;
+    tx.commit().await.map_err(|e| {
+        KernelError::storage(format!("Failed to commit migration transaction: {e}"))
+    })?;
 
     Ok(())
 }
@@ -152,7 +154,7 @@ async fn get_current_version(pool: &SqlitePool) -> Result<i64> {
     let version: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM _schema_migrations")
         .fetch_optional(pool)
         .await
-        .context("Failed to query schema version")?;
+        .map_err(|e| KernelError::storage(format!("Failed to query schema version: {e}")))?;
 
     Ok(version.unwrap_or(-1))
 }

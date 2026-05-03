@@ -4,9 +4,8 @@
 
 use crate::tools::webfetch::get_client;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::ToolOutput;
+use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::strs::truncate_with_suffix;
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,7 +45,7 @@ impl WebSearchTool {
     }
 
     /// Validate search query
-    fn validate_query(query: &str) -> Result<String, String> {
+    fn validate_query(query: &str) -> std::result::Result<String, String> {
         if query.is_empty() {
             return Err("Search query cannot be empty".to_string());
         }
@@ -59,7 +58,11 @@ impl WebSearchTool {
     }
 
     /// Perform web search using `DuckDuckGo` HTML interface
-    async fn search(&self, query: &str, num_results: usize) -> Result<Vec<SearchResult>, String> {
+    async fn search(
+        &self,
+        query: &str,
+        num_results: usize,
+    ) -> std::result::Result<Vec<SearchResult>, String> {
         let client = get_client();
 
         // Use DuckDuckGo HTML interface
@@ -91,7 +94,10 @@ impl WebSearchTool {
     }
 
     /// Parse `DuckDuckGo` HTML results
-    fn parse_duckduckgo_results(html: &str, limit: usize) -> Result<Vec<SearchResult>, String> {
+    fn parse_duckduckgo_results(
+        html: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<SearchResult>, String> {
         let document = scraper::Html::parse_document(html);
 
         // DuckDuckGo result selector
@@ -176,7 +182,7 @@ impl WebSearchTool {
     }
 
     /// Fetch content from a URL
-    async fn fetch_content(url: &str) -> Result<String, String> {
+    async fn fetch_content(url: &str) -> std::result::Result<String, String> {
         let client = get_client();
 
         let response = client
@@ -292,7 +298,7 @@ impl Tool for WebSearchTool {
         // Extract and validate query
         let query = args["query"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'query' argument"))?;
+            .ok_or_else(|| KernelError::tool("Missing 'query' argument"))?;
 
         let validated_query = match Self::validate_query(query) {
             Ok(q) => q,
