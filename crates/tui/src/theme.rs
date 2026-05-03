@@ -1,6 +1,12 @@
 //! Theme and styling configuration for the TUI
 //! All colors are configurable at runtime through semantic color names
+//!
+//! Environment variable override:
+//! Set `YOMI_TUI_THEME` to customize colors at startup.
+//! Format: "key=value,key2=value2" where keys are theme field names and values are hex colors.
+//! Example: `YOMI_TUI_THEME="background=#1e1e1e,accent_user=#ff5733"`
 
+use kernel::ENV_PREFIX;
 use std::sync::{LazyLock, RwLock};
 use tuirealm::ratatui::style::{Color, Modifier, Style};
 
@@ -45,8 +51,6 @@ pub struct ThemeConfig {
     pub code_bg: Color,
     /// Code text color
     pub code_fg: Color,
-    /// Code block border
-    pub code_border: Color,
 
     // UI elements
     /// Border color
@@ -87,7 +91,6 @@ impl Default for ThemeConfig {
             // Code colors
             code_bg: Color::Reset,
             code_fg: hex("#8CDCE0"),
-            code_border: hex("#707080"),
 
             // UI elements
             border: hex("#707080"),
@@ -101,8 +104,25 @@ impl Default for ThemeConfig {
 }
 
 // Global theme configuration - thread-safe
-static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> =
-    LazyLock::new(|| RwLock::new(ThemeConfig::default()));
+// Automatically applies {ENV_PREFIX}TUI_THEME environment variable overrides
+static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> = LazyLock::new(|| {
+    let mut config = ThemeConfig::default();
+
+    if let Ok(env_theme) = std::env::var(format!("{ENV_PREFIX}TUI_THEME")) {
+        for pair in env_theme.split(',') {
+            let pair = pair.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            if let Some((key, value)) = pair.split_once('=') {
+                // Silently apply override during initialization
+                let _ = try_apply_override(&mut config, key.trim(), value.trim());
+            }
+        }
+    }
+
+    RwLock::new(config)
+});
 
 /// Get the current theme configuration
 pub fn current_theme() -> ThemeConfig {
@@ -119,6 +139,40 @@ pub fn set_theme(config: ThemeConfig) {
 /// Reset to default theme
 pub fn reset_theme() {
     set_theme(ThemeConfig::default());
+}
+
+/// Try to apply a theme override. Returns `true` if successful, `false` if key is unknown.
+fn try_apply_override(config: &mut ThemeConfig, key: &str, value: &str) -> bool {
+    let color = if value.eq_ignore_ascii_case("reset") {
+        Color::Reset
+    } else {
+        hex(value)
+    };
+
+    let field = match key {
+        "background" => &mut config.background,
+        "surface" => &mut config.surface,
+        "surface_hover" => &mut config.surface_hover,
+        "text_primary" => &mut config.text_primary,
+        "text_secondary" => &mut config.text_secondary,
+        "text_muted" => &mut config.text_muted,
+        "accent_user" => &mut config.accent_user,
+        "user_msg_bg" => &mut config.user_msg_bg,
+        "accent_system" => &mut config.accent_system,
+        "accent_info" => &mut config.accent_info,
+        "accent_success" => &mut config.accent_success,
+        "accent_warning" => &mut config.accent_warning,
+        "accent_error" => &mut config.accent_error,
+        "code_bg" => &mut config.code_bg,
+        "code_fg" => &mut config.code_fg,
+        "border" => &mut config.border,
+        "border_active" => &mut config.border_active,
+        "divider" => &mut config.divider,
+        "selected_bg" => &mut config.selected_bg,
+        _ => return false,
+    };
+    *field = color;
+    true
 }
 
 /// Theme presets
@@ -183,9 +237,6 @@ pub mod colors {
     }
     pub fn code_fg() -> Color {
         current_theme().code_fg
-    }
-    pub fn code_border() -> Color {
-        current_theme().code_border
     }
 
     pub fn border() -> Color {

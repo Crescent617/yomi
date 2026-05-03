@@ -120,15 +120,14 @@ impl HelpDialog {
     }
 
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
-        // Calculate dialog size (centered, 70% width, 80% height)
-        let dialog_width = (f32::from(area.width) * 0.7).clamp(50.0, 100.0) as u16;
-        let dialog_width = dialog_width.min(area.width.saturating_sub(4));
-        let dialog_height = (f32::from(area.height) * 0.8).clamp(15.0, 40.0) as u16;
-        let dialog_height = dialog_height.min(area.height.saturating_sub(4));
+        // Calculate dialog size (same as picker: 60% width, min 60, margins 2 top / 4 bottom)
+        let percent_width = (f32::from(area.width) * 0.6) as u16;
+        let dialog_width = percent_width.max(60).min(area.width.saturating_sub(4));
+        let dialog_height = area.height.saturating_sub(6);
 
         let dialog_area = Rect {
             x: area.x + (area.width - dialog_width) / 2,
-            y: area.y + (area.height - dialog_height) / 2,
+            y: area.y + 2, // 2 rows margin from top (same as picker)
             width: dialog_width,
             height: dialog_height,
         };
