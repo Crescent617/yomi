@@ -35,7 +35,7 @@ pub use permissions::{Checker, Level, ToolLevelResolver};
 
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};
-pub use config::{env_names, expand_tilde, Config, ConfigError, ModelProvider, DEFAULT_DATA_DIR};
+pub use config::{env_names, Config, ModelProvider};
 pub use event::{
     AgentEvent, AgentResult, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent,
     ToolEvent, UserEvent,
@@ -50,6 +50,7 @@ pub use skill::{Skill, SkillLoader};
 pub use storage::{FsStorage, Storage, TodoStorage};
 pub use tools::{Tool, ToolRegistry};
 pub use types::*;
+pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 // Re-exports for providers
 pub use providers::{AnthropicProvider, OpenAIProvider};

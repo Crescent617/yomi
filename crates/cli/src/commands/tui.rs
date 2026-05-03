@@ -93,7 +93,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let working_dir = working_dir.canonicalize()?;
 
     let mut config = crate::utils::load_config(args.global.config.as_ref(), &working_dir)?;
-    
+
     // Load feature gates from environment
     let feature_gates = tui::FeatureGates::from_env();
 

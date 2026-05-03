@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.42"
+version = "0.1.43"
 edition = "2021"
 authors = ["Huaru Li <crescent617@outlook.com>"]
 license = "MIT"
@@ -72,3 +72,4 @@ lru = "0.18"
 html2text = "0.17"
 scraper = "0.26"
 urlencoding = "2.1"
+notify-rust = { version = "4.16", default-features = false }
