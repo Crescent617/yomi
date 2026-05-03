@@ -1,25 +1,41 @@
 use crate::agent::{AgentError, AgentInput, AgentState, CancelToken};
 use crate::permissions::Responder;
 use crate::types::{AgentId, ContentBlock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// 外部控制运行中 Agent 的句柄
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentHandle {
     pub id: AgentId,
     pub(super) input_tx: mpsc::Sender<AgentInput>,
     pub(super) state_rx: tokio::sync::watch::Receiver<AgentState>,
     cancel_token: CancelToken,
     pub(super) permission_responder: Option<Responder>,
+    /// Generation counter: inputs with lower generation are stale (cancelled before send)
+    input_stale_since: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for AgentHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentHandle")
+            .field("id", &self.id)
+            .field("cancel_token", &self.cancel_token)
+            .field("permission_responder", &self.permission_responder.is_some())
+            .field("input_generation", &self.input_stale_since.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentHandle {
-    pub const fn new(
+    pub fn new(
         id: AgentId,
         input_tx: mpsc::Sender<AgentInput>,
         state_rx: tokio::sync::watch::Receiver<AgentState>,
         cancel_token: CancelToken,
         permission_responder: Option<Responder>,
+        input_stale_since: Arc<AtomicU64>,
     ) -> Self {
         Self {
             id,
@@ -27,13 +43,19 @@ impl AgentHandle {
             state_rx,
             cancel_token,
             permission_responder,
+            input_stale_since,
         }
     }
 
     /// 发送用户消息给 Agent（支持多模态内容）
     pub async fn send_message(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
+        let generation = self.input_stale_since.load(Ordering::Relaxed);
+        let input = AgentInput::User {
+            content,
+            generation,
+        };
         self.input_tx
-            .send(AgentInput::User(content))
+            .send(input)
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }
@@ -69,8 +91,9 @@ impl AgentHandle {
         *self.state_rx.borrow()
     }
 
-    /// 请求取消
+    /// 请求取消，同时递增 generation 使此前发送的输入变为 stale
     pub fn cancel(&self) {
+        self.input_stale_since.fetch_add(1, Ordering::SeqCst);
         self.cancel_token.cancel();
     }
 

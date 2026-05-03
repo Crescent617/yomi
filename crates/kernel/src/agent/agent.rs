@@ -10,6 +10,7 @@ use crate::prompt::SystemPromptBuilder;
 use crate::tools::parallel::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
 use futures::TryStreamExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -18,7 +19,11 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 pub enum AgentInput {
     /// User message with multi-modal content blocks
-    User(Vec<ContentBlock>),
+    User {
+        content: Vec<ContentBlock>,
+        /// Generation counter at send time; lower values are stale (cancelled before send)
+        generation: u64,
+    },
     /// Background task completion
     TaskResult {
         task_id: String,
@@ -50,6 +55,8 @@ pub struct Agent {
     pending_token_usage: Option<MessageTokenUsage>,
     // Working directory for tool execution
     working_dir: std::path::PathBuf,
+    /// Generation counter: inputs with lower generation are stale (cancelled before send)
+    input_stale_since: Arc<AtomicU64>,
 }
 
 impl Agent {
@@ -118,6 +125,9 @@ impl Agent {
             None => (None, None),
         };
 
+        // Shared generation counter for tracking stale inputs (incremented on cancel)
+        let input_stale_since: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+
         let agent = Self {
             id: id.clone(),
             shared,
@@ -132,6 +142,7 @@ impl Agent {
             permission_checker,
             pending_token_usage: None,
             working_dir: args.working_dir,
+            input_stale_since: Arc::clone(&input_stale_since),
         };
 
         let handle_id = id.clone();
@@ -142,7 +153,14 @@ impl Agent {
             info!("Agent {} closed", handle_id);
         });
 
-        let handle = AgentHandle::new(id, input_tx, state_rx, cancel_token, permission_responder);
+        let handle = AgentHandle::new(
+            id,
+            input_tx,
+            state_rx,
+            cancel_token,
+            permission_responder,
+            Arc::clone(&input_stale_since),
+        );
         (handle, event_rx)
     }
 
@@ -321,7 +339,22 @@ impl Agent {
 
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
-            Some(AgentInput::User(content)) => {
+            Some(AgentInput::User {
+                content,
+                generation,
+            }) => {
+                // Check if this input was sent before the last cancellation
+                let current_gen = self.input_stale_since.load(Ordering::Relaxed);
+                if generation < current_gen {
+                    tracing::info!(
+                        "Agent {} discarding stale user input (generation {} < {})",
+                        self.id,
+                        generation,
+                        current_gen
+                    );
+                    return Ok(());
+                }
+
                 self.cancel_token.reset_if_cancelled();
                 let text_content: String = content
                     .iter()
@@ -391,12 +424,6 @@ impl Agent {
 
         // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
-        tracing::debug!(
-            "Agent {} preparing to stream with {} tool(s): {:?}",
-            self.id,
-            tools.len(),
-            tools.iter().map(|t| &t.name).collect::<Vec<_>>()
-        );
         tracing::debug!(
             "Agent {} iteration {}/{}",
             self.id,
