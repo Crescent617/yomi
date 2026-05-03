@@ -30,9 +30,12 @@ tempfile = { workspace = true }
 image = { workspace = true, features = ["png"] }
 base64 = { workspace = true }
 
+# Desktop notifications (optional, controlled by YOMI_DESKTOP_NOTIFY env var)
+notify-rust = { version = "4.16", default-features = false, features = ["z"] }
+
 # Unix signal handling for Ctrl-Z (suspend)
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["signal"] }
+nix = { version = "0.31", features = ["signal"] }
 
 [lints]
 workspace = true

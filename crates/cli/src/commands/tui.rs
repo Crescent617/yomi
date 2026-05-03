@@ -93,6 +93,9 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let working_dir = working_dir.canonicalize()?;
 
     let mut config = crate::utils::load_config(args.global.config.as_ref(), &working_dir)?;
+    
+    // Load feature gates from environment
+    let feature_gates = tui::FeatureGates::from_env();
 
     if args.yolo {
         config.auto_approve = Level::Dangerous;
@@ -144,7 +147,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     print_startup_info(&config);
 
     // Initialize global config for TUI
-    tui::init_config(config.clone());
+    tui::init_config(config.clone(), feature_gates);
 
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),
