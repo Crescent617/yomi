@@ -104,17 +104,14 @@ impl Tool for WriteTool {
         // Check if file exists
         let file_exists = tokio::fs::try_exists(&path).await?;
 
-        // If file exists and we have a file state store, check if it's been read
-        // Skip staleness check for append mode (we're not overwriting)
-        if file_exists {
+        // Check staleness for existing files (skip for append mode)
+        if file_exists && !is_append {
             if let Some(ref store) = self.file_state_store {
                 if !store.has_recorded(&path) {
                     return Ok(ToolOutput::error(format!(
                         "File has not been read yet. Read it first before writing: {file_path_str}"
                     )));
                 }
-
-                // Check for staleness
                 if let Err(error) = self.check_staleness(&path).await {
                     return Ok(ToolOutput::error(error));
                 }
@@ -128,61 +125,42 @@ impl Tool for WriteTool {
             }
         }
 
-        // Write the file (with exclusive lock for existing files)
-        let _original_content = if file_exists && !is_append {
-            // For existing files in overwrite mode, acquire exclusive lock first, then read and write
-            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
-
-            // Read original content for diff (while holding exclusive lock)
-            let original = tokio::fs::read_to_string(&path).await.ok();
-
-            // Write new content
-            tokio::fs::write(&path, content).await?;
-
-            original
-        } else if is_append && file_exists {
-            // Append mode: acquire lock, read original for diff, then append
-            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
-
-            // Read original content for diff
-            let original = tokio::fs::read_to_string(&path).await.ok();
-
-            // Append content
-            let mut file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .await?;
-            file.write_all(content.as_bytes()).await?;
-            file.flush().await?;
-            drop(file);
-
-            original
-        } else {
-            // For new files, just write (no lock needed)
-            tokio::fs::write(&path, content).await?;
-            None
+        // Determine operation type for response message
+        let op = match (file_exists, is_append) {
+            (false, _) => "created",
+            (true, true) => "appended",
+            (true, false) => "updated",
         };
+
+        // Write file: existing files need lock, append needs OpenOptions
+        if file_exists {
+            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {e}"))?;
+
+            if is_append {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .await?;
+                file.write_all(content.as_bytes()).await?;
+                file.flush().await?;
+            } else {
+                tokio::fs::write(&path, content).await?;
+            }
+        } else {
+            tokio::fs::write(&path, content).await?;
+        }
 
         // Update file state store
         if let Some(ref store) = self.file_state_store {
-            let mtime = get_mtime(&path).await;
-            store.record(path.clone(), mtime);
+            store.record(path.clone(), get_mtime(&path).await);
         }
 
-        // Build response
-        let response = if is_append && file_exists {
-            format!("File appended: {file_path_str}")
-        } else if file_exists {
-            format!("File updated: {file_path_str}")
-        } else {
-            format!("File created: {file_path_str}")
-        };
-
-        Ok(ToolOutput::text_with_summary(response, ""))
+        Ok(ToolOutput::text_with_summary(
+            format!("File {op}: {file_path_str}"),
+            "",
+        ))
     }
 }
 
