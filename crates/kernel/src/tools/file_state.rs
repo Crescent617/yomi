@@ -78,6 +78,18 @@ impl FileStateStore {
         self.get_mtime(path) != Some(current_mtime)
     }
 
+    /// Check staleness and return an error message if stale
+    pub fn check_staleness(&self, path: &Path, current_mtime: u64) -> Result<(), String> {
+        if self.is_stale(path, current_mtime) {
+            Err(
+                "File has been modified since it was read. Read the file again before modifying."
+                    .to_string(),
+            )
+        } else {
+            Ok(())
+        }
+    }
+
     /// Create a serializable snapshot of the current file states
     pub fn snapshot(&self) -> FileStateSnapshot {
         let entries = match self.mtimes.read() {

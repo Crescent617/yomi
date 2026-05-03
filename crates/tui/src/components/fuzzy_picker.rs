@@ -58,9 +58,9 @@ pub struct PickerConfig {
     pub title: String,
     pub placeholder: String,
     pub max_list_height: u16,
-    pub width_percent: f32,  // 0.0-1.0, defaults to 0.6
-    pub min_width: u16,      // Minimum width in columns, default 40
-    pub min_height: u16,     // Minimum height in rows, default 10
+    pub width_percent: f32, // 0.0-1.0, defaults to 0.6
+    pub min_width: u16,     // Minimum width in columns, default 40
+    pub min_height: u16,    // Minimum height in rows, default 10
 }
 
 impl Default for PickerConfig {
@@ -333,7 +333,7 @@ impl FuzzyPicker {
         // Filtered items list: fill available height
         // -4: 2 (top/bottom borders) + 2 (search input + separator)
         let max_visible = (palette_area.height.saturating_sub(4)) as usize;
-        
+
         // Auto-calculate scroll_offset to keep selected item visible
         if self.selected >= self.scroll_offset + max_visible {
             self.scroll_offset = self.selected.saturating_sub(max_visible - 1);
@@ -343,7 +343,7 @@ impl FuzzyPicker {
         // Clamp scroll_offset to valid range
         let max_scroll = self.filtered.len().saturating_sub(max_visible);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
-        
+
         if !self.filtered.is_empty() {
             let scroll = self.scroll_offset;
             let start = scroll;
@@ -378,12 +378,12 @@ impl FuzzyPicker {
                     ListItem::new(content).style(style)
                 })
                 .collect();
-            
+
             // Fill remaining space with empty items
             for _ in items.len()..max_visible {
                 items.push(ListItem::new("").style(Style::default()));
             }
-            
+
             let list = List::new(items).block(Block::default());
             frame.render_widget(list, chunks[1]);
         } else if !self.input.is_empty() {

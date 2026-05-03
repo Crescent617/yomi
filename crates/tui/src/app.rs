@@ -15,6 +15,9 @@ pub struct TuiResult {
     /// Session ID to switch to (for /sessions command)
     pub switch_to_session: Option<String>,
 }
+
+/// Callback type for input hook - called when user submits input
+pub type OnInputHook = Box<dyn Fn(&str) + Send + Sync>;
 use tokio::sync::mpsc;
 use tuirealm::{
     application::{Application, PollStrategy},
@@ -132,6 +135,8 @@ pub struct Model {
     permission_level: Level,
     /// Queued message waiting to be sent when streaming ends (only one allowed)
     queued_message: Option<Vec<ContentBlock>>,
+    /// Hook called when user submits input (for saving session, etc.)
+    on_input_hook: Option<OnInputHook>,
 }
 
 impl Model {
@@ -146,6 +151,7 @@ impl Model {
         session_messages: Vec<Message>,
         initial_message: Option<String>,
         session_id: String,
+        on_input_hook: Option<OnInputHook>,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app()?;
@@ -177,6 +183,7 @@ impl Model {
             session_id,
             permission_level: crate::config().auto_approve,
             queued_message: None,
+            on_input_hook,
         })
     }
 
@@ -1351,6 +1358,11 @@ impl Model {
                         let _ = self.init_input_history();
                     }
 
+                    // Call input hook if provided (e.g., for saving session)
+                    if let Some(ref hook) = self.on_input_hook {
+                        hook(&self.session_id);
+                    }
+
                     // Check if we're currently streaming
                     if self.state.is_streaming {
                         // Queue the message to be sent when streaming ends (only one allowed)
@@ -1831,6 +1843,7 @@ pub async fn run_tui(
     session_messages: Vec<Message>,
     initial_message: Option<String>,
     session_id: String,
+    on_input_hook: Option<OnInputHook>,
 ) -> Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -1843,6 +1856,7 @@ pub async fn run_tui(
         session_messages,
         initial_message,
         session_id,
+        on_input_hook,
     )?;
     model.init_banner()?;
     model.init_status_bar()?;
