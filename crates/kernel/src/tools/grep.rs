@@ -1,11 +1,15 @@
-use crate::tools::base::get_mtimes_concurrent;
+use crate::tools::base::{get_mtime, get_mtimes_concurrent};
+use crate::tools::file_state::FileStateStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::rg_helper::parse_json_output;
 use async_trait::async_trait;
 use serde_json::Value;
+
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -13,8 +17,11 @@ use tokio::time::timeout;
 pub const GREP_TOOL_NAME: &str = "grep";
 const DEFAULT_HEAD_LIMIT: usize = 250;
 const RIPGREP_TIMEOUT: Duration = Duration::from_secs(30);
+const TRUNCATED_MSG: &str = "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
 
-pub struct GrepTool;
+pub struct GrepTool {
+    file_state_store: Option<Arc<FileStateStore>>,
+}
 
 impl Default for GrepTool {
     fn default() -> Self {
@@ -24,7 +31,16 @@ impl Default for GrepTool {
 
 impl GrepTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            file_state_store: None,
+        }
+    }
+
+    /// Set the file state store for tracking reads
+    #[must_use]
+    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
+        self.file_state_store = Some(store);
+        self
     }
 
     /// Build ripgrep command arguments
@@ -69,7 +85,8 @@ impl GrepTool {
                 args.push("-c".to_string());
             }
             _ => {
-                // content mode
+                // content mode - use JSON for structured parsing
+                args.push("--json".to_string());
                 if show_line_numbers {
                     args.push("-n".to_string());
                 }
@@ -93,10 +110,6 @@ impl GrepTool {
                 }
             }
         }
-
-        // Note: We don't use -m/--max-count here because it limits matches per file,
-        // not total files. For files_with_matches mode, this could cause us to miss
-        // files if a single file has many matches. We handle limiting ourselves after sorting.
 
         // File type filter
         if let Some(ft) = file_type {
@@ -171,29 +184,6 @@ impl GrepTool {
         let limited: Vec<T> = items.iter().skip(skip).take(take).cloned().collect();
 
         (limited, was_truncated)
-    }
-
-    /// Parse ripgrep output based on output mode
-    fn parse_output(stdout: &str, output_mode: &str, limit: usize, offset: usize) -> String {
-        let lines: Vec<&str> = stdout.lines().collect();
-
-        if lines.is_empty() {
-            return match output_mode {
-                "files_with_matches" => "No files found".to_string(),
-                _ => "No matches found".to_string(),
-            };
-        }
-
-        // Apply offset and limit
-        let (limited, was_truncated) = Self::apply_pagination(&lines, limit, offset);
-
-        let mut result = limited.join("\n");
-
-        if was_truncated {
-            result.push_str("\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)");
-        }
-
-        result
     }
 
     /// Run ripgrep and return output
@@ -274,15 +264,7 @@ impl GrepTool {
             .collect();
 
         // Apply offset and limit
-        let skip = offset.min(sorted_paths.len());
-        let take = if limit == 0 {
-            sorted_paths.len() - skip
-        } else {
-            (sorted_paths.len() - skip).min(limit)
-        };
-
-        let was_truncated = sorted_paths.len() - skip > limit && limit > 0;
-        let limited: Vec<String> = sorted_paths.into_iter().skip(skip).take(take).collect();
+        let (limited, was_truncated) = Self::apply_pagination(&sorted_paths, limit, offset);
 
         let mut result = if limited.is_empty() {
             "No files found".to_string()
@@ -291,14 +273,14 @@ impl GrepTool {
         };
 
         if was_truncated {
-            result.push_str("\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)");
+            result.push_str(TRUNCATED_MSG);
         }
 
         result
     }
 
     /// Format count output with pagination
-    async fn format_count_output(&self, stdout: &str, limit: usize, offset: usize) -> String {
+    fn format_count_output(stdout: &str, limit: usize, offset: usize) -> String {
         let lines: Vec<&str> = stdout.lines().collect();
 
         if lines.is_empty() {
@@ -324,23 +306,45 @@ impl GrepTool {
 
         write!(
             result,
-            "\n\nFound {} total {} across {} {}",
-            total_matches,
+            "\n\nFound {total_matches} total {} across {file_count} {}",
             if total_matches == 1 {
                 "occurrence"
             } else {
                 "occurrences"
             },
-            file_count,
             if file_count == 1 { "file" } else { "files" }
         )
         .unwrap();
 
         if was_truncated {
-            result.push_str("\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)");
+            result.push_str(TRUNCATED_MSG);
         }
 
         result
+    }
+
+    /// Process content mode output using JSON parsing
+    /// Returns formatted output and the list of files that were displayed
+    fn process_content_output(
+        stdout: &str,
+        limit: usize,
+        offset: usize,
+        show_line_numbers: bool,
+    ) -> (String, Vec<PathBuf>) {
+        let parsed = parse_json_output(stdout);
+
+        if parsed.is_empty() {
+            return ("No matches found".to_string(), Vec::new());
+        }
+
+        let was_truncated = parsed.paginate(limit, offset).1;
+        let mut result = parsed.format_paginated(limit, offset, show_line_numbers);
+
+        if was_truncated {
+            result.push_str(TRUNCATED_MSG);
+        }
+
+        (result, parsed.unique_files_paginated(limit, offset))
     }
 }
 
@@ -495,26 +499,39 @@ impl Tool for GrepTool {
                     .await
                 }
                 "count" => {
-                    self.format_count_output(&stdout, limit.unwrap_or(DEFAULT_HEAD_LIMIT), offset)
-                        .await
+                    Self::format_count_output(&stdout, limit.unwrap_or(DEFAULT_HEAD_LIMIT), offset)
                 }
                 _ => {
-                    // content mode
-                    Self::parse_output(
+                    // content mode - use JSON parsing for accurate pagination and file tracking
+                    let (response, displayed_files) = Self::process_content_output(
                         &stdout,
-                        output_mode,
                         limit.unwrap_or(DEFAULT_HEAD_LIMIT),
                         offset,
-                    )
+                        show_line_numbers,
+                    );
+
+                    // Record only the files that were actually displayed (after pagination)
+                    if let Some(ref store) = self.file_state_store {
+                        for file_path in displayed_files {
+                            // Convert relative paths to absolute for recording
+                            let absolute_path = if file_path.is_absolute() {
+                                file_path
+                            } else {
+                                ctx.working_dir.join(file_path)
+                            };
+                            let mtime = get_mtime(&absolute_path).await;
+                            store.record(absolute_path, mtime);
+                        }
+                    }
+
+                    response
                 }
             }
         } else {
-            Self::parse_output(
-                &stdout,
-                output_mode,
-                limit.unwrap_or(DEFAULT_HEAD_LIMIT),
-                offset,
-            )
+            // Unexpected exit code - return stderr as error
+            return Ok(ToolOutput::error(format!(
+                "ripgrep exited with code {code}: {stderr}"
+            )));
         };
 
         Ok(ToolOutput::text_with_summary(response, &stderr))
@@ -676,11 +693,13 @@ mod tests {
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
-        assert!(result.text_content().contains("line 1"));
-        assert!(result.text_content().contains("line 2"));
-        assert!(result.text_content().contains("fn main"));
-        assert!(result.text_content().contains("line 4"));
-        assert!(result.text_content().contains("line 5"));
+        let content = result.text_content();
+        println!("Content output:\n{content}");
+        assert!(content.contains("line 1"), "Expected 'line 1' in:\n{content}");
+        assert!(content.contains("line 2"), "Expected 'line 2' in:\n{content}");
+        assert!(content.contains("fn main"), "Expected 'fn main' in:\n{content}");
+        assert!(content.contains("line 4"), "Expected 'line 4' in:\n{content}");
+        assert!(content.contains("line 5"), "Expected 'line 5' in:\n{content}");
     }
 
     #[tokio::test]
@@ -705,5 +724,128 @@ mod tests {
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains(".hidden.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_tool_content_mode_records_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(
+            base_path.join("test.rs"),
+            "fn main() {\n    println!(\"hello\");\n}",
+        )
+        .await
+        .unwrap();
+
+        // Use file_state_store to track reads
+        let store = Arc::new(FileStateStore::new());
+        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+
+        let args = serde_json::json!({
+            "pattern": "println!",
+            "output_mode": "content"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(result.success());
+
+        // Verify file was recorded in the store
+        let file_path = base_path.join("test.rs").canonicalize().unwrap();
+        assert!(store.has_recorded(&file_path));
+        assert!(store.get_mtime(&file_path).unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_grep_tool_files_with_matches_does_not_record() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(
+            base_path.join("test.rs"),
+            "fn main() {\n    println!(\"hello\");\n}",
+        )
+        .await
+        .unwrap();
+
+        // Use file_state_store to track reads
+        let store = Arc::new(FileStateStore::new());
+        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+
+        let args = serde_json::json!({
+            "pattern": "println!",
+            "output_mode": "files_with_matches"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(result.success());
+
+        // Verify file was NOT recorded (files_with_matches doesn't record)
+        let file_path = base_path.join("test.rs").canonicalize().unwrap();
+        assert!(!store.has_recorded(&file_path));
+    }
+
+    #[tokio::test]
+    async fn test_grep_tool_content_mode_pagination_records_only_displayed() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        // Create multiple files with matches
+        tokio::fs::write(base_path.join("file1.rs"), "fn main() { println!(\"1\"); }")
+            .await
+            .unwrap();
+        tokio::fs::write(base_path.join("file2.rs"), "fn foo() { println!(\"2\"); }")
+            .await
+            .unwrap();
+        tokio::fs::write(base_path.join("file3.rs"), "fn bar() { println!(\"3\"); }")
+            .await
+            .unwrap();
+
+        // Use file_state_store to track reads
+        let store = Arc::new(FileStateStore::new());
+        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+
+        // Search with limit=1, only first match should be recorded
+        let args = serde_json::json!({
+            "pattern": "println!",
+            "output_mode": "content",
+            "limit": 1
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(result.success());
+
+        println!("Result content:\n{}", result.text_content());
+
+        // Verify only one file was recorded
+        let file1 = base_path.join("file1.rs").canonicalize().unwrap();
+        let file2 = base_path.join("file2.rs").canonicalize().unwrap();
+        let file3 = base_path.join("file3.rs").canonicalize().unwrap();
+
+        println!("file1: {file1:?}");
+        println!("file2: {file2:?}");
+        println!("file3: {file3:?}");
+
+        // Check how many files were recorded
+        let recorded_count = [store.has_recorded(&file1), store.has_recorded(&file2), store.has_recorded(&file3)]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+
+        assert_eq!(recorded_count, 1, "Expected exactly 1 file recorded. file1={}, file2={}, file3={}",
+            store.has_recorded(&file1), store.has_recorded(&file2), store.has_recorded(&file3));
+
+        // The recorded file should be the one that appears in the output
+        let content = result.text_content();
+        if content.contains("file1.rs") {
+            assert!(store.has_recorded(&file1), "file1.rs should be recorded");
+        } else if content.contains("file2.rs") {
+            assert!(store.has_recorded(&file2), "file2.rs should be recorded");
+        } else if content.contains("file3.rs") {
+            assert!(store.has_recorded(&file3), "file3.rs should be recorded");
+        }
     }
 }

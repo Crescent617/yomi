@@ -6,6 +6,7 @@ pub mod id;
 pub mod image;
 pub mod line_numbers;
 pub mod path;
+pub mod rg_helper;
 pub mod strs;
 pub mod tokens;
 
