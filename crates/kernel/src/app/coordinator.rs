@@ -1,17 +1,19 @@
 use crate::agent::AgentShared;
 use crate::app::session::{Session, SessionConfig};
-use crate::event::Event;
+use crate::event::{AgentEvent, Event};
 use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::{MessageStore, SessionStore, StorageSet};
 use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 pub struct Coordinator {
     agent_shared: Arc<AgentShared>,
-    sessions: RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>,
+    sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
+    /// Broadcast channels for session events (for forwarding and cleanup)
+    session_event_senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
 }
 
 impl Coordinator {
@@ -59,7 +61,8 @@ impl Coordinator {
         ));
         Self {
             agent_shared,
-            sessions: RwLock::new(HashMap::new()),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            session_event_senders: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -74,14 +77,94 @@ impl Coordinator {
 
     /// Initialize a session in memory
     async fn init_session(&self, session_id: SessionId, config: SessionConfig) -> Result<()> {
-        let session = Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared))
-            .await?;
+        // Check if session already exists in memory
+        if self.get_session(&session_id).await.is_some() {
+            return Err(KernelError::session(format!(
+                "Session {} already initialized",
+                session_id.0
+            )));
+        }
+
+        // Initialize session and get the event receiver directly
+        let (session, event_rx) =
+            Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared)).await?;
+
+        // Get the main agent ID for monitoring
+        let main_agent_id = session.main_agent_id().cloned();
+
+        // Create broadcast channel for external consumers
+        let (broadcast_tx, _) = broadcast::channel::<Event>(256);
+
+        // Store the broadcast sender
+        self.session_event_senders
+            .write()
+            .await
+            .insert(session_id.clone(), broadcast_tx.clone());
+
+        // Spawn event forwarding task
+        let sessions_clone = Arc::clone(&self.sessions);
+        let senders_clone = Arc::clone(&self.session_event_senders);
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            Self::forward_session_events(
+                sid_clone,
+                event_rx,
+                broadcast_tx,
+                main_agent_id,
+                sessions_clone,
+                senders_clone,
+            )
+            .await;
+        });
 
         self.sessions
             .write()
             .await
             .insert(session_id, Arc::new(RwLock::new(session)));
+
         Ok(())
+    }
+
+    /// Forward events from agent to broadcast channel and handle cleanup
+    async fn forward_session_events(
+        session_id: SessionId,
+        mut agent_rx: mpsc::Receiver<Event>,
+        broadcast_tx: broadcast::Sender<Event>,
+        main_agent_id: Option<crate::types::AgentId>,
+        sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
+        senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
+    ) {
+        let sid_str = session_id.0.clone();
+        tracing::info!("Event forwarding started for session {}", sid_str);
+
+        while let Some(event) = agent_rx.recv().await {
+            // Check if this is the main agent closing
+            if let Event::Agent(AgentEvent::Shutdown { agent_id, error }) = &event {
+                if main_agent_id.as_ref() == Some(agent_id) {
+                    tracing::info!(
+                        "Main agent {} for session {} closed: error={:?}",
+                        agent_id.as_str(),
+                        sid_str,
+                        error
+                    );
+                    // Broadcast the closed event before cleanup
+                    let _ = broadcast_tx.send(event.clone());
+                    // Remove session from coordinator
+                    sessions.write().await.remove(&session_id);
+                    senders.write().await.remove(&session_id);
+                    tracing::info!("Session {} removed from coordinator", sid_str);
+                    break;
+                }
+            }
+
+            // Broadcast event to all subscribers
+            if broadcast_tx.send(event).is_err() {
+                // No active subscribers (this is ok, receivers can come and go)
+                tracing::trace!("No active subscribers for session {} events", sid_str);
+            }
+        }
+
+        tracing::info!("Event forwarding ended for session {}", sid_str);
     }
 
     /// Restore a session from storage by its ID
@@ -164,13 +247,20 @@ impl Coordinator {
         result
     }
 
-    pub async fn take_session_event_receiver(
+    /// Subscribe to events for a session (to be called by TUI)
+    /// Returns None if session not found
+    /// Each call returns a new receiver that will receive all future events
+    pub async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Option<tokio::sync::mpsc::Receiver<Event>> {
-        let session = self.get_session(session_id).await?;
-        let rx = session.write().await.take_event_receiver();
-        rx
+    ) -> Option<broadcast::Receiver<Event>> {
+        Some(
+            self.session_event_senders
+                .read()
+                .await
+                .get(session_id)?
+                .subscribe(),
+        )
     }
 
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {

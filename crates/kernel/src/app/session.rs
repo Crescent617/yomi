@@ -16,7 +16,6 @@ pub struct Session {
     #[allow(dead_code)]
     agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
-    event_rx: Option<mpsc::Receiver<Event>>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
     /// File state store for tracking file modification times
@@ -35,11 +34,12 @@ pub struct SessionConfig {
 impl Session {
     /// Initialize a new session with the main agent spawned.
     /// This is the single entry point for session creation.
+    /// Returns (Session, `mpsc::Receiver<Event>`) - the receiver must be consumed by caller.
     pub(crate) async fn init(
         id: SessionId,
         config: SessionConfig,
         agent_shared: Arc<AgentShared>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, mpsc::Receiver<Event>)> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
 
         let permission_state = Self::create_permission_state(&config);
@@ -53,15 +53,15 @@ impl Session {
         )
         .await?;
 
-        Ok(Self {
+        let session = Self {
             id,
             config,
             agent_shared,
             main_agent: Some(main_agent),
-            event_rx: Some(event_rx),
             permission_state,
             file_state_store,
-        })
+        };
+        Ok((session, event_rx))
     }
 
     /// Create and populate the file state store for this session
@@ -109,20 +109,16 @@ impl Session {
             .await
             .unwrap_or_default();
 
-        let spawn_args = AgentSpawnArgs::new(
-            config.agent.system_prompt.clone(),
-            id.0.clone(),
-        )
-        .with_skills(config.agent.skills.clone())
-        .with_history(history)
-        .with_max_iterations(config.agent.max_iterations)
-        .with_working_dir(config.project_path.clone())
-        .with_subagent(config.agent.enable_subagent)
-        .with_file_state_store(Arc::clone(file_state_store));
+        let spawn_args = AgentSpawnArgs::new(config.agent.system_prompt.clone(), id.0.clone())
+            .with_skills(config.agent.skills.clone())
+            .with_history(history)
+            .with_max_iterations(config.agent.max_iterations)
+            .with_working_dir(config.project_path.clone())
+            .with_subagent(config.agent.enable_subagent)
+            .with_file_state_store(Arc::clone(file_state_store));
 
         let shared = Arc::new(
-            agent_shared
-                .with_per_session(permission_state, Some(Arc::clone(file_state_store))),
+            agent_shared.with_per_session(permission_state, Some(Arc::clone(file_state_store))),
         );
 
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args);
@@ -197,10 +193,6 @@ impl Session {
 
     pub fn main_agent_id(&self) -> Option<&AgentId> {
         self.main_agent.as_ref().map(|h| &h.id)
-    }
-
-    pub const fn take_event_receiver(&mut self) -> Option<mpsc::Receiver<Event>> {
-        self.event_rx.take()
     }
 
     /// Update permission level at runtime

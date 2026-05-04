@@ -36,7 +36,7 @@ impl FeatureGates {
 
 /// Callback type for input hook - called when user submits input
 pub type OnInputHook = Box<dyn Fn(&str) + Send + Sync>;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tuirealm::{
     application::{Application, PollStrategy},
     listener::EventListenerCfg,
@@ -48,7 +48,7 @@ use tuirealm::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use kernel::event::{ControlCommand, Event as AppEvent};
+use kernel::event::{ControlCommand, Event};
 use kernel::permissions::Level;
 use kernel::tools::TODO_WRITE_TOOL_NAME;
 use kernel::types::{ContentBlock, Message};
@@ -121,7 +121,7 @@ pub struct Model {
     pub state: AppState,
     pub terminal: CrosstermTerminalAdapter,
     /// Channel to receive events from kernel
-    pub event_rx: mpsc::Receiver<AppEvent>,
+    pub event_rx: broadcast::Receiver<Event>,
     /// Channel to send input to kernel (supports multi-modal content blocks)
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
@@ -160,7 +160,7 @@ pub struct Model {
 impl Model {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        event_rx: mpsc::Receiver<AppEvent>,
+        event_rx: broadcast::Receiver<Event>,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
         ctrl_tx: mpsc::Sender<ControlCommand>,
         session_store: Arc<dyn kernel::storage::SessionStore>,
@@ -993,7 +993,7 @@ impl Model {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 // User message from kernel (render after kernel accepts it)
-                AppEvent::User(kernel::event::UserEvent::Message { content }) => {
+                Event::User(kernel::event::UserEvent::Message { content }) => {
                     let blocks_json = serde_json::to_string(&content).unwrap_or_default();
                     let _ = self.app.attr(
                         &Id::ChatView,
@@ -1003,7 +1003,7 @@ impl Model {
                     self.scroll_chat_to_bottom();
                     self.state.should_redraw = true;
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
+                Event::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                     self.state.is_streaming = true;
                     // Clear tool call delta when receiving regular content
                     self.clear_tool_call_delta();
@@ -1017,7 +1017,7 @@ impl Model {
                         kernel::event::ContentChunk::RedactedThinking => {}
                     }
                 }
-                AppEvent::Model(kernel::event::ModelEvent::ToolCallDelta {
+                Event::Model(kernel::event::ModelEvent::ToolCallDelta {
                     tool_name,
                     arguments_delta,
                     ..
@@ -1028,17 +1028,17 @@ impl Model {
                     self.app.attr(&Id::InfoBar, attr, value)?;
                     self.state.should_redraw = true;
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Error { error, .. }) => {
+                Event::Model(kernel::event::ModelEvent::Error { error, .. }) => {
                     // Model-level error: stop streaming and show error
                     self.handle_streaming_error(
                         StreamingStatus::Failed,
                         format!("Model error: {error}"),
                     );
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Request { .. }) => {
+                Event::Model(kernel::event::ModelEvent::Request { .. }) => {
                     self.start_streaming();
                 }
-                AppEvent::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
+                Event::Model(kernel::event::ModelEvent::Compacting { active, .. }) => {
                     // Show/hide compacting status in InfoBar
                     let attr = if active {
                         Attribute::Custom(attr::START_COMPACTING)
@@ -1048,7 +1048,7 @@ impl Model {
                     self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
                     self.state.should_redraw = true;
                 }
-                AppEvent::Model(kernel::event::ModelEvent::TokenUsage {
+                Event::Model(kernel::event::ModelEvent::TokenUsage {
                     total_tokens,
                     context_window,
                     ..
@@ -1062,7 +1062,7 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Started {
+                Event::Tool(kernel::event::ToolEvent::Started {
                     tool_id,
                     tool_name,
                     arguments,
@@ -1090,7 +1090,7 @@ impl Model {
 
                     self.state.should_redraw = true;
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Output {
+                Event::Tool(kernel::event::ToolEvent::Output {
                     tool_id,
                     output,
                     content_blocks,
@@ -1117,7 +1117,7 @@ impl Model {
                         let _ = self.terminal.enable_mouse_capture();
                     }
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Error {
+                Event::Tool(kernel::event::ToolEvent::Error {
                     tool_id,
                     error,
                     elapsed_ms,
@@ -1139,7 +1139,7 @@ impl Model {
                         let _ = self.terminal.enable_mouse_capture();
                     }
                 }
-                AppEvent::Tool(kernel::event::ToolEvent::Progress {
+                Event::Tool(kernel::event::ToolEvent::Progress {
                     tool_id,
                     message,
                     tokens,
@@ -1156,17 +1156,17 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                AppEvent::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
+                Event::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
                     self.handle_streaming_cancelled(operation.as_deref());
                 }
-                AppEvent::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
+                Event::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
                     self.handle_streaming_error(
                         StreamingStatus::Failed,
                         format!("Agent error: {error}"),
                     );
                 }
                 // Error events - recoverable or non-recoverable
-                AppEvent::Agent(kernel::event::AgentEvent::Error {
+                Event::Agent(kernel::event::AgentEvent::Error {
                     phase,
                     error,
                     is_recoverable,
@@ -1187,7 +1187,7 @@ impl Model {
                     }
                 }
                 // Retrying event - show in status bar
-                AppEvent::Agent(kernel::event::AgentEvent::Retrying {
+                Event::Agent(kernel::event::AgentEvent::Retrying {
                     attempt,
                     max_attempts,
                     reason,
@@ -1199,17 +1199,14 @@ impl Model {
                     self.state.should_redraw = true;
                 }
                 // Max iterations reached - show in chat view
-                AppEvent::Agent(kernel::event::AgentEvent::MaxIterationsReached {
-                    count, ..
-                }) => {
+                Event::Agent(kernel::event::AgentEvent::MaxIterationsReached { count, .. }) => {
                     self.handle_streaming_error(
                         StreamingStatus::MaxIterations,
                         format!("Reached maximum iterations ({count})"),
                     );
                 }
-                AppEvent::Agent(kernel::event::AgentEvent::ReActLoopEnd {
-                    iteration_count,
-                    ..
+                Event::Agent(kernel::event::AgentEvent::ReActLoopEnd {
+                    iteration_count, ..
                 }) => {
                     self.finalize_assistant_message();
                     self.stop_streaming(StreamingStatus::Completed);
@@ -1218,9 +1215,20 @@ impl Model {
                     self.show_notification(&Notification::success(&message, 5000));
                     self.state.should_redraw = true;
                 }
+                // Agent closed - only handle error cases (normal completion handled by ReActLoopEnd)
+                Event::Agent(kernel::event::AgentEvent::Shutdown {
+                    error: Some(err), ..
+                }) => {
+                    self.finalize_assistant_message();
+                    self.handle_streaming_error(
+                        StreamingStatus::Failed,
+                        format!("Agent closed with error: {err}"),
+                    );
+                    self.state.should_redraw = true;
+                }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed
-                AppEvent::Agent(kernel::event::AgentEvent::PermissionRequest {
+                Event::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
                     tool_name,
                     tool_args,
@@ -1855,7 +1863,7 @@ impl Model {
 /// Run the TUI application
 #[allow(clippy::too_many_arguments, clippy::future_not_send)]
 pub async fn run_tui(
-    event_rx: mpsc::Receiver<AppEvent>,
+    event_rx: broadcast::Receiver<Event>,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
     session_store: Arc<dyn kernel::storage::SessionStore>,
