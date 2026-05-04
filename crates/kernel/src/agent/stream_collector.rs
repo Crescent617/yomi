@@ -11,7 +11,8 @@ use crate::types::{ContentBlock, ToolCall};
 pub struct StreamCollectionResult {
     pub content_blocks: Vec<ContentBlock>,
     pub tool_calls: Vec<ToolCall>,
-    pub token_usage: Option<(u32, u32)>,
+    /// Token usage
+    pub token_usage: Option<crate::providers::TokenUsage>,
 }
 
 /// Internal state for stream collection
@@ -22,7 +23,8 @@ pub struct StreamCollectorState {
     thinking_signature: Option<String>,
     has_redacted_thinking: bool,
     pending_tool_calls: Vec<ToolCall>,
-    token_usage: Option<(u32, u32)>,
+    /// Token usage
+    token_usage: Option<crate::providers::TokenUsage>,
 }
 
 impl StreamCollectorState {
@@ -55,8 +57,8 @@ impl StreamCollectorState {
         });
     }
 
-    pub(crate) fn handle_token_usage(&mut self, prompt_tokens: u32, completion_tokens: u32) {
-        self.token_usage = Some((prompt_tokens, completion_tokens));
+    pub(crate) fn handle_token_usage(&mut self, usage: crate::providers::TokenUsage) {
+        self.token_usage = Some(usage);
     }
 
     /// Build content blocks, tool calls, and token usage from collected state

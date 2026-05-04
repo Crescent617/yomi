@@ -689,7 +689,9 @@ impl Component for InputMock {
                     // Check if selection overlaps with this visual line
                     if norm.start < line_end && norm.end > line_start {
                         // There is overlap, split into segments
-                        let sel_start_in_line = norm.start.saturating_sub(line_start);
+                        // Clamp positions to valid range within vl.text (which may be empty)
+                        let sel_start_in_line =
+                            norm.start.saturating_sub(line_start).min(vl.text.len());
                         let sel_end_in_line =
                             norm.end.saturating_sub(line_start).min(vl.text.len());
 

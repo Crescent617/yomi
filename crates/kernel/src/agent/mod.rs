@@ -11,7 +11,7 @@ pub use agent::{Agent, AgentInput};
 pub use cancel::CancelToken;
 pub use handle::AgentHandle;
 pub use message_buffer::MessageBuffer;
-pub use simple::{cancelled_error, is_cancelled_error, SimpleAgent};
+pub use simple::{cancelled_error, is_cancelled_error, ExecuteMetrics, SimpleAgent};
 pub use stream_collector::{StreamCollectionResult, StreamCollectorState};
 pub use types::{
     AgentConfig, AgentError, AgentExecutionContext, AgentShared, AgentSpawnArgs, AgentState,

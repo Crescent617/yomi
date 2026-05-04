@@ -270,7 +270,7 @@ pub struct AgentShared {
     pub project_memory: Arc<crate::project_memory::MemoryFiles>,
     /// Context compactor for managing long conversations
     pub compactor: Option<crate::compactor::Compactor>,
-    /// Storage for message persistence
+    /// Storage for message persistence and token usage
     pub storage: Option<Arc<dyn crate::storage::Storage>>,
     /// Shared permission state for all agents in a session
     pub permission_state: Option<crate::permissions::PermissionState>,

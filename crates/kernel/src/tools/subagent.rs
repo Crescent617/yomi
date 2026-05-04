@@ -259,8 +259,11 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                 let tool_id = ctx.tool_call_id.to_string();
 
                 // Spawn background task to execute subagent
+                // Clone shared resources for the async block
+                let shared = self.shared.clone();
+                let parent_session_id = self.parent_session_id.clone();
                 tokio::spawn(async move {
-                    let (output, status) = Self::execute_simple_agent(
+                    let (output, status) = Self::execute_simple_agent_with_shared(
                         &mut simple_agent,
                         system_prompt,
                         history,
@@ -269,6 +272,8 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                         &parent_event_tx,
                         &parent_id,
                         &tool_id,
+                        shared,
+                        parent_session_id,
                     )
                     .await;
 
@@ -288,17 +293,18 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                 Ok(ToolOutput::text(result))
             }
             SubAgentMode::Sync => {
-                let (output, status) = Self::execute_simple_agent(
-                    &mut simple_agent,
-                    system_prompt,
-                    history,
-                    prompt,
-                    cancel_token,
-                    &self.parent_event_tx,
-                    &self.parent_id,
-                    ctx.tool_call_id,
-                )
-                .await;
+                let (output, status) = self
+                    .execute_simple_agent(
+                        &mut simple_agent,
+                        system_prompt,
+                        history,
+                        prompt,
+                        cancel_token,
+                        &self.parent_event_tx,
+                        &self.parent_id,
+                        ctx.tool_call_id,
+                    )
+                    .await;
 
                 info!(
                     "Sub-agent {} completed with status: {:?}",
@@ -414,9 +420,31 @@ impl SubagentTool {
         }
     }
 
-    /// Execute a `SimpleAgent` and collect output with progress events
+    /// Static helper to record token usage
+    async fn do_record_token_usage(
+        shared: Arc<AgentShared>,
+        parent_session_id: &str,
+        parent_id: &AgentId,
+        metrics: &crate::agent::ExecuteMetrics,
+    ) {
+        if let Some(storage) = &shared.storage {
+            let record = crate::types::TokenRecord::new(
+                crate::types::SessionId(parent_session_id.to_string()),
+                parent_id.clone(),
+                metrics.token_usage,
+                shared.model_config.model_id.clone(),
+                shared.model_config.provider.to_string(),
+                crate::types::UsageType::Subagent,
+            );
+            if let Err(e) = storage.record_token_usage(&record).await {
+                tracing::warn!("Failed to record subagent token usage: {}", e);
+            }
+        }
+    }
+
+    /// Execute a `SimpleAgent` with shared resources (for async mode)
     #[allow(clippy::too_many_arguments)]
-    async fn execute_simple_agent(
+    async fn execute_simple_agent_with_shared(
         simple_agent: &mut SimpleAgent,
         system_prompt: String,
         history: Option<Vec<Arc<Message>>>,
@@ -425,6 +453,8 @@ impl SubagentTool {
         parent_event_tx: &mpsc::Sender<Event>,
         parent_id: &AgentId,
         tool_id: &str,
+        shared: Arc<AgentShared>,
+        parent_session_id: String,
     ) -> (String, SubAgentStatus) {
         let event_tx = parent_event_tx.clone();
         let agent_id = parent_id.clone();
@@ -446,7 +476,11 @@ impl SubagentTool {
         // Handle result and send final progress
         match result {
             Ok((_, metrics)) => {
-                let total = metrics.total_prompt_tokens + metrics.total_completion_tokens;
+                let total = metrics.token_usage.total_tokens();
+
+                // Record token usage for subagent
+                Self::do_record_token_usage(shared, &parent_session_id, parent_id, &metrics).await;
+
                 let status = if metrics.completed {
                     Self::send_progress(
                         parent_event_tx,
@@ -488,5 +522,33 @@ impl SubagentTool {
                 (String::new(), status)
             }
         }
+    }
+
+    /// Execute a `SimpleAgent` and collect output with progress events
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_simple_agent(
+        &self,
+        simple_agent: &mut SimpleAgent,
+        system_prompt: String,
+        history: Option<Vec<Arc<Message>>>,
+        task: String,
+        cancel_token: tokio_util::sync::CancellationToken,
+        parent_event_tx: &mpsc::Sender<Event>,
+        parent_id: &AgentId,
+        tool_id: &str,
+    ) -> (String, SubAgentStatus) {
+        Self::execute_simple_agent_with_shared(
+            simple_agent,
+            system_prompt,
+            history,
+            task,
+            cancel_token,
+            parent_event_tx,
+            parent_id,
+            tool_id,
+            self.shared.clone(),
+            self.parent_session_id.clone(),
+        )
+        .await
     }
 }
