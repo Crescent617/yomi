@@ -1163,14 +1163,39 @@ impl Model {
                                 "Iteration {iteration} completed with {messages} messages"
                             );
                         }
-                        AgentStatus::TurnCompleted { total_iterations } => {
-                            // Task naturally completed
-                            self.finalize_assistant_message();
-                            self.stop_streaming(StreamingStatus::Completed);
-                            let message =
-                                format!("😸 Task completed ({total_iterations} iterations)");
-                            Self::send_desktop_notification("Yomi", &message);
-                            self.show_notification(&Notification::success(&message, 5000));
+                        AgentStatus::TurnCompleted {
+                            total_iterations,
+                            finish_reason,
+                        } => {
+                            // Task naturally completed - check for special finish reasons
+                            match finish_reason {
+                                Some(kernel::types::FinishReason::MaxTokens) => {
+                                    let message = "⚠️ Response truncated: max tokens reached";
+                                    Self::send_desktop_notification("Yomi - Stopped", message);
+                                    self.handle_streaming_error(
+                                        StreamingStatus::Failed,
+                                        message.to_string(),
+                                    );
+                                }
+                                Some(kernel::types::FinishReason::ContentFilter) => {
+                                    let message = "🚫 Response blocked: content filter triggered";
+                                    Self::send_desktop_notification("Yomi - Stopped", message);
+                                    self.handle_streaming_error(
+                                        StreamingStatus::Failed,
+                                        message.to_string(),
+                                    );
+                                }
+                                _ => {
+                                    // Normal completion
+                                    self.finalize_assistant_message();
+                                    self.stop_streaming(StreamingStatus::Completed);
+                                    let message = format!(
+                                        "😸 Task completed ({total_iterations} iterations)"
+                                    );
+                                    Self::send_desktop_notification("Yomi", &message);
+                                    self.show_notification(&Notification::success(&message, 5000));
+                                }
+                            }
                             self.state.should_redraw = true;
                         }
                         AgentStatus::Stopped { reason } => match reason {
@@ -1180,8 +1205,8 @@ impl Model {
                             StopReason::Cancelled { operation } => {
                                 // Cancelled - no desktop notification, just update UI
                                 let message = operation.map_or_else(
-                                    || "Cancelled".to_string(),
-                                    |op| format!("Cancelled: {op}"),
+                                    || "🚫 Cancelled".to_string(),
+                                    |op| format!("🚫 Cancelled: {op}"),
                                 );
                                 self.handle_streaming_error(StreamingStatus::Cancelled, message);
                             }

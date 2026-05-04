@@ -476,8 +476,8 @@ impl Agent {
             if let Some(response_id) = result.response_id {
                 msg.response_id = Some(response_id);
             }
-            if let Some(finish_reason) = result.finish_reason {
-                msg.finish_reason = Some(finish_reason);
+            if let Some(fr) = result.finish_reason {
+                msg.finish_reason = Some(fr);
             }
 
             self.persist_message(&msg).await;
@@ -490,7 +490,7 @@ impl Agent {
             tracing::warn!("Failed to send completed event: {}", e);
         }
 
-        self.transition_after_streaming().await
+        self.transition_after_streaming(result.finish_reason).await
     }
 
     /// Collect all output from the stream until completion
@@ -791,7 +791,10 @@ impl Agent {
     }
 
     /// Transition to appropriate state after streaming completes
-    async fn transition_after_streaming(&self) -> Result<(), AgentError> {
+    async fn transition_after_streaming(
+        &self,
+        finish_reason: Option<crate::types::FinishReason>,
+    ) -> Result<(), AgentError> {
         let has_tool_calls = self
             .message_buffer
             .messages()
@@ -823,6 +826,7 @@ impl Agent {
                 agent_id: self.id.clone(),
                 state: AgentStatus::TurnCompleted {
                     total_iterations: self.context.iteration_count(),
+                    finish_reason,
                 },
             })) {
                 tracing::warn!("Failed to send TurnCompleted event: {}", e);
