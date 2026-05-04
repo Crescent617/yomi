@@ -208,7 +208,7 @@ impl ToolRegistry {
     /// Register todo tools (replaces the heavier task tools)
     pub fn register_todo_tool(
         &mut self,
-        storage: std::sync::Arc<crate::storage::TodoStorage>,
+        storage: std::sync::Arc<dyn crate::storage::TodoStore>,
         session_id: impl Into<String>,
     ) {
         let session_id_str = session_id.into();

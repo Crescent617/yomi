@@ -1,4 +1,4 @@
-use crate::storage::TodoStorage;
+use crate::storage::TodoStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -11,12 +11,12 @@ pub const TODO_READ_TOOL_NAME: &str = "todoRead";
 /// `TodoWriteTool` - Simple todo list management tool
 /// Persists todo list to file for persistence and TUI display
 pub struct TodoWriteTool {
-    storage: Arc<TodoStorage>,
+    storage: Arc<dyn TodoStore>,
     session_id: String,
 }
 
 impl TodoWriteTool {
-    pub fn new(storage: Arc<TodoStorage>, session_id: impl Into<String>) -> Self {
+    pub fn new(storage: Arc<dyn TodoStore>, session_id: impl Into<String>) -> Self {
         Self {
             storage,
             session_id: session_id.into(),
@@ -101,25 +101,25 @@ Guidelines:
 
         // Persist to file (delete if empty)
         if todos_array.is_empty() {
-            self.storage.clear(&self.session_id)?;
+            self.storage.clear(&self.session_id).await?;
         } else {
             let json_str = serde_json::to_string(&args)?;
-            self.storage.save(&self.session_id, &json_str)?;
+            self.storage.save(&self.session_id, &json_str).await?;
         }
 
-        Ok(ToolOutput::text("Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable"))
+        Ok(ToolOutput::text("Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with your current tasks if applicable"))
     }
 }
 
 /// `TodoReadTool` - Read the current todo list
 /// Returns the current todo list from storage
 pub struct TodoReadTool {
-    storage: Arc<TodoStorage>,
+    storage: Arc<dyn TodoStore>,
     session_id: String,
 }
 
 impl TodoReadTool {
-    pub fn new(storage: Arc<TodoStorage>, session_id: impl Into<String>) -> Self {
+    pub fn new(storage: Arc<dyn TodoStore>, session_id: impl Into<String>) -> Self {
         Self {
             storage,
             session_id: session_id.into(),
@@ -147,7 +147,7 @@ impl Tool for TodoReadTool {
 
     async fn exec(&self, _args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         // Load todo list from storage
-        match self.storage.load(&self.session_id) {
+        match self.storage.load(&self.session_id).await? {
             Some(json_str) => Ok(ToolOutput::text(json_str)),
             None => Ok(ToolOutput::text(r#"{"todos": []}"#)),
         }
@@ -157,12 +157,18 @@ impl Tool for TodoReadTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::JsonTodoStore;
     use tempfile::TempDir;
+
+    async fn create_test_storage() -> (Arc<dyn TodoStore>, TempDir) {
+        let temp = TempDir::new().unwrap();
+        let store: Arc<dyn TodoStore> = Arc::new(JsonTodoStore::new(temp.path()));
+        (store, temp)
+    }
 
     #[tokio::test]
     async fn test_todo_write_tool() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoWriteTool::new(storage.clone(), "test-session");
 
         let input = json!({
@@ -188,15 +194,14 @@ mod tests {
         assert!(text.contains("Todos have been modified successfully"));
 
         // Verify file was saved
-        let loaded = storage.load("test-session").unwrap();
+        let loaded = storage.load("test-session").await.unwrap().unwrap();
         let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
         assert_eq!(loaded_json, input);
     }
 
     #[tokio::test]
-    async fn test_todo_write_tool_empty_list_deletes_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+    async fn test_todo_write_tool_empty_list_clears() {
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoWriteTool::new(storage.clone(), "test-session");
 
         // First add some todos
@@ -205,7 +210,7 @@ mod tests {
         });
         let ctx = ToolExecCtx::new("test", "/tmp");
         tool.exec(input1, ctx).await.unwrap();
-        assert!(storage.exists("test-session"));
+        assert!(storage.load("test-session").await.unwrap().is_some());
 
         // Then clear with empty list - should delete the file
         let input2 = json!({ "todos": [] });
@@ -215,14 +220,12 @@ mod tests {
         let text = result.text_content();
         assert!(text.contains("Todos have been modified successfully"));
         // Verify file was deleted
-        assert!(!storage.exists("test-session"));
-        assert!(storage.load("test-session").is_none());
+        assert!(storage.load("test-session").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn test_todo_write_tool_invalid_status() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoWriteTool::new(storage, "test-session");
 
         let input = json!({
@@ -239,8 +242,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_write_tool_missing_id() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoWriteTool::new(storage, "test-session");
 
         let input = json!({
@@ -260,8 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_write_tool_missing_content() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoWriteTool::new(storage, "test-session");
 
         let input = json!({
@@ -281,8 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_read_tool_with_data() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
 
         // First write some todos
         let write_tool = TodoWriteTool::new(storage.clone(), "test-session");
@@ -307,8 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_todo_read_tool_empty() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(TodoStorage::new(temp_dir.path()));
+        let (storage, _temp) = create_test_storage().await;
         let tool = TodoReadTool::new(storage, "test-session");
 
         let ctx = ToolExecCtx::new("test", "/tmp");

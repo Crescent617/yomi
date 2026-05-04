@@ -1,12 +1,10 @@
 use crate::args::GlobalArgs;
-use crate::storage::open_storage;
 use anyhow::Result;
-use kernel::storage::Storage;
-use std::sync::Arc;
+use kernel::StorageSet;
 
 #[allow(clippy::needless_pass_by_value)]
 pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
-    let storage = Arc::new(open_storage(global).await?);
+    let storage = StorageSet::open(&crate::utils::data_dir(&global)?).await?;
 
     // Get current working directory
     let current_dir = std::env::current_dir()?;
@@ -14,10 +12,11 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
 
     // List sessions: by default only current working dir, with --all list all
     let sessions = if all {
-        storage.list_sessions().await?
+        storage.session_store().list().await?
     } else {
         let filtered = storage
-            .list_sessions_by_working_dir(&current_dir_str)
+            .session_store()
+            .list_by_working_dir(&current_dir_str)
             .await?;
         if filtered.is_empty() {
             println!("No sessions found for current directory: {current_dir_str}");
@@ -36,7 +35,7 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
     for session in sessions.iter().take(50) {
         let age_str = session.format_age();
 
-        // Use title field for last user message preview (reusing title for preview)
+        // Use title field for last user message preview
         let preview = session.title.as_ref().map_or_else(
             || "(no user message)".to_string(),
             |t| {
@@ -52,7 +51,7 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
             .working_dir
             .clone()
             .unwrap_or_else(|| "(unknown)".to_string());
-        rows.push((session.id.clone(), age_str, working_dir, preview));
+        rows.push((session.id.0.clone(), age_str, working_dir, preview));
     }
 
     let id_width = rows.iter().map(|r| r.0.len()).max().unwrap_or(10).max(10);

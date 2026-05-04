@@ -1,15 +1,14 @@
-use crate::storage::SessionStateManager;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-/// Simple file mtime tracking for detecting stale reads
+/// Simple in-memory file mtime tracking for detecting stale reads
 #[derive(Clone)]
 pub struct FileStateStore {
     /// Map of file path to last known modification time
     mtimes: Arc<RwLock<HashMap<PathBuf, u64>>>,
-    /// Optional session state manager for persistent storage
-    state_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<SessionStateManager>>>>>,
+    /// Optional persistent storage backend - set once at creation
+    persistent: Option<Arc<dyn crate::storage::FileStateStore>>,
 }
 
 impl Default for FileStateStore {
@@ -20,10 +19,9 @@ impl Default for FileStateStore {
 
 impl std::fmt::Debug for FileStateStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let has_manager = self.state_manager.read().is_ok_and(|m| m.is_some());
         f.debug_struct("FileStateStore")
             .field("mtimes_count", &self.mtimes.read().map_or(0, |m| m.len()))
-            .field("has_state_manager", &has_manager)
+            .field("has_persistent", &self.persistent.is_some())
             .finish()
     }
 }
@@ -33,13 +31,16 @@ impl FileStateStore {
     pub fn new() -> Self {
         Self {
             mtimes: Arc::new(RwLock::new(HashMap::new())),
-            state_manager: Arc::new(RwLock::new(None)),
+            persistent: None,
         }
     }
 
-    /// Set the session state manager for persistence
-    pub fn set_state_manager(&self, manager: Arc<tokio::sync::Mutex<SessionStateManager>>) {
-        *self.state_manager.write().unwrap() = Some(manager);
+    /// Create with persistent storage backend
+    pub fn with_persistent(persistent: Arc<dyn crate::storage::FileStateStore>) -> Self {
+        Self {
+            mtimes: Arc::new(RwLock::new(HashMap::new())),
+            persistent: Some(persistent),
+        }
     }
 
     /// Record a file's modification time
@@ -47,15 +48,13 @@ impl FileStateStore {
         let key = path.canonicalize().unwrap_or(path);
         self.mtimes.write().unwrap().insert(key.clone(), mtime);
 
-        if let Ok(guard) = self.state_manager.read() {
-            if let Some(ref manager) = *guard {
-                let manager = Arc::clone(manager);
-                tokio::spawn(async move {
-                    if let Err(e) = manager.lock().await.record_file(key, mtime).await {
-                        tracing::warn!("Failed to persist file state: {}", e);
-                    }
-                });
-            }
+        if let Some(ref store) = self.persistent {
+            let store = Arc::clone(store);
+            tokio::spawn(async move {
+                if let Err(e) = store.record(key, mtime).await {
+                    tracing::warn!("Failed to persist file state: {}", e);
+                }
+            });
         }
     }
 
@@ -81,15 +80,13 @@ impl FileStateStore {
     pub fn clear(&self) {
         self.mtimes.write().unwrap().clear();
 
-        if let Ok(guard) = self.state_manager.read() {
-            if let Some(ref manager) = *guard {
-                let manager = Arc::clone(manager);
-                tokio::spawn(async move {
-                    if let Err(e) = manager.lock().await.clear_file_states().await {
-                        tracing::warn!("Failed to clear persisted file states: {}", e);
-                    }
-                });
-            }
+        if let Some(ref store) = self.persistent {
+            let store = Arc::clone(store);
+            tokio::spawn(async move {
+                if let Err(e) = store.clear().await {
+                    tracing::warn!("Failed to clear persisted file states: {}", e);
+                }
+            });
         }
     }
 

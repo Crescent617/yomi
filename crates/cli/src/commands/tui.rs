@@ -2,7 +2,7 @@ use crate::{
     args::GlobalArgs,
     misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
-    storage::{open_storage_with_data_dir, AppStorage},
+    storage::AppStorage,
     utils::DEBUG_MODE,
 };
 use anyhow::{Context, Result};
@@ -13,7 +13,6 @@ use kernel::{
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
-    storage::{Storage, TodoStorage},
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
@@ -81,20 +80,21 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     let skills = load_skills(&config, &working_dir).await;
 
-    let storage = Arc::new(open_storage_with_data_dir(&config.data_dir).await?);
+    // Initialize all storage backends
+    let storage = kernel::StorageSet::open(&config.data_dir).await?;
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
-    let todo_storage = Arc::new(TodoStorage::new(&config.data_dir));
     let project_memory = kernel::project_memory::load(&working_dir).await?;
 
     let coordinator_skill_folders = resolve_skill_folders(&config, &working_dir);
 
     let coordinator = Arc::new(Coordinator::new(
-        storage.clone(),
+        storage.session_store(),
+        storage.message_store(),
         provider,
         config.agent.model.clone(),
         Some(task_store),
-        Some(todo_storage),
+        Some(storage.todo_store()),
         project_memory,
         Some(config.agent.compactor.clone()),
         coordinator_skill_folders,
@@ -153,7 +153,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         )
         .await?;
 
-        let session_messages = storage.get_messages(&session_id).await.unwrap_or_default();
+        let session_messages = storage
+            .message_store()
+            .get(&session_id.0)
+            .await
+            .unwrap_or_default();
 
         let result = run_session_loop(
             coordinator.clone(),

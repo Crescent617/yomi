@@ -3,14 +3,15 @@ use crate::app::session::{Session, SessionConfig};
 use crate::event::Event;
 use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
-use crate::storage::Storage;
+use crate::storage::{MessageStore, SessionStore};
 use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct Coordinator {
-    storage: Arc<dyn Storage>,
+    session_store: Arc<dyn SessionStore>,
+    message_store: Arc<dyn MessageStore>,
     agent_shared: Arc<AgentShared>,
     sessions: RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>,
 }
@@ -18,11 +19,12 @@ pub struct Coordinator {
 impl Coordinator {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        storage: Arc<dyn Storage>,
+        session_store: Arc<dyn SessionStore>,
+        message_store: Arc<dyn MessageStore>,
         provider: Arc<dyn Provider>,
         model_config: ModelConfig,
         task_store: Option<Arc<crate::task::TaskStore>>,
-        todo_storage: Option<Arc<crate::storage::TodoStorage>>,
+        todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         project_memory: crate::project_memory::MemoryFiles,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
@@ -34,13 +36,16 @@ impl Coordinator {
             todo_storage,
             Arc::new(project_memory),
             compactor,
-            Some(storage.clone()),
-            None, // permission_state is created per-session
+            Some(session_store.clone()),
+            Some(message_store.clone()),
+            None, // usage_store - TODO: inject from caller
+            None,
             skill_folders,
-            None, // file_state_store is created per-session
+            None,
         ));
         Self {
-            storage,
+            session_store,
+            message_store,
             agent_shared,
             sessions: RwLock::new(HashMap::new()),
         }
@@ -49,18 +54,19 @@ impl Coordinator {
     /// Create a new session with the given configuration
     pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
         let working_dir = config.project_path.to_string_lossy().to_string();
-        let id = self.storage.create_session(Some(&working_dir)).await?;
+        let id = self.session_store.create(Some(&working_dir)).await?;
         self.init_session(id.clone(), config).await?;
         tracing::info!("Session {} created", id.0);
         Ok(id)
     }
 
-    /// Initialize a session in memory (internal helper)
+    /// Initialize a session in memory
     async fn init_session(&self, session_id: SessionId, config: SessionConfig) -> Result<()> {
         let mut session = Session::new(
             session_id.clone(),
             config,
-            self.storage.clone(),
+            self.session_store.clone(),
+            self.message_store.clone(),
             Arc::clone(&self.agent_shared),
         )
         .await?;
@@ -80,14 +86,14 @@ impl Coordinator {
         config: SessionConfig,
     ) -> Result<SessionId> {
         // Verify session exists in storage
-        let session_record = self.storage.get_session(session_id).await?.ok_or_else(|| {
+        let session_info = self.session_store.get(session_id).await?.ok_or_else(|| {
             KernelError::session(format!("Session not found in storage: {}", session_id.0))
         })?;
 
         tracing::info!("Restoring session {} from storage", session_id.0);
-        self.init_session(session_record.id.clone(), config).await?;
-        tracing::info!("Session {} restored", session_record.id.0);
-        Ok(session_record.id)
+        self.init_session(session_info.id.clone(), config).await?;
+        tracing::info!("Session {} restored", session_info.id.0);
+        Ok(session_info.id)
     }
 
     /// Fork a session: create new session with copied history from parent
@@ -97,7 +103,7 @@ impl Coordinator {
         config: SessionConfig,
     ) -> Result<SessionId> {
         // Create new session with copied history in storage
-        let new_id = self.storage.fork_session(parent_id).await?;
+        let new_id = self.session_store.fork(parent_id).await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
 
         self.init_session(new_id.clone(), config).await?;
@@ -130,7 +136,7 @@ impl Coordinator {
         result
     }
 
-    /// Send a multi-modal message with content blocks (supports images, text, etc.)
+    /// Send a multi-modal message with content blocks
     pub async fn send_blocks(
         &self,
         session_id: &SessionId,
@@ -220,7 +226,7 @@ impl Coordinator {
 
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
-        self.storage.delete_session(session_id).await
+        self.session_store.delete(session_id).await
     }
 
     /// Get messages for a session from storage
@@ -228,11 +234,16 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::types::Message>> {
-        self.storage.get_messages(session_id).await
+        self.message_store.get(&session_id.0).await
     }
 
-    /// Get storage reference
-    pub fn storage(&self) -> &Arc<dyn Storage> {
-        &self.storage
+    /// Get session store reference
+    pub fn session_store(&self) -> &Arc<dyn SessionStore> {
+        &self.session_store
+    }
+
+    /// Get message store reference
+    pub fn message_store(&self) -> &Arc<dyn MessageStore> {
+        &self.message_store
     }
 }
