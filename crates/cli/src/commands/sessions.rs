@@ -1,50 +1,12 @@
 use crate::args::GlobalArgs;
-use crate::utils::load_config;
+use crate::storage::open_storage;
 use anyhow::Result;
-use kernel::{storage::SimpleStorage, storage::Storage};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use std::path::Path;
-use std::str::FromStr;
+use kernel::storage::Storage;
 use std::sync::Arc;
-
-/// Create `SQLite` pool with proper connection string and PRAGMAs
-async fn create_db_pool(db_path: &Path) -> Result<sqlx::SqlitePool> {
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    // Create empty file if it doesn't exist (sqlx requirement)
-    if !db_path.exists() {
-        tokio::fs::File::create(db_path).await?;
-    }
-
-    // Parse connection options and set pragmas for ALL connections
-    let connect_options =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-            .pragma("busy_timeout", "5000")
-            .pragma("journal_mode", "WAL");
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(connect_options)
-        .await?;
-
-    Ok(pool)
-}
 
 #[allow(clippy::needless_pass_by_value)]
 pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
-    let working_dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let config = load_config(global.config.as_ref(), &working_dir)?;
-    let data_dir = config.data_dir;
-
-    let db_path = data_dir.join("yomi.db");
-    let pool = create_db_pool(&db_path).await?;
-    let storage = Arc::new(SimpleStorage::new(data_dir.join("sessions"), pool).await?);
+    let storage = Arc::new(open_storage(global).await?);
 
     // Get current working directory
     let current_dir = std::env::current_dir()?;

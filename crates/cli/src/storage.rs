@@ -8,7 +8,10 @@
 //! Data is stored in `~/.yomi/appdata/` with per-directory hashed filenames
 //! to avoid concurrent access issues.
 
+use crate::args::GlobalArgs;
+use crate::utils::load_config;
 use anyhow::{Context, Result};
+use kernel::storage::{SimpleStorage, Storage};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -240,6 +243,49 @@ impl AppStorage {
         fs::rename(&temp_path, path).await?;
         Ok(())
     }
+}
+
+/// Open kernel Storage with the given data directory
+pub async fn open_storage_with_data_dir(data_dir: &std::path::Path) -> Result<impl Storage> {
+    use sqlx::sqlite::SqliteConnectOptions;
+    use std::str::FromStr;
+
+    let db_path = data_dir.join("yomi.db");
+
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    // Create empty file if it doesn't exist (sqlx requirement)
+    if !db_path.exists() {
+        tokio::fs::File::create(&db_path).await?;
+    }
+
+    // Parse connection options and set pragmas for ALL connections
+    let connect_options =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .pragma("busy_timeout", "5000")
+            .pragma("journal_mode", "WAL");
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options)
+        .await?;
+
+    SimpleStorage::new(data_dir.join("sessions"), pool)
+        .await
+        .with_context(|| "Failed to open storage")
+}
+
+/// Open kernel Storage with the given global arguments
+pub async fn open_storage(global: GlobalArgs) -> Result<impl Storage> {
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let config = load_config(global.config.as_ref(), &working_dir)?;
+    open_storage_with_data_dir(&config.data_dir).await
 }
 
 #[cfg(test)]

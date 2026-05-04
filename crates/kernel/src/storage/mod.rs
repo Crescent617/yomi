@@ -17,6 +17,21 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Token usage summary for a time range
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsageSummary {
+    pub total_prompt: u64,
+    pub total_completion: u64,
+    pub total_cached: u64,
+    pub request_count: u64,
+}
+
+impl TokenUsageSummary {
+    pub const fn total_tokens(&self) -> u64 {
+        self.total_prompt + self.total_completion
+    }
+}
+
 /// Session information for listing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -62,4 +77,10 @@ pub trait Storage: Send + Sync {
     async fn list_sessions_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>>;
     /// Record token usage for a session
     async fn record_token_usage(&self, record: &TokenRecord) -> Result<()>;
+    /// Get token usage summary for a time range
+    async fn get_token_usage_summary(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<TokenUsageSummary>;
 }
