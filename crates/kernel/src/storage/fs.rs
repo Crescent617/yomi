@@ -36,23 +36,6 @@ impl SimpleStorage {
         })
     }
 
-    /// Get token storage
-    pub fn token_storage(&self) -> &TokenStorage {
-        &self.token
-    }
-
-    /// Default storage path: ~/.local/share/yomi/sessions/
-    pub fn default_path() -> PathBuf {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("yomi")
-            .join("sessions")
-    }
-
     /// Get session file path
     fn session_file_path(&self, session_id: &SessionId) -> PathBuf {
         self.base_dir.join(format!("{}.jsonl", session_id.0))
@@ -276,6 +259,14 @@ impl Storage for SimpleStorage {
 
     async fn record_token_usage(&self, record: &crate::types::TokenRecord) -> Result<()> {
         self.token.record(record).await
+    }
+
+    async fn get_token_usage_summary(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::storage::TokenUsageSummary> {
+        self.token.get_summary_by_time_range(start, end).await
     }
 }
 

@@ -2,7 +2,7 @@ use crate::{
     args::GlobalArgs,
     misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
-    storage::AppStorage,
+    storage::{open_storage_with_data_dir, AppStorage},
     utils::DEBUG_MODE,
 };
 use anyhow::{Context, Result};
@@ -13,41 +13,13 @@ use kernel::{
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
-    storage::{SimpleStorage, Storage, TodoStorage},
+    storage::{Storage, TodoStorage},
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-/// Create `SQLite` pool with proper connection string and PRAGMAs
-async fn create_db_pool(db_path: &Path) -> anyhow::Result<sqlx::SqlitePool> {
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    // Create empty file if it doesn't exist (sqlx requirement)
-    if !db_path.exists() {
-        tokio::fs::File::create(db_path).await?;
-    }
-
-    // Parse connection options and set pragmas for ALL connections
-    let connect_options =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-            .pragma("busy_timeout", "5000")
-            .pragma("journal_mode", "WAL");
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(connect_options)
-        .await?;
-
-    Ok(pool)
-}
 
 #[derive(Default, clap::Parser)]
 pub struct TuiArgs {
@@ -109,10 +81,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     let skills = load_skills(&config, &working_dir).await;
 
-    // Create SQLite pool for session metadata
-    let db_path = config.data_dir.join("yomi.db");
-    let pool = create_db_pool(&db_path).await?;
-    let storage = Arc::new(SimpleStorage::new(config.data_dir.join("sessions"), pool).await?);
+    let storage = Arc::new(open_storage_with_data_dir(&config.data_dir).await?);
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
     let todo_storage = Arc::new(TodoStorage::new(&config.data_dir));

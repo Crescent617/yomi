@@ -32,6 +32,8 @@ enum Commands {
     Skill(SkillArgs),
     /// Manage configuration
     Config(ConfigArgs),
+    /// Show token usage
+    Usage(UsageArgs),
     /// Show version
     Version,
 }
@@ -97,6 +99,16 @@ enum ConfigCommands {
     },
 }
 
+#[derive(Parser)]
+struct UsageArgs {
+    #[command(flatten)]
+    global: GlobalArgs,
+
+    /// Number of days to look back (default: 7)
+    #[arg(short = 'n', long, default_value = "7")]
+    days: i64,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -106,6 +118,7 @@ async fn main() -> Result<()> {
         Some(Commands::Session(args)) => run_session(args).await,
         Some(Commands::Skill(args)) => run_skill(args).await,
         Some(Commands::Config(args)) => run_config(args).await,
+        Some(Commands::Usage(args)) => run_usage(args).await,
         Some(Commands::Version) => {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -132,4 +145,8 @@ async fn run_config(args: ConfigArgs) -> Result<()> {
         ConfigCommands::Get { key } => commands::config::get(args.global, &key),
         ConfigCommands::Set { key, value } => commands::config::set(args.global, &key, value),
     }
+}
+
+async fn run_usage(args: UsageArgs) -> Result<()> {
+    commands::usage::show(args.global, args.days).await
 }
