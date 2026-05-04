@@ -1,6 +1,5 @@
 use crate::permissions::{Level, PermissionState};
 use crate::storage::file_state::JsonlFileStateStore;
-use crate::storage::{MessageStore, SessionStore};
 use crate::types::{AgentId, KernelError, Result, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
@@ -11,16 +10,17 @@ use tokio::sync::mpsc;
 
 pub struct Session {
     id: SessionId,
-    config: SessionConfig,
     #[allow(dead_code)]
-    session_store: Arc<dyn SessionStore>,
-    message_store: Arc<dyn MessageStore>,
+    config: SessionConfig,
+    /// Shared agent resources (contains `session_store`, `message_store`, etc.)
+    #[allow(dead_code)]
     agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     event_rx: Option<mpsc::Receiver<Event>>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
     /// File state store for tracking file modification times
+    #[allow(dead_code)]
     file_state_store: Arc<crate::tools::file_state::FileStateStore>,
 }
 
@@ -33,21 +33,47 @@ pub struct SessionConfig {
 }
 
 impl Session {
-    pub async fn new(
+    /// Initialize a new session with the main agent spawned.
+    /// This is the single entry point for session creation.
+    pub(crate) async fn init(
         id: SessionId,
         config: SessionConfig,
-        session_store: Arc<dyn SessionStore>,
-        message_store: Arc<dyn MessageStore>,
         agent_shared: Arc<AgentShared>,
     ) -> Result<Self> {
-        // Create persistent file state store
+        let file_state_store = Self::create_file_state_store(&id, &config).await?;
+
+        let permission_state = Self::create_permission_state(&config);
+
+        let (main_agent, event_rx) = Self::spawn_main_agent(
+            &id,
+            &config,
+            &agent_shared,
+            &file_state_store,
+            permission_state.clone(),
+        )
+        .await?;
+
+        Ok(Self {
+            id,
+            config,
+            agent_shared,
+            main_agent: Some(main_agent),
+            event_rx: Some(event_rx),
+            permission_state,
+            file_state_store,
+        })
+    }
+
+    /// Create and populate the file state store for this session
+    async fn create_file_state_store(
+        id: &SessionId,
+        config: &SessionConfig,
+    ) -> Result<Arc<crate::tools::file_state::FileStateStore>> {
         let persistent_store: Arc<dyn crate::storage::FileStateStore> =
             Arc::new(JsonlFileStateStore::new(&id.0, &config.data_dir).await?);
 
-        // Load previous file states from disk
         let states = persistent_store.get_all().await?;
 
-        // Create file state store with persistent backend and preload states
         let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::with_persistent(
             persistent_store,
         ));
@@ -55,66 +81,54 @@ impl Session {
             file_state_store.record(path, mtime);
         }
 
-        Ok(Self {
-            id,
-            config,
-            session_store,
-            message_store,
-            agent_shared,
-            main_agent: None,
-            event_rx: None,
-            permission_state: None,
-            file_state_store,
-        })
+        Ok(file_state_store)
     }
 
-    pub async fn init(&mut self) -> Result<()> {
-        self.spawn_main_agent().await?;
-        Ok(())
-    }
-
-    async fn spawn_main_agent(&mut self) -> Result<()> {
-        // Load history from storage
-        let history = self.message_store.get(&self.id.0).await.unwrap_or_default();
-
-        // Create shared permission state for all agents in this session
-        if self.permission_state.is_none() && self.config.auto_approve_level != Level::Dangerous {
-            let ps = PermissionState::new(self.config.auto_approve_level).0;
-            self.permission_state = Some(ps);
+    /// Create permission state if needed based on config
+    fn create_permission_state(config: &SessionConfig) -> Option<PermissionState> {
+        if config.auto_approve_level == Level::Dangerous {
+            None
+        } else {
+            Some(PermissionState::new(config.auto_approve_level).0)
         }
-        let permission_state = self.permission_state.clone();
+    }
 
-        let config =
-            AgentSpawnArgs::new(self.config.agent.system_prompt.clone(), self.id.0.clone())
-                .with_skills(self.config.agent.skills.clone())
-                .with_history(history)
-                .with_max_iterations(self.config.agent.max_iterations)
-                .with_working_dir(self.config.project_path.clone())
-                .with_subagent(self.config.agent.enable_subagent)
-                .with_file_state_store(Arc::clone(&self.file_state_store));
+    /// Spawn the main agent for this session
+    async fn spawn_main_agent(
+        id: &SessionId,
+        config: &SessionConfig,
+        agent_shared: &Arc<AgentShared>,
+        file_state_store: &Arc<crate::tools::file_state::FileStateStore>,
+        permission_state: Option<PermissionState>,
+    ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
+        let history = agent_shared
+            .message_store
+            .as_ref()
+            .ok_or_else(|| KernelError::session("message store not configured"))?
+            .get(&id.0)
+            .await
+            .unwrap_or_default();
 
-        // Create AgentShared with permission state and file state store
-        let shared = Arc::new(AgentShared::new(
-            self.agent_shared.provider.clone(),
-            self.agent_shared.model_config.clone(),
-            self.agent_shared.task_store.clone(),
-            self.agent_shared.todo_storage.clone(),
-            self.agent_shared.project_memory.clone(),
-            self.agent_shared.compactor.clone(),
-            self.agent_shared.session_store.clone(),
-            self.agent_shared.message_store.clone(),
-            self.agent_shared.usage_store.clone(),
-            permission_state,
-            self.agent_shared.skill_folders.clone(),
-            Some(Arc::clone(&self.file_state_store)),
-        ));
+        let spawn_args = AgentSpawnArgs::new(
+            config.agent.system_prompt.clone(),
+            id.0.clone(),
+        )
+        .with_skills(config.agent.skills.clone())
+        .with_history(history)
+        .with_max_iterations(config.agent.max_iterations)
+        .with_working_dir(config.project_path.clone())
+        .with_subagent(config.agent.enable_subagent)
+        .with_file_state_store(Arc::clone(file_state_store));
 
-        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, config);
-        let agent_id = handle.id.clone();
-        tracing::info!("Main agent {} spawned for session {}", agent_id, self.id.0);
-        self.main_agent = Some(handle);
-        self.event_rx = Some(event_rx);
-        Ok(())
+        let shared = Arc::new(
+            agent_shared
+                .with_per_session(permission_state, Some(Arc::clone(file_state_store))),
+        );
+
+        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args);
+        tracing::info!("Main agent {} spawned for session {}", handle.id, id.0);
+
+        Ok((handle, event_rx))
     }
 
     pub async fn send_message(&self, content: String) -> Result<()> {
