@@ -89,12 +89,10 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let coordinator_skill_folders = resolve_skill_folders(&config, &working_dir);
 
     let coordinator = Arc::new(Coordinator::new(
-        storage.session_store(),
-        storage.message_store(),
+        &storage,
         provider,
         config.agent.model.clone(),
         Some(task_store),
-        Some(storage.todo_store()),
         project_memory,
         Some(config.agent.compactor.clone()),
         coordinator_skill_folders,

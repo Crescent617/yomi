@@ -315,6 +315,20 @@ impl AgentShared {
             file_state_store,
         }
     }
+
+    /// Create a new `AgentShared` with per-session resources added
+    #[must_use]
+    pub fn with_per_session(
+        &self,
+        permission_state: Option<crate::permissions::PermissionState>,
+        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    ) -> Self {
+        Self {
+            permission_state,
+            file_state_store,
+            ..self.clone()
+        }
+    }
 }
 
 /// Agent error type using thiserror
