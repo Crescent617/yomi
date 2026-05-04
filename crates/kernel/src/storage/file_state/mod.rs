@@ -26,7 +26,15 @@ impl FileState {
 pub enum StateEntry {
     /// Metadata header (first line)
     #[serde(rename = "meta")]
-    Metadata { v: u32, created: String },
+    Metadata {
+        v: u32,
+        /// Unix timestamp (seconds since epoch)
+        created_at: u64,
+        #[serde(default)]
+        truncate_count: u32,
+        #[serde(default)]
+        vacuum_count: u32,
+    },
 
     /// File state entry
     #[serde(rename = "file")]
@@ -53,6 +61,18 @@ impl TryFrom<StateEntry> for FileState {
     }
 }
 
+impl StateEntry {
+    /// Create a default metadata entry with current timestamp
+    pub fn default_meta() -> Self {
+        Self::Metadata {
+            v: STATE_VERSION,
+            created_at: crate::utils::now_secs(),
+            truncate_count: 0,
+            vacuum_count: 0,
+        }
+    }
+}
+
 use crate::types::{KernelError, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -67,7 +87,7 @@ pub trait FileStateStore: Send + Sync {
     async fn get_all(&self) -> Result<HashMap<PathBuf, u64>>;
 
     /// Clear all file states
-    async fn clear(&self) -> Result<()>;
+    async fn truncate(&self) -> Result<()>;
 }
 
 /// Helper for storage errors

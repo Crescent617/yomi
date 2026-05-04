@@ -35,12 +35,21 @@ impl FileStateStore {
         }
     }
 
-    /// Create with persistent storage backend
-    pub fn with_persistent(persistent: Arc<dyn crate::storage::FileStateStore>) -> Self {
-        Self {
-            mtimes: Arc::new(RwLock::new(HashMap::new())),
-            persistent: Some(persistent),
-        }
+    /// Create with persistent storage backend (empty memory)
+    #[must_use]
+    pub fn with_persistent(mut self, persistent: Arc<dyn crate::storage::FileStateStore>) -> Self {
+        self.persistent = Some(persistent);
+        self
+    }
+
+    /// Create with memory states only (no persistence)
+    #[must_use]
+    pub fn with_states(mut self, states: impl Iterator<Item = (PathBuf, u64)>) -> Self {
+        let mtimes: HashMap<PathBuf, u64> = states
+            .map(|(p, m)| (p.canonicalize().unwrap_or(p), m))
+            .collect();
+        self.mtimes = Arc::new(RwLock::new(mtimes));
+        self
     }
 
     /// Record a file's modification time
@@ -83,7 +92,7 @@ impl FileStateStore {
         if let Some(ref store) = self.persistent {
             let store = Arc::clone(store);
             tokio::spawn(async move {
-                if let Err(e) = store.clear().await {
+                if let Err(e) = store.truncate().await {
                     tracing::warn!("Failed to clear persisted file states: {}", e);
                 }
             });
