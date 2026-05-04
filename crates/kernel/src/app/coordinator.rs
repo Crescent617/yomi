@@ -1,6 +1,6 @@
 use crate::agent::AgentShared;
 use crate::app::session::{Session, SessionConfig};
-use crate::event::{AgentEvent, Event};
+use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::{MessageStore, SessionStore, StorageSet};
@@ -130,41 +130,35 @@ impl Coordinator {
         session_id: SessionId,
         mut agent_rx: mpsc::Receiver<Event>,
         broadcast_tx: broadcast::Sender<Event>,
-        main_agent_id: Option<crate::types::AgentId>,
+        _main_agent_id: Option<crate::types::AgentId>,
         sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
         senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
     ) {
         let sid_str = session_id.0.clone();
         tracing::info!("Event forwarding started for session {}", sid_str);
 
+        // Forward events until the channel closes (agent ended)
         while let Some(event) = agent_rx.recv().await {
-            // Check if this is the main agent closing
-            if let Event::Agent(AgentEvent::Shutdown { agent_id, error }) = &event {
-                if main_agent_id.as_ref() == Some(agent_id) {
-                    tracing::info!(
-                        "Main agent {} for session {} closed: error={:?}",
-                        agent_id.as_str(),
-                        sid_str,
-                        error
-                    );
-                    // Broadcast the closed event before cleanup
-                    let _ = broadcast_tx.send(event.clone());
-                    // Remove session from coordinator
-                    sessions.write().await.remove(&session_id);
-                    senders.write().await.remove(&session_id);
-                    tracing::info!("Session {} removed from coordinator", sid_str);
-                    break;
-                }
-            }
-
-            // Broadcast event to all subscribers
             if broadcast_tx.send(event).is_err() {
                 // No active subscribers (this is ok, receivers can come and go)
                 tracing::trace!("No active subscribers for session {} events", sid_str);
             }
         }
 
-        tracing::info!("Event forwarding ended for session {}", sid_str);
+        // Agent channel closed - session is shutting down
+        tracing::info!("Main agent for session {} closed", sid_str);
+
+        // Broadcast shutdown event
+        let shutdown_event = Event::System(SystemEvent::Shutdown {
+            session_id: session_id.clone(),
+            error: None, // TODO: capture error from agent if needed
+        });
+        let _ = broadcast_tx.send(shutdown_event);
+
+        // Remove session from coordinator
+        sessions.write().await.remove(&session_id);
+        senders.write().await.remove(&session_id);
+        tracing::info!("Session {} removed from coordinator", sid_str);
     }
 
     /// Restore a session from storage by its ID

@@ -36,9 +36,7 @@ pub use permissions::{Checker, Level, ToolLevelResolver};
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
-pub use event::{
-    AgentEvent, ContentChunk, Event, ModelEvent, ProgressUpdate, SystemEvent, ToolEvent, UserEvent,
-};
+pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
 pub use misc::plugin::{Plugin, PluginLoader};
 pub use prompt::{PromptBuilder, SystemPromptBuilder};
 pub use providers::{
