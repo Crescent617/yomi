@@ -108,6 +108,24 @@ impl UsageSummary {
     }
 }
 
+/// Daily usage summary
+#[derive(Debug, Clone)]
+pub struct DailyUsage {
+    /// Date in local timezone (YYYY-MM-DD)
+    pub date: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cached_tokens: u64,
+    pub request_count: u64,
+}
+
+impl DailyUsage {
+    /// Total tokens (prompt + completion)
+    pub const fn total_tokens(&self) -> u64 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
 /// Storage for token usage records and aggregation
 #[async_trait]
 pub trait UsageStore: Send + Sync {
@@ -116,6 +134,13 @@ pub trait UsageStore: Send + Sync {
 
     /// Get aggregated summary for a time range
     async fn summarize(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<UsageSummary>;
+
+    /// Get daily aggregated usage for a time range
+    async fn daily_summary(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsage>>;
 }
 
 /// Helper for storage errors
