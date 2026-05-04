@@ -123,16 +123,20 @@ impl Tool for EditTool {
         }
 
         // Check if file has been read before editing
-        if let Some(ref store) = self.file_state_store {
-            if !store.has_recorded(&path) {
-                return Ok(ToolOutput::error(format!(
-                    "File has not been read yet. Read it first before editing: {path_str}"
-                )));
-            }
+        // Skip for simple single-line edits (old_str and new_str are both single lines)
+        let is_simple_edit = !old_str.contains('\n') && !new_str.contains('\n') && !replace_all;
 
-            // Check for staleness
-            if let Err(error) = self.check_staleness(&path).await {
-                return Ok(ToolOutput::error(error));
+        if let Some(ref store) = self.file_state_store {
+            // Simple edits don't require read-first check
+            if !is_simple_edit {
+                if !store.has_recorded(&path) {
+                    return Ok(ToolOutput::error(format!(
+                        "File has not been read yet. Read it first before editing: {path_str}"
+                    )));
+                }
+                if let Err(error) = self.check_staleness(&path).await {
+                    return Ok(ToolOutput::error(error));
+                }
             }
         }
 
@@ -253,7 +257,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_edit_tool_no_read_first() {
+    async fn test_edit_tool_no_read_first_multiline() {
+        // Multi-line edit should require read first
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "line 1").unwrap();
+        writeln!(temp_file, "line 2").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let tool = EditTool::new().with_file_state_store(store);
+
+        // Multi-line old_str requires read first
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "line 1\nline 2",
+            "new_str": "replaced"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path);
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(result.is_error);
+        assert!(result.error_text().contains("not been read"));
+    }
+
+    #[tokio::test]
+    async fn test_edit_tool_simple_edit_no_read() {
+        // Simple single-line edit should work without read
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "hello world").unwrap();
         let path = temp_file.path().parent().unwrap();
@@ -270,7 +300,10 @@ mod tests {
 
         let ctx = ToolExecCtx::new("test_tool_call", path);
         let result = tool.exec(args, ctx).await.unwrap();
-        assert!(result.is_error);
-        assert!(result.error_text().contains("not been read"));
+        assert!(!result.is_error);
+        assert!(result.text_content().contains("Replaced"));
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "goodbye world\n");
     }
 }

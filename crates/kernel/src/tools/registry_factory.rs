@@ -128,8 +128,9 @@ impl ToolRegistryFactory {
         // Register Glob tool
         registry.register(GlobTool::new());
 
-        // Register Grep tool
-        registry.register(GrepTool::new());
+        // Register Grep tool with file state store
+        let grep_tool = GrepTool::new().with_file_state_store(Arc::clone(&file_state_store));
+        registry.register(grep_tool);
 
         // Register WebFetch tool
         registry.register(WebFetchTool::new());

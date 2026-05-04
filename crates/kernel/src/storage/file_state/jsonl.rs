@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 const VACUUM_INTERVAL_SECS: u64 = 3600;
 
 /// Record operations threshold: vacuum every N records
-const RECORD_THRESHOLD: usize = 100;
+const RECORD_THRESHOLD: usize = 1000;
 
 /// Append-only JSONL file store for file states
 /// Auto-compacts every `COMPACT_THRESHOLD` entries to deduplicate paths
