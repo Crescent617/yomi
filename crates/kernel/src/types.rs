@@ -61,6 +61,32 @@ pub enum Role {
     Tool,
 }
 
+/// Finish reason - normalized across providers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    /// Normal completion (`OpenAI`: "stop", Anthropic: "`end_turn`")
+    Stop,
+    /// Max tokens reached (`OpenAI`: "length", Anthropic: "`max_tokens`")
+    MaxTokens,
+    /// Content filter triggered (`OpenAI`: "`content_filter`")
+    ContentFilter,
+    /// `ToolCall` finished (custom reason for tool calls)
+    ToolCalls,
+}
+
+impl FinishReason {
+    /// Parse from provider-specific string
+    pub fn from_provider_str(s: &str) -> Option<Self> {
+        match s {
+            "length" | "max_tokens" => Some(Self::MaxTokens), // length is used by OpenAI, max_tokens by Anthropic
+            "content_filter" => Some(Self::ContentFilter),
+            "tool_calls" | "tool_use" => Some(Self::ToolCalls), // Custom reasons for tool calls
+            _ => Some(Self::Stop), // Default to Stop for unknown reasons for backward compatibility
+        }
+    }
+}
+
 /// Content block - similar to `OpenAI`'s content format
 /// Supports text, thinking, images, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,10 +191,10 @@ pub struct Message {
     /// API response ID (e.g., "chatcmpl-xxx" or "`msg_xxx`", only set for assistant messages from API)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
-    /// Finish/stop reason from API response (e.g., "stop", "length", "`end_turn`", "`max_tokens`")
+    /// Finish/stop reason from API response (normalized across providers)
     /// Only set for assistant messages from API
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<String>,
+    pub finish_reason: Option<FinishReason>,
 }
 
 impl Default for Message {
@@ -321,13 +347,6 @@ impl Message {
     #[must_use]
     pub fn with_response_id(mut self, response_id: impl Into<String>) -> Self {
         self.response_id = Some(response_id.into());
-        self
-    }
-
-    /// Set the finish reason for this message (builder pattern, for assistant messages)
-    #[must_use]
-    pub fn with_finish_reason(mut self, finish_reason: impl Into<String>) -> Self {
-        self.finish_reason = Some(finish_reason.into());
         self
     }
 }

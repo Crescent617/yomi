@@ -3,7 +3,7 @@ use crate::event::ContentChunk;
 use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
-use crate::types::{ContentBlock, Message, Result, Role, ToolDefinition};
+use crate::types::{ContentBlock, FinishReason, Message, Result, Role, ToolDefinition};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -232,7 +232,7 @@ impl Provider for AnthropicProvider {
         // Build request body
         let mut request_body = AnthropicRequest {
             model: config.model_id.clone(),
-            max_tokens: config.max_tokens.unwrap_or(4096),
+            max_tokens: config.max_tokens,
             messages,
             system,
             tools: if tools.is_empty() {
@@ -484,9 +484,13 @@ impl AnthropicStreamState {
             AnthropicStreamEvent::MessageStop => {
                 // Emit response metadata before Complete (if available)
                 if let Some(response_id) = self.response_id.take() {
+                    let finish_reason = self
+                        .stop_reason
+                        .take()
+                        .and_then(|s| FinishReason::from_provider_str(&s));
                     items.push(ModelStreamItem::ResponseMeta {
                         response_id,
-                        finish_reason: self.stop_reason.take(),
+                        finish_reason,
                     });
                 }
                 items.push(ModelStreamItem::Complete);
@@ -519,9 +523,13 @@ impl AnthropicStreamState {
 
         // Emit response metadata if we have response_id
         if let Some(response_id) = self.response_id.take() {
+            let finish_reason = self
+                .stop_reason
+                .take()
+                .and_then(|s| FinishReason::from_provider_str(&s));
             items.push(ModelStreamItem::ResponseMeta {
                 response_id,
-                finish_reason: self.stop_reason.take(),
+                finish_reason,
             });
         }
 
@@ -537,7 +545,8 @@ impl AnthropicStreamState {
 #[derive(Debug, Serialize)]
 struct AnthropicRequest {
     model: String,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
@@ -1092,7 +1101,7 @@ mod tests {
         let anthropic_messages = AnthropicProvider::convert_messages(&messages);
         let request = AnthropicRequest {
             model: "claude-3-sonnet-20240229".to_string(),
-            max_tokens: 4096,
+            max_tokens: None,
             messages: anthropic_messages,
             system: None,
             tools: None,

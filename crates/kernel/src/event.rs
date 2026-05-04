@@ -81,7 +81,11 @@ pub enum AgentStatus {
     /// 一次 `ReAct` 迭代完成（原 Completed）
     IterationCompleted { iteration: usize, messages: usize },
     /// 任务自然结束（原 `ReActLoopEnd`）
-    TurnCompleted { total_iterations: usize },
+    TurnCompleted {
+        total_iterations: usize,
+        /// API 返回的 finish reason（如 `MaxTokens`, `ContentFilter`）
+        finish_reason: Option<crate::types::FinishReason>,
+    },
     /// Agent 停止（包含各种结束原因）
     Stopped { reason: StopReason },
 }

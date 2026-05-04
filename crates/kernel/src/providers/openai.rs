@@ -2,7 +2,7 @@ use crate::event::ContentChunk;
 use crate::providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, ProviderError, ToolCallRequest,
 };
-use crate::types::{Message, Result, Role, ToolDefinition};
+use crate::types::{FinishReason, Message, Result, Role, ToolDefinition};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -457,9 +457,13 @@ impl MsgChunkAssembler {
 
         // Emit response metadata if we captured response_id
         if let Some(response_id) = self.response_id.take() {
+            let finish_reason = self
+                .finish_reason
+                .take()
+                .and_then(|s| FinishReason::from_provider_str(&s));
             items.push(ModelStreamItem::ResponseMeta {
                 response_id,
-                finish_reason: self.finish_reason.take(),
+                finish_reason,
             });
         }
 

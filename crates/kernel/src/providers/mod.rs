@@ -1,5 +1,5 @@
 use crate::event::ContentChunk;
-use crate::types::{Message, ToolDefinition};
+use crate::types::{FinishReason, Message, ToolDefinition};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -69,8 +69,8 @@ pub enum ModelStreamItem {
     ResponseMeta {
         /// API response ID (e.g., "chatcmpl-xxx")
         response_id: String,
-        /// Finish reason from API (e.g., "stop", "length", "`content_filter`")
-        finish_reason: Option<String>,
+        /// Finish reason (normalized across providers)
+        finish_reason: Option<FinishReason>,
     },
 }
 
