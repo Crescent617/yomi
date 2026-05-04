@@ -239,7 +239,7 @@ impl Provider for OpenAIProvider {
         let stream = stream::try_unfold(
             (
                 eventsource,
-                ToolCallAssembler::new(),
+                MsgChunkAssembler::new(),
                 tokio::time::Instant::now(),
             ),
             |(mut eventsource, mut assembler, last_content_time)| async move {
@@ -327,11 +327,15 @@ impl Provider for OpenAIProvider {
 /// - A tool call is complete when we receive a chunk with a higher index, or at stream end
 ///
 /// This struct tracks partial state and determines when calls are ready to emit.
-struct ToolCallAssembler {
+struct MsgChunkAssembler {
     /// Partial tool calls by index
     partials: HashMap<usize, PartialToolCall>,
     /// The highest index we've seen so far. Used to detect when lower indices are complete.
     max_seen_index: Option<usize>,
+    /// API response ID (from the first chunk that has it)
+    response_id: Option<String>,
+    /// Finish reason from the final chunk
+    finish_reason: Option<String>,
 }
 
 /// Accumulated state for a single tool call
@@ -342,11 +346,13 @@ struct PartialToolCall {
     arguments: String,
 }
 
-impl ToolCallAssembler {
+impl MsgChunkAssembler {
     fn new() -> Self {
         Self {
             partials: HashMap::new(),
             max_seen_index: None,
+            response_id: None,
+            finish_reason: None,
         }
     }
 
@@ -358,6 +364,11 @@ impl ToolCallAssembler {
         let response: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
             ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
         })?;
+
+        // Capture response ID from any chunk that has it
+        if let Some(id) = response.id {
+            self.response_id = Some(id);
+        }
 
         // Handle usage information (top-level or in choices)
         if let Some(usage) = response.usage {
@@ -373,6 +384,11 @@ impl ToolCallAssembler {
         let Some(choice) = response.choices.into_iter().next() else {
             return Ok(vec![]);
         };
+
+        // Capture finish_reason from the final chunk
+        if let Some(finish_reason) = choice.finish_reason {
+            self.finish_reason = Some(finish_reason);
+        }
 
         let Some(delta) = choice.delta else {
             return Ok(vec![]);
@@ -457,6 +473,14 @@ impl ToolCallAssembler {
             if let Some(completed) = self.try_complete(idx) {
                 items.push(ModelStreamItem::ToolCall(completed));
             }
+        }
+
+        // Emit response metadata if we captured response_id
+        if let Some(response_id) = self.response_id.take() {
+            items.push(ModelStreamItem::ResponseMeta {
+                response_id,
+                finish_reason: self.finish_reason.take(),
+            });
         }
 
         items.push(ModelStreamItem::Complete);
@@ -580,6 +604,9 @@ struct OpenAIFunction {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIStreamResponse {
+    /// Response ID from API (e.g., "chatcmpl-xxx")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     choices: Vec<OpenAIChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<OpenAIUsage>,
@@ -614,6 +641,9 @@ struct OpenAIChoice {
     /// Some providers (like Kimi) include usage in the choice
     #[serde(skip_serializing_if = "Option::is_none")]
     usage: Option<OpenAIUsage>,
+    /// Finish reason from API (e.g., "stop", "length", "`content_filter`")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -697,9 +727,11 @@ mod tests {
 
     fn create_test_response(delta: OpenAIDelta) -> OpenAIStreamResponse {
         OpenAIStreamResponse {
+            id: None,
             choices: vec![OpenAIChoice {
                 delta: Some(delta),
                 usage: None,
+                finish_reason: None,
             }],
             usage: None,
         }
@@ -732,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_assembler_single_tool_call() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // First chunk: tool call starts
         let delta = create_tool_call_delta(0, Some("call_123"), Some("bash"), Some("{\"cmd\":\""));
@@ -782,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_assembler_multiple_tool_calls() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // First tool call starts
         let delta = create_tool_call_delta(
@@ -827,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_assembler_text_content() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let delta = OpenAIDelta {
             content: Some("Hello".to_string()),
@@ -852,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_assembler_thinking_content() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let delta = OpenAIDelta {
             content: None,
@@ -881,7 +913,7 @@ mod tests {
 
     #[test]
     fn test_assembler_reasoning_content_fallback() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // Test reasoning field (used by some providers)
         let delta = OpenAIDelta {
@@ -907,7 +939,7 @@ mod tests {
 
     #[test]
     fn test_assembler_redacted_thinking() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let delta = OpenAIDelta {
             content: None,
@@ -930,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_assembler_empty_content_filtered() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // Empty content should be filtered out
         let delta = OpenAIDelta {
@@ -950,9 +982,10 @@ mod tests {
 
     #[test]
     fn test_assembler_no_choices() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let response = OpenAIStreamResponse {
+            id: None,
             choices: vec![],
             usage: None,
         };
@@ -964,12 +997,14 @@ mod tests {
 
     #[test]
     fn test_assembler_no_delta() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let response = OpenAIStreamResponse {
+            id: None,
             choices: vec![OpenAIChoice {
                 delta: None,
                 usage: None,
+                finish_reason: None,
             }],
             usage: None,
         };
@@ -981,7 +1016,7 @@ mod tests {
 
     #[test]
     fn test_assembler_invalid_json() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         let result = assembler.process("invalid json");
         assert!(result.is_err());
@@ -991,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_assembler_incomplete_tool_call_finish() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // Start a tool call but never complete it
         let delta = create_tool_call_delta(0, Some("call_1"), None, None); // missing name
@@ -1006,7 +1041,7 @@ mod tests {
 
     #[test]
     fn test_assembler_mixed_content_and_tool() {
-        let mut assembler = ToolCallAssembler::new();
+        let mut assembler = MsgChunkAssembler::new();
 
         // First some text
         let delta = OpenAIDelta {

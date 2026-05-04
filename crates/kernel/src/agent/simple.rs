@@ -317,6 +317,10 @@ impl SimpleAgent {
                         ModelStreamItem::TokenUsage(usage) => {
                             state.handle_token_usage(usage);
                         }
+                        ModelStreamItem::ResponseMeta { .. } => {
+                            // SimpleAgent doesn't track response metadata
+                            // Could be added to ExecuteMetrics if needed
+                        }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
                             on_event(Event::Model(ModelEvent::Fallback {

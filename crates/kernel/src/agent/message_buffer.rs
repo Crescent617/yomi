@@ -207,6 +207,7 @@ mod validate_clean_tests {
             tool_call_id: None,
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -220,6 +221,7 @@ mod validate_clean_tests {
             tool_call_id: Some(tool_call_id.to_string()),
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -233,6 +235,7 @@ mod validate_clean_tests {
             tool_call_id: None,
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -371,6 +374,7 @@ mod validate_clean_tests {
             tool_call_id: None,
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         });
         buffer.push(create_user_message("response"));
 

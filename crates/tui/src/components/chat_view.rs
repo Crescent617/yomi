@@ -1088,6 +1088,7 @@ impl ChatView {
 
     /// Render queued message to be displayed at the bottom during streaming
     fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
+        const MAX_LINES: usize = 3;
         let mut lines = Vec::new();
 
         let text_content = Self::extract_text_from_blocks(blocks);
@@ -1100,8 +1101,18 @@ impl ChatView {
                 .add_modifier(Modifier::ITALIC),
         )])));
 
-        // Render content with dimmed style
-        for line in text_content.lines() {
+        // Render content with dimmed style (max 3 lines, show ... if more)
+        for (i, line) in text_content.lines().take(MAX_LINES + 1).enumerate() {
+            if i >= MAX_LINES {
+                lines.push(Arc::new(Line::from(vec![
+                    Span::styled(
+                        chars::MSG_INDENT_GUIDE,
+                        Style::default().fg(colors::text_secondary()),
+                    ),
+                    Span::styled("...", Style::default().fg(colors::text_secondary())),
+                ])));
+                break;
+            }
             lines.push(Arc::new(Line::from(vec![
                 Span::styled(
                     chars::MSG_INDENT_GUIDE,

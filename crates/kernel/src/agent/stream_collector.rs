@@ -13,6 +13,10 @@ pub struct StreamCollectionResult {
     pub tool_calls: Vec<ToolCall>,
     /// Token usage
     pub token_usage: Option<crate::providers::TokenUsage>,
+    /// API response ID (e.g., "chatcmpl-xxx" or "`msg_xxx`")
+    pub response_id: Option<String>,
+    /// Finish/stop reason from API (e.g., "stop", "`end_turn`", "`max_tokens`")
+    pub finish_reason: Option<String>,
 }
 
 /// Internal state for stream collection
@@ -25,6 +29,10 @@ pub struct StreamCollectorState {
     pending_tool_calls: Vec<ToolCall>,
     /// Token usage
     token_usage: Option<crate::providers::TokenUsage>,
+    /// API response ID
+    response_id: Option<String>,
+    /// Finish/stop reason
+    finish_reason: Option<String>,
 }
 
 impl StreamCollectorState {
@@ -61,6 +69,15 @@ impl StreamCollectorState {
         self.token_usage = Some(usage);
     }
 
+    pub(crate) fn handle_response_meta(
+        &mut self,
+        response_id: String,
+        finish_reason: Option<String>,
+    ) {
+        self.response_id = Some(response_id);
+        self.finish_reason = finish_reason;
+    }
+
     /// Build content blocks, tool calls, and token usage from collected state
     pub(crate) fn build_result(self) -> StreamCollectionResult {
         let mut content_blocks = Vec::new();
@@ -91,6 +108,8 @@ impl StreamCollectorState {
             content_blocks,
             tool_calls: self.pending_tool_calls,
             token_usage: self.token_usage,
+            response_id: self.response_id,
+            finish_reason: self.finish_reason,
         }
     }
 }

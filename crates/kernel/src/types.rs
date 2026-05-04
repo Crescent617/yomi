@@ -162,20 +162,37 @@ pub struct Message {
     /// Token usage for this message (from API response, only set for assistant messages)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<MessageTokenUsage>,
+    /// API response ID (e.g., "chatcmpl-xxx" or "`msg_xxx`", only set for assistant messages from API)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
+    /// Finish/stop reason from API response (e.g., "stop", "length", "`end_turn`", "`max_tokens`")
+    /// Only set for assistant messages from API
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
-impl Message {
-    /// Create a message with single text content
-    pub fn system(content: impl Into<String>) -> Self {
+impl Default for Message {
+    fn default() -> Self {
         Self {
-            role: Role::System,
-            content: vec![ContentBlock::Text {
-                text: content.into(),
-            }],
+            role: Role::User,
+            content: Vec::new(),
             tool_calls: None,
             tool_call_id: None,
             created_at: Utc::now(),
             token_usage: None,
+            response_id: None,
+            finish_reason: None,
+        }
+    }
+}
+
+impl Message {
+    /// Create a system message with text content
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: vec![content.into().into()],
+            ..Default::default()
         }
     }
 
@@ -183,13 +200,8 @@ impl Message {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: vec![ContentBlock::Text {
-                text: content.into(),
-            }],
-            tool_calls: None,
-            tool_call_id: None,
-            created_at: Utc::now(),
-            token_usage: None,
+            content: vec![content.into().into()],
+            ..Default::default()
         }
     }
 
@@ -206,10 +218,7 @@ impl Message {
                     },
                 },
             ],
-            tool_calls: None,
-            tool_call_id: None,
-            created_at: Utc::now(),
-            token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -217,13 +226,8 @@ impl Message {
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: vec![ContentBlock::Text {
-                text: content.into(),
-            }],
-            tool_calls: None,
-            tool_call_id: None,
-            created_at: Utc::now(),
-            token_usage: None,
+            content: vec![content.into().into()],
+            ..Default::default()
         }
     }
 
@@ -238,10 +242,7 @@ impl Message {
                 },
                 ContentBlock::Text { text: text.into() },
             ],
-            tool_calls: None,
-            tool_call_id: None,
-            created_at: Utc::now(),
-            token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -250,10 +251,7 @@ impl Message {
         Self {
             role,
             content: blocks,
-            tool_calls: None,
-            tool_call_id: None,
-            created_at: Utc::now(),
-            token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -299,13 +297,9 @@ impl Message {
     pub fn tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
-            content: vec![ContentBlock::Text {
-                text: output.into(),
-            }],
-            tool_calls: None,
+            content: vec![output.into().into()],
             tool_call_id: Some(tool_call_id.into()),
-            created_at: Utc::now(),
-            token_usage: None,
+            ..Default::default()
         }
     }
 
@@ -313,6 +307,27 @@ impl Message {
     #[must_use]
     pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
         self.tool_call_id = Some(tool_call_id.into());
+        self
+    }
+
+    /// Set token usage for this message (builder pattern, for assistant messages)
+    #[must_use]
+    pub fn with_token_usage(mut self, usage: MessageTokenUsage) -> Self {
+        self.token_usage = Some(usage);
+        self
+    }
+
+    /// Set the API response ID for this message (builder pattern, for assistant messages)
+    #[must_use]
+    pub fn with_response_id(mut self, response_id: impl Into<String>) -> Self {
+        self.response_id = Some(response_id.into());
+        self
+    }
+
+    /// Set the finish reason for this message (builder pattern, for assistant messages)
+    #[must_use]
+    pub fn with_finish_reason(mut self, finish_reason: impl Into<String>) -> Self {
+        self.finish_reason = Some(finish_reason.into());
         self
     }
 }

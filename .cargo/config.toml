@@ -40,6 +40,8 @@ rustflags = [
     "clippy::struct_field_names",
     "-A",
     "clippy::manual_let_else",
+    "-A",
+    "clippy::default-trait-access",
 ]
 
 [registries.crates-io]

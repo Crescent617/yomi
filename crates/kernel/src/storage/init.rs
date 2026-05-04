@@ -180,7 +180,7 @@ mod tests {
         // Verify data directory structure
         assert!(temp_dir.path().join("yomi.db").exists());
         assert!(temp_dir.path().join("sessions").exists());
-        assert!(temp_dir.path().join("todos").exists());
+        assert!(temp_dir.path().join("sessions/todos").exists());
     }
 
     #[tokio::test]
