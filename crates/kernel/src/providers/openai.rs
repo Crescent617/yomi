@@ -40,61 +40,31 @@ impl OpenAIProvider {
             .map(|m| {
                 let m = m.as_ref();
 
-                // Check if message has image content
-                let has_image = m
+                let blocks: Vec<_> = m
                     .content
                     .iter()
-                    .any(|c| matches!(c, crate::types::ContentBlock::ImageUrl { .. }));
+                    .filter_map(|c| match c {
+                        crate::types::ContentBlock::Text { text } if !text.is_empty() => {
+                            Some(OpenAIContentBlock {
+                                type_: "text".into(),
+                                text: Some(text.clone()),
+                                image_url: None,
+                            })
+                        }
+                        crate::types::ContentBlock::ImageUrl { image_url } => {
+                            Some(OpenAIContentBlock {
+                                type_: "image_url".into(),
+                                text: None,
+                                image_url: Some(OpenAIImageUrl {
+                                    url: image_url.url.clone(),
+                                    detail: image_url.detail.clone(),
+                                }),
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
-                // Build content (text-only or multi-modal)
-                let content = if has_image {
-                    // Multi-modal: convert to content blocks
-                    let blocks: Vec<OpenAIContentBlock> = m
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            crate::types::ContentBlock::Text { text } if !text.is_empty() => {
-                                Some(OpenAIContentBlock {
-                                    type_: "text".to_string(),
-                                    text: Some(text.clone()),
-                                    image_url: None,
-                                })
-                            }
-                            crate::types::ContentBlock::ImageUrl { image_url } => {
-                                Some(OpenAIContentBlock {
-                                    type_: "image_url".to_string(),
-                                    text: None,
-                                    image_url: Some(OpenAIImageUrl {
-                                        // image_url.url is already base64, wrap in data URL format
-                                        // image_url.url is already a data URL (e.g., data:image/png;base64,...)
-                                        url: image_url.url.clone(),
-                                        detail: image_url.detail.clone(),
-                                    }),
-                                })
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    OpenAIContent::Blocks(blocks)
-                } else {
-                    // Text-only: use simple string format
-                    let text = if m.content.len() == 1 {
-                        m.content
-                            .first()
-                            .and_then(|c| c.as_text())
-                            .map(|t| t.to_string())
-                            .unwrap_or_default()
-                    } else {
-                        m.content
-                            .iter()
-                            .filter_map(|c| c.as_text())
-                            .collect::<Vec<_>>()
-                            .join("")
-                    };
-                    OpenAIContent::Text(text)
-                };
-
-                // Extract thinking content for reasoning models
                 let reasoning_content = m
                     .content
                     .iter()
@@ -106,29 +76,33 @@ impl OpenAIProvider {
                     })
                     .unwrap_or_default();
 
+                let role = match m.role {
+                    Role::System => "system",
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                    Role::Tool => "tool",
+                };
+
+                let tool_calls = m.tool_calls.as_ref().map(|calls| {
+                    calls
+                        .iter()
+                        .map(|c| OpenAIToolCall {
+                            index: None,
+                            id: Some(c.id.clone()),
+                            type_: Some("function".into()),
+                            function: OpenAIFunction {
+                                name: Some(c.name.clone()),
+                                arguments: Some(c.arguments.to_string()),
+                            },
+                        })
+                        .collect()
+                });
+
                 OpenAIMessage {
-                    role: match m.role {
-                        Role::System => "system".to_string(),
-                        Role::User => "user".to_string(),
-                        Role::Assistant => "assistant".to_string(),
-                        Role::Tool => "tool".to_string(),
-                    },
-                    content,
+                    role: role.into(),
+                    content: OpenAIContent::Blocks(blocks),
                     reasoning_content: Some(reasoning_content),
-                    tool_calls: m.tool_calls.as_ref().map(|calls| {
-                        calls
-                            .iter()
-                            .map(|c| OpenAIToolCall {
-                                index: None,
-                                id: Some(c.id.clone()),
-                                type_: Some("function".to_string()),
-                                function: OpenAIFunction {
-                                    name: Some(c.name.clone()),
-                                    arguments: Some(c.arguments.to_string()),
-                                },
-                            })
-                            .collect()
-                    }),
+                    tool_calls,
                     tool_call_id: m.tool_call_id.clone(),
                 }
             })
