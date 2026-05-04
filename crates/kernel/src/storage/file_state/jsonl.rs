@@ -18,13 +18,14 @@ pub struct JsonlFileStateStore {
 
 impl JsonlFileStateStore {
     /// Create or open a state file for the given session
+    /// File states are stored in `sessions/file_states/`
     pub async fn new(session_id: &str, data_dir: &Path) -> Result<Self> {
-        let sessions_dir = data_dir.join("sessions");
-        fs::create_dir_all(&sessions_dir)
+        let file_states_dir = data_dir.join("sessions").join("file_states");
+        fs::create_dir_all(&file_states_dir)
             .await
             .map_err(|e| storage_err(e.to_string()))?;
 
-        let file_path = sessions_dir.join(format!("{session_id}.state.jsonl"));
+        let file_path = file_states_dir.join(format!("{session_id}.jsonl"));
 
         let file = if file_path.exists() {
             fs::OpenOptions::new()

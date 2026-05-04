@@ -64,6 +64,14 @@ pub enum ModelStreamItem {
         to: String,
     },
     TokenUsage(TokenUsage),
+    /// API response metadata (id, `finish_reason`, etc.)
+    /// Emitted when the stream ends with the final chunk's metadata
+    ResponseMeta {
+        /// API response ID (e.g., "chatcmpl-xxx")
+        response_id: String,
+        /// Finish reason from API (e.g., "stop", "length", "`content_filter`")
+        finish_reason: Option<String>,
+    },
 }
 
 /// Tool call request from model

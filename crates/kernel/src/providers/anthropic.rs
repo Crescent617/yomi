@@ -362,6 +362,10 @@ struct AnthropicStreamState {
     accumulated_text: String,
     accumulated_thinking: String,
     input_tokens: Option<u32>,
+    /// API response ID (from `message_start` event)
+    response_id: Option<String>,
+    /// Stop reason from `message_delta` (e.g., "`end_turn`", "`max_tokens`", "`stop_sequence`")
+    stop_reason: Option<String>,
 }
 
 struct PartialToolCall {
@@ -377,6 +381,8 @@ impl AnthropicStreamState {
             accumulated_text: String::new(),
             accumulated_thinking: String::new(),
             input_tokens: None,
+            response_id: None,
+            stop_reason: None,
         }
     }
 
@@ -391,6 +397,10 @@ impl AnthropicStreamState {
             AnthropicStreamEvent::MessageStart { message } => {
                 // Store input tokens from message_start event
                 self.input_tokens = Some(message.usage.input_tokens);
+                // Capture response ID from message_start
+                self.response_id = Some(message.id);
+                // Capture stop_reason if already set (usually null at start)
+                self.stop_reason = message.stop_reason;
             }
             AnthropicStreamEvent::Ping => {}
             AnthropicStreamEvent::ContentBlockStart { content_block, .. } => match content_block {
@@ -453,7 +463,11 @@ impl AnthropicStreamState {
                     }));
                 }
             }
-            AnthropicStreamEvent::MessageDelta { usage, .. } => {
+            AnthropicStreamEvent::MessageDelta { delta, usage } => {
+                // Capture stop_reason from message_delta
+                if let Some(reason) = delta.stop_reason {
+                    self.stop_reason = Some(reason);
+                }
                 // Extract token usage from the message delta
                 // Note: message_delta contains output_tokens, input_tokens should come from message_start
                 if let Some(usage) = usage {
@@ -494,6 +508,14 @@ impl AnthropicStreamState {
                 name: tool.name,
                 arguments,
             }));
+        }
+
+        // Emit response metadata if we have response_id
+        if let Some(response_id) = self.response_id.take() {
+            items.push(ModelStreamItem::ResponseMeta {
+                response_id,
+                finish_reason: self.stop_reason.take(),
+            });
         }
 
         if !items.iter().any(|i| matches!(i, ModelStreamItem::Complete)) {
@@ -601,8 +623,7 @@ enum AnthropicStreamEvent {
         _index: usize,
     },
     MessageDelta {
-        #[serde(rename = "delta")]
-        _delta: AnthropicMessageDelta,
+        delta: AnthropicMessageDelta,
         usage: Option<AnthropicUsage>,
     },
     MessageStop,
@@ -614,8 +635,7 @@ enum AnthropicStreamEvent {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageStart {
-    #[serde(rename = "id")]
-    _id: String,
+    id: String,
     #[serde(rename = "type")]
     _type_: String,
     #[serde(rename = "role")]
@@ -625,7 +645,7 @@ struct AnthropicMessageStart {
     #[serde(rename = "model")]
     _model: String,
     #[serde(rename = "stop_reason")]
-    _stop_reason: Option<String>,
+    stop_reason: Option<String>,
     #[serde(rename = "stop_sequence")]
     _stop_sequence: Option<String>,
     #[serde(rename = "usage")]
@@ -653,8 +673,7 @@ enum AnthropicDelta {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicMessageDelta {
-    #[serde(rename = "stop_reason")]
-    _stop_reason: Option<String>,
+    stop_reason: Option<String>,
     #[serde(rename = "stop_sequence")]
     _stop_sequence: Option<String>,
 }
@@ -816,6 +835,7 @@ mod tests {
             tool_call_id: Some("tool_123".to_string()),
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         })];
 
         let converted = AnthropicProvider::convert_messages(&messages);
@@ -870,6 +890,7 @@ mod tests {
             tool_call_id: None,
             created_at: Utc::now(),
             token_usage: None,
+            ..Default::default()
         })];
 
         let converted = AnthropicProvider::convert_messages(&messages);
@@ -978,6 +999,7 @@ mod tests {
                 tool_call_id: None,
                 created_at: Utc::now(),
                 token_usage: None,
+                ..Default::default()
             }),
             // Tool result
             Arc::new(Message {
@@ -989,6 +1011,7 @@ mod tests {
                 tool_call_id: Some("weather_1".to_string()),
                 created_at: Utc::now(),
                 token_usage: None,
+                ..Default::default()
             }),
             // Final assistant response
             Arc::new(Message::assistant("It's 72°F and sunny in New York!")),
@@ -1051,6 +1074,7 @@ mod tests {
                 tool_call_id: None,
                 created_at: Utc::now(),
                 token_usage: None,
+                ..Default::default()
             }),
             Arc::new(Message::tool_result(
                 "toolu_01D7FLrfh4GYq7yT1ULFeyMV",

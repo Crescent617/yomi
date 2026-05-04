@@ -8,7 +8,7 @@ use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolE
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::parallel::ToolExecutionResult;
-use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role, ToolCall};
+use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role};
 use futures::TryStreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -51,8 +51,6 @@ pub struct Agent {
     tool_registry: crate::tools::ToolRegistry,
     // Permission checker for tool execution
     permission_checker: Option<Arc<Checker>>,
-    // Pending token usage for the current message
-    pending_token_usage: Option<MessageTokenUsage>,
     // Working directory for tool execution
     working_dir: std::path::PathBuf,
     /// Generation counter: inputs with lower generation are stale (cancelled before send)
@@ -140,7 +138,6 @@ impl Agent {
             max_iterations: args.max_iterations,
             tool_registry,
             permission_checker,
-            pending_token_usage: None,
             working_dir: args.working_dir,
             input_stale_since: Arc::clone(&input_stale_since),
         };
@@ -462,15 +459,25 @@ impl Agent {
             }
         };
 
-        let (content_blocks, pending_tool_calls) = self.collect_stream_output(&mut stream).await?;
+        let result = self.collect_stream_output(&mut stream).await?;
 
-        if !content_blocks.is_empty() || !pending_tool_calls.is_empty() {
-            let mut msg = Message::with_blocks(Role::Assistant, content_blocks);
-            if !pending_tool_calls.is_empty() {
-                msg.tool_calls = Some(pending_tool_calls);
+        if !result.content_blocks.is_empty() || !result.tool_calls.is_empty() {
+            let mut msg = Message::with_blocks(Role::Assistant, result.content_blocks);
+            if !result.tool_calls.is_empty() {
+                msg.tool_calls = Some(result.tool_calls);
             }
-            if let Some(usage) = self.pending_token_usage.take() {
-                msg.token_usage = Some(usage);
+            if let Some(usage) = result.token_usage {
+                msg.token_usage = Some(MessageTokenUsage {
+                    prompt_tokens: usage.prompt_tokens,
+                    completion_tokens: usage.completion_tokens,
+                    total_tokens: usage.total_tokens(),
+                });
+            }
+            if let Some(response_id) = result.response_id {
+                msg.response_id = Some(response_id);
+            }
+            if let Some(finish_reason) = result.finish_reason {
+                msg.finish_reason = Some(finish_reason);
             }
 
             self.persist_message(&msg).await;
@@ -490,7 +497,7 @@ impl Agent {
     async fn collect_stream_output(
         &mut self,
         stream: &mut crate::providers::ModelStream,
-    ) -> Result<(Vec<ContentBlock>, Vec<ToolCall>), AgentError> {
+    ) -> Result<super::stream_collector::StreamCollectionResult, AgentError> {
         use super::stream_collector::StreamCollectorState;
         use crate::providers::ModelStreamItem;
 
@@ -500,7 +507,7 @@ impl Agent {
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
-                    return self.handle_cancel("streaming").await.map(|()| (vec![], vec![]));
+                    return self.handle_cancel("streaming").await.map(|()| Default::default());
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => match item {
@@ -547,11 +554,6 @@ impl Agent {
                                 usage.total_tokens()
                             );
                             let total = usage.total_tokens();
-                            self.pending_token_usage = Some(MessageTokenUsage {
-                                prompt_tokens: usage.prompt_tokens,
-                                completion_tokens: usage.completion_tokens,
-                                total_tokens: total,
-                            });
                             state.handle_token_usage(usage);
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
@@ -580,6 +582,15 @@ impl Agent {
                                 }
                             }
                         }
+                        ModelStreamItem::ResponseMeta { response_id, finish_reason } => {
+                            tracing::debug!(
+                                "Agent {} received response meta: id={}, finish_reason={:?}",
+                                self.id,
+                                response_id,
+                                finish_reason
+                            );
+                            state.handle_response_meta(response_id, finish_reason);
+                        }
                     },
                     Ok(None) => break,
                     Err(e) => {
@@ -589,8 +600,7 @@ impl Agent {
             }
         }
 
-        let result = state.build_result();
-        Ok((result.content_blocks, result.tool_calls))
+        Ok(state.build_result())
     }
 
     /// Force compaction regardless of threshold.

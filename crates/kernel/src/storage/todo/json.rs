@@ -14,9 +14,10 @@ pub struct JsonTodoStore {
 
 impl JsonTodoStore {
     /// Create new store with the given data directory
+    /// Todo files are stored in `sessions/todos/`
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
         Self {
-            base_dir: data_dir.into().join("todos"),
+            base_dir: data_dir.into().join("sessions").join("todos"),
         }
     }
 

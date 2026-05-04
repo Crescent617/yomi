@@ -101,10 +101,8 @@ fn build_success_result(
     let message = Message {
         role: Role::Tool,
         content: content_blocks,
-        tool_calls: None,
         tool_call_id: Some(call_id.to_string()),
-        created_at: chrono::Utc::now(),
-        token_usage: None,
+        ..Default::default()
     };
 
     (event, message)
@@ -130,10 +128,8 @@ fn build_error_result(
     let message = Message {
         role: Role::Tool,
         content: vec![ContentBlock::Text { text: error }],
-        tool_calls: None,
         tool_call_id: Some(call_id.to_string()),
-        created_at: chrono::Utc::now(),
-        token_usage: None,
+        ..Default::default()
     };
 
     (event, message)
