@@ -95,10 +95,16 @@ impl OpenAIProvider {
                 };
 
                 // Extract thinking content for reasoning models
-                let reasoning_content = m.content.iter().find_map(|c| match c {
-                    crate::types::ContentBlock::Thinking { thinking, .. } => Some(thinking.clone()),
-                    _ => None,
-                });
+                let reasoning_content = m
+                    .content
+                    .iter()
+                    .find_map(|c| match c {
+                        crate::types::ContentBlock::Thinking { thinking, .. } => {
+                            Some(thinking.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
 
                 OpenAIMessage {
                     role: match m.role {
@@ -108,7 +114,7 @@ impl OpenAIProvider {
                         Role::Tool => "tool".to_string(),
                     },
                     content,
-                    reasoning_content,
+                    reasoning_content: Some(reasoning_content),
                     tool_calls: m.tool_calls.as_ref().map(|calls| {
                         calls
                             .iter()

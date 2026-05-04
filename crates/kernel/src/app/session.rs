@@ -74,14 +74,11 @@ impl Session {
 
         let states = persistent_store.get_all().await?;
 
-        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::with_persistent(
-            persistent_store,
-        ));
-        for (path, mtime) in states {
-            file_state_store.record(path, mtime);
-        }
+        let file_state_store = crate::tools::file_state::FileStateStore::new()
+            .with_persistent(persistent_store)
+            .with_states(states.into_iter());
 
-        Ok(file_state_store)
+        Ok(Arc::new(file_state_store))
     }
 
     /// Create permission state if needed based on config
