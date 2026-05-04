@@ -46,7 +46,15 @@ pub use providers::{
     ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{Skill, SkillLoader};
-pub use storage::{SimpleStorage, Storage, TodoStorage};
+// Re-export storage domains
+pub use storage::{
+    file_state::{FileState, FileStateStore, JsonlFileStateStore, StateEntry},
+    message::{JsonlMessageStore, MessageStore},
+    session::{SessionInfo, SessionStore, SqliteSessionStore},
+    todo::{JsonTodoStore, TodoStore},
+    usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType},
+    StorageSet,
+};
 pub use tools::{Tool, ToolRegistry};
 pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};

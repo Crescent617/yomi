@@ -176,10 +176,9 @@ impl Agent {
 
     /// Persist a single message to storage
     async fn persist_message(&self, message: &Message) {
-        if let Some(storage) = &self.shared.storage {
-            let session_id = crate::types::SessionId(self.session_id.clone());
-            let _ = storage
-                .append_messages(&session_id, std::slice::from_ref(message))
+        if let Some(store) = &self.shared.message_store {
+            let _ = store
+                .append(&self.session_id, std::slice::from_ref(message))
                 .await;
         }
     }
@@ -562,16 +561,16 @@ impl Agent {
                                 tracing::warn!("Failed to send token usage event: {}", e);
                             }
                             // Record token usage
-                            if let Some(storage) = &self.shared.storage {
-                                let record = crate::types::TokenRecord::new(
+                            if let Some(store) = &self.shared.usage_store {
+                                let record = crate::storage::UsageRecord::new(
                                     crate::types::SessionId(self.session_id.clone()),
                                     self.id.clone(),
                                     usage,
                                     self.shared.model_config.model_id.clone(),
                                     self.shared.model_config.provider.to_string(),
-                                    crate::types::UsageType::Normal,
+                                    crate::storage::UsageType::Normal,
                                 );
-                                if let Err(e) = storage.record_token_usage(&record).await {
+                                if let Err(e) = store.record(&record).await {
                                     tracing::warn!("Failed to record token usage: {}", e);
                                 }
                             }
@@ -709,16 +708,16 @@ impl Agent {
         if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
             return; // No usage to record
         }
-        if let Some(storage) = &self.shared.storage {
-            let record = crate::types::TokenRecord::new(
+        if let Some(store) = &self.shared.usage_store {
+            let record = crate::storage::UsageRecord::new(
                 crate::types::SessionId(self.session_id.clone()),
                 self.id.clone(),
                 usage,
                 self.shared.model_config.model_id.clone(),
                 self.shared.model_config.provider.to_string(),
-                crate::types::UsageType::Compactor,
+                crate::storage::UsageType::Compactor,
             );
-            if let Err(e) = storage.record_token_usage(&record).await {
+            if let Err(e) = store.record(&record).await {
                 tracing::warn!("Failed to record compactor token usage: {}", e);
             }
         }
@@ -740,14 +739,13 @@ impl Agent {
         *self.message_buffer.messages_mut() = new_messages;
 
         // Persist compacted messages (without system messages)
-        if let Some(storage) = &self.shared.storage {
-            let sid = crate::types::SessionId(self.session_id.clone());
+        if let Some(store) = &self.shared.message_store {
             let to_persist: Vec<Message> = messages
                 .into_iter()
                 .filter(|m| m.role != Role::System)
                 .map(|m| (*m).clone())
                 .collect();
-            if let Err(e) = storage.set_messages(&sid, &to_persist).await {
+            if let Err(e) = store.replace(&self.session_id, &to_persist).await {
                 tracing::warn!(
                     "Agent {} failed to persist compacted messages: {}",
                     self.id,

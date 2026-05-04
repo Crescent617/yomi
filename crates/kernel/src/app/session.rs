@@ -1,10 +1,10 @@
 use crate::permissions::{Level, PermissionState};
-use crate::storage::SessionStateManager;
+use crate::storage::file_state::JsonlFileStateStore;
+use crate::storage::{MessageStore, SessionStore};
 use crate::types::{AgentId, KernelError, Result, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
     event::Event,
-    storage::Storage,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -12,7 +12,9 @@ use tokio::sync::mpsc;
 pub struct Session {
     id: SessionId,
     config: SessionConfig,
-    storage: Arc<dyn Storage>,
+    #[allow(dead_code)]
+    session_store: Arc<dyn SessionStore>,
+    message_store: Arc<dyn MessageStore>,
     agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     event_rx: Option<mpsc::Receiver<Event>>,
@@ -34,30 +36,30 @@ impl Session {
     pub async fn new(
         id: SessionId,
         config: SessionConfig,
-        storage: Arc<dyn Storage>,
+        session_store: Arc<dyn SessionStore>,
+        message_store: Arc<dyn MessageStore>,
         agent_shared: Arc<AgentShared>,
     ) -> Result<Self> {
-        // Create file state store internally (kernel闭环)
-        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::new());
+        // Create persistent file state store
+        let persistent_store: Arc<dyn crate::storage::FileStateStore> =
+            Arc::new(JsonlFileStateStore::new(&id.0, &config.data_dir).await?);
 
-        // Create session state manager for persistent storage
-        let state_manager = Arc::new(tokio::sync::Mutex::new(
-            SessionStateManager::new(&id, &config.data_dir).await?,
+        // Load previous file states from disk
+        let states = persistent_store.get_all().await?;
+
+        // Create file state store with persistent backend and preload states
+        let file_state_store = Arc::new(crate::tools::file_state::FileStateStore::with_persistent(
+            persistent_store,
         ));
-
-        // Load previous file states from disk into memory
-        let states = state_manager.lock().await.get_file_states().await?;
         for (path, mtime) in states {
             file_state_store.record(path, mtime);
         }
 
-        // Inject state manager into file state store for persistence
-        file_state_store.set_state_manager(Arc::clone(&state_manager));
-
         Ok(Self {
             id,
             config,
-            storage,
+            session_store,
+            message_store,
             agent_shared,
             main_agent: None,
             event_rx: None,
@@ -73,15 +75,9 @@ impl Session {
 
     async fn spawn_main_agent(&mut self) -> Result<()> {
         // Load history from storage
-        let history = self
-            .storage
-            .get_messages(&self.id)
-            .await
-            .unwrap_or_default();
+        let history = self.message_store.get(&self.id.0).await.unwrap_or_default();
 
         // Create shared permission state for all agents in this session
-        // In YOLO mode (Dangerous), no permission state is created (all tools auto-approve)
-        // Create or reuse permission state
         if self.permission_state.is_none() && self.config.auto_approve_level != Level::Dangerous {
             let ps = PermissionState::new(self.config.auto_approve_level).0;
             self.permission_state = Some(ps);
@@ -105,7 +101,9 @@ impl Session {
             self.agent_shared.todo_storage.clone(),
             self.agent_shared.project_memory.clone(),
             self.agent_shared.compactor.clone(),
-            self.agent_shared.storage.clone(),
+            self.agent_shared.session_store.clone(),
+            self.agent_shared.message_store.clone(),
+            self.agent_shared.usage_store.clone(),
             permission_state,
             self.agent_shared.skill_folders.clone(),
             Some(Arc::clone(&self.file_state_store)),
@@ -134,7 +132,7 @@ impl Session {
         }
     }
 
-    /// Send a multi-modal message with content blocks (supports images, text, etc.)
+    /// Send a multi-modal message with content blocks
     pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
         tracing::debug!(
             "Session {} sending {} content blocks",

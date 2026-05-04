@@ -1,3 +1,4 @@
+use crate::args::GlobalArgs;
 use anyhow::Result;
 use kernel::{config::Config, expand_tilde, DEFAULT_DATA_DIR};
 use std::path::{Path, PathBuf};
@@ -74,4 +75,14 @@ pub fn set_nested_value(table: &mut toml::Table, key: &str, value: String) -> Re
     current.insert((*last).to_string(), parsed_value);
 
     Ok(())
+}
+
+/// Get the data directory from global args
+pub fn data_dir(global: &GlobalArgs) -> Result<PathBuf> {
+    let working_dir = global
+        .dir
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let config = load_config(global.config.as_ref(), &working_dir)?;
+    Ok(config.data_dir)
 }

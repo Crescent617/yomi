@@ -127,7 +127,7 @@ pub struct Model {
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
     pub ctrl_tx: mpsc::Sender<ControlCommand>,
     /// Storage for loading sessions list
-    storage: Arc<dyn kernel::storage::Storage>,
+    session_store: Arc<dyn kernel::storage::SessionStore>,
     /// Current assistant response content (for adding to history when complete)
     current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -163,7 +163,7 @@ impl Model {
         event_rx: mpsc::Receiver<AppEvent>,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
         ctrl_tx: mpsc::Sender<ControlCommand>,
-        storage: Arc<dyn kernel::storage::Storage>,
+        session_store: Arc<dyn kernel::storage::SessionStore>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         session_messages: Vec<Message>,
@@ -188,7 +188,7 @@ impl Model {
             event_rx,
             input_tx,
             ctrl_tx,
-            storage,
+            session_store,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -421,10 +421,11 @@ impl Model {
     }
 
     /// Initialize todo list from file storage
-    pub fn init_todo_list(&mut self) -> Result<()> {
-        use kernel::storage::TodoStorage;
-        let todo_storage = TodoStorage::new(&crate::config().data_dir);
-        if let Some(todo_json) = todo_storage.load(&self.session_id) {
+    pub async fn init_todo_list(&mut self) -> Result<()> {
+        use kernel::storage::JsonTodoStore;
+        use kernel::storage::TodoStore;
+        let todo_storage = JsonTodoStore::new(&crate::config().data_dir);
+        if let Some(todo_json) = todo_storage.load(&self.session_id).await? {
             self.app.attr(
                 &Id::TodoList,
                 Attribute::Custom(attr::SET_TODOS),
@@ -1765,7 +1766,7 @@ impl Model {
                     let working_dir = self.working_dir.to_string_lossy().to_string();
                     let sessions = tokio::task::block_in_place(|| {
                         tokio::runtime::Handle::current()
-                            .block_on(self.storage.list_sessions_by_working_dir(&working_dir))
+                            .block_on(self.session_store.list_by_working_dir(&working_dir))
                     })
                     .unwrap_or_default();
 
@@ -1777,9 +1778,10 @@ impl Model {
                                 .title
                                 .unwrap_or_else(|| "(no message)".to_string())
                                 .replace('\n', " ");
-                            let short_id = format_short_id(&s.id);
+                            let id_str = s.id.0;
+                            let short_id = format_short_id(&id_str);
                             let label = format!("{short_id} - {age_str}");
-                            crate::components::PickerItem::new(s.id, label).with_meta(preview)
+                            crate::components::PickerItem::new(id_str, label).with_meta(preview)
                         })
                         .collect();
 
@@ -1856,7 +1858,7 @@ pub async fn run_tui(
     event_rx: mpsc::Receiver<AppEvent>,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
-    storage: Arc<dyn kernel::storage::Storage>,
+    session_store: Arc<dyn kernel::storage::SessionStore>,
     working_dir: String,
     input_history: Vec<String>,
     session_messages: Vec<Message>,
@@ -1869,7 +1871,7 @@ pub async fn run_tui(
         event_rx,
         input_tx,
         ctrl_tx,
-        storage,
+        session_store,
         input_history,
         working_dir_path,
         session_messages,
@@ -1884,7 +1886,7 @@ pub async fn run_tui(
     // Display session messages and init ctx usage (for resumed sessions)
     model.init_session_messages()?;
     // Initialize todo list from file
-    model.init_todo_list()?;
+    model.init_todo_list().await?;
     // run() consumes model and returns the new history entries
     model.run().await
 }

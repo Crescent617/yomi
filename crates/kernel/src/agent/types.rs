@@ -265,13 +265,17 @@ pub struct AgentShared {
     /// Task store for task tools (legacy)
     pub task_store: Option<Arc<crate::task::TaskStore>>,
     /// Todo storage for todo list persistence
-    pub todo_storage: Option<Arc<crate::storage::TodoStorage>>,
+    pub todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
     /// Project memory (CLAUDE.md/AGENTS.md)
     pub project_memory: Arc<crate::project_memory::MemoryFiles>,
     /// Context compactor for managing long conversations
     pub compactor: Option<crate::compactor::Compactor>,
-    /// Storage for message persistence and token usage
-    pub storage: Option<Arc<dyn crate::storage::Storage>>,
+    /// Session store for session operations
+    pub session_store: Option<Arc<dyn crate::storage::SessionStore>>,
+    /// Message store for message persistence
+    pub message_store: Option<Arc<dyn crate::storage::MessageStore>>,
+    /// Usage store for token tracking
+    pub usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
     /// Shared permission state for all agents in a session
     pub permission_state: Option<crate::permissions::PermissionState>,
     /// Skill folders for the `skill_load` tool
@@ -286,10 +290,12 @@ impl AgentShared {
         provider: Arc<dyn crate::providers::Provider>,
         model_config: Arc<ModelConfig>,
         task_store: Option<Arc<crate::task::TaskStore>>,
-        todo_storage: Option<Arc<crate::storage::TodoStorage>>,
+        todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         project_memory: Arc<crate::project_memory::MemoryFiles>,
         compactor: Option<crate::compactor::Compactor>,
-        storage: Option<Arc<dyn crate::storage::Storage>>,
+        session_store: Option<Arc<dyn crate::storage::SessionStore>>,
+        message_store: Option<Arc<dyn crate::storage::MessageStore>>,
+        usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
         permission_state: Option<crate::permissions::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
         file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
@@ -301,7 +307,9 @@ impl AgentShared {
             todo_storage,
             project_memory,
             compactor,
-            storage,
+            session_store,
+            message_store,
+            usage_store,
             permission_state,
             skill_folders,
             file_state_store,

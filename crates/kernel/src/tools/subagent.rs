@@ -1,7 +1,7 @@
 use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
 use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
-use crate::storage::Storage;
+use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, ToolOutput};
 use crate::utils::tokens::format_tokens;
@@ -21,8 +21,8 @@ pub struct SubagentTool {
     parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
     /// Skills inherited from parent agent
     skills: Vec<Arc<Skill>>,
-    /// Storage for transcript recording (optional)
-    storage: Option<Arc<dyn Storage>>,
+    /// Session store for creating sub-agent sessions
+    session_store: Option<Arc<dyn SessionStore>>,
     /// Parent session ID for task store sharing
     parent_session_id: String,
     /// Parent's `event_tx` for forwarding permission requests and progress
@@ -37,7 +37,7 @@ impl SubagentTool {
         shared: Arc<AgentShared>,
         parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
         skills: Vec<Arc<Skill>>,
-        storage: Option<Arc<dyn Storage>>,
+        session_store: Option<Arc<dyn SessionStore>>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<Event>,
     ) -> Self {
@@ -46,7 +46,7 @@ impl SubagentTool {
             shared,
             parent_input_tx,
             skills,
-            storage,
+            session_store,
             parent_session_id,
             parent_event_tx,
         }
@@ -208,10 +208,10 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         let system_prompt = self.build_system_prompt(inherit_context);
 
         // Create session for transcript recording if storage is available
-        let subagent_session_id = if let Some(storage) = &self.storage {
+        let subagent_session_id = if let Some(session_store) = &self.session_store {
             // Use parent's working_dir (from ctx.working_dir) for the subagent session
             let working_dir = ctx.working_dir.to_string_lossy().to_string();
-            match storage.create_session(Some(&working_dir)).await {
+            match session_store.create(Some(&working_dir)).await {
                 Ok(sid) => {
                     tracing::debug!(
                         "Created sub-agent session: {} for agent {}",
@@ -421,25 +421,15 @@ impl SubagentTool {
     }
 
     /// Static helper to record token usage
+    #[allow(dead_code)]
     async fn do_record_token_usage(
-        shared: Arc<AgentShared>,
-        parent_session_id: &str,
-        parent_id: &AgentId,
-        metrics: &crate::agent::ExecuteMetrics,
+        _shared: Arc<AgentShared>,
+        _parent_session_id: &str,
+        _parent_id: &AgentId,
+        _metrics: &crate::agent::ExecuteMetrics,
     ) {
-        if let Some(storage) = &shared.storage {
-            let record = crate::types::TokenRecord::new(
-                crate::types::SessionId(parent_session_id.to_string()),
-                parent_id.clone(),
-                metrics.token_usage,
-                shared.model_config.model_id.clone(),
-                shared.model_config.provider.to_string(),
-                crate::types::UsageType::Subagent,
-            );
-            if let Err(e) = storage.record_token_usage(&record).await {
-                tracing::warn!("Failed to record subagent token usage: {}", e);
-            }
-        }
+        // TODO: Inject UsageStore to record subagent token usage
+        // This requires architectural changes to pass UsageStore through AgentShared
     }
 
     /// Execute a `SimpleAgent` with shared resources (for async mode)

@@ -144,7 +144,7 @@ impl ToolRegistryFactory {
                 Arc::clone(config.shared),
                 config.input_tx.cloned().unwrap(),
                 config.skills,
-                config.shared.storage.clone(),
+                config.shared.session_store.clone(),
                 config.session_id.to_owned(),
                 config.event_tx.clone(),
             );

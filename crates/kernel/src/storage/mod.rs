@@ -1,86 +1,42 @@
-pub mod fs;
-pub mod meta;
-pub mod migrations;
-pub mod session_state;
+//! Storage layer - organized by functional domain
+//!
+//! Each domain is independent with its own trait and implementations:
+//! - `session`: Session lifecycle and metadata
+//! - `message`: Chat message history
+//! - `usage`: Token usage tracking
+//! - `todo`: Todo list persistence
+//! - `file_state`: File modification tracking
+//!
+//! # Quick Start
+//! Use [`StorageSet`] to initialize all storage backends at once:
+//!
+//! ```no_run
+//! use std::path::PathBuf;
+//! use kernel::storage::StorageSet;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let storage = StorageSet::open(PathBuf::from("~/.yomi")).await?;
+//! let session_id = storage.session_store().create(None).await?;
+//! # Ok(())
+//! # }
+//! ```
+
+pub mod file_state;
+pub mod message;
+pub mod session;
 pub mod todo;
-pub mod token;
+pub mod usage;
 
-pub use fs::SimpleStorage;
-pub use meta::{MetaStorage, SessionMeta};
-pub use migrations::{run_migrations, CURRENT_SCHEMA_VERSION};
-pub use session_state::{FileState, SessionStateManager, StateEntry, STATE_VERSION};
-pub use todo::TodoStorage;
-pub use token::TokenStorage;
+// Unified initialization
+mod init;
+pub use init::StorageSet;
 
-use crate::types::{Message, Result, SessionId, SessionRecord, TokenRecord};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+// Migrations are internal - use StorageSet::open() instead
+pub(crate) mod migrations;
 
-/// Token usage summary for a time range
-#[derive(Debug, Clone, Default)]
-pub struct TokenUsageSummary {
-    pub total_prompt: u64,
-    pub total_completion: u64,
-    pub total_cached: u64,
-    pub request_count: u64,
-}
-
-impl TokenUsageSummary {
-    pub const fn total_tokens(&self) -> u64 {
-        self.total_prompt + self.total_completion
-    }
-}
-
-/// Session information for listing
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub parent_id: Option<String>,
-    pub title: Option<String>,
-    pub message_count: i64,
-    pub working_dir: Option<String>,
-}
-
-impl SessionInfo {
-    /// Format the age of the session (time since last update) as a human-readable string
-    pub fn format_age(&self) -> String {
-        let age = Utc::now() - self.updated_at;
-        if age.num_days() > 0 {
-            format!("{}d ago", age.num_days())
-        } else if age.num_hours() > 0 {
-            format!("{}h ago", age.num_hours())
-        } else if age.num_minutes() > 0 {
-            format!("{}m ago", age.num_minutes())
-        } else {
-            "just now".to_string()
-        }
-    }
-}
-
-#[async_trait]
-pub trait Storage: Send + Sync {
-    /// Create a new session with optional working directory
-    async fn create_session(&self, working_dir: Option<&str>) -> Result<SessionId>;
-    async fn fork_session(&self, parent_id: &SessionId) -> Result<SessionId>;
-    async fn get_session(&self, id: &SessionId) -> Result<Option<SessionRecord>>;
-    async fn delete_session(&self, id: &SessionId) -> Result<()>;
-    async fn append_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
-    async fn get_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
-    /// Replace all messages for a session (used after compaction)
-    async fn set_messages(&self, session_id: &SessionId, messages: &[Message]) -> Result<()>;
-    /// List all sessions with basic info
-    async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
-    /// List sessions filtered by working directory
-    async fn list_sessions_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>>;
-    /// Record token usage for a session
-    async fn record_token_usage(&self, record: &TokenRecord) -> Result<()>;
-    /// Get token usage summary for a time range
-    async fn get_token_usage_summary(
-        &self,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<TokenUsageSummary>;
-}
+// Re-export common types for convenience
+pub use file_state::{FileState, FileStateStore, JsonlFileStateStore, StateEntry};
+pub use message::{JsonlMessageStore, MessageStore};
+pub use session::{SessionInfo, SessionStore, SqliteSessionStore};
+pub use todo::{JsonTodoStore, TodoStore};
+pub use usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType};

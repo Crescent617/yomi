@@ -216,7 +216,7 @@ pub async fn run_session_loop(
         event_rx,
         input_tx,
         ctrl_tx,
-        coordinator.storage().clone(),
+        coordinator.session_store().clone(),
         ctx.working_dir.to_string_lossy().to_string(),
         input_history,
         session_messages,

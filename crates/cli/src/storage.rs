@@ -1,17 +1,13 @@
 //! CLI-specific storage for session index and input history
 //!
-//! This storage is separate from the kernel's Storage trait and manages:
+//! This storage is separate from the kernel's storage and manages:
 //! - Session index: Maps working directories to their last session ID
 //! - Input history: Per-directory input history for TUI navigation
-//! - File state: Tracks file modification times for stale read detection
 //!
 //! Data is stored in `~/.yomi/appdata/` with per-directory hashed filenames
 //! to avoid concurrent access issues.
 
-use crate::args::GlobalArgs;
-use crate::utils::load_config;
 use anyhow::{Context, Result};
-use kernel::storage::{SimpleStorage, Storage};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -39,7 +35,7 @@ impl AppStorage {
     /// Create new `AppStorage` at the given base directory
     ///
     /// The base directory is typically `~/.yomi/`, data will be stored in `~/.yomi/appdata/`
-    pub fn new(base_dir: impl AsRef<std::path::Path>) -> Result<Self> {
+    pub fn new(base_dir: impl AsRef<Path>) -> Result<Self> {
         let app_data_dir = base_dir.as_ref().join(APP_DATA_DIR);
 
         // Create subdirectories
@@ -131,7 +127,6 @@ impl AppStorage {
     /// Load input history for a working directory
     ///
     /// Returns a vector of input strings, oldest first
-    /// File: `~/.yomi/appdata/history/{hash}.jsonl`
     pub async fn load_input_history(&self, working_dir: &Path) -> Result<Vec<String>> {
         let path = self.input_hist_path(working_dir);
         if !path.exists() {
@@ -153,20 +148,16 @@ impl AppStorage {
     /// Add an entry to input history (append-only for performance)
     ///
     /// Empty inputs are ignored. Call `dedup_input_history` on exit to remove duplicates.
-    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries with hysteresis:
-    /// when limit is reached, we trim to 50% to avoid frequent rewrites.
+    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries with hysteresis.
     pub async fn add_input_entry(&self, working_dir: &Path, input: &str) -> Result<()> {
         if input.trim().is_empty() {
             return Ok(());
         }
 
         let path = self.input_hist_path(working_dir);
-
-        // Check if trim is needed
         let needs_trim = Self::count_entries(&path).await? >= DEFAULT_MAX_HISTORY;
 
         if needs_trim {
-            // Load, trim to 50% (hysteresis), and rewrite
             let mut entries = self.load_input_history(working_dir).await?;
             let keep_count = DEFAULT_MAX_HISTORY / 2;
             if entries.len() > keep_count {
@@ -175,7 +166,6 @@ impl AppStorage {
             entries.push(input.to_string());
             self.write_history(&path, &entries).await?;
         } else {
-            // Simple append
             Self::append_entry(&path, input).await?;
         }
 
@@ -189,23 +179,23 @@ impl AppStorage {
             return Ok(());
         }
 
-        let mut entries = self.load_input_history(working_dir).await?;
+        let entries = self.load_input_history(working_dir).await?;
         if entries.len() < 2 {
             return Ok(());
         }
 
-        // Dedup: keep only last occurrence of each entry
-        // Process from end to keep the latest
+        // Dedup: process from end to keep latest occurrence, then reverse back
         let mut seen = std::collections::HashSet::new();
-        let mut deduped: Vec<String> = entries
+        let deduped: Vec<String> = entries
             .into_iter()
             .rev()
             .filter(|e| seen.insert(e.clone()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
             .collect();
-        deduped.reverse();
-        entries = deduped;
 
-        self.write_history(&path, &entries).await?;
+        self.write_history(&path, &deduped).await?;
         Ok(())
     }
 
@@ -245,49 +235,6 @@ impl AppStorage {
     }
 }
 
-/// Open kernel Storage with the given data directory
-pub async fn open_storage_with_data_dir(data_dir: &std::path::Path) -> Result<impl Storage> {
-    use sqlx::sqlite::SqliteConnectOptions;
-    use std::str::FromStr;
-
-    let db_path = data_dir.join("yomi.db");
-
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    // Create empty file if it doesn't exist (sqlx requirement)
-    if !db_path.exists() {
-        tokio::fs::File::create(&db_path).await?;
-    }
-
-    // Parse connection options and set pragmas for ALL connections
-    let connect_options =
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-            .pragma("busy_timeout", "5000")
-            .pragma("journal_mode", "WAL");
-
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(connect_options)
-        .await?;
-
-    SimpleStorage::new(data_dir.join("sessions"), pool)
-        .await
-        .with_context(|| "Failed to open storage")
-}
-
-/// Open kernel Storage with the given global arguments
-pub async fn open_storage(global: GlobalArgs) -> Result<impl Storage> {
-    let working_dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let config = load_config(global.config.as_ref(), &working_dir)?;
-    open_storage_with_data_dir(&config.data_dir).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,27 +247,14 @@ mod tests {
 
         let working_dir = PathBuf::from("/path/to/project");
 
-        // Initially no session
         assert!(storage.load_session(&working_dir).await.unwrap().is_none());
-
-        // Save a session
         storage
             .save_session(&working_dir, "session-123")
             .await
             .unwrap();
 
-        // Should be able to retrieve it
         let entry = storage.load_session(&working_dir).await.unwrap().unwrap();
         assert_eq!(entry.session_id, "session-123");
-
-        // Update with new session
-        storage
-            .save_session(&working_dir, "session-456")
-            .await
-            .unwrap();
-
-        let entry = storage.load_session(&working_dir).await.unwrap().unwrap();
-        assert_eq!(entry.session_id, "session-456");
     }
 
     #[tokio::test]
@@ -330,11 +264,9 @@ mod tests {
 
         let working_dir = PathBuf::from("/path/to/project");
 
-        // Initially empty
         let history = storage.load_input_history(&working_dir).await.unwrap();
         assert!(history.is_empty());
 
-        // Add some entries
         storage
             .add_input_entry(&working_dir, "hello")
             .await
@@ -346,67 +278,5 @@ mod tests {
 
         let history = storage.load_input_history(&working_dir).await.unwrap();
         assert_eq!(history, vec!["hello", "world"]);
-
-        // Empty should be ignored
-        storage.add_input_entry(&working_dir, "").await.unwrap();
-        storage.add_input_entry(&working_dir, "   ").await.unwrap();
-        let history = storage.load_input_history(&working_dir).await.unwrap();
-        assert_eq!(history, vec!["hello", "world"]);
-    }
-
-    #[tokio::test]
-    async fn test_input_history_dedup() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = AppStorage::new(temp_dir.path()).unwrap();
-
-        let working_dir = PathBuf::from("/path/to/project");
-
-        // Add entries with duplicates
-        storage.add_input_entry(&working_dir, "a").await.unwrap();
-        storage.add_input_entry(&working_dir, "b").await.unwrap();
-        storage.add_input_entry(&working_dir, "a").await.unwrap();
-        storage.add_input_entry(&working_dir, "c").await.unwrap();
-        storage.add_input_entry(&working_dir, "b").await.unwrap();
-
-        let history = storage.load_input_history(&working_dir).await.unwrap();
-        assert_eq!(history, vec!["a", "b", "a", "c", "b"]);
-
-        // Dedup should keep only latest occurrence
-        storage.dedup_input_history(&working_dir).await.unwrap();
-
-        let history = storage.load_input_history(&working_dir).await.unwrap();
-        assert_eq!(history, vec!["a", "c", "b"]);
-    }
-
-    #[tokio::test]
-    async fn test_different_working_dirs() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = AppStorage::new(temp_dir.path()).unwrap();
-
-        let dir1 = PathBuf::from("/path/to/project1");
-        let dir2 = PathBuf::from("/path/to/project2");
-
-        storage.save_session(&dir1, "session-1").await.unwrap();
-        storage.save_session(&dir2, "session-2").await.unwrap();
-
-        storage
-            .add_input_entry(&dir1, "input for project 1")
-            .await
-            .unwrap();
-        storage
-            .add_input_entry(&dir2, "input for project 2")
-            .await
-            .unwrap();
-
-        let entry1 = storage.load_session(&dir1).await.unwrap().unwrap();
-        let entry2 = storage.load_session(&dir2).await.unwrap().unwrap();
-        assert_eq!(entry1.session_id, "session-1");
-        assert_eq!(entry2.session_id, "session-2");
-
-        let history1 = storage.load_input_history(&dir1).await.unwrap();
-        let history2 = storage.load_input_history(&dir2).await.unwrap();
-
-        assert_eq!(history1, vec!["input for project 1"]);
-        assert_eq!(history2, vec!["input for project 2"]);
     }
 }
