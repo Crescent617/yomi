@@ -15,6 +15,24 @@ use tokio_util::sync::CancellationToken;
 pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
 /// Default context window size
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
+
+/// Compaction result containing compacted messages and token usage
+#[derive(Debug, Clone)]
+pub struct CompactionResult {
+    pub messages: Vec<Arc<Message>>,
+    pub token_usage: crate::providers::TokenUsage,
+}
+
+impl CompactionResult {
+    /// Create a new compaction result
+    pub fn new(messages: Vec<Arc<Message>>, token_usage: crate::providers::TokenUsage) -> Self {
+        Self {
+            messages,
+            token_usage,
+        }
+    }
+}
+
 /// Number of recent messages to keep during compaction
 const KEEP_RECENT_MESSAGES: usize = 6;
 /// Max tokens for summary generation
@@ -204,7 +222,7 @@ impl Compactor {
 
     /// Perform full compaction: generate summary using API.
     ///
-    /// Returns messages in order: [summary] + recent
+    /// Returns `CompactionResult` containing messages in order: [summary] + recent
     /// Note: System messages are NOT included in the returned result - they are
     /// recreated by the agent on session restore to avoid duplication.
     ///
@@ -215,7 +233,7 @@ impl Compactor {
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Vec<Arc<Message>>, CompactionError> {
+    ) -> Result<CompactionResult, CompactionError> {
         // Separate system messages from the rest
         let (_system_msgs, non_system): (Vec<_>, Vec<_>) = messages
             .iter()
@@ -225,7 +243,10 @@ impl Compactor {
         if non_system.len() <= self.keep_recent {
             // Not enough non-system messages to compact, keep everything as-is
             // Note: We still filter out system messages here
-            return Ok(non_system);
+            return Ok(CompactionResult::new(
+                non_system,
+                crate::providers::TokenUsage::default(),
+            ));
         }
 
         let split_point = non_system.len() - self.keep_recent;
@@ -233,7 +254,7 @@ impl Compactor {
         let recent: Vec<Arc<Message>> = non_system[split_point..].to_vec();
 
         // Generate summary using API
-        let summary_text =
+        let (summary_text, token_usage) =
             generate_summary(to_summarize, provider, model_config, cancel_token).await?;
 
         // Create summary message as user role so it survives session restore
@@ -244,12 +265,12 @@ impl Compactor {
 
         // Estimate total tokens and set on the last message for accurate future calculations
         set_token_usage_on_last(&mut result);
-        Ok(result)
+        Ok(CompactionResult::new(result, token_usage))
     }
 
     /// Auto-compact: try micro first, then full if needed.
     ///
-    /// Returns `Some(new_messages)` if compaction was performed, `None` otherwise.
+    /// Returns `Some(CompactionResult)` if compaction was performed, `None` otherwise.
     /// Supports cancellation via `cancel_token`.
     pub async fn auto_compact(
         &self,
@@ -257,7 +278,7 @@ impl Compactor {
         provider: &dyn Provider,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
-    ) -> Result<Option<Vec<Arc<Message>>>, CompactionError> {
+    ) -> Result<Option<CompactionResult>, CompactionError> {
         if !self.should_compact(messages) {
             return Ok(None);
         }
@@ -266,7 +287,10 @@ impl Compactor {
         if let Some(after_micro) = self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
             if !self.should_compact(&after_micro) {
-                return Ok(Some(after_micro));
+                return Ok(Some(CompactionResult::new(
+                    after_micro,
+                    crate::providers::TokenUsage::default(),
+                )));
             }
             // Need full compaction on top of micro results
             return self
@@ -283,13 +307,13 @@ impl Compactor {
 }
 
 /// Generate summary using API call.
-/// Returns Err if cancelled or API fails.
+/// Returns (summary, `token_usage`) or Err if cancelled or API fails.
 async fn generate_summary(
     messages: &[Arc<Message>],
     provider: &dyn Provider,
     model_config: &ModelConfig,
     cancel_token: Option<CancellationToken>,
-) -> Result<String, CompactionError> {
+) -> Result<(String, crate::providers::TokenUsage), CompactionError> {
     use crate::agent::MessageBuffer;
 
     let mut msg_buf = MessageBuffer::from_arc_messages(messages);
@@ -316,6 +340,8 @@ async fn generate_summary(
 
     // Collect response with cancellation check
     let mut summary = String::with_capacity(SUMMARY_MAX_TOKENS as usize);
+    let mut token_usage = crate::providers::TokenUsage::default();
+
     loop {
         // Check if cancelled (non-blocking check)
         if cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
@@ -327,6 +353,9 @@ async fn generate_summary(
                 ModelStreamItem::Chunk(crate::event::ContentChunk::Text(text)) => {
                     summary.push_str(&text);
                 }
+                ModelStreamItem::TokenUsage(usage) => {
+                    token_usage = usage;
+                }
                 ModelStreamItem::Complete => break,
                 _ => {}
             },
@@ -336,7 +365,7 @@ async fn generate_summary(
             Err(_) => {}
         }
     }
-    Ok(summary)
+    Ok((summary, token_usage))
 }
 
 #[cfg(test)]

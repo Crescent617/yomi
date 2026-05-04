@@ -1,5 +1,5 @@
 use crate::storage::migrations::run_migrations;
-use crate::storage::{MetaStorage, SessionInfo, Storage};
+use crate::storage::{MetaStorage, SessionInfo, Storage, TokenStorage};
 use crate::types::{KernelError, Message, Result, SessionId, SessionRecord};
 use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
-/// Filesystem-based storage with `SQLite` metadata
-pub struct FsStorage {
+pub struct SimpleStorage {
     base_dir: PathBuf,
     meta: MetaStorage,
+    token: TokenStorage,
 }
 
-impl FsStorage {
+impl SimpleStorage {
     /// Create new `FsStorage` with `SQLite` metadata
     pub async fn new(base_dir: impl Into<PathBuf>, pool: SqlitePool) -> Result<Self> {
         let base_dir = base_dir.into();
@@ -26,9 +26,19 @@ impl FsStorage {
             .await
             .map_err(|e| KernelError::storage(format!("Failed to run database migrations: {e}")))?;
 
-        let meta = MetaStorage::new(pool);
+        let meta = MetaStorage::new(pool.clone());
+        let token = TokenStorage::new(pool);
 
-        Ok(Self { base_dir, meta })
+        Ok(Self {
+            base_dir,
+            meta,
+            token,
+        })
+    }
+
+    /// Get token storage
+    pub fn token_storage(&self) -> &TokenStorage {
+        &self.token
     }
 
     /// Default storage path: ~/.local/share/yomi/sessions/
@@ -73,7 +83,7 @@ impl FsStorage {
 }
 
 #[async_trait]
-impl Storage for FsStorage {
+impl Storage for SimpleStorage {
     async fn create_session(&self, working_dir: Option<&str>) -> Result<SessionId> {
         let session_id = SessionId::new();
 
@@ -263,6 +273,10 @@ impl Storage for FsStorage {
 
         Ok(sessions)
     }
+
+    async fn record_token_usage(&self, record: &crate::types::TokenRecord) -> Result<()> {
+        self.token.record(record).await
+    }
 }
 
 #[cfg(test)]
@@ -270,14 +284,14 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    async fn create_test_storage() -> (FsStorage, TempDir) {
+    async fn create_test_storage() -> (SimpleStorage, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        let storage = FsStorage::new(temp_dir.path(), pool).await.unwrap();
+        let storage = SimpleStorage::new(temp_dir.path(), pool).await.unwrap();
         (storage, temp_dir)
     }
 

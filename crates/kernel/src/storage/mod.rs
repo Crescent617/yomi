@@ -3,14 +3,16 @@ pub mod meta;
 pub mod migrations;
 pub mod session_state;
 pub mod todo;
+pub mod token;
 
-pub use fs::FsStorage;
+pub use fs::SimpleStorage;
 pub use meta::{MetaStorage, SessionMeta};
 pub use migrations::{run_migrations, CURRENT_SCHEMA_VERSION};
 pub use session_state::{FileState, SessionStateManager, StateEntry, STATE_VERSION};
 pub use todo::TodoStorage;
+pub use token::TokenStorage;
 
-use crate::types::{Message, Result, SessionId, SessionRecord};
+use crate::types::{Message, Result, SessionId, SessionRecord, TokenRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,4 +60,6 @@ pub trait Storage: Send + Sync {
     async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
     /// List sessions filtered by working directory
     async fn list_sessions_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>>;
+    /// Record token usage for a session
+    async fn record_token_usage(&self, record: &TokenRecord) -> Result<()>;
 }

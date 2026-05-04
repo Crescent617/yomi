@@ -13,7 +13,7 @@ use kernel::{
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
-    storage::{FsStorage, Storage, TodoStorage},
+    storage::{SimpleStorage, Storage, TodoStorage},
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
@@ -112,7 +112,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     // Create SQLite pool for session metadata
     let db_path = config.data_dir.join("yomi.db");
     let pool = create_db_pool(&db_path).await?;
-    let storage = Arc::new(FsStorage::new(config.data_dir.join("sessions"), pool).await?);
+    let storage = Arc::new(SimpleStorage::new(config.data_dir.join("sessions"), pool).await?);
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
     let todo_storage = Arc::new(TodoStorage::new(&config.data_dir));

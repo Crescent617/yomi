@@ -458,10 +458,13 @@ impl AnthropicStreamState {
                 // Note: message_delta contains output_tokens, input_tokens should come from message_start
                 if let Some(usage) = usage {
                     let prompt_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
-                    items.push(ModelStreamItem::TokenUsage {
-                        prompt_tokens,
-                        completion_tokens: usage.output_tokens,
-                    });
+                    items.push(ModelStreamItem::TokenUsage(
+                        crate::providers::TokenUsage::new(
+                            prompt_tokens,
+                            usage.output_tokens,
+                            None, // Anthropic doesn't support prompt caching in this format
+                        ),
+                    ));
                 }
             }
             AnthropicStreamEvent::MessageStop => {
@@ -1116,17 +1119,14 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         match &items[0] {
-            ModelStreamItem::TokenUsage {
-                prompt_tokens,
-                completion_tokens,
-            } => {
+            ModelStreamItem::TokenUsage(usage) => {
                 // prompt_tokens should come from message_start (100), not message_delta (0)
                 assert_eq!(
-                    *prompt_tokens, 100,
+                    usage.prompt_tokens, 100,
                     "prompt_tokens should be from message_start"
                 );
                 assert_eq!(
-                    *completion_tokens, 55,
+                    usage.completion_tokens, 55,
                     "completion_tokens should be from message_delta"
                 );
             }

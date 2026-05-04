@@ -46,7 +46,7 @@ pub use providers::{
     ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{Skill, SkillLoader};
-pub use storage::{FsStorage, Storage, TodoStorage};
+pub use storage::{SimpleStorage, Storage, TodoStorage};
 pub use tools::{Tool, ToolRegistry};
 pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};

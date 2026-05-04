@@ -35,10 +35,8 @@ pub fn is_cancelled_error(err: &KernelError) -> bool {
 pub struct ExecuteMetrics {
     /// Total iterations (model requests)
     pub iteration_count: usize,
-    /// Total prompt tokens
-    pub total_prompt_tokens: u32,
-    /// Total completion tokens
-    pub total_completion_tokens: u32,
+    /// Token usage (prompt, completion, cached)
+    pub token_usage: crate::providers::TokenUsage,
     /// Assistant output text (for progress reporting)
     pub output_text: String,
     /// Whether the task completed (false if `max_iterations` reached)
@@ -175,14 +173,13 @@ impl SimpleAgent {
             // So total_tokens = prompt_tokens + completion_tokens represents the cumulative total
             // across all iterations. We directly assign (not accumulate) because each response
             // already includes the complete history in prompt_tokens.
-            if let Some((prompt, completion)) = token_usage {
-                metrics.total_prompt_tokens = prompt;
-                metrics.total_completion_tokens = completion;
+            if let Some(usage) = token_usage {
+                metrics.token_usage = usage;
                 on_event(Event::Model(ModelEvent::TokenUsage {
                     agent_id: self.agent_id.clone(),
-                    prompt_tokens: metrics.total_prompt_tokens,
-                    completion_tokens: metrics.total_completion_tokens,
-                    total_tokens: metrics.total_prompt_tokens + metrics.total_completion_tokens,
+                    prompt_tokens: usage.prompt_tokens,
+                    completion_tokens: usage.completion_tokens,
+                    total_tokens: usage.total_tokens(),
                     context_window: 0, // SimpleAgent doesn't track context window
                 }));
             }
@@ -266,13 +263,13 @@ impl SimpleAgent {
     }
 
     /// Stream from model, collecting the response
-    /// Returns the assistant message and optional token usage (prompt, completion)
+    /// Returns the assistant message and optional token usage
     async fn stream_model<F>(
         &mut self,
         messages: &[Arc<Message>],
         cancel_token: &CancellationToken,
         on_event: &mut F,
-    ) -> Result<(Message, Option<(u32, u32)>)>
+    ) -> Result<(Message, Option<crate::providers::TokenUsage>)>
     where
         F: FnMut(Event),
     {
@@ -317,11 +314,8 @@ impl SimpleAgent {
                         ModelStreamItem::ToolCall(request) => {
                             state.handle_tool_call(request);
                         }
-                        ModelStreamItem::TokenUsage {
-                            prompt_tokens,
-                            completion_tokens,
-                        } => {
-                            state.handle_token_usage(prompt_tokens, completion_tokens);
+                        ModelStreamItem::TokenUsage(usage) => {
+                            state.handle_token_usage(usage);
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {

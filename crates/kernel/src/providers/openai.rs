@@ -359,17 +359,21 @@ impl ToolCallAssembler {
             ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
         })?;
 
-        // Handle usage information (sent in final chunk when stream_options.include_usage=true)
+        // Handle usage information (top-level or in choices)
         if let Some(usage) = response.usage {
-            return Ok(vec![ModelStreamItem::TokenUsage {
-                prompt_tokens: usage.prompt_tokens,
-                completion_tokens: usage.completion_tokens,
-            }]);
+            return Ok(vec![ModelStreamItem::TokenUsage(
+                crate::providers::TokenUsage::new(
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.cached_tokens(),
+                ),
+            )]);
         }
 
         let Some(choice) = response.choices.into_iter().next() else {
             return Ok(vec![]);
         };
+
         let Some(delta) = choice.delta else {
             return Ok(vec![]);
         };
@@ -585,11 +589,31 @@ struct OpenAIStreamResponse {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
+    /// Cached tokens in `prompt_tokens_details` (OpenAI/Kimi unified format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
+}
+
+impl OpenAIUsage {
+    /// Get cached tokens from `prompt_tokens_details`
+    fn cached_tokens(&self) -> Option<u32> {
+        self.prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAIPromptTokensDetails {
+    cached_tokens: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OpenAIChoice {
     delta: Option<OpenAIDelta>,
+    /// Some providers (like Kimi) include usage in the choice
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<OpenAIUsage>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -609,9 +633,74 @@ struct OpenAIDelta {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_parse_kimi_usage_with_cached_tokens() {
+        // Real SSE data from Kimi API - usage is in choices[0].usage
+        // Note: Kimi puts usage INSIDE choices, not at top level
+        let data = r#"{"id":"chatcmpl-69f75d4e42d433402b5cfc09","object":"chat.completion.chunk","created":1777818959,"model":"kimi-k2.5","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121,"prompt_tokens_details":{"cached_tokens":8}}}]}"#;
+
+        let response: OpenAIStreamResponse = serde_json::from_str(data).unwrap();
+
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
+            .expect("should have one choice");
+        assert!(choice.usage.is_some(), "choice.usage should be present");
+        let usage = choice.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 8);
+        assert_eq!(usage.completion_tokens, 113);
+        assert_eq!(usage.cached_tokens(), Some(8), "cached_tokens should be 8");
+    }
+
+    #[test]
+    fn test_parse_openai_usage_with_cached_tokens() {
+        // OpenAI format: cached_tokens in prompt_tokens_details (nested)
+        // Note: OpenAI puts usage INSIDE choices
+        let data = r#"{"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1777819000,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":19,"completion_tokens":10,"total_tokens":29,"prompt_tokens_details":{"cached_tokens":5}}}]}"#;
+
+        let response: OpenAIStreamResponse = serde_json::from_str(data).unwrap();
+
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
+            .expect("should have one choice");
+        assert!(choice.usage.is_some(), "choice.usage should be present");
+        let usage = choice.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 19);
+        assert_eq!(usage.completion_tokens, 10);
+        assert_eq!(usage.cached_tokens(), Some(5), "cached_tokens should be 5");
+    }
+
+    #[test]
+    fn test_parse_top_level_usage_with_cached_tokens() {
+        // Some providers put usage at TOP LEVEL instead of inside choices
+        let data = r#"{"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1777819000,"model":"test","usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":25}},"choices":[]}"#;
+
+        let response: OpenAIStreamResponse = serde_json::from_str(data).unwrap();
+
+        // Top-level usage should be detected
+        assert!(
+            response.usage.is_some(),
+            "top-level usage should be present"
+        );
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(
+            usage.cached_tokens(),
+            Some(25),
+            "cached_tokens should be 25"
+        );
+    }
+
     fn create_test_response(delta: OpenAIDelta) -> OpenAIStreamResponse {
         OpenAIStreamResponse {
-            choices: vec![OpenAIChoice { delta: Some(delta) }],
+            choices: vec![OpenAIChoice {
+                delta: Some(delta),
+                usage: None,
+            }],
             usage: None,
         }
     }
@@ -878,7 +967,10 @@ mod tests {
         let mut assembler = ToolCallAssembler::new();
 
         let response = OpenAIStreamResponse {
-            choices: vec![OpenAIChoice { delta: None }],
+            choices: vec![OpenAIChoice {
+                delta: None,
+                usage: None,
+            }],
             usage: None,
         };
         let json = serde_json::to_string(&response).unwrap();

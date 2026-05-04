@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -40,6 +40,27 @@ const MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "add_working_dir",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN working_dir TEXT;"],
+    },
+    Migration {
+        version: 2,
+        name: "add_token_usage",
+        sqls: &[
+            r"CREATE TABLE token_usage (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL,
+                completion_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                cached_tokens INTEGER,
+                model TEXT,
+                provider TEXT,
+                usage_type TEXT NOT NULL CHECK(usage_type IN ('normal', 'subagent', 'compactor')),
+                created_at TEXT NOT NULL
+            );",
+            r"CREATE INDEX idx_token_session ON token_usage(session_id);",
+            r"CREATE INDEX idx_token_type ON token_usage(session_id, usage_type);",
+        ],
     },
 ];
 

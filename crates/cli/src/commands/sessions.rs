@@ -1,7 +1,7 @@
 use crate::args::GlobalArgs;
 use crate::utils::load_config;
 use anyhow::Result;
-use kernel::{storage::FsStorage, storage::Storage};
+use kernel::{storage::SimpleStorage, storage::Storage};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
 use std::str::FromStr;
@@ -44,7 +44,7 @@ pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
 
     let db_path = data_dir.join("yomi.db");
     let pool = create_db_pool(&db_path).await?;
-    let storage = Arc::new(FsStorage::new(data_dir.join("sessions"), pool).await?);
+    let storage = Arc::new(SimpleStorage::new(data_dir.join("sessions"), pool).await?);
 
     // Get current working directory
     let current_dir = std::env::current_dir()?;

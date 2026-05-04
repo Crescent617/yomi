@@ -805,16 +805,6 @@ impl Model {
             ) {
                 tracing::warn!("Failed to clear queued message in ChatView: {}", e);
             }
-            // Add user message to chat view
-            let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
-            if let Err(e) = self.app.attr(
-                &Id::ChatView,
-                Attribute::Custom(attr::ADD_USER_MESSAGE),
-                AttrValue::String(blocks_json),
-            ) {
-                tracing::warn!("Failed to add user message in ChatView: {}", e);
-            }
-            self.scroll_chat_to_bottom();
             // Send to kernel (streaming will be started by ModelEvent::Request)
             if let Err(e) = self.input_tx.try_send(blocks) {
                 tracing::error!("Failed to send queued message to kernel: {}", e);

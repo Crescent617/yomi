@@ -15,6 +15,35 @@ pub use openai::OpenAIProvider;
 pub type ModelStream =
     Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem, ProviderError>> + Send>>;
 
+/// Token usage information from API response
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    /// Cached tokens (for providers that support prompt caching)
+    pub cached_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    /// Create a new `TokenUsage`
+    pub const fn new(
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        cached_tokens: Option<u32>,
+    ) -> Self {
+        Self {
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+        }
+    }
+
+    /// Get total tokens (prompt + completion)
+    pub const fn total_tokens(&self) -> u32 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
 /// Items emitted by model stream
 #[derive(Debug, Clone)]
 pub enum ModelStreamItem {
@@ -34,10 +63,7 @@ pub enum ModelStreamItem {
         from: String,
         to: String,
     },
-    TokenUsage {
-        prompt_tokens: u32,
-        completion_tokens: u32,
-    },
+    TokenUsage(TokenUsage),
 }
 
 /// Tool call request from model

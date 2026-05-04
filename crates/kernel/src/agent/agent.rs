@@ -533,26 +533,47 @@ impl Agent {
                                 tracing::warn!("Failed to send fallback event: {}", e);
                             }
                         }
-                        ModelStreamItem::TokenUsage { prompt_tokens, completion_tokens } => {
+                        ModelStreamItem::TokenUsage(usage) => {
                             // NOTE: this is right because each response's prompt_tokens will contain whole history
-                            let total = prompt_tokens + completion_tokens;
+                            tracing::info!(
+                                "Agent {} received token usage update: prompt={}, completion={}, total={}",
+                                self.id,
+                                usage.prompt_tokens,
+                                usage.completion_tokens,
+                                usage.total_tokens()
+                            );
+                            let total = usage.total_tokens();
                             self.pending_token_usage = Some(MessageTokenUsage {
-                                prompt_tokens,
-                                completion_tokens,
+                                prompt_tokens: usage.prompt_tokens,
+                                completion_tokens: usage.completion_tokens,
                                 total_tokens: total,
                             });
-                            state.handle_token_usage(prompt_tokens, completion_tokens);
+                            state.handle_token_usage(usage);
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
                                 .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
-                                prompt_tokens,
-                                completion_tokens,
+                                prompt_tokens: usage.prompt_tokens,
+                                completion_tokens: usage.completion_tokens,
                                 total_tokens: total,
                                 context_window,
                             })) {
                                 tracing::warn!("Failed to send token usage event: {}", e);
+                            }
+                            // Record token usage
+                            if let Some(storage) = &self.shared.storage {
+                                let record = crate::types::TokenRecord::new(
+                                    crate::types::SessionId(self.session_id.clone()),
+                                    self.id.clone(),
+                                    usage,
+                                    self.shared.model_config.model_id.clone(),
+                                    self.shared.model_config.provider.to_string(),
+                                    crate::types::UsageType::Normal,
+                                );
+                                if let Err(e) = storage.record_token_usage(&record).await {
+                                    tracing::warn!("Failed to record token usage: {}", e);
+                                }
                             }
                         }
                     },
@@ -619,14 +640,19 @@ impl Agent {
     /// Clears file state store only if messages were actually reduced (real compaction).
     async fn handle_compaction_result(
         &mut self,
-        result: Result<Option<Vec<Arc<Message>>>, CompactionError>,
+        result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
         old_count: usize,
     ) -> Result<String, String> {
         let compact_result =
             match result {
                 Ok(None) => Ok("No compaction needed".to_string()),
-                Ok(Some(messages)) => {
-                    self.apply_compacted_messages(messages).await;
+                Ok(Some(compaction_result)) => {
+                    // Record compactor token usage
+                    self.record_compactor_token_usage(compaction_result.token_usage)
+                        .await;
+
+                    self.apply_compacted_messages(compaction_result.messages)
+                        .await;
                     let new_count = self.message_buffer.len();
                     let compacted_count = old_count.saturating_sub(new_count);
 
@@ -675,6 +701,26 @@ impl Agent {
             active,
         })) {
             tracing::warn!("Failed to send compacting event (active={}): {}", active, e);
+        }
+    }
+
+    /// Record compactor token usage
+    async fn record_compactor_token_usage(&self, usage: crate::providers::TokenUsage) {
+        if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
+            return; // No usage to record
+        }
+        if let Some(storage) = &self.shared.storage {
+            let record = crate::types::TokenRecord::new(
+                crate::types::SessionId(self.session_id.clone()),
+                self.id.clone(),
+                usage,
+                self.shared.model_config.model_id.clone(),
+                self.shared.model_config.provider.to_string(),
+                crate::types::UsageType::Compactor,
+            );
+            if let Err(e) = storage.record_token_usage(&record).await {
+                tracing::warn!("Failed to record compactor token usage: {}", e);
+            }
         }
     }
 
