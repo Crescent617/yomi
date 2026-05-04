@@ -31,8 +31,8 @@ pub enum AgentInput {
     },
     /// Permission response from user/TUI
     PermissionResponse { req_id: String, approved: bool },
-    /// Close the agent gracefully (for subagent/resource management)
-    Close,
+    /// Shutdown the agent gracefully (for subagent/resource management)
+    Shutdown,
     /// Force compaction of message buffer
     Compact,
 }
@@ -132,7 +132,7 @@ impl Agent {
             id: id.clone(),
             shared,
             message_buffer,
-            event_tx,
+            event_tx: event_tx.clone(),
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
@@ -146,10 +146,19 @@ impl Agent {
         };
 
         let handle_id = id.clone();
+        let event_tx_for_cleanup = event_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = agent.start_loop().await {
+            let result = agent.start_loop().await;
+            if let Err(ref e) = result {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
+            // Send Closed event to notify listeners that this agent has ended
+            let _ = event_tx_for_cleanup
+                .send(Event::Agent(AgentEvent::Shutdown {
+                    agent_id: handle_id.clone(),
+                    error: result.err().map(|e| e.to_string()),
+                }))
+                .await;
             info!("Agent {} closed", handle_id);
         });
 
@@ -380,7 +389,7 @@ impl Agent {
                 tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
                 Ok(())
             }
-            Some(AgentInput::Close) => {
+            Some(AgentInput::Shutdown) => {
                 tracing::info!("Agent {} received close signal", self.id);
                 self.context.transition_to(AgentState::Closed);
                 Ok(())

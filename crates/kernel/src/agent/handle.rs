@@ -103,7 +103,7 @@ impl AgentHandle {
     /// 优雅地关闭 Agent（发送 Close 信号，区别于 Cancel）
     pub async fn close(&self) -> Result<(), AgentError> {
         self.input_tx
-            .send(super::AgentInput::Close)
+            .send(super::AgentInput::Shutdown)
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }

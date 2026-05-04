@@ -424,7 +424,9 @@ fn render_line(line: &Line<'_>, x_start: u16, y: u16, max_width: u16, buf: &mut 
 
     for span in &line.spans {
         let style = span.style.patch(line.style);
-        x = render_text(span.content.as_ref(), x, y, max_x - x_start, buf, style);
+        // Pass remaining width, not original max_width, to prevent buffer overflow
+        let remaining_width = max_x.saturating_sub(x);
+        x = render_text(span.content.as_ref(), x, y, remaining_width, buf, style);
         if x >= max_x {
             return;
         }

@@ -192,9 +192,9 @@ pub async fn run_session_loop(
         }
     });
 
-    // Get event receiver and run TUI
+    // Subscribe to session events (broadcast channel - TUI can lag but won't block)
     let event_rx = coordinator
-        .take_session_event_receiver(&session_id)
+        .subscribe_session_events(&session_id)
         .await
         .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
 

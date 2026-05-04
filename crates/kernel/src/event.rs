@@ -84,16 +84,16 @@ pub enum AgentEvent {
         max_attempts: u32,
         reason: String,
     },
-    /// 状态转换
-    StateChanged {
-        agent_id: AgentId,
-        from: String, // 状态名称字符串
-        to: String,
-    },
     /// Agent 达到最大迭代次数
     MaxIterationsReached {
         agent_id: AgentId,
         count: usize,
+    },
+    /// Agent Shutdown（正常结束或异常退出）
+    Shutdown {
+        agent_id: AgentId,
+        /// Error message if the agent exited with an error
+        error: Option<String>,
     },
 }
 
