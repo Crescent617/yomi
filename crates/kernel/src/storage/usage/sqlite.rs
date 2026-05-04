@@ -1,6 +1,6 @@
 //! `SQLite` implementation of `UsageStore`
 
-use super::{storage_err, UsageRecord, UsageStore, UsageSummary};
+use super::{storage_err, DailyUsage, UsageRecord, UsageStore, UsageSummary};
 use crate::types::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -68,11 +68,57 @@ impl UsageStore for SqliteUsageStore {
             request_count: row.request_count as u64,
         })
     }
+
+    async fn daily_summary(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsage>> {
+        // Use 'localtime' modifier to group by local timezone dates
+        let rows = sqlx::query_as::<_, DailyRow>(
+            "SELECT 
+                date(created_at, 'localtime') as date,
+                COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                COUNT(*) as request_count
+             FROM token_usage 
+             WHERE created_at >= ? AND created_at <= ?
+             GROUP BY date(created_at, 'localtime')
+             ORDER BY date(created_at, 'localtime') ASC",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to get daily summary: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| DailyUsage {
+                date: r.date,
+                prompt_tokens: r.prompt_tokens as u64,
+                completion_tokens: r.completion_tokens as u64,
+                cached_tokens: r.cached_tokens as u64,
+                request_count: r.request_count as u64,
+            })
+            .collect())
+    }
 }
 
 /// Internal row type for summary queries
 #[derive(sqlx::FromRow)]
 struct SummaryRow {
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
+    request_count: i64,
+}
+
+/// Internal row type for daily summary queries
+#[derive(sqlx::FromRow)]
+struct DailyRow {
+    date: String,
     prompt_tokens: i64,
     completion_tokens: i64,
     cached_tokens: i64,

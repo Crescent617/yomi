@@ -104,7 +104,7 @@ struct UsageArgs {
     #[command(flatten)]
     global: GlobalArgs,
 
-    /// Number of days to look back (default: 7)
+    /// Number of days to look back
     #[arg(short = 'n', long, default_value = "7")]
     days: i64,
 }
