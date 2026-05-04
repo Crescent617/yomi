@@ -482,6 +482,13 @@ impl AnthropicStreamState {
                 }
             }
             AnthropicStreamEvent::MessageStop => {
+                // Emit response metadata before Complete (if available)
+                if let Some(response_id) = self.response_id.take() {
+                    items.push(ModelStreamItem::ResponseMeta {
+                        response_id,
+                        finish_reason: self.stop_reason.take(),
+                    });
+                }
                 items.push(ModelStreamItem::Complete);
             }
             AnthropicStreamEvent::Error { error } => {
