@@ -4,7 +4,7 @@ use super::{
     CancelToken,
 };
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
-use crate::event::{AgentEvent, Event, ModelEvent, ToolEvent};
+use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::parallel::ToolExecutionResult;
@@ -146,19 +146,12 @@ impl Agent {
         };
 
         let handle_id = id.clone();
-        let event_tx_for_cleanup = event_tx.clone();
         tokio::spawn(async move {
             let result = agent.start_loop().await;
             if let Err(ref e) = result {
                 tracing::error!("Agent {} failed: {}", handle_id, e);
             }
-            // Send Closed event to notify listeners that this agent has ended
-            let _ = event_tx_for_cleanup
-                .send(Event::Agent(AgentEvent::Shutdown {
-                    agent_id: handle_id.clone(),
-                    error: result.err().map(|e| e.to_string()),
-                }))
-                .await;
+            // Note: Session shutdown is detected by coordinator when event_rx closes
             info!("Agent {} closed", handle_id);
         });
 
@@ -218,9 +211,13 @@ impl Agent {
                 // Notify TUI that max iterations reached
                 let _ = self
                     .event_tx
-                    .send(Event::Agent(AgentEvent::MaxIterationsReached {
+                    .send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
-                        count: self.max_iterations,
+                        state: AgentStatus::Stopped {
+                            reason: StopReason::MaxIterations {
+                                reached: self.max_iterations,
+                            },
+                        },
                     }))
                     .await;
                 self.context.transition_to(AgentState::Idle);
@@ -262,13 +259,6 @@ impl Agent {
             self.context.increment_iteration();
         }
 
-        let _ = self
-            .event_tx
-            .send(Event::Agent(AgentEvent::Completed {
-                agent_id: self.id.clone(),
-            }))
-            .await;
-
         Ok(())
     }
 
@@ -281,15 +271,17 @@ impl Agent {
         Ok(())
     }
 
-    /// Helper to emit `AgentEvent::Failed` and return error
+    /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return error
     async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("Agent {} failed: {}", self.id, error_msg);
         let _n = self
             .event_tx
-            .send(Event::Agent(AgentEvent::Failed {
+            .send(Event::Agent(AgentEvent::Lifecycle {
                 agent_id: self.id.clone(),
-                error: error_msg,
+                state: AgentStatus::Stopped {
+                    reason: StopReason::Failed { error: error_msg },
+                },
             }))
             .await;
         Err(error)
@@ -332,9 +324,13 @@ impl Agent {
 
     /// Emit operation cancelled event
     async fn emit_operation_cancelled(&self, operation: &str) {
-        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Cancelled {
+        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
             agent_id: self.id.clone(),
-            operation: Some(operation.to_string()),
+            state: AgentStatus::Stopped {
+                reason: StopReason::Cancelled {
+                    operation: Some(operation.to_string()),
+                },
+            },
         })) {
             tracing::warn!("Failed to emit operation cancelled event: {}", e);
         }
@@ -813,15 +809,13 @@ impl Agent {
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
-            if let Err(e) = self
-                .event_tx
-                .try_send(Event::Agent(AgentEvent::ReActLoopEnd {
-                    agent_id: self.id.clone(),
-                    iteration_count: self.context.iteration_count(),
-                    message_count: self.message_buffer.len(),
-                }))
-            {
-                tracing::warn!("Failed to send ReActLoopEnd event: {}", e);
+            if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                agent_id: self.id.clone(),
+                state: AgentStatus::TurnCompleted {
+                    total_iterations: self.context.iteration_count(),
+                },
+            })) {
+                tracing::warn!("Failed to send TurnCompleted event: {}", e);
             }
             self.context.transition_to(AgentState::Idle);
         }

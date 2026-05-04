@@ -48,7 +48,7 @@ use tuirealm::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use kernel::event::{ControlCommand, Event};
+use kernel::event::{AgentStatus, ControlCommand, Event, StopReason, SystemEvent};
 use kernel::permissions::Level;
 use kernel::tools::TODO_WRITE_TOOL_NAME;
 use kernel::types::{ContentBlock, Message};
@@ -756,13 +756,6 @@ impl Model {
         self.state.should_redraw = true;
     }
 
-    /// Handle streaming cancellation with optional operation context
-    fn handle_streaming_cancelled(&mut self, operation: Option<&str>) {
-        let message =
-            operation.map_or_else(|| "Cancelled".to_string(), |op| format!("Cancelled: {op}"));
-        self.handle_streaming_error(StreamingStatus::Cancelled, message);
-    }
-
     /// Set a queued message to be sent when streaming ends
     fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
         // Check if there's already a queued message
@@ -1156,14 +1149,62 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                Event::Agent(kernel::event::AgentEvent::Cancelled { operation, .. }) => {
-                    self.handle_streaming_cancelled(operation.as_deref());
-                }
-                Event::Agent(kernel::event::AgentEvent::Failed { error, .. }) => {
-                    self.handle_streaming_error(
-                        StreamingStatus::Failed,
-                        format!("Agent error: {error}"),
-                    );
+                // Agent lifecycle state changes
+                Event::Agent(kernel::event::AgentEvent::Lifecycle { state, .. }) => {
+                    match state {
+                        AgentStatus::Running => {
+                            // Agent started - could show in status bar if needed
+                        }
+                        AgentStatus::IterationCompleted {
+                            iteration,
+                            messages,
+                        } => {
+                            tracing::debug!(
+                                "Iteration {iteration} completed with {messages} messages"
+                            );
+                        }
+                        AgentStatus::TurnCompleted { total_iterations } => {
+                            // Task naturally completed
+                            self.finalize_assistant_message();
+                            self.stop_streaming(StreamingStatus::Completed);
+                            let message =
+                                format!("😸 Task completed ({total_iterations} iterations)");
+                            Self::send_desktop_notification("Yomi", &message);
+                            self.show_notification(&Notification::success(&message, 5000));
+                            self.state.should_redraw = true;
+                        }
+                        AgentStatus::Stopped { reason } => match reason {
+                            StopReason::Completed => {
+                                // Normal completion - already handled by TurnCompleted
+                            }
+                            StopReason::Cancelled { operation } => {
+                                // Cancelled - no desktop notification, just update UI
+                                let message = operation.map_or_else(
+                                    || "Cancelled".to_string(),
+                                    |op| format!("Cancelled: {op}"),
+                                );
+                                self.handle_streaming_error(StreamingStatus::Cancelled, message);
+                            }
+                            StopReason::Failed { error } => {
+                                self.finalize_assistant_message();
+                                let message = format!("❌ Task failed: {error}");
+                                Self::send_desktop_notification("Yomi - Error", &message);
+                                self.handle_streaming_error(
+                                    StreamingStatus::Failed,
+                                    format!("Agent error: {error}"),
+                                );
+                            }
+                            StopReason::MaxIterations { reached } => {
+                                self.finalize_assistant_message();
+                                let message = format!("⚠️ Max iterations reached ({reached})");
+                                Self::send_desktop_notification("Yomi - Stopped", &message);
+                                self.handle_streaming_error(
+                                    StreamingStatus::MaxIterations,
+                                    format!("Reached maximum iterations ({reached})"),
+                                );
+                            }
+                        },
+                    }
                 }
                 // Error events - recoverable or non-recoverable
                 Event::Agent(kernel::event::AgentEvent::Error {
@@ -1198,31 +1239,14 @@ impl Model {
                     self.show_notification(&Notification::info(message, 0));
                     self.state.should_redraw = true;
                 }
-                // Max iterations reached - show in chat view
-                Event::Agent(kernel::event::AgentEvent::MaxIterationsReached { count, .. }) => {
-                    self.handle_streaming_error(
-                        StreamingStatus::MaxIterations,
-                        format!("Reached maximum iterations ({count})"),
-                    );
-                }
-                Event::Agent(kernel::event::AgentEvent::ReActLoopEnd {
-                    iteration_count, ..
-                }) => {
-                    self.finalize_assistant_message();
-                    self.stop_streaming(StreamingStatus::Completed);
-                    let message = format!("😸 Task completed ({iteration_count} iterations)");
-                    Self::send_desktop_notification("Yomi", &message);
-                    self.show_notification(&Notification::success(&message, 5000));
-                    self.state.should_redraw = true;
-                }
-                // Agent closed - only handle error cases (normal completion handled by ReActLoopEnd)
-                Event::Agent(kernel::event::AgentEvent::Shutdown {
+                // Session shutdown - only handle error cases (normal completion handled by ReActLoopEnd)
+                Event::System(SystemEvent::Shutdown {
                     error: Some(err), ..
                 }) => {
                     self.finalize_assistant_message();
                     self.handle_streaming_error(
                         StreamingStatus::Failed,
-                        format!("Agent closed with error: {err}"),
+                        format!("Session closed with error: {err}"),
                     );
                     self.state.should_redraw = true;
                 }

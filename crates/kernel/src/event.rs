@@ -39,23 +39,10 @@ pub enum UserEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentEvent {
-    Completed {
+    /// Agent 生命周期状态变化
+    Lifecycle {
         agent_id: AgentId,
-    },
-    /// `ReAct` loop completed without tool calls (natural task completion)
-    ReActLoopEnd {
-        agent_id: AgentId,
-        iteration_count: usize,
-        message_count: usize,
-    },
-    Failed {
-        agent_id: AgentId,
-        error: String,
-    },
-    Cancelled {
-        agent_id: AgentId,
-        /// Optional operation name that was cancelled (e.g., "streaming", "compaction")
-        operation: Option<String>,
+        state: AgentStatus,
     },
     /// Permission request for tool execution approval
     PermissionRequest {
@@ -84,17 +71,35 @@ pub enum AgentEvent {
         max_attempts: u32,
         reason: String,
     },
-    /// Agent 达到最大迭代次数
-    MaxIterationsReached {
-        agent_id: AgentId,
-        count: usize,
+}
+
+/// Agent 生命周期状态（业务层面，区别于内部执行状态 `AgentState`）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentStatus {
+    /// Agent 开始运行
+    Running,
+    /// 一次 `ReAct` 迭代完成（原 Completed）
+    IterationCompleted { iteration: usize, messages: usize },
+    /// 任务自然结束（原 `ReActLoopEnd`）
+    TurnCompleted { total_iterations: usize },
+    /// Agent 停止（包含各种结束原因）
+    Stopped { reason: StopReason },
+}
+
+/// Agent 停止原因
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StopReason {
+    /// 正常完成
+    Completed,
+    /// 用户取消
+    Cancelled {
+        /// 被取消的操作名称（如 "streaming", "compaction"）
+        operation: Option<String>,
     },
-    /// Agent Shutdown（正常结束或异常退出）
-    Shutdown {
-        agent_id: AgentId,
-        /// Error message if the agent exited with an error
-        error: Option<String>,
-    },
+    /// 执行失败
+    Failed { error: String },
+    /// 达到最大迭代次数
+    MaxIterations { reached: usize },
 }
 
 /// Agent 执行阶段，用于错误报告
@@ -205,15 +210,10 @@ pub enum ToolEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SystemEvent {
-    Shutdown,
-    ConfigReloaded,
-    SessionForked { from: SessionId, to: SessionId },
-}
-
-/// Progress update for long-running operations
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProgressUpdate {
-    pub step: usize,
-    pub total: Option<usize>,
-    pub message: String,
+    /// Session shutdown (main agent ended)
+    Shutdown {
+        session_id: SessionId,
+        /// Error message if session exited with an error
+        error: Option<String>,
+    },
 }
