@@ -93,6 +93,7 @@ fn build_success_result(
         agent_id: agent_id.clone(),
         tool_id: call_id.to_string(),
         output,
+        tool_name: tool_name.to_string(),
         content_blocks: truncated,
         elapsed_ms,
     };
@@ -171,6 +172,7 @@ pub async fn execute_tools_parallel(
     cancel_token: Option<&CancellationToken>,
     parent_messages: Option<&[Arc<Message>]>,
     working_dir: &std::path::Path,
+    session_id: &str,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -187,6 +189,7 @@ pub async fn execute_tools_parallel(
         let call_name = call.name.clone();
         let arguments = call.arguments.clone();
         let tool_opt = tool_registry.get(&call_name);
+        let session_id = session_id.to_string();
 
         if tool_opt.is_none() {
             tracing::error!(
@@ -209,6 +212,7 @@ pub async fn execute_tools_parallel(
                         parent_messages_for_task.as_deref(),
                         cancel_token_for_task,
                         &working_dir,
+                        session_id,
                     );
                     execute_single_tool_with_ctx(tool, arguments, ctx).await
                 }

@@ -57,6 +57,8 @@ pub struct SimpleAgent {
     agent_id: AgentId,
     /// Working directory for tool execution
     working_dir: std::path::PathBuf,
+    /// Session ID for session-scoped operations
+    session_id: String,
 }
 
 impl SimpleAgent {
@@ -65,6 +67,7 @@ impl SimpleAgent {
         model_config: ModelConfig,
         tool_registry: ToolRegistry,
         working_dir: impl Into<std::path::PathBuf>,
+        session_id: impl Into<String>,
     ) -> Self {
         Self {
             provider,
@@ -75,6 +78,7 @@ impl SimpleAgent {
             event_tx: None,
             agent_id: AgentId::new(),
             working_dir: working_dir.into(),
+            session_id: session_id.into(),
         }
     }
 
@@ -368,6 +372,7 @@ impl SimpleAgent {
             None,
             Some(cancel_token.clone()),
             &self.working_dir,
+            &self.session_id,
         );
 
         let output = tool.exec(call.arguments.clone(), ctx).await?;

@@ -3,8 +3,35 @@
 //! Main application using tuirealm framework for component-based TUI.
 
 use anyhow::Result;
+use kernel::event::{AgentStatus, ControlCommand, Event, StopReason, SystemEvent};
+use kernel::permissions::Level;
+use kernel::tools::{TODO_READ_TOOL_NAME, TODO_UPDATE_TOOL_NAME, TODO_WRITE_TOOL_NAME};
+use kernel::types::{ContentBlock, Message};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc};
+use tuirealm::{
+    application::{Application, PollStrategy},
+    listener::EventListenerCfg,
+    props::{AttrValue, Attribute},
+    ratatui::layout::{Constraint, Direction, Layout},
+    state::{State, StateValue},
+    subscription::{EventClause, Sub, SubClause},
+    terminal::{CrosstermTerminalAdapter, TerminalAdapter},
+};
+use unicode_width::UnicodeWidthStr;
+
+use crate::{
+    attr,
+    components::{
+        default_help_sections, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
+        ChatViewComponent, FuzzyPickerComponent, HelpDialog, InfoBarComponent, InputComponent,
+        PickerConfig, PickerItem, SelectDialogComponent, StatusBarComponent, TodoListComponent,
+    },
+    id::Id,
+    msg::{Msg, UserEvent},
+    utils::text::{substring_by_chars, truncate_by_chars},
+};
 
 /// Result type returned by TUI
 pub struct TuiResult {
@@ -36,34 +63,6 @@ impl FeatureGates {
 
 /// Callback type for input hook - called when user submits input
 pub type OnInputHook = Box<dyn Fn(&str) + Send + Sync>;
-use tokio::sync::{broadcast, mpsc};
-use tuirealm::{
-    application::{Application, PollStrategy},
-    listener::EventListenerCfg,
-    props::{AttrValue, Attribute},
-    ratatui::layout::{Constraint, Direction, Layout},
-    state::{State, StateValue},
-    subscription::{EventClause, Sub, SubClause},
-    terminal::{CrosstermTerminalAdapter, TerminalAdapter},
-};
-use unicode_width::UnicodeWidthStr;
-
-use kernel::event::{AgentStatus, ControlCommand, Event, StopReason, SystemEvent};
-use kernel::permissions::Level;
-use kernel::tools::TODO_WRITE_TOOL_NAME;
-use kernel::types::{ContentBlock, Message};
-
-use crate::{
-    attr,
-    components::{
-        default_help_sections, info_bar::Notification, status_bar::Tip, tips::get_random_tip,
-        ChatViewComponent, FuzzyPickerComponent, HelpDialog, InfoBarComponent, InputComponent,
-        PickerConfig, PickerItem, SelectDialogComponent, StatusBarComponent, TodoListComponent,
-    },
-    id::Id,
-    msg::{Msg, UserEvent},
-    utils::text::{substring_by_chars, truncate_by_chars},
-};
 
 /// Format a session ID for display, truncating long IDs with ellipsis.
 /// Uses character-based slicing for Unicode safety.
@@ -982,7 +981,7 @@ impl Model {
     }
 
     /// Process events from kernel
-    pub fn process_kernel_events(&mut self) -> Result<()> {
+    pub async fn process_kernel_event(&mut self) -> Result<()> {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 // User message from kernel (render after kernel accepts it)
@@ -1069,18 +1068,6 @@ impl Model {
                         Attribute::Custom(attr::START_TOOL),
                         AttrValue::String(combined),
                     )?;
-
-                    // Handle todoWrite tool - update todo list panel
-                    if tool_name == TODO_WRITE_TOOL_NAME {
-                        if let Some(args) = arguments {
-                            self.app.attr(
-                                &Id::TodoList,
-                                Attribute::Custom(attr::SET_TODOS),
-                                AttrValue::String(args),
-                            )?;
-                        }
-                    }
-
                     self.state.should_redraw = true;
                 }
                 Event::Tool(kernel::event::ToolEvent::Output {
@@ -1088,6 +1075,7 @@ impl Model {
                     output,
                     content_blocks,
                     elapsed_ms,
+                    tool_name,
                     ..
                 }) => {
                     // Clear tool call state from info bar (tool execution is complete)
@@ -1102,7 +1090,22 @@ impl Model {
                         Attribute::Custom(attr::COMPLETE_TOOL),
                         AttrValue::String(combined),
                     )?;
+
+                    if matches!(
+                        tool_name.as_str(),
+                        TODO_WRITE_TOOL_NAME | TODO_UPDATE_TOOL_NAME | TODO_READ_TOOL_NAME
+                    ) {
+                        // If the tool is a todo tool, refresh the todo list after completion
+                        if let Err(e) = self.init_todo_list().await {
+                            tracing::error!(
+                                "Failed to refresh todo list after tool execution: {}",
+                                e
+                            );
+                        }
+                    }
+
                     self.state.should_redraw = true;
+
                     // Windows workaround: re-enable mouse capture after shell commands
                     // Shell tools may disable ENABLE_MOUSE_INPUT console mode on Windows
                     #[cfg(target_os = "windows")]
@@ -1375,7 +1378,9 @@ impl Model {
 
         while !self.state.quit {
             // Process kernel events
-            self.process_kernel_events()?;
+            if let Err(e) = self.process_kernel_event().await {
+                tracing::error!("Error processing kernel event: {}", e);
+            }
 
             // Tick the application
             match self.app.tick(PollStrategy::Once(Duration::from_millis(10))) {

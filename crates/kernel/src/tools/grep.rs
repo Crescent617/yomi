@@ -563,7 +563,7 @@ mod tests {
             "output_mode": "files_with_matches"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test1.rs"));
@@ -589,7 +589,7 @@ mod tests {
             "output_mode": "content"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("println"));
@@ -611,7 +611,7 @@ mod tests {
             "-i": true
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("MAIN"));
@@ -635,7 +635,7 @@ mod tests {
             "glob": "*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test.rs"));
@@ -657,7 +657,7 @@ mod tests {
             "output_mode": "files_with_matches"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("No files found"));
@@ -683,7 +683,7 @@ mod tests {
             "-A": 2
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         let content = result.text_content();
@@ -728,7 +728,7 @@ mod tests {
         let args = serde_json::json!({
             "pattern": "fn secret"
         });
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains(".hidden.rs"));
@@ -755,7 +755,7 @@ mod tests {
             "output_mode": "content"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -786,7 +786,7 @@ mod tests {
             "output_mode": "files_with_matches"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -822,7 +822,7 @@ mod tests {
             "limit": 1
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 

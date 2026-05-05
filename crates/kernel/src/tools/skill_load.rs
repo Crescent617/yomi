@@ -116,7 +116,7 @@ This is a test skill.";
             "path": skill_path.to_str().unwrap()
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path(), "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -145,7 +145,7 @@ description: Debugging skill
             "name": "debugging"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path(), "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -160,7 +160,7 @@ description: Debugging skill
             "name": "nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path(), "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -175,7 +175,7 @@ description: Debugging skill
             "path": "/nonexistent/path/SKILL.md"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path(), "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -207,7 +207,7 @@ description: Writing superpower
             "name": "superpowers:writing"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", temp.path());
+        let ctx = ToolExecCtx::new("test_tool_call", temp.path(), "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());

@@ -186,6 +186,7 @@ pub enum ToolEvent {
     Output {
         agent_id: AgentId,
         tool_id: String,
+        tool_name: String,
         /// Text output for backward compatibility
         output: String,
         /// Content blocks for multimodal support (images, etc.)

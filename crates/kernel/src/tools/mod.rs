@@ -35,7 +35,10 @@ pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
-pub use todo::{TodoReadTool, TodoWriteTool, TODO_READ_TOOL_NAME, TODO_WRITE_TOOL_NAME};
+pub use todo::{
+    TodoReadTool, TodoUpdateTool, TodoWriteTool, TODO_READ_TOOL_NAME, TODO_UPDATE_TOOL_NAME,
+    TODO_WRITE_TOOL_NAME,
+};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
@@ -50,20 +53,27 @@ pub struct ToolExecCtx<'a> {
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
     /// Working directory for file-based operations
     pub working_dir: std::path::PathBuf,
+    /// Session ID for session-scoped operations (e.g., todo storage)
+    pub session_id: String,
 }
 
 impl<'a> ToolExecCtx<'a> {
-    /// Create a new context with just the tool call ID
-    pub fn new(tool_call_id: &'a str, working_dir: impl Into<std::path::PathBuf>) -> Self {
+    /// Create a new context with just the tool call ID and `session_id`
+    pub fn new(
+        tool_call_id: &'a str,
+        working_dir: impl Into<std::path::PathBuf>,
+        session_id: impl Into<String>,
+    ) -> Self {
         Self {
             tool_call_id,
             parent_messages: None,
             cancel_token: None,
             working_dir: working_dir.into(),
+            session_id: session_id.into(),
         }
     }
 
-    /// Create a context with tool call ID, parent messages, runtime token, and working directory
+    /// Create a context with tool call ID, parent messages, runtime token, working directory and `session_id`
     /// This is a convenience constructor for the common case where both
     /// `parent_messages` and `cancel_token` are available
     pub fn with_parent_ctx(
@@ -71,12 +81,14 @@ impl<'a> ToolExecCtx<'a> {
         parent_messages: Option<&'a [Arc<crate::types::Message>]>,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
         working_dir: impl Into<std::path::PathBuf>,
+        session_id: impl Into<String>,
     ) -> Self {
         Self {
             tool_call_id,
             parent_messages,
             cancel_token,
             working_dir: working_dir.into(),
+            session_id: session_id.into(),
         }
     }
 
@@ -232,13 +244,9 @@ impl ToolRegistry {
 
 impl ToolRegistry {
     /// Register todo tools (replaces the heavier task tools)
-    pub fn register_todo_tool(
-        &mut self,
-        storage: std::sync::Arc<dyn crate::storage::TodoStore>,
-        session_id: impl Into<String>,
-    ) {
-        let session_id_str = session_id.into();
-        self.register(TodoWriteTool::new(storage.clone(), session_id_str.clone()));
-        self.register(TodoReadTool::new(storage, session_id_str));
+    pub fn register_todo_tool(&mut self, storage: std::sync::Arc<dyn crate::storage::TodoStore>) {
+        self.register(TodoWriteTool::new(storage.clone()));
+        self.register(TodoReadTool::new(storage.clone()));
+        self.register(TodoUpdateTool::new(storage));
     }
 }

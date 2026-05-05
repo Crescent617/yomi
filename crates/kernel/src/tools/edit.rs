@@ -229,7 +229,7 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", path);
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.text_content().contains("Replaced"));
 
@@ -256,7 +256,7 @@ mod tests {
             "new_str": "replaced"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", path);
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("not been read"));
@@ -279,7 +279,7 @@ mod tests {
             "new_str": "goodbye"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", path);
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(!result.is_error);
         assert!(result.text_content().contains("Replaced"));
