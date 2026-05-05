@@ -1,13 +1,12 @@
 //! File state tracking - track file modification times for stale read detection
 
+use crate::types::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Version of the file state file format
-pub const STATE_VERSION: u32 = 1;
-
 /// File modification state for a single file
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileState {
     pub path: PathBuf,
     pub mtime: u64,
@@ -20,79 +19,28 @@ impl FileState {
     }
 }
 
-/// A single entry in the state file (JSONL format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "t", rename_all = "snake_case")]
-pub enum StateEntry {
-    /// Metadata header (first line)
-    #[serde(rename = "meta")]
-    Metadata {
-        v: u32,
-        /// Unix timestamp (seconds since epoch)
-        created_at: u64,
-        #[serde(default)]
-        truncate_count: u32,
-        #[serde(default)]
-        vacuum_count: u32,
-    },
-
-    /// File state entry
-    #[serde(rename = "file")]
-    FileState { p: PathBuf, m: u64 },
-}
-
-impl From<FileState> for StateEntry {
-    fn from(fs: FileState) -> Self {
-        StateEntry::FileState {
-            p: fs.path,
-            m: fs.mtime,
-        }
-    }
-}
-
-impl TryFrom<StateEntry> for FileState {
-    type Error = &'static str;
-
-    fn try_from(entry: StateEntry) -> std::result::Result<Self, Self::Error> {
-        match entry {
-            StateEntry::FileState { p, m } => Ok(FileState { path: p, mtime: m }),
-            StateEntry::Metadata { .. } => Err("not a file state entry"),
-        }
-    }
-}
-
-impl StateEntry {
-    /// Create a default metadata entry with current timestamp
-    pub fn default_meta() -> Self {
-        Self::Metadata {
-            v: STATE_VERSION,
-            created_at: crate::utils::now_secs(),
-            truncate_count: 0,
-            vacuum_count: 0,
-        }
-    }
-}
-
-use crate::types::{KernelError, Result};
-use async_trait::async_trait;
-use std::collections::HashMap;
-
 /// Storage for file modification states
 #[async_trait]
 pub trait FileStateStore: Send + Sync {
     /// Record a file state
     async fn record(&self, path: PathBuf, mtime: u64) -> Result<()>;
 
-    /// Get all recorded file states (latest entry per path wins)
-    async fn get_all(&self) -> Result<HashMap<PathBuf, u64>>;
+    /// Record multiple file states efficiently
+    ///
+    /// Default implementation records one by one. Implementations should
+    /// override this for better performance when batching is supported.
+    async fn record_batch(&self, states: Vec<FileState>) -> Result<()> {
+        for state in states {
+            self.record(state.path, state.mtime).await?;
+        }
+        Ok(())
+    }
+
+    /// Get all recorded file states (deduplicated by path, last wins)
+    async fn read_all(&self) -> Result<Vec<FileState>>;
 
     /// Clear all file states
     async fn truncate(&self) -> Result<()>;
-}
-
-/// Helper for storage errors
-fn storage_err(msg: impl Into<String>) -> KernelError {
-    KernelError::Storage(msg.into())
 }
 
 pub mod jsonl;

@@ -22,6 +22,7 @@
 //! ```
 
 pub mod file_state;
+pub mod jsonl_store;
 pub mod message;
 pub mod session;
 pub mod todo;
@@ -35,7 +36,7 @@ pub use init::StorageSet;
 pub(crate) mod migrations;
 
 // Re-export common types for convenience
-pub use file_state::{FileState, FileStateStore, JsonlFileStateStore, StateEntry};
+pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
 pub use message::{JsonlMessageStore, MessageStore};
 pub use session::{SessionInfo, SessionStore, SqliteSessionStore};
 pub use todo::{JsonTodoStore, TodoStore};

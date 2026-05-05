@@ -153,7 +153,7 @@ impl Tool for WriteTool {
 
         // Update file state store
         if let Some(ref store) = self.file_state_store {
-            store.record(path.clone(), get_mtime(&path).await);
+            store.record(path.clone(), get_mtime(&path).await).await;
         }
 
         Ok(ToolOutput::text_with_summary(
@@ -254,7 +254,7 @@ mod tests {
 
         // Record the file as read with the current mtime
         let mtime = crate::tools::base::get_mtime(&file_path).await;
-        store.record(file_path.clone(), mtime);
+        store.record(file_path.clone(), mtime).await;
 
         let tool = WriteTool::new().with_file_state_store(store);
 

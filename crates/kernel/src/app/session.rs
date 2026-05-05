@@ -72,11 +72,11 @@ impl Session {
         let persistent_store: Arc<dyn crate::storage::FileStateStore> =
             Arc::new(JsonlFileStateStore::new(&id.0, &config.data_dir).await?);
 
-        let states = persistent_store.get_all().await?;
+        let states = persistent_store.read_all().await?;
 
         let file_state_store = crate::tools::file_state::FileStateStore::new()
             .with_persistent(persistent_store)
-            .with_states(states.into_iter());
+            .with_states(states.into_iter().map(|fs| (fs.path, fs.mtime)));
 
         Ok(Arc::new(file_state_store))
     }

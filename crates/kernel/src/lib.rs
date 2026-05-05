@@ -46,7 +46,7 @@ pub use providers::{
 pub use skill::{Skill, SkillLoader};
 // Re-export storage domains
 pub use storage::{
-    file_state::{FileState, FileStateStore, JsonlFileStateStore, StateEntry},
+    file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
     session::{SessionInfo, SessionStore, SqliteSessionStore},
     todo::{JsonTodoStore, TodoStore},
