@@ -23,7 +23,7 @@ pub struct ToolRegistryConfig<'a> {
     pub session_id: &'a str,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
     pub parent_session_id: Option<&'a str>,
-    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     pub enable_sub_agents: bool,
     pub enable_reminder: bool,
 }
@@ -86,7 +86,7 @@ impl<'a> ToolRegistryConfig<'a> {
     #[must_use]
     pub fn with_file_state_store(
         mut self,
-        store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+        store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     ) -> Self {
         self.file_state_store = store;
         self
@@ -106,7 +106,7 @@ impl ToolRegistryFactory {
         let mut registry = ToolRegistry::new();
         let file_state_store = config
             .file_state_store
-            .unwrap_or_else(|| Arc::new(crate::tools::file_state::FileStateStore::new()));
+            .unwrap_or_else(|| Arc::new(crate::tools::helper::file_state::FileStateStore::new()));
 
         // Register Bash tool
         let bash_ctx = ShellToolCtx::new(config.agent_id.clone(), config.input_tx.cloned());

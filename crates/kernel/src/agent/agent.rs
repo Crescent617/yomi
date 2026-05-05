@@ -7,7 +7,7 @@ use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::parallel::ToolExecutionResult;
+use crate::tools::executor::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role};
 use futures::TryStreamExt;
 use std::sync::atomic::{AtomicU64, Ordering};

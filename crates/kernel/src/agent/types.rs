@@ -34,7 +34,7 @@ pub struct AgentSpawnArgs {
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
     /// Optional file state store (for restoring from previous session)
-    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -130,7 +130,7 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_file_state_store(
         mut self,
-        store: Arc<crate::tools::file_state::FileStateStore>,
+        store: Arc<crate::tools::helper::FileStateStore>,
     ) -> Self {
         self.file_state_store = Some(store);
         self
@@ -281,7 +281,7 @@ pub struct AgentShared {
     /// Skill folders for the `skill_load` tool
     pub skill_folders: Vec<std::path::PathBuf>,
     /// File state store for tracking file modification times (cleared on compaction)
-    pub file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+    pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
 }
 
 impl AgentShared {
@@ -298,7 +298,7 @@ impl AgentShared {
         usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
         permission_state: Option<crate::permissions::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
-        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+        file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     ) -> Self {
         Self {
             provider,
@@ -321,7 +321,7 @@ impl AgentShared {
     pub fn with_per_session(
         &self,
         permission_state: Option<crate::permissions::PermissionState>,
-        file_state_store: Option<Arc<crate::tools::file_state::FileStateStore>>,
+        file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     ) -> Self {
         Self {
             permission_state,

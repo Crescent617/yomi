@@ -38,7 +38,7 @@ pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
 pub use misc::plugin::{Plugin, PluginLoader};
-pub use prompt::{PromptBuilder, SystemPromptBuilder};
+pub use prompt::SystemPromptBuilder;
 pub use providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
     ThinkingConfig, ToolCallRequest,

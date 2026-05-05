@@ -1,9 +1,8 @@
-//! Base tool functionality shared across file-based tools
+//! File utility functions shared across tools
 //!
 //! Provides common utilities for path resolution and file metadata operations.
 
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -12,9 +11,6 @@ const DEFAULT_MAX_CONCURRENT_MTIME_OPS: usize = 100;
 
 /// Maximum file size (10 MB)
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
-
-/// Maximum tool output length (20 KB)
-pub const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
 
 /// Get file modification time in milliseconds since epoch
 ///
