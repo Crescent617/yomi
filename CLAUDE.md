@@ -1,6 +1,5 @@
 # AGENTS.md
 
-
 ## Project Overview
 
 Yomi is a Rust-based AI coding assistant CLI featuring an async agent loop, sub-agent support, and a TUI interface built with tuirealm.
