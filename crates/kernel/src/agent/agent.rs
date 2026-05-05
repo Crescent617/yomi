@@ -887,6 +887,7 @@ impl Agent {
                 Some(&cancel_token),
                 Some(self.message_buffer.messages()),
                 &self.working_dir,
+                &self.session_id,
             )
             .await
         };

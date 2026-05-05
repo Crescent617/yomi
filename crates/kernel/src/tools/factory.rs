@@ -154,7 +154,7 @@ impl ToolRegistryFactory {
 
         // Register todo tool
         if let Some(todo_storage) = config.shared.todo_storage.clone() {
-            registry.register_todo_tool(todo_storage, config.session_id.to_owned());
+            registry.register_todo_tool(todo_storage);
         }
 
         // Register Reminder tool if enabled (main agent only)

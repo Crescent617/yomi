@@ -256,7 +256,7 @@ mod tests {
             "pattern": "*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("test1.rs"));
@@ -280,7 +280,7 @@ mod tests {
             "pattern": "**/*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("src/main.rs"));
@@ -314,7 +314,7 @@ mod tests {
             "pattern": "**/*.rs"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("tracked.rs"));
@@ -331,7 +331,7 @@ mod tests {
             "pattern": "*.nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("No files found"));
@@ -354,7 +354,7 @@ mod tests {
             "path": "src"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("main.rs"));
@@ -371,7 +371,7 @@ mod tests {
             "path": "nonexistent"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("does not exist"));
@@ -396,7 +396,7 @@ mod tests {
         let args = serde_json::json!({
             "pattern": "*.rs"
         });
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains(".hidden.rs"));
@@ -407,7 +407,7 @@ mod tests {
             "pattern": "*.rs",
             "include_hidden": false
         });
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(!result.text_content().contains(".hidden.rs"));
@@ -437,7 +437,7 @@ mod tests {
             "pattern": "*.{rs,ts,js}"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(

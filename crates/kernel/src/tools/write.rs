@@ -163,7 +163,7 @@ mod tests {
             "content": "Hello, World!"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("File created"));
@@ -187,7 +187,7 @@ mod tests {
             "content": "fn main() {}"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -217,7 +217,7 @@ mod tests {
         });
 
         // Should fail because file hasn't been read
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.is_error);
         assert!(result.error_text().contains("not been read"));
@@ -248,7 +248,7 @@ mod tests {
         });
 
         // Should succeed because file was recorded as read
-        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
         assert!(result.text_content().contains("File updated"));
@@ -271,7 +271,7 @@ mod tests {
             "content": "absolute path content"
         });
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -296,7 +296,7 @@ mod tests {
             "file_path": "test.txt",
             "content": "Hello, World!"
         });
-        let ctx = ToolExecCtx::new("test_tool_call", &base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
         let result = write_tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
@@ -310,7 +310,7 @@ mod tests {
             "old_str": "Hello",
             "new_str": "Goodbye"
         });
-        let ctx = ToolExecCtx::new("test_tool_call_2", &base_path);
+        let ctx = ToolExecCtx::new("test_tool_call_2", &base_path, "test-session");
         let result = edit_tool.exec(args, ctx).await.unwrap();
 
         // Should succeed, not fail with "not been read" error

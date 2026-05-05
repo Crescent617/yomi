@@ -88,6 +88,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             (*self.shared.model_config).clone(),
             tool_registry,
             working_dir,
+            session_id,
         )
         .with_agent_id(agent_id)
         .with_event_tx(self.parent_event_tx.clone())

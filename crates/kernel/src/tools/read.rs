@@ -201,7 +201,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt"});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -220,7 +220,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -242,7 +242,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "limit": 2});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -264,7 +264,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -287,7 +287,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "line_numbers": true});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -308,7 +308,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "line_numbers": true});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
@@ -327,7 +327,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "nonexistent.txt"});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -346,7 +346,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 10});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.is_error);
@@ -374,7 +374,7 @@ mod tests {
         let tool = ReadTool::default();
         let args = serde_json::json!({"path": "large.txt"});
 
-        let ctx = ToolExecCtx::new("test_tool_call", base_path);
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
 
         assert!(result.success());
