@@ -20,7 +20,7 @@ pub struct Session {
     permission_state: Option<PermissionState>,
     /// File state store for tracking file modification times
     #[allow(dead_code)]
-    file_state_store: Arc<crate::tools::file_state::FileStateStore>,
+    file_state_store: Arc<crate::tools::helper::FileStateStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,13 +68,13 @@ impl Session {
     async fn create_file_state_store(
         id: &SessionId,
         config: &SessionConfig,
-    ) -> Result<Arc<crate::tools::file_state::FileStateStore>> {
+    ) -> Result<Arc<crate::tools::helper::FileStateStore>> {
         let persistent_store: Arc<dyn crate::storage::FileStateStore> =
             Arc::new(JsonlFileStateStore::new(&id.0, &config.data_dir).await?);
 
         let states = persistent_store.read_all().await?;
 
-        let file_state_store = crate::tools::file_state::FileStateStore::new()
+        let file_state_store = crate::tools::helper::FileStateStore::new()
             .with_persistent(persistent_store)
             .with_states(states.into_iter().map(|fs| (fs.path, fs.mtime)));
 
@@ -95,7 +95,7 @@ impl Session {
         id: &SessionId,
         config: &SessionConfig,
         agent_shared: &Arc<AgentShared>,
-        file_state_store: &Arc<crate::tools::file_state::FileStateStore>,
+        file_state_store: &Arc<crate::tools::helper::FileStateStore>,
         permission_state: Option<PermissionState>,
     ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
         let history = agent_shared

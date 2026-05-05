@@ -4,15 +4,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub mod base;
 pub mod edit;
-pub(crate) mod file_lock;
-pub mod file_state;
+pub mod executor;
+pub mod factory;
 pub mod glob;
 pub mod grep;
-pub mod parallel;
+pub mod helper;
 pub mod read;
-pub mod registry_factory;
 pub mod reminder;
 pub mod shell;
 pub mod skill_load;
@@ -22,14 +20,17 @@ pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
-pub use base::MAX_FILE_SIZE;
+// Re-export from helper module
+pub use helper::{FileStateStore, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
+
+// Re-export from executor and factory directly
+pub use executor::{execute_tools_parallel, ToolExecutionResult};
+pub use factory::{ToolRegistryConfig, ToolRegistryFactory};
 
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
-pub use parallel::execute_tools_parallel;
 pub use read::{ReadTool, READ_TOOL_NAME};
-pub use registry_factory::{ToolRegistryConfig, ToolRegistryFactory};
 pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};

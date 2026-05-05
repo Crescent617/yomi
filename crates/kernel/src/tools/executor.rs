@@ -1,25 +1,20 @@
 use crate::event::ToolEvent;
-use crate::tools::base::MAX_TOOL_OUTPUT_LENGTH;
+use crate::tools::helper::truncate::{truncate_output, TRUNCATION_MESSAGE};
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME};
 use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
-use crate::utils::strs;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use tokio_util::sync::CancellationToken;
 
-const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to limit]";
+/// Maximum tool output length (20 KB)
+const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
 
 /// Tool execution result
 pub struct ToolExecutionResult {
     pub tool_call_id: String,
     pub message: Message,
     pub event: ToolEvent,
-}
-
-/// Truncate output if it exceeds max length (UTF-8 safe)
-fn truncate_output(output: &str) -> String {
-    strs::truncate_with_suffix(output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
 }
 
 /// Check if a tool handles its own truncation
@@ -40,7 +35,7 @@ fn truncate_and_convert_blocks(
         .map(|block| match block {
             crate::types::ToolOutputBlock::Text { text } => crate::types::ToolOutputBlock::Text {
                 text: if should_truncate {
-                    truncate_output(text)
+                    truncate_output(text, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
                 } else {
                     text.clone()
                 },
@@ -87,7 +82,11 @@ fn build_success_result(
     let output = if tool_handles_truncation(tool_name) {
         result.text_content()
     } else {
-        truncate_output(&result.text_content())
+        truncate_output(
+            &result.text_content(),
+            MAX_TOOL_OUTPUT_LENGTH,
+            TRUNCATION_MESSAGE,
+        )
     };
 
     let event = ToolEvent::Output {

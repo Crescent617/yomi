@@ -1,6 +1,6 @@
-use crate::tools::base::get_mtime;
-use crate::tools::file_lock::{lock_exclusive_timeout, DEFAULT_LOCK_TIMEOUT};
-use crate::tools::file_state::FileStateStore;
+use crate::tools::helper::{
+    get_mtime, lock_exclusive_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT,
+};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -253,7 +253,7 @@ mod tests {
         let store = Arc::new(FileStateStore::new());
 
         // Record the file as read with the current mtime
-        let mtime = crate::tools::base::get_mtime(&file_path).await;
+        let mtime = crate::tools::helper::get_mtime(&file_path).await;
         store.record(file_path.clone(), mtime).await;
 
         let tool = WriteTool::new().with_file_state_store(store);
@@ -302,7 +302,7 @@ mod tests {
         let base_path = temp_dir.path().to_path_buf();
 
         // Create a shared file state store
-        let store = Arc::new(crate::tools::file_state::FileStateStore::new());
+        let store = Arc::new(crate::tools::helper::FileStateStore::new());
 
         // Create WriteTool with file state store
         let write_tool = WriteTool::new().with_file_state_store(Arc::clone(&store));
