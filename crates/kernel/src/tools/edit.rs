@@ -1,48 +1,31 @@
 use crate::tools::helper::{
     get_mtime, lock_exclusive_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
 };
-use crate::tools::{Tool, ToolExecCtx};
+use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
 use std::sync::Arc;
 
 pub const EDIT_TOOL_NAME: &str = "edit";
 
+#[derive(Default)]
 pub struct EditTool {
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
-impl Default for EditTool {
-    fn default() -> Self {
-        Self::new()
+impl EditTool {
+    /// Create a new `EditTool` with optional file state store
+    pub fn new(store: impl Into<Option<Arc<FileStateStore>>>) -> Self {
+        Self {
+            file_state_store: store.into(),
+        }
     }
 }
 
-impl EditTool {
-    pub fn new() -> Self {
-        Self {
-            file_state_store: None,
-        }
-    }
-
-    /// Set the file state store for tracking reads
-    #[must_use]
-    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
-        self.file_state_store = Some(store);
-        self
-    }
-
-    /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &Path) -> std::result::Result<(), String> {
-        let store = self
-            .file_state_store
-            .as_ref()
-            .ok_or("File state store not initialized")?;
-
-        let current_mtime = get_mtime(path).await;
-        store.check_staleness(path, current_mtime)
+impl FileStateAwareTool for EditTool {
+    fn file_state_store(&self) -> Option<&Arc<FileStateStore>> {
+        self.file_state_store.as_ref()
     }
 }
 /// Find the actual string in file content.
@@ -229,8 +212,6 @@ mod tests {
         // Use canonicalized path for file state store
         let full_path = path.join(file_name).canonicalize().unwrap();
 
-        let tool = EditTool::new();
-
         // First, simulate a read by setting file state with actual file's mtime
         let store = Arc::new(FileStateStore::new());
         let _content = "hello world".to_string();
@@ -240,7 +221,7 @@ mod tests {
 
         store.record(full_path.clone(), mtime).await;
 
-        let tool = tool.with_file_state_store(store);
+        let tool = EditTool::new(store);
 
         let args = serde_json::json!({
             "path": file_name,
@@ -266,7 +247,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let tool = EditTool::new().with_file_state_store(store);
+        let tool = EditTool::new(store);
 
         // Multi-line old_str requires read first
         let args = serde_json::json!({
@@ -290,7 +271,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let tool = EditTool::new().with_file_state_store(store);
+        let tool = EditTool::new(store);
 
         let args = serde_json::json!({
             "path": file_name,

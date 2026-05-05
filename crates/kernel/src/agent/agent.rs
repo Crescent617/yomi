@@ -418,7 +418,7 @@ impl Agent {
             .await;
 
         // Validate and clean message buffer before sending to provider
-        self.message_buffer.santinize();
+        self.message_buffer.sanitize();
 
         // Clone messages and tools for the spawned task (needs 'static)
         let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();

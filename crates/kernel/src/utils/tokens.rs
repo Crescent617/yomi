@@ -49,9 +49,9 @@ pub fn estimate_tokens_for_messages(messages: &[crate::types::Message]) -> u32 {
     total_chars as u32 / 4
 }
 
-/// Format token count with ~ prefix to indicate estimation
+/// Format estimated token count with ~ prefix to indicate estimation
 #[allow(clippy::cast_precision_loss)]
-pub fn format_token_count(count: usize) -> String {
+pub fn format_estimated_tokens(count: usize) -> String {
     if count >= 1000 {
         format!("~{:.1}k", count as f64 / 1000.0)
     } else {
@@ -59,8 +59,8 @@ pub fn format_token_count(count: usize) -> String {
     }
 }
 
-/// Format f64 token count with ~ prefix (display as integer)
-pub fn format_token_count_f64(count: f64) -> String {
+/// Format estimated f64 token count with ~ prefix (display as integer)
+pub fn format_estimated_tokens_f64(count: f64) -> String {
     let count_rounded = count.round();
     if count_rounded >= 1000.0 {
         format!("~{:.1}k", count_rounded / 1000.0)
@@ -69,9 +69,9 @@ pub fn format_token_count_f64(count: f64) -> String {
     }
 }
 
-/// Format token count for display (actual count from API, no ~ prefix)
+/// Format actual token count from API for display (no ~ prefix)
 #[allow(clippy::cast_precision_loss)]
-pub fn format_tokens(count: u32) -> String {
+pub fn format_actual_tokens(count: u32) -> String {
     if count >= 1000 {
         format!("{:.1}k", f64::from(count) / 1000.0)
     } else {
@@ -111,10 +111,10 @@ mod tests {
     }
 
     #[test]
-    fn test_format_token_count() {
-        assert_eq!(format_token_count(100), "~100");
-        assert_eq!(format_token_count(1500), "~1.5k");
-        assert_eq!(format_token_count(10000), "~10.0k");
+    fn test_format_estimated_tokens() {
+        assert_eq!(format_estimated_tokens(100), "~100");
+        assert_eq!(format_estimated_tokens(1500), "~1.5k");
+        assert_eq!(format_estimated_tokens(10000), "~10.0k");
     }
 
     #[test]
@@ -146,13 +146,13 @@ mod tests {
     }
 
     #[test]
-    fn test_format_token_count_boundaries() {
-        assert_eq!(format_token_count(0), "~0");
-        assert_eq!(format_token_count(1), "~1");
-        assert_eq!(format_token_count(999), "~999");
-        assert_eq!(format_token_count(1000), "~1.0k");
-        assert_eq!(format_token_count(9999), "~10.0k"); // Actually ~10.0k
-        assert_eq!(format_token_count(100_000), "~100.0k");
+    fn test_format_estimated_tokens_boundaries() {
+        assert_eq!(format_estimated_tokens(0), "~0");
+        assert_eq!(format_estimated_tokens(1), "~1");
+        assert_eq!(format_estimated_tokens(999), "~999");
+        assert_eq!(format_estimated_tokens(1000), "~1.0k");
+        assert_eq!(format_estimated_tokens(9999), "~10.0k"); // Actually ~10.0k
+        assert_eq!(format_estimated_tokens(100_000), "~100.0k");
     }
 
     #[test]

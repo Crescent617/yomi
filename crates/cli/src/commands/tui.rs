@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use kernel::{
     agent::AgentConfig,
     config::{Config, ModelProvider},
-    expand_tilde,
+    deduplicate_skills, expand_tilde,
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
@@ -56,12 +56,7 @@ pub struct TuiArgs {
 }
 
 pub async fn run(args: TuiArgs) -> Result<()> {
-    let working_dir = args
-        .global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let working_dir = working_dir.canonicalize()?;
+    let working_dir = crate::utils::resolve_working_dir(&args.global)?;
 
     let mut config = crate::utils::load_config(args.global.config.as_ref(), &working_dir)?;
 
@@ -278,22 +273,6 @@ async fn load_plugin_skills(config: &Config, skills: &mut Vec<Arc<kernel::skill:
             }
         }
     }
-}
-
-fn deduplicate_skills(skills: &mut Vec<Arc<kernel::skill::Skill>>) {
-    let mut seen_names = std::collections::HashSet::new();
-    skills.retain(|skill| {
-        if seen_names.contains(&skill.name) {
-            tracing::debug!(
-                "Duplicate skill name '{}' found, keeping first instance.",
-                skill.name
-            );
-            false
-        } else {
-            seen_names.insert(skill.name.clone());
-            true
-        }
-    });
 }
 
 fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {

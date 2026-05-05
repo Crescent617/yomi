@@ -19,30 +19,21 @@ const RIPGREP_TIMEOUT: Duration = Duration::from_secs(30);
 const TRUNCATED_MSG: &str =
     "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
 
+#[derive(Default)]
 pub struct GrepTool {
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
-impl Default for GrepTool {
-    fn default() -> Self {
-        Self::new()
+impl GrepTool {
+    /// Create a new `GrepTool` with optional file state store
+    pub fn new(store: impl Into<Option<Arc<FileStateStore>>>) -> Self {
+        Self {
+            file_state_store: store.into(),
+        }
     }
 }
 
 impl GrepTool {
-    pub fn new() -> Self {
-        Self {
-            file_state_store: None,
-        }
-    }
-
-    /// Set the file state store for tracking reads
-    #[must_use]
-    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
-        self.file_state_store = Some(store);
-        self
-    }
-
     /// Build ripgrep command arguments
     #[allow(clippy::too_many_arguments)]
     fn build_rg_args(
@@ -566,7 +557,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "println!",
             "output_mode": "files_with_matches"
@@ -592,7 +583,7 @@ mod tests {
         .await
         .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "println!",
             "output_mode": "content"
@@ -613,7 +604,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "main",
             "output_mode": "content",
@@ -638,7 +629,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "main",
             "glob": "*.rs"
@@ -660,7 +651,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "nonexistent",
             "output_mode": "files_with_matches"
@@ -684,7 +675,7 @@ mod tests {
         .await
         .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "fn main",
             "output_mode": "content",
@@ -731,7 +722,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = GrepTool::new();
+        let tool = GrepTool::default();
 
         // Always searches hidden files (claude-code behavior)
         let args = serde_json::json!({
@@ -757,7 +748,7 @@ mod tests {
 
         // Use file_state_store to track reads
         let store = Arc::new(FileStateStore::new());
-        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+        let tool = GrepTool::new(Arc::clone(&store));
 
         let args = serde_json::json!({
             "pattern": "println!",
@@ -788,7 +779,7 @@ mod tests {
 
         // Use file_state_store to track reads
         let store = Arc::new(FileStateStore::new());
-        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+        let tool = GrepTool::new(Arc::clone(&store));
 
         let args = serde_json::json!({
             "pattern": "println!",
@@ -822,7 +813,7 @@ mod tests {
 
         // Use file_state_store to track reads
         let store = Arc::new(FileStateStore::new());
-        let tool = GrepTool::new().with_file_state_store(Arc::clone(&store));
+        let tool = GrepTool::new(Arc::clone(&store));
 
         // Search with limit=1, only first match should be recorded
         let args = serde_json::json!({

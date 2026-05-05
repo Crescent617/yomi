@@ -1,16 +1,11 @@
 use crate::args::GlobalArgs;
 use crate::commands::tui::resolve_skill_folders;
-use crate::utils::load_config;
+use crate::utils::{load_config, resolve_working_dir};
 use anyhow::Result;
 use kernel::skill::SkillLoader;
 
-#[allow(clippy::needless_pass_by_value)]
-pub async fn list(global: GlobalArgs) -> Result<()> {
-    let working_dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let working_dir = working_dir.canonicalize()?;
+pub async fn list(global: &GlobalArgs) -> Result<()> {
+    let working_dir = resolve_working_dir(global)?;
 
     let config = load_config(global.config.as_ref(), &working_dir)?;
     let skill_folders = resolve_skill_folders(&config, &working_dir);

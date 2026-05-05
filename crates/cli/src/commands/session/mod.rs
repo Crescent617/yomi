@@ -5,9 +5,8 @@ use kernel::{ListArgs, StorageSet};
 
 pub mod cleanup;
 
-#[allow(clippy::needless_pass_by_value)]
-pub async fn list(global: GlobalArgs, all: bool) -> Result<()> {
-    let storage = StorageSet::open(&crate::utils::data_dir(&global)?).await?;
+pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
+    let storage = StorageSet::open(&crate::utils::data_dir(global)?).await?;
 
     // Get current working directory
     let current_dir = std::env::current_dir()?;

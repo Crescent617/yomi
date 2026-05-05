@@ -121,6 +121,31 @@ pub trait Tool: Send + Sync {
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput>;
 }
 
+/// Trait for tools that track file state for read-before-write validation
+pub trait FileStateAwareTool {
+    /// Get the file state store if configured
+    fn file_state_store(&self) -> Option<&Arc<FileStateStore>>;
+
+    /// Check if the file has been modified since it was last read
+    /// Default implementation uses the file state store to compare mtimes
+    fn check_staleness(
+        &self,
+        path: &std::path::Path,
+    ) -> impl std::future::Future<Output = std::result::Result<(), String>> + Send
+    where
+        Self: Sync,
+    {
+        async move {
+            let store = self
+                .file_state_store()
+                .ok_or("File state store not initialized")?;
+
+            let current_mtime = helper::get_mtime(path).await;
+            store.check_staleness(path, current_mtime)
+        }
+    }
+}
+
 /// Tool registry - manages available tools for an agent
 #[derive(Default)]
 pub struct ToolRegistry {

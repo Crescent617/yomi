@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
 
 async fn run_session(args: SessionArgs) -> Result<()> {
     match args.command {
-        SessionsCommands::List { all } => commands::session::list(args.global, all).await,
+        SessionsCommands::List { all } => commands::session::list(&args.global, all).await,
         SessionsCommands::Cleanup { days, yes } => {
             commands::session::cleanup::run(args.global, days, yes).await
         }
@@ -147,15 +147,15 @@ async fn run_session(args: SessionArgs) -> Result<()> {
 
 async fn run_skill(args: SkillArgs) -> Result<()> {
     match args.command {
-        SkillsCommands::List => commands::skill::list(args.global).await,
+        SkillsCommands::List => commands::skill::list(&args.global).await,
     }
 }
 
 async fn run_config(args: ConfigArgs) -> Result<()> {
     match args.command {
-        ConfigCommands::Show => commands::config::show(args.global),
-        ConfigCommands::Get { key } => commands::config::get(args.global, &key),
-        ConfigCommands::Set { key, value } => commands::config::set(args.global, &key, value),
+        ConfigCommands::Show => commands::config::show(&args.global),
+        ConfigCommands::Get { key } => commands::config::get(&args.global, &key),
+        ConfigCommands::Set { key, value } => commands::config::set(&args.global, &key, value),
     }
 }
 

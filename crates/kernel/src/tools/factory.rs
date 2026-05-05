@@ -114,22 +114,22 @@ impl ToolRegistryFactory {
         registry.register(bash_tool);
 
         // Register Read tool with file state store
-        let read_tool = ReadTool::new().with_file_state_store(Arc::clone(&file_state_store));
+        let read_tool = ReadTool::new(Arc::clone(&file_state_store));
         registry.register(read_tool);
 
         // Register Edit tool with file state store
-        let edit_tool = EditTool::new().with_file_state_store(Arc::clone(&file_state_store));
+        let edit_tool = EditTool::new(Arc::clone(&file_state_store));
         registry.register(edit_tool);
 
         // Register Write tool with file state store
-        let write_tool = WriteTool::new().with_file_state_store(Arc::clone(&file_state_store));
+        let write_tool = WriteTool::new(Arc::clone(&file_state_store));
         registry.register(write_tool);
 
         // Register Glob tool
         registry.register(GlobTool::new());
 
         // Register Grep tool with file state store
-        let grep_tool = GrepTool::new().with_file_state_store(Arc::clone(&file_state_store));
+        let grep_tool = GrepTool::new(Arc::clone(&file_state_store));
         registry.register(grep_tool);
 
         // Register WebFetch tool
