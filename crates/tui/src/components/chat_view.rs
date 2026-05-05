@@ -2260,7 +2260,7 @@ fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
             .as_str()
             .map(f)
             .or_else(|| value["path"].as_str().map(f)),
-        SUBAGENT_TOOL_NAME => value["prompt"].as_str().map(f),
+        SUBAGENT_TOOL_NAME => value["description"].as_str().map(f),
         TODO_READ_TOOL_NAME => Some(String::new()), // No specific target for reading todos
         _ => None,
     };
