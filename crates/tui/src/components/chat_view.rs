@@ -868,7 +868,8 @@ impl ChatView {
 
                     // Show tokens if available
                     if let Some(total) = tokens {
-                        let token_text = format!(" ⎿ {} tokens", tokens::format_tokens(*total));
+                        let token_text =
+                            format!(" ⎿ {} tokens", tokens::format_actual_tokens(*total));
                         lines.push(Arc::new(Line::from(vec![Span::styled(
                             token_text,
                             Style::default().fg(colors::text_secondary()),

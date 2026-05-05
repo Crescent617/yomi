@@ -1,6 +1,6 @@
 use crate::tools::helper::{
-    get_mtime, lock_shared_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
-    MAX_TOOL_OUTPUT_LENGTH,
+    get_mtime, lock_shared_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
+    MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH,
 };
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
@@ -13,30 +13,21 @@ use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
 
+#[derive(Default)]
 pub struct ReadTool {
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
-impl Default for ReadTool {
-    fn default() -> Self {
-        Self::new()
+impl ReadTool {
+    /// Create a new `ReadTool` with optional file state store
+    pub fn new(store: impl Into<Option<Arc<FileStateStore>>>) -> Self {
+        Self {
+            file_state_store: store.into(),
+        }
     }
 }
 
 impl ReadTool {
-    pub fn new() -> Self {
-        Self {
-            file_state_store: None,
-        }
-    }
-
-    /// Set the file state store for tracking reads
-    #[must_use]
-    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
-        self.file_state_store = Some(store);
-        self
-    }
-
     /// Read an image file and return `ToolOutput` with image content
     async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
         // Acquire shared lock before reading to coordinate with writers
@@ -111,37 +102,12 @@ impl ReadTool {
                 .await;
         }
 
-        Ok(ToolOutput::text(maybe_truncate(output, offset)))
+        Ok(ToolOutput::text(maybe_truncate_output(
+            output,
+            MAX_TOOL_OUTPUT_LENGTH,
+            offset,
+        )))
     }
-}
-
-/// Truncate text if it exceeds max length, adding a notice with the line number.
-fn maybe_truncate(mut text: String, offset: usize) -> String {
-    if text.len() <= MAX_TOOL_OUTPUT_LENGTH {
-        return text;
-    }
-
-    // Truncate at a safe UTF-8 boundary near the limit
-    let truncate_at = find_utf8_boundary(&text, MAX_TOOL_OUTPUT_LENGTH);
-    text.truncate(truncate_at);
-
-    // Calculate line number at truncation point
-    let lines_count = text.lines().count();
-    let truncation_line = offset + lines_count.saturating_sub(1);
-
-    let notice = format!(
-        "\n\n[Content truncated at line {truncation_line}. Use offset/limit to read more.]"
-    );
-    text.push_str(&notice);
-    text
-}
-
-/// Find a valid UTF-8 boundary at or before the target byte position.
-fn find_utf8_boundary(text: &str, target: usize) -> usize {
-    text.char_indices()
-        .rev()
-        .find(|&(i, _)| i <= target)
-        .map_or(0, |(i, _)| i)
 }
 
 #[async_trait]
@@ -232,7 +198,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt"});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -251,7 +217,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -273,7 +239,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "limit": 2});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -295,7 +261,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -318,7 +284,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "line_numbers": true});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -339,7 +305,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 2, "line_numbers": true});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -358,7 +324,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "nonexistent.txt"});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -377,7 +343,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "test.txt", "offset": 10});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);
@@ -405,7 +371,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = ReadTool::new();
+        let tool = ReadTool::default();
         let args = serde_json::json!({"path": "large.txt"});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path);

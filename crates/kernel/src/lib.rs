@@ -43,7 +43,7 @@ pub use providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
     ThinkingConfig, ToolCallRequest,
 };
-pub use skill::{Skill, SkillLoader};
+pub use skill::{deduplicate_skills, Skill, SkillLoader};
 // Re-export storage domains
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},

@@ -1,5 +1,5 @@
 use crate::args::GlobalArgs;
-use crate::utils::{get_nested_value, load_config, set_nested_value};
+use crate::utils::{get_nested_value, load_config, resolve_working_dir, set_nested_value};
 use anyhow::{Context, Result};
 use kernel::{expand_tilde, DEFAULT_DATA_DIR};
 use std::path::PathBuf;
@@ -11,24 +11,16 @@ fn config_path(global: &GlobalArgs) -> PathBuf {
         .unwrap_or_else(|| expand_tilde(DEFAULT_DATA_DIR).join("config.toml"))
 }
 
-#[allow(clippy::needless_pass_by_value)]
-pub fn show(global: GlobalArgs) -> Result<()> {
-    let working_dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+pub fn show(global: &GlobalArgs) -> Result<()> {
+    let working_dir = resolve_working_dir(global)?;
     let config = load_config(global.config.as_ref(), &working_dir)?;
     let toml_str = toml::to_string_pretty(&config)?;
     println!("{toml_str}");
     Ok(())
 }
 
-#[allow(clippy::needless_pass_by_value)]
-pub fn get(global: GlobalArgs, key: &str) -> Result<()> {
-    let working_dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+pub fn get(global: &GlobalArgs, key: &str) -> Result<()> {
+    let working_dir = resolve_working_dir(global)?;
     let config = load_config(global.config.as_ref(), &working_dir)?;
     let value = serde_json::to_value(&config)?;
     match get_nested_value(&value, key) {
@@ -41,9 +33,8 @@ pub fn get(global: GlobalArgs, key: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::needless_pass_by_value)]
-pub fn set(global: GlobalArgs, key: &str, value: String) -> Result<()> {
-    let config_path = config_path(&global);
+pub fn set(global: &GlobalArgs, key: &str, value: String) -> Result<()> {
+    let config_path = config_path(global);
     let mut config: toml::Table = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path)?;
         content.parse().context("Invalid config TOML")?

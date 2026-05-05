@@ -21,8 +21,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::utils::text::truncate_by_width;
 
-use crate::{attr, msg::Msg, theme::colors};
+use crate::{attr, msg::Msg, theme::colors, utils::TimedMessage};
 use kernel::permissions::Level;
+use std::ops::{Deref, DerefMut};
 
 /// Tip message for status bar (center section)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,9 +62,8 @@ pub enum AppMode {
 pub struct StatusBar {
     props: Props,
     mode: AppMode,
-    /// Current tip (center section)
-    tip: Option<Tip>,
-    tip_timeout: Option<std::time::Instant>,
+    /// Current tip (center section) with timeout
+    tip: TimedMessage<Tip>,
     /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
     /// Permission level for displaying YOLO mode
@@ -84,25 +84,19 @@ impl StatusBar {
 
     /// Show a tip with timeout
     pub fn show_tip(&mut self, tip: Tip) {
-        if tip.duration_ms == 0 {
+        let duration_ms = tip.duration_ms;
+        if duration_ms == 0 {
             // No timeout - persistent tip
-            self.tip = Some(tip);
-            self.tip_timeout = None;
+            self.tip.set(tip);
         } else {
-            self.tip_timeout =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(tip.duration_ms));
-            self.tip = Some(tip);
+            self.tip
+                .set_with_timeout(tip, std::time::Duration::from_millis(duration_ms));
         }
     }
 
     /// Check timeout and clear expired tip
     pub fn check_timeout(&mut self) {
-        if let Some(timeout) = self.tip_timeout {
-            if std::time::Instant::now() > timeout {
-                self.tip = None;
-                self.tip_timeout = None;
-            }
-        }
+        self.tip.check_timeout();
     }
 
     /// Tick handler for timeout checking
@@ -151,7 +145,7 @@ impl StatusBar {
     }
 
     fn render_center_section(&self, width: usize) -> Paragraph<'static> {
-        let text = self.tip.as_ref().map_or("", |t| t.content.as_str());
+        let text = self.tip.content().map_or("", |t| t.content.as_str());
 
         // Truncate if too long (using display width for CJK)
         let text_width = text.width_cjk();
@@ -282,8 +276,7 @@ impl Component for StatusBar {
                 }
             }
             Attribute::Custom(attr::CLEAR_TIP) => {
-                self.tip = None;
-                self.tip_timeout = None;
+                self.tip.clear();
             }
             Attribute::Custom(attr::SET_CTX_USAGE) => {
                 // Parse "tokens\x00context_window" format
@@ -356,6 +349,20 @@ impl StatusBarComponent {
         Self {
             component: StatusBar::new(),
         }
+    }
+}
+
+impl Deref for StatusBarComponent {
+    type Target = StatusBar;
+
+    fn deref(&self) -> &Self::Target {
+        &self.component
+    }
+}
+
+impl DerefMut for StatusBarComponent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.component
     }
 }
 

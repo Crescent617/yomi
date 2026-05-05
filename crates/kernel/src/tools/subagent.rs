@@ -4,7 +4,7 @@ use crate::skill::Skill;
 use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, ToolOutput};
-use crate::utils::tokens::format_tokens;
+use crate::utils::tokens::format_actual_tokens;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -392,7 +392,10 @@ impl SubagentTool {
                     event_tx,
                     agent_id,
                     tool_id,
-                    format!("iter {iteration_count} · {} tokens", format_tokens(total)),
+                    format!(
+                        "iter {iteration_count} · {} tokens",
+                        format_actual_tokens(total)
+                    ),
                     Some(total),
                 );
             }
@@ -476,7 +479,7 @@ impl SubagentTool {
                         parent_event_tx,
                         parent_id.clone(),
                         tool_id,
-                        format!("completed · {} tokens", format_tokens(total)),
+                        format!("completed · {} tokens", format_actual_tokens(total)),
                         Some(total),
                     );
                     SubAgentStatus::Completed
@@ -486,7 +489,10 @@ impl SubagentTool {
                         parent_event_tx,
                         parent_id.clone(),
                         tool_id,
-                        format!("partial (max iter) · {} tokens", format_tokens(total)),
+                        format!(
+                            "partial (max iter) · {} tokens",
+                            format_actual_tokens(total)
+                        ),
                         Some(total),
                     );
                     SubAgentStatus::Failed(format!(

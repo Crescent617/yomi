@@ -317,7 +317,7 @@ async fn generate_summary(
     use crate::agent::MessageBuffer;
 
     let mut msg_buf = MessageBuffer::from_arc_messages(messages);
-    msg_buf.santinize();
+    msg_buf.sanitize();
     let messages = msg_buf.messages();
 
     // Build messages for summary generation

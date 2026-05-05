@@ -365,6 +365,25 @@ impl SkillLoader {
     }
 }
 
+/// Deduplicate skills by name, keeping the first occurrence.
+/// This is a utility function that can be used after loading skills from multiple sources
+/// (e.g., folders and plugins) to ensure no duplicate names exist.
+pub fn deduplicate_skills(skills: &mut Vec<Arc<Skill>>) {
+    let mut seen_names = std::collections::HashSet::new();
+    skills.retain(|skill| {
+        if seen_names.contains(&skill.name) {
+            tracing::debug!(
+                "Duplicate skill name '{}' found, keeping first instance.",
+                skill.name
+            );
+            false
+        } else {
+            seen_names.insert(skill.name.clone());
+            true
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

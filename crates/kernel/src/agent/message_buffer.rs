@@ -89,7 +89,7 @@ impl MessageBuffer {
     /// Removes assistant messages with `tool_calls` that don't have corresponding tool responses,
     /// and removes tool responses that are not immediately after their corresponding assistant.
     /// Time: O(n), Space: O(k) where k = number of pending tool calls
-    pub fn santinize(&mut self) {
+    pub fn sanitize(&mut self) {
         use crate::types::Role;
         use std::collections::HashSet;
 
@@ -245,7 +245,7 @@ mod validate_clean_tests {
         buffer.push(create_assistant_with_tools(vec!["t1"]));
         buffer.push(create_tool_response("t1"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 2);
         assert_eq!(buffer.messages()[0].role, Role::Assistant);
@@ -259,7 +259,7 @@ mod validate_clean_tests {
         buffer.push(create_tool_response("t1"));
         buffer.push(create_tool_response("t2"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 3);
     }
@@ -271,7 +271,7 @@ mod validate_clean_tests {
         buffer.push(create_user_message("interrupt"));
         buffer.push(create_tool_response("t1"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 1);
         assert_eq!(buffer.messages()[0].role, Role::User);
@@ -282,7 +282,7 @@ mod validate_clean_tests {
         let mut buffer = MessageBuffer::new();
         buffer.push(create_tool_response("t1"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 0);
     }
@@ -293,7 +293,7 @@ mod validate_clean_tests {
         buffer.push(create_assistant_with_tools(vec!["t1", "t2"]));
         buffer.push(create_tool_response("t1"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 0);
     }
@@ -305,7 +305,7 @@ mod validate_clean_tests {
         buffer.push(create_tool_response("t1"));
         buffer.push(create_tool_response("extra"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         // Only the orphan extra tool is removed, valid chain is kept
         assert_eq!(buffer.len(), 2);
@@ -319,7 +319,7 @@ mod validate_clean_tests {
         buffer.push(create_assistant_with_tools(vec!["t1"]));
         buffer.push(create_tool_response("t2"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 0);
     }
@@ -332,7 +332,7 @@ mod validate_clean_tests {
         buffer.push(create_assistant_with_tools(vec!["t2"]));
         buffer.push(create_tool_response("t2"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 4);
     }
@@ -347,7 +347,7 @@ mod validate_clean_tests {
         buffer.push(create_tool_response("t2"));
         buffer.push(create_tool_response("orphan"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 3);
         assert_eq!(buffer.messages()[0].role, Role::Assistant);
@@ -358,7 +358,7 @@ mod validate_clean_tests {
     #[test]
     fn test_empty_buffer() {
         let mut buffer = MessageBuffer::new();
-        buffer.santinize();
+        buffer.sanitize();
         assert_eq!(buffer.len(), 0);
     }
 
@@ -378,7 +378,7 @@ mod validate_clean_tests {
         });
         buffer.push(create_user_message("response"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         assert_eq!(buffer.len(), 2);
     }
@@ -390,7 +390,7 @@ mod validate_clean_tests {
         buffer.push(create_tool_response("t1"));
         buffer.push(create_tool_response("t1"));
 
-        buffer.santinize();
+        buffer.sanitize();
 
         // Only the duplicate tool response is removed, valid chain is kept
         assert_eq!(buffer.len(), 2);

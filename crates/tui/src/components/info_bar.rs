@@ -21,9 +21,10 @@ use crate::{
     attr,
     msg::Msg,
     theme::{chars, colors, spinner_char},
-    utils::text::truncate_by_width,
+    utils::{text::truncate_by_width, TimedMessage},
 };
 use kernel::utils::tokens;
+use std::ops::{Deref, DerefMut};
 use unicode_width::UnicodeWidthStr;
 
 /// Notification level for info bar messages
@@ -154,9 +155,8 @@ pub struct InfoBar {
     tick_frame: usize,
     token_count: f64,
     start_time: Option<std::time::Instant>,
-    /// Current notification with level
-    notification: Option<Notification>,
-    notification_timeout: Option<std::time::Instant>,
+    /// Current notification with level and timeout
+    notification: TimedMessage<Notification>,
     /// Current tool call being streamed (`tool_name`)
     current_tool_call: Option<String>,
 }
@@ -195,27 +195,19 @@ impl InfoBar {
 
     /// Show a notification with level and timeout
     pub fn show_notification(&mut self, notification: Notification) {
-        if notification.duration_ms == 0 {
+        let duration_ms = notification.duration_ms;
+        if duration_ms == 0 {
             // No timeout - persistent notification
-            self.notification = Some(notification);
-            self.notification_timeout = None;
+            self.notification.set(notification);
         } else {
-            self.notification_timeout = Some(
-                std::time::Instant::now()
-                    + std::time::Duration::from_millis(notification.duration_ms),
-            );
-            self.notification = Some(notification);
+            self.notification
+                .set_with_timeout(notification, std::time::Duration::from_millis(duration_ms));
         }
     }
 
     /// Check timeout and clear expired notification
     pub fn check_timeout(&mut self) {
-        if let Some(timeout) = self.notification_timeout {
-            if std::time::Instant::now() > timeout {
-                self.notification = None;
-                self.notification_timeout = None;
-            }
-        }
+        self.notification.check_timeout();
     }
 
     /// Format elapsed time for display (e.g., " · 1.5s" or " · 2m30s")
@@ -264,7 +256,7 @@ impl InfoBar {
         let token_style = Style::default().fg(colors::text_secondary());
         let token_text = format!(
             "{} tokens",
-            tokens::format_token_count_f64(self.token_count)
+            tokens::format_estimated_tokens_f64(self.token_count)
         );
         spans.push(Span::styled(token_text, token_style));
 
@@ -280,7 +272,7 @@ impl InfoBar {
     fn render_right_section(&self, width: usize) -> Line<'static> {
         let (text, level) = self
             .notification
-            .as_ref()
+            .content()
             .map_or(("", NotificationLevel::Unknown), |n| {
                 (n.content.as_str(), n.level)
             });
@@ -384,8 +376,7 @@ impl Component for InfoBar {
                 }
             }
             Attribute::Custom(attr::CLEAR_NOTIFICATION) => {
-                self.notification = None;
-                self.notification_timeout = None;
+                self.notification.clear();
             }
             Attribute::Custom(attr::APPEND_TOOL_CALL_DELTA) => {
                 // Format: "tool_name\x00arguments_delta"
@@ -434,6 +425,20 @@ impl InfoBarComponent {
         Self {
             component: InfoBar::new(),
         }
+    }
+}
+
+impl Deref for InfoBarComponent {
+    type Target = InfoBar;
+
+    fn deref(&self) -> &Self::Target {
+        &self.component
+    }
+}
+
+impl DerefMut for InfoBarComponent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.component
     }
 }
 

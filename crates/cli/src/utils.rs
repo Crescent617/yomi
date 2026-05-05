@@ -79,10 +79,17 @@ pub fn set_nested_value(table: &mut toml::Table, key: &str, value: String) -> Re
 
 /// Get the data directory from global args
 pub fn data_dir(global: &GlobalArgs) -> Result<PathBuf> {
-    let working_dir = global
+    let working_dir = resolve_working_dir(global)?;
+    let config = load_config(global.config.as_ref(), &working_dir)?;
+    Ok(config.data_dir)
+}
+
+/// Resolve working directory from global args
+/// Uses the provided dir or falls back to current directory
+pub fn resolve_working_dir(global: &GlobalArgs) -> Result<PathBuf> {
+    let dir = global
         .dir
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let config = load_config(global.config.as_ref(), &working_dir)?;
-    Ok(config.data_dir)
+    Ok(dir.canonicalize()?)
 }

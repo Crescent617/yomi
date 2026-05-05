@@ -550,14 +550,6 @@ impl ToolOutput {
     }
 }
 
-// Backward compatibility: implement Deref to allow .stdout access in tests
-#[deprecated(note = "ToolOutput fields have changed, use text_content() instead")]
-pub struct ToolOutputCompat {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-}
-
 /// Tool definition for model
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolDefinition {

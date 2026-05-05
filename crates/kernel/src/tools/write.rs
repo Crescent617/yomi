@@ -1,49 +1,33 @@
 use crate::tools::helper::{
     get_mtime, lock_exclusive_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT,
 };
-use crate::tools::{Tool, ToolExecCtx};
+use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 pub const WRITE_TOOL_NAME: &str = "write";
 
+#[derive(Default)]
 pub struct WriteTool {
     file_state_store: Option<Arc<FileStateStore>>,
 }
 
-impl Default for WriteTool {
-    fn default() -> Self {
-        Self::new()
+impl WriteTool {
+    /// Create a new `WriteTool` with optional file state store
+    pub fn new(store: impl Into<Option<Arc<FileStateStore>>>) -> Self {
+        Self {
+            file_state_store: store.into(),
+        }
     }
 }
 
-impl WriteTool {
-    pub fn new() -> Self {
-        Self {
-            file_state_store: None,
-        }
-    }
-
-    /// Set the file state store for tracking reads
-    #[must_use]
-    pub fn with_file_state_store(mut self, store: Arc<FileStateStore>) -> Self {
-        self.file_state_store = Some(store);
-        self
-    }
-
-    /// Check if the file has been modified since it was last read
-    async fn check_staleness(&self, path: &Path) -> std::result::Result<(), String> {
-        let store = self
-            .file_state_store
-            .as_ref()
-            .ok_or("File state store not initialized")?;
-
-        let current_mtime = get_mtime(path).await;
-        store.check_staleness(path, current_mtime)
+impl FileStateAwareTool for WriteTool {
+    fn file_state_store(&self) -> Option<&Arc<FileStateStore>> {
+        self.file_state_store.as_ref()
     }
 }
 
@@ -173,7 +157,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new();
+        let tool = WriteTool::default();
         let args = serde_json::json!({
             "file_path": "test.txt",
             "content": "Hello, World!"
@@ -197,7 +181,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new();
+        let tool = WriteTool::default();
         let args = serde_json::json!({
             "file_path": "src/nested/test.rs",
             "content": "fn main() {}"
@@ -225,7 +209,7 @@ mod tests {
             .unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let tool = WriteTool::new().with_file_state_store(store);
+        let tool = WriteTool::new(store);
 
         let args = serde_json::json!({
             "file_path": "existing.txt",
@@ -256,7 +240,7 @@ mod tests {
         let mtime = crate::tools::helper::get_mtime(&file_path).await;
         store.record(file_path.clone(), mtime).await;
 
-        let tool = WriteTool::new().with_file_state_store(store);
+        let tool = WriteTool::new(store);
 
         let args = serde_json::json!({
             "file_path": "existing.txt",
@@ -280,7 +264,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
-        let tool = WriteTool::new();
+        let tool = WriteTool::default();
         let absolute_path = base_path.join("absolute.txt");
         let args = serde_json::json!({
             "file_path": absolute_path.to_str().unwrap(),
@@ -305,7 +289,7 @@ mod tests {
         let store = Arc::new(crate::tools::helper::FileStateStore::new());
 
         // Create WriteTool with file state store
-        let write_tool = WriteTool::new().with_file_state_store(Arc::clone(&store));
+        let write_tool = WriteTool::new(Arc::clone(&store));
 
         // Write a new file
         let args = serde_json::json!({
@@ -317,7 +301,7 @@ mod tests {
         assert!(result.success());
 
         // Now create EditTool with the same file state store
-        let edit_tool = crate::tools::edit::EditTool::new().with_file_state_store(store);
+        let edit_tool = crate::tools::edit::EditTool::new(store);
 
         // Try to edit the file without reading first
         // This should succeed because WriteTool already recorded the file state

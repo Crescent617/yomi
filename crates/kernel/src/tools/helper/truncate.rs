@@ -30,6 +30,12 @@ pub fn maybe_truncate_output(text: String, max_len: usize, offset: usize) -> Str
     result
 }
 
+/// Truncate text with default max length (`MAX_TOOL_OUTPUT_LENGTH`).
+/// Convenience wrapper for tools that use the standard limit.
+pub fn maybe_truncate(text: String, offset: usize, max_len: usize) -> String {
+    maybe_truncate_output(text, max_len, offset)
+}
+
 /// Find a valid UTF-8 boundary at or before the target byte position.
 fn find_utf8_boundary(text: &str, target: usize) -> usize {
     text.char_indices()
