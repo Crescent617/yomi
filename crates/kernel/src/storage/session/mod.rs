@@ -32,6 +32,39 @@ impl SessionInfo {
     }
 }
 
+/// Default limit for listing sessions (safety cap)
+const DEFAULT_LIST_LIMIT: usize = 1000;
+
+/// Arguments for listing sessions with various filters
+#[derive(Debug, Clone)]
+pub struct ListArgs {
+    /// Filter: sessions with `updated_at` < before
+    pub before: Option<chrono::DateTime<chrono::Utc>>,
+    /// Filter: sessions with `updated_at` > after
+    pub after: Option<chrono::DateTime<chrono::Utc>>,
+    /// Filter: exact match on working directory
+    pub working_dir: Option<String>,
+    /// Limit number of results (None = unlimited)
+    pub limit: Option<usize>,
+    /// Offset for pagination
+    pub offset: Option<usize>,
+    /// Order by `updated_at` (default: descending)
+    pub order_asc: bool,
+}
+
+impl Default for ListArgs {
+    fn default() -> Self {
+        Self {
+            before: None,
+            after: None,
+            working_dir: None,
+            limit: Some(DEFAULT_LIST_LIMIT),
+            offset: None,
+            order_asc: false,
+        }
+    }
+}
+
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -47,17 +80,19 @@ pub trait SessionStore: Send + Sync {
     /// Delete a session
     async fn delete(&self, id: &SessionId) -> Result<()>;
 
-    /// List all sessions, ordered by `updated_at` descending
-    async fn list(&self) -> Result<Vec<SessionInfo>>;
-
-    /// List sessions by working directory
-    async fn list_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>>;
+    /// List sessions with filters
+    async fn list(&self, args: ListArgs) -> Result<Vec<SessionInfo>>;
 
     /// Update message count for a session
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()>;
 
     /// Update session title
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()>;
+
+    /// Delete sessions older than the given number of days
+    ///
+    /// Returns the IDs of deleted sessions
+    async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>>;
 }
 
 /// Helper for storage errors

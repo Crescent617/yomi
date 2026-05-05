@@ -20,6 +20,15 @@ use tuirealm::{
 
 use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_chars};
 
+/// Maximum number of todos to display
+const MAX_DISPLAY_TODOS: usize = 12;
+/// Minimum screen width to show the panel
+const MIN_SCREEN_WIDTH: u16 = 60;
+/// Margin for borders: border(2) + `right_spacing(1)` = 3
+const PANEL_MARGIN: u16 = 3;
+/// Icon width: "○ " or "● " = 2 chars
+const ICON_WIDTH: usize = 2;
+
 /// Todo item status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,17 +123,6 @@ impl TodoList {
     }
 }
 
-/// Maximum number of todos to display
-const MAX_DISPLAY_TODOS: usize = 12;
-/// Maximum panel width
-const MAX_PANEL_WIDTH: u16 = 40;
-/// Minimum screen width to show the panel
-const MIN_SCREEN_WIDTH: u16 = 60;
-/// Margin for borders: border(2) + `right_spacing(1)` = 3
-const PANEL_MARGIN: u16 = 3;
-/// Icon width: "○ " or "● " = 2 chars
-const ICON_WIDTH: usize = 2;
-
 impl Component for TodoList {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
         if !self.is_visible() {
@@ -154,7 +152,7 @@ impl Component for TodoList {
 
         // Panel width: content + margin, but not exceeding max or screen limit
         let content_with_margin = (max_content_width as u16) + PANEL_MARGIN;
-        let panel_width = content_with_margin.min(MAX_PANEL_WIDTH).min(area.width / 2);
+        let panel_width = content_with_margin.min(area.width * 2 / 5);
 
         // Calculate height: items + border(2) + optional more indicator(1)
         let panel_height =
