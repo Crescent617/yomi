@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -43,9 +43,11 @@ impl Metadata {
 /// - Internal metadata tracks timestamps, vacuum/truncate counts
 /// - Auto-vacuum every N appends to control file size
 /// - Vacuum deduplicates by key function bound at creation
+/// - Lazy initialization: file created on first write
 pub struct JsonlStore<R, K> {
     path: PathBuf,
     file: Mutex<Option<File>>,
+    initialized: AtomicBool,
     vacuum_threshold: usize,
     append_count: AtomicUsize,
     key_fn: Arc<dyn Fn(&R) -> K + Send + Sync>,
@@ -66,42 +68,61 @@ where
     R: Serialize + DeserializeOwned + Clone,
     K: Eq + Hash + Send + Sync,
 {
-    /// Open existing file or create new with default metadata
-    pub async fn open(
-        path: impl AsRef<Path>,
-        key_fn: impl Fn(&R) -> K + Send + Sync + 'static,
-    ) -> crate::types::Result<Self> {
-        Self::open_with_threshold(path, key_fn, 1000).await
+    /// Create a lazy store - file is created on first write
+    /// Read operations return empty if file doesn't exist yet
+    pub fn new(path: impl AsRef<Path>, key_fn: impl Fn(&R) -> K + Send + Sync + 'static) -> Self {
+        Self::new_with_threshold(path, key_fn, 1000)
     }
 
-    /// Open with custom vacuum threshold
-    pub async fn open_with_threshold(
+    /// Create lazy store with custom vacuum threshold
+    pub fn new_with_threshold(
         path: impl AsRef<Path>,
         key_fn: impl Fn(&R) -> K + Send + Sync + 'static,
         vacuum_threshold: usize,
-    ) -> crate::types::Result<Self> {
-        let path = path.as_ref().to_path_buf();
+    ) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            file: Mutex::new(None),
+            initialized: AtomicBool::new(false),
+            vacuum_threshold,
+            append_count: AtomicUsize::new(0),
+            key_fn: Arc::new(key_fn),
+            _phantom: PhantomData,
+        }
+    }
+    /// Ensure store is initialized (file created/opened)
+    async fn ensure_initialized(&self) -> crate::types::Result<()> {
+        if self.initialized.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let mut guard = self.file.lock().await;
+
+        // Double-check after acquiring lock
+        if self.initialized.load(Ordering::Acquire) {
+            return Ok(());
+        }
 
         // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .await
                 .map_err(|e| KernelError::Io(e.to_string()))?;
         }
 
-        let exists = path.exists();
+        let exists = self.path.exists();
 
         let file = if exists {
             fs::OpenOptions::new()
                 .append(true)
-                .open(&path)
+                .open(&self.path)
                 .await
                 .map_err(|e| KernelError::Io(e.to_string()))?
         } else {
             let mut f = fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&path)
+                .open(&self.path)
                 .await
                 .map_err(|e| KernelError::Io(e.to_string()))?;
 
@@ -111,27 +132,27 @@ where
             f
         };
 
-        Ok(Self {
-            path,
-            file: Mutex::new(Some(file)),
-            vacuum_threshold,
-            append_count: AtomicUsize::new(0),
-            key_fn: Arc::new(key_fn),
-            _phantom: PhantomData,
-        })
+        *guard = Some(file);
+        self.initialized.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Append a record. Auto-vacuum if threshold reached.
+    /// Lazy initialization: creates file on first append if not exists.
     pub async fn append(&self, record: &R) -> crate::types::Result<()> {
         self.append_batch(std::slice::from_ref(record)).await
     }
 
     /// Append multiple records with a single flush.
     /// More efficient than calling `append()` in a loop.
+    /// Lazy initialization: creates file on first append if not exists.
     pub async fn append_batch(&self, records: &[R]) -> crate::types::Result<()> {
         if records.is_empty() {
             return Ok(());
         }
+
+        // Ensure initialized before writing
+        self.ensure_initialized().await?;
 
         // Write all records with single flush
         {
@@ -173,13 +194,24 @@ where
     }
 
     /// Read all records deduplicated by key (keeps last occurrence)
+    /// Returns empty vec if store was never written to (lazy read)
     pub async fn read_all(&self) -> crate::types::Result<Vec<R>> {
+        // Fast path: if file doesn't exist, return empty
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
         let records = self.read_raw().await?;
         Ok(self.dedup(records))
     }
 
     /// Clear all records, keeping metadata.
+    /// No-op if store was never written to.
     pub async fn truncate(&self) -> crate::types::Result<()> {
+        // Fast path: if file doesn't exist, nothing to do
+        if !self.path.exists() {
+            return Ok(());
+        }
+
         let meta = Self::read_meta(&self.path).await.unwrap_or_default();
 
         self.rewrite_file(meta, &[], |meta| {
@@ -195,7 +227,13 @@ where
     }
 
     /// Force vacuum now (deduplicate by key)
+    /// No-op if store was never written to.
     pub async fn vacuum(&self) -> crate::types::Result<()> {
+        // Fast path: if file doesn't exist, nothing to do
+        if !self.path.exists() {
+            return Ok(());
+        }
+
         let records = self.read_raw().await?;
         let deduped = self.dedup(records);
 
@@ -211,6 +249,7 @@ where
     }
 
     /// Get metadata
+    /// Returns default metadata if store was never written to.
     pub async fn meta(&self) -> crate::types::Result<Metadata> {
         Ok(Self::read_meta(&self.path).await.unwrap_or_default())
     }
@@ -339,18 +378,16 @@ mod tests {
         data: String,
     }
 
-    async fn create_test_store() -> (JsonlStore<TestRecord, u32>, TempDir) {
+    fn create_test_store() -> (JsonlStore<TestRecord, u32>, TempDir) {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.jsonl");
-        let store: JsonlStore<TestRecord, u32> = JsonlStore::open(&path, |r: &TestRecord| r.id)
-            .await
-            .unwrap();
+        let store: JsonlStore<TestRecord, u32> = JsonlStore::new(&path, |r: &TestRecord| r.id);
         (store, temp)
     }
 
     #[tokio::test]
     async fn test_create_and_meta() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         let meta = store.meta().await.unwrap();
         assert_eq!(meta.vacuum_count, 0);
@@ -358,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_and_read() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store
             .append(&TestRecord {
@@ -381,7 +418,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_all_deduped() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store
             .append(&TestRecord {
@@ -419,9 +456,7 @@ mod tests {
         let path = temp.path().join("test.jsonl");
         // Set low threshold for testing
         let store =
-            JsonlStore::<TestRecord, u32>::open_with_threshold(&path, |r: &TestRecord| r.id, 5)
-                .await
-                .unwrap();
+            JsonlStore::<TestRecord, u32>::new_with_threshold(&path, |r: &TestRecord| r.id, 5);
 
         // Append 5 records with duplicate ids
         for i in 0..5 {
@@ -445,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manual_vacuum() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         for i in 0..3 {
             store
@@ -467,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store
             .append(&TestRecord {
@@ -492,9 +527,7 @@ mod tests {
         let path = temp.path().join("persist.jsonl");
 
         {
-            let store: JsonlStore<TestRecord, u32> = JsonlStore::open(&path, |r: &TestRecord| r.id)
-                .await
-                .unwrap();
+            let store: JsonlStore<TestRecord, u32> = JsonlStore::new(&path, |r: &TestRecord| r.id);
             store
                 .append(&TestRecord {
                     id: 42,
@@ -505,9 +538,7 @@ mod tests {
         }
 
         {
-            let store: JsonlStore<TestRecord, u32> = JsonlStore::open(&path, |r: &TestRecord| r.id)
-                .await
-                .unwrap();
+            let store: JsonlStore<TestRecord, u32> = JsonlStore::new(&path, |r: &TestRecord| r.id);
             let records = store.read_all().await.unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].id, 42);
@@ -518,9 +549,7 @@ mod tests {
     async fn test_append_batch() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("batch.jsonl");
-        let store: JsonlStore<TestRecord, u32> = JsonlStore::open(&path, |r: &TestRecord| r.id)
-            .await
-            .unwrap();
+        let store: JsonlStore<TestRecord, u32> = JsonlStore::new(&path, |r: &TestRecord| r.id);
 
         // Append batch of 5 records with single flush
         let records: Vec<TestRecord> = (0..5)
@@ -547,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_batch_empty() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         // Empty batch should be no-op
         store.append_batch(&[]).await.unwrap();
@@ -562,9 +591,7 @@ mod tests {
         let path = temp.path().join("batch_vacuum.jsonl");
         // Set threshold to 5
         let store =
-            JsonlStore::<TestRecord, u32>::open_with_threshold(&path, |r: &TestRecord| r.id, 5)
-                .await
-                .unwrap();
+            JsonlStore::<TestRecord, u32>::new_with_threshold(&path, |r: &TestRecord| r.id, 5);
 
         // Append batch of 5 (exactly at threshold)
         let records: Vec<TestRecord> = (0..5)
