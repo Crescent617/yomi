@@ -200,7 +200,7 @@ impl Tool for EditTool {
         // Update file mtime in store
         if let Some(ref store) = self.file_state_store {
             let mtime = get_mtime(&path).await;
-            store.record(path.clone(), mtime);
+            store.record(path.clone(), mtime).await;
         }
 
         // Build success message
@@ -238,7 +238,7 @@ mod tests {
         // Get actual file mtime
         let mtime = crate::tools::base::get_mtime(&full_path).await;
 
-        store.record(full_path.clone(), mtime);
+        store.record(full_path.clone(), mtime).await;
 
         let tool = tool.with_file_state_store(store);
 

@@ -53,17 +53,17 @@ impl FileStateStore {
     }
 
     /// Record a file's modification time
-    pub fn record(&self, path: PathBuf, mtime: u64) {
+    ///
+    /// Updates in-memory state synchronously, then persists if a persistent store is configured.
+    /// Persistence errors are logged but not returned (best-effort persistence).
+    pub async fn record(&self, path: PathBuf, mtime: u64) {
         let key = path.canonicalize().unwrap_or(path);
         self.mtimes.write().unwrap().insert(key.clone(), mtime);
 
         if let Some(ref store) = self.persistent {
-            let store = Arc::clone(store);
-            tokio::spawn(async move {
-                if let Err(e) = store.record(key, mtime).await {
-                    tracing::warn!("Failed to persist file state: {}", e);
-                }
-            });
+            if let Err(e) = store.record(key, mtime).await {
+                tracing::warn!("Failed to persist file state: {}", e);
+            }
         }
     }
 
@@ -86,16 +86,13 @@ impl FileStateStore {
     }
 
     /// Clear all entries (called when compactor runs)
-    pub fn clear(&self) {
+    pub async fn clear(&self) {
         self.mtimes.write().unwrap().clear();
 
         if let Some(ref store) = self.persistent {
-            let store = Arc::clone(store);
-            tokio::spawn(async move {
-                if let Err(e) = store.truncate().await {
-                    tracing::warn!("Failed to clear persisted file states: {}", e);
-                }
-            });
+            if let Err(e) = store.truncate().await {
+                tracing::warn!("Failed to clear persisted file states: {}", e);
+            }
         }
     }
 
@@ -124,21 +121,60 @@ impl FileStateStore {
     pub fn is_empty(&self) -> bool {
         self.mtimes.read().map_or(true, |m| m.is_empty())
     }
+
+    /// Record multiple file states efficiently
+    ///
+    /// Updates in-memory state synchronously, then persists if a persistent store is configured.
+    /// Persistence errors are logged but not returned (best-effort persistence).
+    pub async fn record_batch(&self, states: Vec<(PathBuf, u64)>) {
+        if states.is_empty() {
+            return;
+        }
+
+        // Canonicalize paths first to ensure consistency between memory and persistence
+        let canonicalized: Vec<(PathBuf, u64)> = states
+            .into_iter()
+            .map(|(path, mtime)| {
+                let key = path.canonicalize().unwrap_or(path);
+                (key, mtime)
+            })
+            .collect();
+
+        // Update memory first
+        {
+            let mut mtimes = self.mtimes.write().unwrap();
+            for (path, mtime) in &canonicalized {
+                mtimes.insert(path.clone(), *mtime);
+            }
+        }
+
+        // Persist if store is available
+        if let Some(ref store) = self.persistent {
+            let file_states: Vec<crate::storage::FileState> = canonicalized
+                .into_iter()
+                .map(|(path, mtime)| crate::storage::FileState::new(path, mtime))
+                .collect();
+
+            if let Err(e) = store.record_batch(file_states).await {
+                tracing::warn!("Failed to persist file states batch: {}", e);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_file_state_store() {
+    #[tokio::test]
+    async fn test_file_state_store() {
         let store = FileStateStore::new();
         let path = PathBuf::from("/tmp/test.txt");
 
         assert!(!store.has_recorded(&path));
         assert!(store.get_mtime(&path).is_none());
 
-        store.record(path.clone(), 12345);
+        store.record(path.clone(), 12345).await;
 
         assert!(store.has_recorded(&path));
         assert_eq!(store.get_mtime(&path), Some(12345));

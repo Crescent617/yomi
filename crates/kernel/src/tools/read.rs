@@ -58,7 +58,7 @@ impl ReadTool {
                 // Track file mtime if store is available
                 if let Some(ref store) = self.file_state_store {
                     let mtime = get_mtime(path).await;
-                    store.record(path.to_path_buf(), mtime);
+                    store.record(path.to_path_buf(), mtime).await;
                 }
 
                 // Create output with image and metadata text
@@ -105,7 +105,9 @@ impl ReadTool {
         };
 
         if let Some(ref store) = self.file_state_store {
-            store.record(path.to_path_buf(), get_mtime(path).await);
+            store
+                .record(path.to_path_buf(), get_mtime(path).await)
+                .await;
         }
 
         Ok(ToolOutput::text(maybe_truncate(output, offset)))

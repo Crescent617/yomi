@@ -1,30 +1,19 @@
-//! JSON Lines implementation of `FileStateStore`
+//! JSON Lines implementation of `FileStateStore` using generic `JsonlStore`
 
-use super::{storage_err, FileStateStore, StateEntry};
+use super::{FileState, FileStateStore};
+use crate::storage::jsonl_store::JsonlStore;
 use crate::types::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-use tokio::fs::{self, File};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
 
 /// Vacuum interval in seconds: compact files older than 1 hour
 const VACUUM_INTERVAL_SECS: u64 = 3600;
 
-/// Record operations threshold: vacuum every N records
-const RECORD_THRESHOLD: usize = 1000;
-
 /// Append-only JSONL file store for file states
-/// Auto-compacts every `COMPACT_THRESHOLD` entries to deduplicate paths
+/// Auto-vacuum internally managed by `JsonlStore`
 #[derive(Debug)]
 pub struct JsonlFileStateStore {
-    file_path: PathBuf,
-    file: Mutex<Option<File>>,
-    /// Counter for record operations since last vacuum
-    counter: AtomicUsize,
+    inner: JsonlStore<FileState, PathBuf>,
 }
 
 impl JsonlFileStateStore {
@@ -32,242 +21,45 @@ impl JsonlFileStateStore {
     /// File states are stored in `sessions/file_states/`
     pub async fn new(session_id: &str, data_dir: &Path) -> Result<Self> {
         let file_states_dir = data_dir.join("sessions").join("file_states");
-        fs::create_dir_all(&file_states_dir)
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-
         let file_path = file_states_dir.join(format!("{session_id}.jsonl"));
 
         let exists = file_path.exists();
+        let inner: JsonlStore<FileState, PathBuf> =
+            JsonlStore::open(&file_path, |fs: &FileState| fs.path.clone()).await?;
 
-        let file = if exists {
-            fs::OpenOptions::new()
-                .append(true)
-                .open(&file_path)
-                .await
-                .map_err(|e| storage_err(e.to_string()))?
-        } else {
-            let mut f = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path)
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-
-            let meta = StateEntry::default_meta();
-            let line = serde_json::to_string(&meta).map_err(|e| storage_err(e.to_string()))?;
-            f.write_all(line.as_bytes())
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-            f.write_all(b"\n")
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-            f
-        };
-
-        // Check if vacuum needed based on file age
-        let meta = if exists {
-            Self::read_meta(&file_path).await
-        } else {
-            None
-        };
-
-        let needs_vacuum = meta.as_ref().is_some_and(|m| {
-            if let StateEntry::Metadata { created_at, .. } = m {
-                crate::utils::now_secs().saturating_sub(*created_at) > VACUUM_INTERVAL_SECS
-            } else {
-                false
+        // Check if vacuum needed based on last vacuum time
+        if exists {
+            let meta = inner.meta().await?;
+            if crate::utils::now_secs().saturating_sub(meta.vacuumed_at) > VACUUM_INTERVAL_SECS {
+                // Force vacuum for old files
+                let _ = inner.vacuum().await;
             }
-        });
-
-        let store = Self {
-            file_path,
-            file: Mutex::new(Some(file)),
-            counter: AtomicUsize::new(0),
-        };
-
-        // Vacuum old files on open
-        if exists && needs_vacuum {
-            let _ = store.vacuum().await;
         }
 
-        Ok(store)
-    }
-
-    /// Read metadata from the first line of the file
-    async fn read_meta(file_path: &Path) -> Option<StateEntry> {
-        if !file_path.exists() {
-            return None;
-        }
-
-        let file = File::open(file_path).await.ok()?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        let first_line = lines.next_line().await.ok()??;
-        serde_json::from_str(&first_line).ok()
-    }
-
-    /// Vacuum the file by reading all states, deduplicating, and rewriting
-    async fn vacuum(&self) -> Result<()> {
-        // Read all states (already deduplicated by HashMap behavior)
-        let states = self.get_all().await?;
-
-        let mut guard = self.file.lock().await;
-        *guard = None;
-
-        // Build metadata: reuse existing or create default, then update vacuum count and time
-        let mut meta = Self::read_meta(&self.file_path)
-            .await
-            .unwrap_or_else(StateEntry::default_meta);
-        if let StateEntry::Metadata {
-            vacuum_count: ref mut count,
-            ref mut created_at,
-            ..
-        } = &mut meta
-        {
-            *count += 1;
-            *created_at = crate::utils::now_secs();
-        }
-
-        // Rewrite file with compacted data
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self.file_path)
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        let line = serde_json::to_string(&meta).map_err(|e| storage_err(e.to_string()))?;
-        file.write_all(line.as_bytes())
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        file.write_all(b"\n")
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-
-        // Write compacted states
-        for (path, mtime) in &states {
-            let entry = StateEntry::FileState {
-                p: path.clone(),
-                m: *mtime,
-            };
-            let line = serde_json::to_string(&entry).map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(line.as_bytes())
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(b"\n")
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-        }
-
-        file.flush().await.map_err(|e| storage_err(e.to_string()))?;
-        *guard = Some(file);
-
-        tracing::debug!("Vacuumed file state store: {} unique paths", states.len());
-
-        Ok(())
+        Ok(Self { inner })
     }
 }
 
 #[async_trait]
 impl FileStateStore for JsonlFileStateStore {
     async fn record(&self, path: PathBuf, mtime: u64) -> Result<()> {
-        let entry = StateEntry::FileState { p: path, m: mtime };
-        let line = serde_json::to_string(&entry).map_err(|e| storage_err(e.to_string()))?;
-
-        let mut guard = self.file.lock().await;
-        let file = guard.as_mut().ok_or_else(|| storage_err("file not open"))?;
-
-        file.write_all(line.as_bytes())
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        file.write_all(b"\n")
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        file.flush().await.map_err(|e| storage_err(e.to_string()))?;
-
-        // Drop guard before potential vacuum
-        drop(guard);
-
-        // Check if vacuum needed based on record count
-        let count = self.counter.fetch_add(1, Ordering::Relaxed) + 1;
-        if count >= RECORD_THRESHOLD {
-            self.vacuum().await?;
-            self.counter.store(0, Ordering::Relaxed);
-        }
-
+        let entry = FileState::new(path, mtime);
+        self.inner.append(&entry).await?;
         Ok(())
     }
 
-    async fn get_all(&self) -> Result<HashMap<PathBuf, u64>> {
-        let mut states = HashMap::new();
+    async fn record_batch(&self, states: Vec<FileState>) -> Result<()> {
+        // Append all states with single flush - vacuum will be triggered naturally if threshold reached
+        self.inner.append_batch(&states).await
+    }
 
-        if !self.file_path.exists() {
-            return Ok(states);
-        }
-
-        let file = File::open(&self.file_path)
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        let reader = BufReader::new(file);
-        let mut lines = reader.lines();
-
-        while let Some(line) = lines
-            .next_line()
-            .await
-            .map_err(|e| storage_err(e.to_string()))?
-        {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            match serde_json::from_str::<StateEntry>(&line) {
-                Ok(StateEntry::FileState { p, m }) => {
-                    states.insert(p, m);
-                }
-                Ok(StateEntry::Metadata { .. }) => {}
-                Err(e) => tracing::warn!("failed to parse state entry: {e}"),
-            }
-        }
-
-        Ok(states)
+    async fn read_all(&self) -> Result<Vec<FileState>> {
+        // read_all() returns deduplicated entries by default (last wins)
+        self.inner.read_all().await
     }
 
     async fn truncate(&self) -> Result<()> {
-        let mut guard = self.file.lock().await;
-        *guard = None;
-
-        // Build metadata: reuse existing or create default, then update cleared count
-        let mut meta = Self::read_meta(&self.file_path)
-            .await
-            .unwrap_or_else(StateEntry::default_meta);
-        if let StateEntry::Metadata {
-            ref mut truncate_count,
-            ..
-        } = &mut meta
-        {
-            *truncate_count += 1;
-        }
-
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self.file_path)
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        let line = serde_json::to_string(&meta).map_err(|e| storage_err(e.to_string()))?;
-        file.write_all(line.as_bytes())
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        file.write_all(b"\n")
-            .await
-            .map_err(|e| storage_err(e.to_string()))?;
-        file.flush().await.map_err(|e| storage_err(e.to_string()))?;
-
-        *guard = Some(file);
-
+        self.inner.truncate().await?;
         Ok(())
     }
 }
@@ -292,10 +84,8 @@ mod tests {
         store.record(PathBuf::from("/tmp/a.rs"), 100).await.unwrap();
         store.record(PathBuf::from("/tmp/b.rs"), 200).await.unwrap();
 
-        let states = store.get_all().await.unwrap();
+        let states = store.read_all().await.unwrap();
         assert_eq!(states.len(), 2);
-        assert_eq!(states.get(&PathBuf::from("/tmp/a.rs")), Some(&100));
-        assert_eq!(states.get(&PathBuf::from("/tmp/b.rs")), Some(&200));
     }
 
     #[tokio::test]
@@ -311,9 +101,10 @@ mod tests {
             .await
             .unwrap();
 
-        let states = store.get_all().await.unwrap();
+        let states = store.read_all().await.unwrap();
         assert_eq!(states.len(), 1);
-        assert_eq!(states.get(&PathBuf::from("/tmp/test.rs")), Some(&200));
+        assert_eq!(states[0].path, PathBuf::from("/tmp/test.rs"));
+        assert_eq!(states[0].mtime, 200);
     }
 
     #[tokio::test]
@@ -326,7 +117,7 @@ mod tests {
             .unwrap();
         store.truncate().await.unwrap();
 
-        let states = store.get_all().await.unwrap();
+        let states = store.read_all().await.unwrap();
         assert!(states.is_empty());
     }
 
@@ -349,39 +140,35 @@ mod tests {
             let store = JsonlFileStateStore::new(session_id, temp.path())
                 .await
                 .unwrap();
-            let states = store.get_all().await.unwrap();
+            let states = store.read_all().await.unwrap();
             assert_eq!(states.len(), 1);
-            assert_eq!(states.get(&PathBuf::from("/tmp/test.rs")), Some(&123));
+            assert_eq!(states[0].path, PathBuf::from("/tmp/test.rs"));
+            assert_eq!(states[0].mtime, 123);
         }
     }
 
     #[tokio::test]
-    async fn test_auto_compact_dedup() {
+    async fn test_auto_vacuum() {
         let temp = TempDir::new().unwrap();
-        let store = JsonlFileStateStore::new("compact-test", temp.path())
+
+        // Create store with low threshold
+        let store = JsonlFileStateStore::new("vacuum-test", temp.path())
             .await
             .unwrap();
 
-        // Record 50 entries for the same file (should trigger compaction at 100)
-        for i in 0..50 {
+        // Write 1000+ records to trigger auto-vacuum
+        for i in 0..1005 {
             store
                 .record(PathBuf::from("/tmp/same.rs"), 100 + i as u64)
                 .await
                 .unwrap();
         }
 
-        // Record 50 more for different files
-        for i in 0..50 {
-            store
-                .record(PathBuf::from(format!("/tmp/file{i}.rs")), 1000)
-                .await
-                .unwrap();
-        }
-
-        // At 100 entries, compaction should have triggered
-        // Result: 1 unique path from first 50 + 50 unique paths = 51 unique
-        let states = store.get_all().await.unwrap();
-        assert_eq!(states.len(), 51);
-        assert_eq!(states.get(&PathBuf::from("/tmp/same.rs")), Some(&149)); // latest mtime
+        // After vacuum, only 1 unique path remains
+        let states = store.read_all().await.unwrap();
+        assert_eq!(states.len(), 1);
+        // Latest mtime is 100 + 1004 = 1104
+        assert_eq!(states[0].path, PathBuf::from("/tmp/same.rs"));
+        assert_eq!(states[0].mtime, 1104);
     }
 }

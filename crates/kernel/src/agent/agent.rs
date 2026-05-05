@@ -677,7 +677,7 @@ impl Agent {
                             "Agent {} clearing file state due to compaction ({} -> {} messages)",
                             self.id, old_count, new_count
                         );
-                            file_state_store.clear();
+                            file_state_store.clear().await;
                         }
                     }
 

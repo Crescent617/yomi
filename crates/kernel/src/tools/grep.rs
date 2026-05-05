@@ -17,7 +17,8 @@ use tokio::time::timeout;
 pub const GREP_TOOL_NAME: &str = "grep";
 const DEFAULT_HEAD_LIMIT: usize = 250;
 const RIPGREP_TIMEOUT: Duration = Duration::from_secs(30);
-const TRUNCATED_MSG: &str = "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
+const TRUNCATED_MSG: &str =
+    "\n\n(Results are truncated. Consider using a more specific pattern or increase limit.)";
 
 pub struct GrepTool {
     file_state_store: Option<Arc<FileStateStore>>,
@@ -512,6 +513,7 @@ impl Tool for GrepTool {
 
                     // Record only the files that were actually displayed (after pagination)
                     if let Some(ref store) = self.file_state_store {
+                        let mut states = Vec::with_capacity(displayed_files.len());
                         for file_path in displayed_files {
                             // Convert relative paths to absolute for recording
                             let absolute_path = if file_path.is_absolute() {
@@ -520,8 +522,9 @@ impl Tool for GrepTool {
                                 ctx.working_dir.join(file_path)
                             };
                             let mtime = get_mtime(&absolute_path).await;
-                            store.record(absolute_path, mtime);
+                            states.push((absolute_path, mtime));
                         }
+                        store.record_batch(states).await;
                     }
 
                     response
@@ -695,11 +698,26 @@ mod tests {
         assert!(result.success());
         let content = result.text_content();
         println!("Content output:\n{content}");
-        assert!(content.contains("line 1"), "Expected 'line 1' in:\n{content}");
-        assert!(content.contains("line 2"), "Expected 'line 2' in:\n{content}");
-        assert!(content.contains("fn main"), "Expected 'fn main' in:\n{content}");
-        assert!(content.contains("line 4"), "Expected 'line 4' in:\n{content}");
-        assert!(content.contains("line 5"), "Expected 'line 5' in:\n{content}");
+        assert!(
+            content.contains("line 1"),
+            "Expected 'line 1' in:\n{content}"
+        );
+        assert!(
+            content.contains("line 2"),
+            "Expected 'line 2' in:\n{content}"
+        );
+        assert!(
+            content.contains("fn main"),
+            "Expected 'fn main' in:\n{content}"
+        );
+        assert!(
+            content.contains("line 4"),
+            "Expected 'line 4' in:\n{content}"
+        );
+        assert!(
+            content.contains("line 5"),
+            "Expected 'line 5' in:\n{content}"
+        );
     }
 
     #[tokio::test]
@@ -830,13 +848,23 @@ mod tests {
         println!("file3: {file3:?}");
 
         // Check how many files were recorded
-        let recorded_count = [store.has_recorded(&file1), store.has_recorded(&file2), store.has_recorded(&file3)]
-            .iter()
-            .filter(|&&b| b)
-            .count();
+        let recorded_count = [
+            store.has_recorded(&file1),
+            store.has_recorded(&file2),
+            store.has_recorded(&file3),
+        ]
+        .iter()
+        .filter(|&&b| b)
+        .count();
 
-        assert_eq!(recorded_count, 1, "Expected exactly 1 file recorded. file1={}, file2={}, file3={}",
-            store.has_recorded(&file1), store.has_recorded(&file2), store.has_recorded(&file3));
+        assert_eq!(
+            recorded_count,
+            1,
+            "Expected exactly 1 file recorded. file1={}, file2={}, file3={}",
+            store.has_recorded(&file1),
+            store.has_recorded(&file2),
+            store.has_recorded(&file3)
+        );
 
         // The recorded file should be the one that appears in the output
         let content = result.text_content();

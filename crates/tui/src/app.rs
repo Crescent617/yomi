@@ -1170,7 +1170,7 @@ impl Model {
                             // Task naturally completed - check for special finish reasons
                             match finish_reason {
                                 Some(kernel::types::FinishReason::MaxTokens) => {
-                                    let message = "⚠️ Response truncated: max tokens reached";
+                                    let message = " Response truncated: max tokens reached";
                                     Self::send_desktop_notification("Yomi - Stopped", message);
                                     self.handle_streaming_error(
                                         StreamingStatus::Failed,
@@ -1178,7 +1178,7 @@ impl Model {
                                     );
                                 }
                                 Some(kernel::types::FinishReason::ContentFilter) => {
-                                    let message = "🚫 Response blocked: content filter triggered";
+                                    let message = " Response blocked: content filter triggered";
                                     Self::send_desktop_notification("Yomi - Stopped", message);
                                     self.handle_streaming_error(
                                         StreamingStatus::Failed,
@@ -1205,14 +1205,14 @@ impl Model {
                             StopReason::Cancelled { operation } => {
                                 // Cancelled - no desktop notification, just update UI
                                 let message = operation.map_or_else(
-                                    || "🚫 Cancelled".to_string(),
-                                    |op| format!("🚫 Cancelled: {op}"),
+                                    || " Cancelled".to_string(),
+                                    |op| format!(" Cancelled: {op}"),
                                 );
                                 self.handle_streaming_error(StreamingStatus::Cancelled, message);
                             }
                             StopReason::Failed { error } => {
                                 self.finalize_assistant_message();
-                                let message = format!("❌ Task failed: {error}");
+                                let message = format!(" Task failed: {error}");
                                 Self::send_desktop_notification("Yomi - Error", &message);
                                 self.handle_streaming_error(
                                     StreamingStatus::Failed,
@@ -1221,7 +1221,7 @@ impl Model {
                             }
                             StopReason::MaxIterations { reached } => {
                                 self.finalize_assistant_message();
-                                let message = format!("⚠️ Max iterations reached ({reached})");
+                                let message = format!(" Max iterations reached ({reached})");
                                 Self::send_desktop_notification("Yomi - Stopped", &message);
                                 self.handle_streaming_error(
                                     StreamingStatus::MaxIterations,
@@ -1241,7 +1241,7 @@ impl Model {
                     let phase_str = format!("{phase:?}");
                     if is_recoverable {
                         // Recoverable error: show in status bar with warning color
-                        let message = format!("{phase_str} error (will retry): {error}");
+                        let message = format!(" {phase_str} error (will retry): {error}");
                         self.show_notification(&Notification::warn(message, 3000));
                         self.state.should_redraw = true;
                     } else {
@@ -1259,7 +1259,7 @@ impl Model {
                     reason,
                     ..
                 }) => {
-                    let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
+                    let message = format!(" Retrying ({attempt}/{max_attempts}): {reason}");
                     // 0 = no timeout, persists until cleared
                     self.show_notification(&Notification::info(message, 0));
                     self.state.should_redraw = true;
@@ -1729,9 +1729,9 @@ impl Model {
 
                     // Show status message
                     let msg = if new_level == Level::Dangerous {
-                        "YOLO mode enabled - all tools will be auto-approved"
+                        " YOLO mode enabled - all tools will be auto-approved"
                     } else {
-                        "YOLO mode disabled"
+                        " YOLO mode disabled"
                     };
                     self.show_notification(&Notification::info(msg, 5000));
 
