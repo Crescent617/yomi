@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
-    event::Event,
+    event::{Event, Key, KeyEvent, KeyModifiers},
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::Rect,
@@ -2136,6 +2136,23 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
         match *ev {
             Event::Tick => {
                 self.component.tick();
+                Some(Msg::Redraw)
+            }
+            // Keyboard scrolling - PageUp/PageDown
+            Event::Keyboard(KeyEvent {
+                code: Key::PageUp,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                let amount = self.component.last_visible_height.max(1);
+                self.component.scroll_up(amount);
+                Some(Msg::Redraw)
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::PageDown,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                let amount = self.component.last_visible_height.max(1);
+                self.component.scroll_down(amount);
                 Some(Msg::Redraw)
             }
             // Handle mouse scroll events for chat view scrolling

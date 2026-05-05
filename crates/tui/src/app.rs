@@ -157,6 +157,16 @@ pub struct Model {
 }
 
 impl Model {
+    /// Set focus to a component and re-enable mouse capture on Windows.
+    /// This is a workaround for Windows console losing mouse capture after focus changes.
+    fn set_focus(&mut self, id: &Id) {
+        let _ = self.app.active(id);
+        #[cfg(target_os = "windows")]
+        {
+            let _ = self.terminal.enable_mouse_capture();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_rx: broadcast::Receiver<Event>,
@@ -1308,8 +1318,8 @@ impl Model {
                         AttrValue::String(dialog_data),
                     );
                     // Give focus to dialog so it receives keyboard events
-                    let result = self.app.active(&Id::Dialog);
-                    tracing::debug!("Dialog focus result: {:?}", result);
+                    self.set_focus(&Id::Dialog);
+                    tracing::debug!("Dialog focused");
                     self.state.should_redraw = true;
                 }
                 _ => {}
@@ -1660,7 +1670,7 @@ impl Model {
                         });
                     }
                     // Return focus to input box
-                    let _ = self.app.active(&Id::InputBox);
+                    self.set_focus(&Id::InputBox);
                     None
                 }
                 Msg::DialogCancelled => {
@@ -1673,7 +1683,7 @@ impl Model {
                         });
                     }
                     // Return focus to input box
-                    let _ = self.app.active(&Id::InputBox);
+                    self.set_focus(&Id::InputBox);
                     None
                 }
                 // Slash commands
@@ -1776,7 +1786,7 @@ impl Model {
                         AttrValue::Flag(true),
                     );
                     // Give focus to history picker
-                    let _ = self.app.active(&Id::HistoryPicker);
+                    self.set_focus(&Id::HistoryPicker);
                     None
                 }
                 Msg::HistorySelected(idx_str) => {
@@ -1795,13 +1805,13 @@ impl Model {
                         }
                     }
                     // Return focus to input box and trigger redraw
-                    let _ = self.app.active(&Id::InputBox);
+                    self.set_focus(&Id::InputBox);
                     self.state.should_redraw = true;
                     None
                 }
                 Msg::CloseHistoryPicker => {
                     // Return focus to input box and trigger redraw
-                    let _ = self.app.active(&Id::InputBox);
+                    self.set_focus(&Id::InputBox);
                     self.state.should_redraw = true;
                     None
                 }
@@ -1817,9 +1827,7 @@ impl Model {
                         tracing::warn!("Failed to show help dialog: {}", e);
                     }
                     // Give focus to help dialog so it receives keyboard events
-                    if let Err(e) = self.app.active(&Id::HelpDialog) {
-                        tracing::warn!("Failed to focus help dialog: {}", e);
-                    }
+                    self.set_focus(&Id::HelpDialog);
                     self.state.should_redraw = true;
                     None
                 }
@@ -1867,9 +1875,7 @@ impl Model {
                         tracing::warn!("Failed to show session picker: {}", e);
                     }
                     // Give focus to session picker
-                    if let Err(e) = self.app.active(&Id::SessionPicker) {
-                        tracing::warn!("Failed to focus session picker: {}", e);
-                    }
+                    self.set_focus(&Id::SessionPicker);
                     self.state.should_redraw = true;
                     None
                 }
@@ -1891,7 +1897,7 @@ impl Model {
                         Attribute::Custom(attr::DIALOG_HIDE),
                         AttrValue::Flag(true),
                     );
-                    let _ = self.app.active(&Id::InputBox);
+                    self.set_focus(&Id::InputBox);
                     self.state.should_redraw = true;
                     None
                 }
@@ -1904,9 +1910,7 @@ impl Model {
                     ) {
                         tracing::warn!("Failed to hide help dialog: {}", e);
                     }
-                    if let Err(e) = self.app.active(&Id::InputBox) {
-                        tracing::warn!("Failed to focus input box: {}", e);
-                    }
+                    self.set_focus(&Id::InputBox);
                     self.state.should_redraw = true;
                     None
                 }
