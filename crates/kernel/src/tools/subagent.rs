@@ -288,7 +288,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                 });
 
                 let result = format!(
-                    "Sub-agent '{description}' ({sub_agent_id}) spawned in async mode. Results will be sent when complete."
+                    "Sub-agent({sub_agent_id}) with task '{description}' spawned in async mode. Results will be sent automatically when complete."
                 );
                 Ok(ToolOutput::text(result))
             }
