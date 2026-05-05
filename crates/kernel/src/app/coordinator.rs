@@ -206,22 +206,8 @@ impl Coordinator {
         self.sessions.read().await.keys().cloned().collect()
     }
 
-    pub async fn send_message(&self, session_id: &SessionId, content: String) -> Result<()> {
-        tracing::debug!(
-            "Sending message to session {} ({} bytes)",
-            session_id.0,
-            content.len()
-        );
-        let session = self.require_session(session_id).await?;
-        let result = session.read().await.send_message(content).await;
-        if let Err(ref e) = result {
-            tracing::error!("Failed to send message to session {}: {}", session_id.0, e);
-        }
-        result
-    }
-
     /// Send a multi-modal message with content blocks
-    pub async fn send_blocks(
+    pub async fn send_message(
         &self,
         session_id: &SessionId,
         blocks: Vec<crate::types::ContentBlock>,

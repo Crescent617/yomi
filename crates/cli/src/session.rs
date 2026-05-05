@@ -144,7 +144,7 @@ pub async fn run_session_loop(
     tokio::spawn(async move {
         while let Some(blocks) = input_rx.recv().await {
             if let Err(e) = coord_for_input
-                .send_blocks(&session_id_for_input, blocks)
+                .send_message(&session_id_for_input, blocks)
                 .await
             {
                 tracing::error!("Failed to send message: {}", e);
