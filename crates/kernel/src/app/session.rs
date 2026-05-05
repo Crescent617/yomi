@@ -118,7 +118,7 @@ impl Session {
             agent_shared.with_per_session(permission_state, Some(Arc::clone(file_state_store))),
         );
 
-        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args);
+        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args).await;
         tracing::info!("Main agent {} spawned for session {}", handle.id, id.0);
 
         Ok((handle, event_rx))

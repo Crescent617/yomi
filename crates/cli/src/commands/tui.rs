@@ -84,7 +84,6 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let storage = kernel::StorageSet::open(&config.data_dir).await?;
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
-    let project_memory = kernel::project_memory::load(&working_dir).await?;
 
     let coordinator_skill_folders = resolve_skill_folders(&config, &working_dir);
 
@@ -93,7 +92,6 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         provider,
         config.agent.model.clone(),
         Some(task_store),
-        project_memory,
         Some(config.agent.compactor.clone()),
         coordinator_skill_folders,
     ));

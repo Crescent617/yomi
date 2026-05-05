@@ -20,7 +20,7 @@ pub mod config;
 pub mod event;
 pub mod misc;
 pub mod permissions;
-pub mod project_memory;
+pub mod memory;
 pub mod prompt;
 pub mod providers;
 pub mod skill;
