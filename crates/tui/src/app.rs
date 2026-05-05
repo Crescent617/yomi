@@ -1833,7 +1833,7 @@ impl Model {
                             let age_str = s.format_age();
                             let preview = s
                                 .title
-                                .unwrap_or_else(|| "(no message)".to_string())
+                                .unwrap_or_else(|| "(no user message)".to_string())
                                 .replace('\n', " ");
                             let id_str = s.id.0;
                             let short_id = format_short_id(&id_str);

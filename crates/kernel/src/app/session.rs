@@ -124,21 +124,6 @@ impl Session {
         Ok((handle, event_rx))
     }
 
-    pub async fn send_message(&self, content: String) -> Result<()> {
-        tracing::debug!(
-            "Session {} sending message ({} bytes)",
-            self.id.0,
-            content.len()
-        );
-        match &self.main_agent {
-            Some(handle) => {
-                handle.send_text(content).await?;
-                Ok(())
-            }
-            None => Err(KernelError::session("Session not initialized")),
-        }
-    }
-
     /// Send a multi-modal message with content blocks
     pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
         tracing::debug!(
@@ -146,12 +131,27 @@ impl Session {
             self.id.0,
             blocks.len()
         );
+
+        // Update session title from first text block of user message
+        self.update_title(&blocks).await;
+
         match &self.main_agent {
             Some(handle) => {
                 handle.send_message(blocks).await?;
                 Ok(())
             }
             None => Err(KernelError::session("Session not initialized")),
+        }
+    }
+
+    /// Update session title from user message content (first 100 chars of first line)
+    async fn update_title(&self, blocks: &[crate::types::ContentBlock]) {
+        if let Some(session_store) = &self.agent_shared.session_store {
+            let text: String = blocks.iter().filter_map(|b| b.as_text()).take(1).collect();
+            let title = text.chars().take(100).collect::<String>();
+            if !title.is_empty() {
+                let _ = session_store.update_title(&self.id, &title).await;
+            }
         }
     }
 
