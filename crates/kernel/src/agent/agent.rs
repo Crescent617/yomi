@@ -58,7 +58,7 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn spawn(
+    pub async fn spawn(
         id: AgentId,
         shared: &Arc<AgentShared>,
         args: AgentSpawnArgs,
@@ -68,24 +68,13 @@ impl Agent {
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        // Build system prompt with project memory and skills
-        let system_prompt = if shared.project_memory.is_empty() {
-            // No project memory, use original builder
-            SystemPromptBuilder::new()
-                .base_prompt(&args.base_prompt)
-                .with_skills(&args.skills)
-                .with_working_dir(&args.working_dir)
-                .build()
-        } else {
-            // Merge project memory with base prompt
-            let memory_prompt = shared.project_memory.build_system_prompt(&args.base_prompt);
-            // Add skills after project memory
-            SystemPromptBuilder::new()
-                .base_prompt(&memory_prompt)
-                .with_skills(&args.skills)
-                .with_working_dir(&args.working_dir)
-                .build()
-        };
+        // Build system prompt with project memory (auto-loaded from working_dir) and skills
+        let system_prompt = SystemPromptBuilder::new()
+            .base_prompt(&args.base_prompt)
+            .with_skills(&args.skills)
+            .with_working_dir(&args.working_dir)
+            .build()
+            .await;
 
         tracing::debug!(
             "Agent {} spawning with system prompt: {}",

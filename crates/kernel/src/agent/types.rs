@@ -266,8 +266,6 @@ pub struct AgentShared {
     pub task_store: Option<Arc<crate::task::TaskStore>>,
     /// Todo storage for todo list persistence
     pub todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
-    /// Project memory (CLAUDE.md/AGENTS.md)
-    pub project_memory: Arc<crate::project_memory::MemoryFiles>,
     /// Context compactor for managing long conversations
     pub compactor: Option<crate::compactor::Compactor>,
     /// Session store for session operations
@@ -291,7 +289,6 @@ impl AgentShared {
         model_config: Arc<ModelConfig>,
         task_store: Option<Arc<crate::task::TaskStore>>,
         todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
-        project_memory: Arc<crate::project_memory::MemoryFiles>,
         compactor: Option<crate::compactor::Compactor>,
         session_store: Option<Arc<dyn crate::storage::SessionStore>>,
         message_store: Option<Arc<dyn crate::storage::MessageStore>>,
@@ -305,7 +302,6 @@ impl AgentShared {
             model_config,
             task_store,
             todo_storage,
-            project_memory,
             compactor,
             session_store,
             message_store,

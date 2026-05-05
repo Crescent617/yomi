@@ -39,7 +39,6 @@ impl Coordinator {
         provider: Arc<dyn Provider>,
         model_config: ModelConfig,
         task_store: Option<Arc<crate::task::TaskStore>>,
-        project_memory: crate::project_memory::MemoryFiles,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
     ) -> Self {
@@ -50,7 +49,6 @@ impl Coordinator {
             Arc::new(model_config),
             task_store,
             Some(storage.todo_store()),
-            Arc::new(project_memory),
             compactor,
             Some(session_store),
             Some(message_store),

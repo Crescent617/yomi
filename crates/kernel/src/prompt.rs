@@ -1,3 +1,4 @@
+use crate::memory;
 use crate::skill::Skill;
 use chrono::Local;
 use std::fmt::Write;
@@ -36,12 +37,24 @@ impl<'a> SystemPromptBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> String {
+    /// Build system prompt, loading project memory from `working_dir` if set
+    pub async fn build(self) -> String {
         let base = self
             .base_prompt
             .unwrap_or("You are a helpful AI coding assistant.")
             .trim();
+
         let mut prompt = base.to_string();
+
+        // Load and append project memory from working_dir if available
+        if let Some(cwd) = self.working_dir {
+            if let Ok(memory) = memory::load(cwd).await {
+                for file in memory.files() {
+                    prompt.push_str(file.content.trim());
+                }
+            }
+        }
+
         prompt.push_str("\n\n");
 
         if !self.skills.is_empty() {
