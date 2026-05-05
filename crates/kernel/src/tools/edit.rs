@@ -1,5 +1,5 @@
 use crate::tools::helper::{
-    get_mtime, lock_exclusive_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
+    get_mtime, lock_file_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
 };
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
@@ -123,11 +123,8 @@ impl Tool for EditTool {
             }
         }
 
-        // Acquire exclusive lock BEFORE reading to prevent race conditions
-        // This ensures no other process can modify the file between our read and write
-        let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
-            .await
-            .map_err(|e| KernelError::tool(format!("Failed to acquire write lock: {e}")))?;
+        // Acquire lock to serialize concurrent tool calls
+        let _guard = lock_file_timeout(&path, DEFAULT_LOCK_TIMEOUT).await;
 
         // Read file content (now protected by exclusive lock)
         let content = tokio::fs::read_to_string(&path).await?;

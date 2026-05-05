@@ -36,7 +36,7 @@ impl CompactionResult {
 /// Number of recent messages to keep during compaction
 const KEEP_RECENT_MESSAGES: usize = 6;
 /// Max tokens for summary generation
-const SUMMARY_MAX_TOKENS: u32 = 4000;
+const SUMMARY_MAX_TOKENS: u32 = 8192; // 8k tokens for summary
 
 /// Summary prompt for full compaction
 const SUMMARY_PROMPT: &str = include_str!("summary_prompt.txt");

@@ -11,8 +11,7 @@ pub mod truncate;
 
 // Re-export commonly used items
 pub use file_lock::{
-    lock_exclusive, lock_exclusive_timeout, lock_shared, lock_shared_timeout, FileLockError,
-    FileLockGuard, DEFAULT_LOCK_TIMEOUT,
+    lock_file, lock_file_timeout, FileLockError, FileLockGuard, DEFAULT_LOCK_TIMEOUT,
 };
 pub use file_state::FileStateStore;
 pub use file_utils::{get_mtime, get_mtimes_concurrent, MAX_FILE_SIZE};

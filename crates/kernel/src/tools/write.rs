@@ -1,6 +1,4 @@
-use crate::tools::helper::{
-    get_mtime, lock_exclusive_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT,
-};
+use crate::tools::helper::{get_mtime, lock_file_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -115,22 +113,16 @@ impl Tool for WriteTool {
             (true, false) => "updated",
         };
 
-        // Write file: existing files need lock, append needs OpenOptions
-        if file_exists {
-            let _guard = lock_exclusive_timeout(&path, DEFAULT_LOCK_TIMEOUT)
-                .await
-                .map_err(|e| KernelError::tool(format!("Failed to acquire write lock: {e}")))?;
+        // Write file: acquire lock to serialize concurrent tool calls
+        let _guard = lock_file_timeout(&path, DEFAULT_LOCK_TIMEOUT).await;
 
-            if is_append {
-                let mut file = tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&path)
-                    .await?;
-                file.write_all(content.as_bytes()).await?;
-                file.flush().await?;
-            } else {
-                tokio::fs::write(&path, content).await?;
-            }
+        if is_append {
+            let mut file = tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .await?;
+            file.write_all(content.as_bytes()).await?;
+            file.flush().await?;
         } else {
             tokio::fs::write(&path, content).await?;
         }

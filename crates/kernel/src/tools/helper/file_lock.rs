@@ -1,21 +1,35 @@
-//! Cross-process file locking utilities
+//! Process-level file locking utilities
 //!
-//! Provides file locking for edit/write tools to prevent concurrent modifications.
-//! Uses stable Rust `std::fs::File` lock methods (available since Rust 1.89).
+//! Provides file locking for edit/write tools to prevent concurrent modifications
+//! within the same process. Uses `tokio::sync::Mutex` for async-friendly locking.
+//!
+//! This approach is chosen over filesystem locking for Windows compatibility:
+//! - Windows mandatory file locks prevent re-opening the same file within the same process
+//! - Linux advisory locks work fine but have different semantics
+//! - Process-level mutex provides consistent behavior across platforms
 
-use std::fs::File;
-use std::path::Path;
+use dashmap::DashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Default timeout for file lock acquisition
 pub const DEFAULT_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Process-level file locks to serialize concurrent tool calls targeting the same file.
+/// This uses a Mutex instead of filesystem locking for Windows compatibility.
+static PROCESS_FILE_LOCKS: std::sync::LazyLock<DashMap<PathBuf, Arc<Mutex<()>>>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+/// A guard that holds a process-level lock on a file path.
+/// The lock is released when this guard is dropped.
+pub struct FileLockGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
 /// Error type for file lock operations
 #[derive(Debug)]
 pub enum FileLockError {
-    /// Failed to open the file
-    OpenError(std::io::Error),
-    /// Failed to acquire lock
-    LockError(std::io::Error),
     /// Lock acquisition timeout
     Timeout,
 }
@@ -23,12 +37,10 @@ pub enum FileLockError {
 impl std::fmt::Display for FileLockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FileLockError::OpenError(e) => write!(f, "Failed to open file: {e}"),
-            FileLockError::LockError(e) => write!(f, "Failed to acquire file lock: {e}"),
             FileLockError::Timeout => {
                 write!(
                     f,
-                    "Timeout waiting for file lock (another process may be holding it)"
+                    "Timeout waiting for file lock (another tool call may be holding it)"
                 )
             }
         }
@@ -37,121 +49,81 @@ impl std::fmt::Display for FileLockError {
 
 impl std::error::Error for FileLockError {}
 
-/// A file lock guard that releases the lock when dropped
-pub struct FileLockGuard {
-    _file: File,
+/// Acquire an exclusive lock on a file path.
+///
+/// This ensures that concurrent tool calls targeting the same file are serialized.
+/// Unlike filesystem locks, this works reliably on Windows because it doesn't
+/// prevent the same process from re-opening the file.
+///
+/// The lock is automatically released when the returned guard is dropped.
+pub async fn lock_file(path: &Path) -> FileLockGuard {
+    // Get or create the mutex for this path
+    let mutex = PROCESS_FILE_LOCKS
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+
+    // Acquire the lock
+    let guard = mutex.lock_owned().await;
+
+    FileLockGuard { _guard: guard }
 }
 
-impl Drop for FileLockGuard {
-    fn drop(&mut self) {
-        // Lock is automatically released when file is closed
-        let _ = self._file.unlock();
+/// Acquire a file lock with timeout.
+///
+/// Returns an error if the lock cannot be acquired within the specified duration.
+pub async fn lock_file_timeout(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<FileLockGuard, FileLockError> {
+    let mutex = PROCESS_FILE_LOCKS
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+
+    match tokio::time::timeout(timeout, mutex.lock_owned()).await {
+        Ok(guard) => Ok(FileLockGuard { _guard: guard }),
+        Err(_) => Err(FileLockError::Timeout),
     }
-}
-
-/// Acquire an exclusive (write) lock on a file
-///
-/// This blocks until the lock is acquired or an error occurs.
-/// The lock is automatically released when the returned guard is dropped.
-pub async fn lock_exclusive(path: &Path) -> Result<FileLockGuard, FileLockError> {
-    let path = path.to_path_buf();
-
-    tokio::task::spawn_blocking(move || {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(false)
-            .open(&path)
-            .map_err(FileLockError::OpenError)?;
-
-        file.lock().map_err(FileLockError::LockError)?;
-
-        Ok(FileLockGuard { _file: file })
-    })
-    .await
-    .map_err(|e| FileLockError::LockError(std::io::Error::other(format!("Task join error: {e}"))))?
-}
-
-/// Acquire a shared (read) lock on a file
-///
-/// This blocks until the lock is acquired or an error occurs.
-/// The lock is automatically released when the returned guard is dropped.
-pub async fn lock_shared(path: &Path) -> Result<FileLockGuard, FileLockError> {
-    let path = path.to_path_buf();
-
-    tokio::task::spawn_blocking(move || {
-        let file = File::options()
-            .read(true)
-            .write(false)
-            .open(&path)
-            .map_err(FileLockError::OpenError)?;
-
-        file.lock_shared().map_err(FileLockError::LockError)?;
-
-        Ok(FileLockGuard { _file: file })
-    })
-    .await
-    .map_err(|e| FileLockError::LockError(std::io::Error::other(format!("Task join error: {e}"))))?
-}
-
-/// Acquire an exclusive (write) lock on a file with timeout
-///
-/// This will wait up to the specified duration for the lock to become available.
-/// Returns `FileLockError::Timeout` if the lock cannot be acquired within the timeout.
-pub async fn lock_exclusive_timeout(
-    path: &Path,
-    timeout: std::time::Duration,
-) -> Result<FileLockGuard, FileLockError> {
-    tokio::time::timeout(timeout, lock_exclusive(path))
-        .await
-        .map_err(|_| FileLockError::Timeout)?
-}
-
-/// Acquire a shared (read) lock on a file with timeout
-///
-/// This will wait up to the specified duration for the lock to become available.
-/// Returns `FileLockError::Timeout` if the lock cannot be acquired within the timeout.
-pub async fn lock_shared_timeout(
-    path: &Path,
-    timeout: std::time::Duration,
-) -> Result<FileLockGuard, FileLockError> {
-    tokio::time::timeout(timeout, lock_shared(path))
-        .await
-        .map_err(|_| FileLockError::Timeout)?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use std::time::Duration;
 
     #[tokio::test]
-    async fn test_exclusive_lock() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "test content").unwrap();
+    async fn test_lock_file_basic() {
+        let temp_path = std::env::temp_dir().join("test_lock_basic.txt");
 
-        let _guard = lock_exclusive(temp_file.path()).await.unwrap();
+        let guard = lock_file(&temp_path).await;
+        drop(guard);
+
+        // Should be able to acquire again after drop
+        let _guard2 = lock_file(&temp_path).await;
     }
 
     #[tokio::test]
-    async fn test_shared_lock() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "test content").unwrap();
+    async fn test_lock_file_timeout() {
+        let temp_path = std::env::temp_dir().join("test_lock_timeout.txt");
 
-        let _guard = lock_shared(temp_file.path()).await.unwrap();
+        let _guard = lock_file(&temp_path).await;
+
+        // Try to acquire with a very short timeout - should timeout
+        let result = lock_file_timeout(&temp_path, Duration::from_millis(1)).await;
+        assert!(matches!(result, Err(FileLockError::Timeout)));
     }
 
     #[tokio::test]
-    async fn test_lock_guard_releases_on_drop() {
-        let mut temp_file = NamedTempFile::new().unwrap();
-        writeln!(temp_file, "test content").unwrap();
-        let path = temp_file.path().to_path_buf();
+    async fn test_concurrent_locks_different_paths() {
+        let path1 = std::env::temp_dir().join("test_lock_1.txt");
+        let path2 = std::env::temp_dir().join("test_lock_2.txt");
 
-        {
-            let _guard = lock_exclusive(&path).await.unwrap();
-        }
+        // Different paths should not block each other
+        let guard1 = lock_file(&path1).await;
+        let guard2 = lock_file(&path2).await;
 
-        let _guard2 = lock_exclusive(&path).await.unwrap();
+        drop(guard1);
+        drop(guard2);
     }
 }

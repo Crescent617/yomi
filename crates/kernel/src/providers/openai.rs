@@ -165,7 +165,7 @@ impl Provider for OpenAIProvider {
             stream_options: Some(StreamOptions {
                 include_usage: true,
             }),
-            max_tokens: config.max_tokens,
+            max_tokens: config.max_tokens.or(Some(8192)),
             temperature: config.temperature,
             reasoning_effort: if config.thinking.enabled {
                 Some(

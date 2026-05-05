@@ -1,5 +1,5 @@
 use crate::tools::helper::{
-    get_mtime, lock_shared_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
+    get_mtime, lock_file_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
     MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH,
 };
 use crate::tools::{Tool, ToolExecCtx};
@@ -30,10 +30,8 @@ impl ReadTool {
 impl ReadTool {
     /// Read an image file and return `ToolOutput` with image content
     async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
-        // Acquire shared lock before reading to coordinate with writers
-        let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
-            .await
-            .map_err(|e| KernelError::tool(format!("Failed to acquire read lock: {e}")))?;
+        // Acquire lock before reading to coordinate with writers
+        let _guard = lock_file_timeout(path, DEFAULT_LOCK_TIMEOUT).await;
 
         // Check file size
         let metadata = tokio::fs::metadata(path).await?;
@@ -72,9 +70,8 @@ impl ReadTool {
         limit: Option<usize>,
         line_numbers: bool,
     ) -> Result<ToolOutput> {
-        let _guard = lock_shared_timeout(path, DEFAULT_LOCK_TIMEOUT)
-            .await
-            .map_err(|e| KernelError::tool(format!("Failed to acquire read lock for text: {e}")))?;
+        // Acquire lock before reading to coordinate with writers
+        let _guard = lock_file_timeout(path, DEFAULT_LOCK_TIMEOUT).await;
 
         let content = tokio::fs::read_to_string(path).await?;
         let lines: Vec<&str> = content.lines().collect();

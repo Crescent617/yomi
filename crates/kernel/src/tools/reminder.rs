@@ -34,7 +34,7 @@ impl Tool for ReminderTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Schedule a self-reminder after a delay. Use to check on tasks, follow-ups, or periodic check-ins. Delays should be 30s-3600s. Reminder arrives as a new message when the delay expires."
+        "Schedule a self-reminder after a delay. Used ONLY when user ask to remind themselves of something after a short time."
     }
 
     fn schema(&self) -> Value {

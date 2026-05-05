@@ -229,10 +229,11 @@ impl Provider for AnthropicProvider {
             serde_json::to_string_pretty(&messages).unwrap_or_default()
         );
 
-        // Build request body
+        // Set a default max_tokens if not provided
+        let max_tokens = config.max_tokens.or(Some(8192));
         let mut request_body = AnthropicRequest {
             model: config.model_id.clone(),
-            max_tokens: config.max_tokens,
+            max_tokens,
             messages,
             system,
             tools: if tools.is_empty() {

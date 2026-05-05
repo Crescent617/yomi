@@ -39,6 +39,7 @@ scraper = { workspace = true }
 
 # Task system dependencies
 # Note: fs4 removed - using SQLite instead of file-based storage
+dashmap = { workspace = true }
 
 [lints]
 workspace = true
