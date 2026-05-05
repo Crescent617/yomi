@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
-    event::{Event, Key, KeyEvent, KeyModifiers, MouseEventKind},
+    event::{Event, Key, KeyEvent, KeyModifiers},
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::Rect,
@@ -2193,23 +2193,7 @@ impl InputComponent {
                     )))
                 }
             }
-            // PageUp/PageDown always scroll chat view
-            Event::Keyboard(KeyEvent {
-                code: Key::PageUp,
-                modifiers: KeyModifiers::NONE,
-            })
-            | Event::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                ..
-            }) => Some(Msg::ScrollUp),
-            Event::Keyboard(KeyEvent {
-                code: Key::PageDown,
-                modifiers: KeyModifiers::NONE,
-            })
-            | Event::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                ..
-            }) => Some(Msg::ScrollDown),
+            // Note: PageUp/PageDown and mouse scroll events are handled by ChatViewComponent
             // Toggle browse mode with Ctrl+O
             Event::Keyboard(KeyEvent {
                 code: Key::Char('o'),
