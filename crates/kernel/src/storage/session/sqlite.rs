@@ -1,10 +1,11 @@
 //! `SQLite` implementation of `SessionStore`
 
-use super::{storage_err, SessionInfo, SessionStore};
+use super::{storage_err, ListArgs, SessionInfo, SessionStore};
 use crate::types::{KernelError, Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqlitePool;
+use std::fmt::Write;
 
 /// SQLite-based session storage
 #[derive(Debug, Clone)]
@@ -82,27 +83,49 @@ impl SessionStore for SqliteSessionStore {
         Ok(())
     }
 
-    async fn list(&self) -> Result<Vec<SessionInfo>> {
-        let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir 
-             FROM sessions ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to list sessions: {e}")))?;
+    async fn list(&self, args: ListArgs) -> Result<Vec<SessionInfo>> {
+        // Build query dynamically based on filters
+        let mut conditions = vec!["1=1"]; // Dummy condition for easier appending
+        let mut binds = Vec::new();
 
-        Ok(rows.into_iter().map(Into::into).collect())
-    }
+        if let Some(before) = args.before {
+            conditions.push("updated_at < ?");
+            binds.push(before.to_rfc3339());
+        }
+        if let Some(after) = args.after {
+            conditions.push("updated_at > ?");
+            binds.push(after.to_rfc3339());
+        }
+        if let Some(ref wd) = args.working_dir {
+            conditions.push("working_dir = ?");
+            binds.push(wd.clone());
+        }
 
-    async fn list_by_working_dir(&self, working_dir: &str) -> Result<Vec<SessionInfo>> {
-        let rows = sqlx::query_as::<_, SessionRow>(
+        let order = if args.order_asc { "ASC" } else { "DESC" };
+
+        let mut query = format!(
             "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir 
-             FROM sessions WHERE working_dir = ? ORDER BY updated_at DESC",
-        )
-        .bind(working_dir)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to list sessions by working dir: {e}")))?;
+                 FROM sessions WHERE {} ORDER BY updated_at {order}",
+            conditions.join(" AND ")
+        );
+
+        // Add LIMIT and OFFSET in SQL
+        if let Some(limit) = args.limit {
+            let _ = write!(query, " LIMIT {limit}");
+        }
+        if let Some(offset) = args.offset {
+            let _ = write!(query, " OFFSET {offset}");
+        }
+
+        let mut sql_query = sqlx::query_as::<_, SessionRow>(&query);
+        for bind in binds {
+            sql_query = sql_query.bind(bind);
+        }
+
+        let rows = sql_query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to list sessions: {e}")))?;
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
@@ -127,6 +150,44 @@ impl SessionStore for SqliteSessionStore {
             .await
             .map_err(|e| storage_err(format!("failed to update session title: {e}")))?;
         Ok(())
+    }
+
+    async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>> {
+        const CHUNK_SIZE: usize = 100;
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
+
+        // Use list() to get old sessions
+        let args = ListArgs {
+            before: Some(cutoff),
+            limit: None,
+            ..Default::default()
+        };
+        let sessions = self.list(args).await?;
+
+        if sessions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids: Vec<String> = sessions.into_iter().map(|s| s.id.0).collect();
+
+        // Delete in chunks to avoid too many parameters
+        for chunk in ids.chunks(CHUNK_SIZE) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let query = format!("DELETE FROM sessions WHERE id IN ({placeholders})");
+
+            let mut sql_query = sqlx::query(&query);
+            for id in chunk {
+                sql_query = sql_query.bind(id);
+            }
+
+            sql_query
+                .execute(&self.pool)
+                .await
+                .map_err(|e| storage_err(format!("failed to delete old sessions: {e}")))?;
+        }
+
+        Ok(ids.into_iter().map(SessionId).collect())
     }
 }
 
@@ -214,8 +275,114 @@ mod tests {
         // Update id1 to make it more recent
         store.update_message_count(&id1, 1).await.unwrap();
 
-        let list = store.list().await.unwrap();
+        let list = store.list(Default::default()).await.unwrap();
         assert_eq!(list[0].id.0, id1.0);
         assert_eq!(list[1].id.0, id2.0);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_by_working_dir() {
+        let store = create_test_store().await;
+
+        let id1 = store.create(Some("/foo/bar")).await.unwrap();
+        let _id2 = store.create(Some("/baz/qux")).await.unwrap();
+        let id3 = store.create(Some("/foo/bar")).await.unwrap();
+
+        let args = ListArgs {
+            working_dir: Some("/foo/bar".to_string()),
+            ..Default::default()
+        };
+        let list = store.list(args).await.unwrap();
+        assert_eq!(list.len(), 2);
+        let ids: Vec<_> = list.iter().map(|s| &s.id.0).collect();
+        assert!(ids.contains(&&id1.0));
+        assert!(ids.contains(&&id3.0));
+    }
+
+    #[tokio::test]
+    async fn test_list_limit_offset() {
+        let store = create_test_store().await;
+
+        // Create 5 sessions with explicit delays to ensure different timestamps
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            ids.push(store.create(None).await.unwrap());
+            // Update message count to change updated_at, with increasing delays
+            tokio::time::sleep(tokio::time::Duration::from_millis(10 + i as u64 * 5)).await;
+            store
+                .update_message_count(&ids[i], i as i64 + 1)
+                .await
+                .unwrap();
+        }
+
+        // Test limit
+        let args = ListArgs {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let list = store.list(args).await.unwrap();
+        assert_eq!(list.len(), 2);
+
+        // Test offset - get middle 2 sessions
+        let args = ListArgs {
+            limit: Some(2),
+            offset: Some(1),
+            ..Default::default()
+        };
+        let offset_list = store.list(args).await.unwrap();
+        assert_eq!(offset_list.len(), 2);
+
+        // Full list for comparison
+        let full_list = store.list(Default::default()).await.unwrap();
+        assert_eq!(full_list.len(), 5);
+
+        // Offset results should be different from first page
+        assert_ne!(offset_list[0].id.0, full_list[0].id.0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_deletes_old_sessions() {
+        let store = create_test_store().await;
+
+        // Create a session and manually set its updated_at to 10 days ago
+        let old_id = store.create(Some("/test")).await.unwrap();
+        sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
+            .bind(&old_id.0)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        // Create a recent session
+        let recent_id = store.create(Some("/test")).await.unwrap();
+
+        // Cleanup sessions older than 7 days
+        let deleted = store.cleanup(7).await.unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].0, old_id.0);
+
+        // Verify old session is gone
+        let old_session = store.get(&old_id).await.unwrap();
+        assert!(old_session.is_none());
+
+        // Verify recent session still exists
+        let recent_session = store.get(&recent_id).await.unwrap();
+        assert!(recent_session.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_empty_when_no_old_sessions() {
+        let store = create_test_store().await;
+
+        // Create only recent sessions
+        let _id1 = store.create(None).await.unwrap();
+        let _id2 = store.create(None).await.unwrap();
+
+        // Cleanup sessions older than 30 days
+        let deleted = store.cleanup(30).await.unwrap();
+        assert!(deleted.is_empty());
+
+        // Verify all sessions still exist
+        let all = store.list(Default::default()).await.unwrap();
+        assert_eq!(all.len(), 2);
     }
 }

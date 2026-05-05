@@ -38,6 +38,6 @@ pub(crate) mod migrations;
 // Re-export common types for convenience
 pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
 pub use message::{JsonlMessageStore, MessageStore};
-pub use session::{SessionInfo, SessionStore, SqliteSessionStore};
+pub use session::{ListArgs, SessionInfo, SessionStore, SqliteSessionStore};
 pub use todo::{JsonTodoStore, TodoStore};
 pub use usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType};

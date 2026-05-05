@@ -55,6 +55,15 @@ enum SessionsCommands {
         #[arg(short, long)]
         all: bool,
     },
+    /// Cleanup old sessions and their data
+    Cleanup {
+        /// Delete sessions older than this many days
+        #[arg(long, default_value = "180")]
+        days: i64,
+        /// Actually delete data (dry-run by default)
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -129,13 +138,16 @@ async fn main() -> Result<()> {
 
 async fn run_session(args: SessionArgs) -> Result<()> {
     match args.command {
-        SessionsCommands::List { all } => commands::sessions::list(args.global, all).await,
+        SessionsCommands::List { all } => commands::session::list(args.global, all).await,
+        SessionsCommands::Cleanup { days, yes } => {
+            commands::session::cleanup::run(args.global, days, yes).await
+        }
     }
 }
 
 async fn run_skill(args: SkillArgs) -> Result<()> {
     match args.command {
-        SkillsCommands::List => commands::skills::list(args.global).await,
+        SkillsCommands::List => commands::skill::list(args.global).await,
     }
 }
 

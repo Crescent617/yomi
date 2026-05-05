@@ -1821,9 +1821,13 @@ impl Model {
                 Msg::CommandSessions => {
                     // Load sessions for current working dir and show picker
                     let working_dir = self.working_dir.to_string_lossy().to_string();
+                    let args = kernel::ListArgs {
+                        working_dir: Some(working_dir),
+                        limit: Some(50),
+                        ..Default::default()
+                    };
                     let sessions = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current()
-                            .block_on(self.session_store.list_by_working_dir(&working_dir))
+                        tokio::runtime::Handle::current().block_on(self.session_store.list(args))
                     })
                     .unwrap_or_default();
 

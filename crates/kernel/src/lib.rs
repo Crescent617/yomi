@@ -18,9 +18,9 @@ pub mod app;
 pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod memory;
 pub mod misc;
 pub mod permissions;
-pub mod memory;
 pub mod prompt;
 pub mod providers;
 pub mod skill;
@@ -48,7 +48,7 @@ pub use skill::{Skill, SkillLoader};
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
-    session::{SessionInfo, SessionStore, SqliteSessionStore},
+    session::{ListArgs, SessionInfo, SessionStore, SqliteSessionStore},
     todo::{JsonTodoStore, TodoStore},
     usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType},
     StorageSet,
