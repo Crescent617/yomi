@@ -149,8 +149,8 @@ impl StorageSet {
     /// Get a file state store for a specific session
     ///
     /// File state stores are per-session, so this returns a new instance each time
-    pub async fn file_state_store(&self, session_id: &str) -> Result<super::JsonlFileStateStore> {
-        super::JsonlFileStateStore::new(session_id, &self.data_dir).await
+    pub fn file_state_store(&self, session_id: &str) -> super::JsonlFileStateStore {
+        super::JsonlFileStateStore::new(session_id, &self.data_dir)
     }
 }
 
@@ -188,7 +188,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = StorageSet::open(temp_dir.path()).await.unwrap();
 
-        let file_store = storage.file_state_store("test-session").await.unwrap();
+        let file_store = storage.file_state_store("test-session");
         // Just verify it was created successfully
         drop(file_store);
     }

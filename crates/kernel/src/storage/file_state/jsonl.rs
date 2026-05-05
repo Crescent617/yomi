@@ -19,24 +19,24 @@ pub struct JsonlFileStateStore {
 impl JsonlFileStateStore {
     /// Create or open a state file for the given session
     /// File states are stored in `sessions/file_states/`
-    pub async fn new(session_id: &str, data_dir: &Path) -> Result<Self> {
+    /// Lazy initialization: file is created on first write
+    pub fn new(session_id: &str, data_dir: &Path) -> Self {
         let file_states_dir = data_dir.join("sessions").join("file_states");
         let file_path = file_states_dir.join(format!("{session_id}.jsonl"));
 
-        let exists = file_path.exists();
         let inner: JsonlStore<FileState, PathBuf> =
-            JsonlStore::open(&file_path, |fs: &FileState| fs.path.clone()).await?;
+            JsonlStore::new(&file_path, |fs: &FileState| fs.path.clone());
 
-        // Check if vacuum needed based on last vacuum time
-        if exists {
-            let meta = inner.meta().await?;
-            if crate::utils::now_secs().saturating_sub(meta.vacuumed_at) > VACUUM_INTERVAL_SECS {
-                // Force vacuum for old files
-                let _ = inner.vacuum().await;
-            }
+        Self { inner }
+    }
+
+    /// Force vacuum if the file hasn't been vacuumed recently
+    pub async fn maybe_vacuum(&self) -> Result<()> {
+        let meta = self.inner.meta().await?;
+        if crate::utils::now_secs().saturating_sub(meta.vacuumed_at) > VACUUM_INTERVAL_SECS {
+            let _ = self.inner.vacuum().await;
         }
-
-        Ok(Self { inner })
+        Ok(())
     }
 }
 
@@ -69,17 +69,46 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    async fn create_test_store() -> (JsonlFileStateStore, TempDir) {
+    fn create_test_store() -> (JsonlFileStateStore, TempDir) {
         let temp = TempDir::new().unwrap();
-        let store = JsonlFileStateStore::new("test-session", temp.path())
-            .await
-            .unwrap();
+        let store = JsonlFileStateStore::new("test-session", temp.path());
         (store, temp)
     }
 
     #[tokio::test]
+    async fn test_lazy_init_no_file_until_record() {
+        let temp = TempDir::new().unwrap();
+        let store = JsonlFileStateStore::new("lazy-test", temp.path());
+
+        // File should not exist before first record
+        let file_path = temp.path().join("sessions/file_states/lazy-test.jsonl");
+        assert!(!file_path.exists());
+
+        // After record, file should exist
+        store.record(PathBuf::from("/tmp/a.rs"), 100).await.unwrap();
+        assert!(file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_read_all_empty_when_no_file() {
+        let (store, _temp) = create_test_store();
+
+        // Should return empty without creating file
+        let states = store.read_all().await.unwrap();
+        assert!(states.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_truncate_no_op_when_no_file() {
+        let (store, _temp) = create_test_store();
+
+        // Should be no-op without creating file
+        store.truncate().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_record_and_get() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store.record(PathBuf::from("/tmp/a.rs"), 100).await.unwrap();
         store.record(PathBuf::from("/tmp/b.rs"), 200).await.unwrap();
@@ -90,7 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_duplicate_paths_keep_latest() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store
             .record(PathBuf::from("/tmp/test.rs"), 100)
@@ -109,7 +138,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear() {
-        let (store, _temp) = create_test_store().await;
+        let (store, _temp) = create_test_store();
 
         store
             .record(PathBuf::from("/tmp/test.rs"), 100)
@@ -127,9 +156,7 @@ mod tests {
         let session_id = "persist-session";
 
         {
-            let store = JsonlFileStateStore::new(session_id, temp.path())
-                .await
-                .unwrap();
+            let store = JsonlFileStateStore::new(session_id, temp.path());
             store
                 .record(PathBuf::from("/tmp/test.rs"), 123)
                 .await
@@ -137,9 +164,7 @@ mod tests {
         }
 
         {
-            let store = JsonlFileStateStore::new(session_id, temp.path())
-                .await
-                .unwrap();
+            let store = JsonlFileStateStore::new(session_id, temp.path());
             let states = store.read_all().await.unwrap();
             assert_eq!(states.len(), 1);
             assert_eq!(states[0].path, PathBuf::from("/tmp/test.rs"));
@@ -152,9 +177,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
 
         // Create store with low threshold
-        let store = JsonlFileStateStore::new("vacuum-test", temp.path())
-            .await
-            .unwrap();
+        let store = JsonlFileStateStore::new("vacuum-test", temp.path());
 
         // Write 1000+ records to trigger auto-vacuum
         for i in 0..1005 {

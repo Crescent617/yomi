@@ -69,8 +69,9 @@ impl Session {
         id: &SessionId,
         config: &SessionConfig,
     ) -> Result<Arc<crate::tools::helper::FileStateStore>> {
-        let persistent_store: Arc<dyn crate::storage::FileStateStore> =
-            Arc::new(JsonlFileStateStore::new(&id.0, &config.data_dir).await?);
+        let jsonl_store = JsonlFileStateStore::new(&id.0, &config.data_dir);
+        jsonl_store.maybe_vacuum().await?;
+        let persistent_store: Arc<dyn crate::storage::FileStateStore> = Arc::new(jsonl_store);
 
         let states = persistent_store.read_all().await?;
 
