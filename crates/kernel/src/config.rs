@@ -260,8 +260,11 @@ impl Config {
         }
 
         // Numeric settings
-        if let Some(tokens) = env_parse::<u32>(env_names::MAX_TOKENS) {
-            self.agent.model.max_tokens = Some(tokens);
+        // Max tokens (supports formats like "4096", "4k", "8k")
+        if let Some(max_tokens) = env_var(env_names::MAX_TOKENS) {
+            if let Some(tokens) = parse_number_with_unit(&max_tokens) {
+                self.agent.model.max_tokens = Some(tokens);
+            }
         }
         if let Some(temp) = env_parse::<f32>(env_names::TEMPERATURE) {
             self.agent.model.temperature = Some(temp);
