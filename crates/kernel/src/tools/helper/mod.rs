@@ -4,14 +4,14 @@
 //! - File operations (mtime, locking, state tracking)
 //! - Text truncation
 
-pub mod file_lock;
+pub mod g_lock;
 pub mod file_state;
 pub mod file_utils;
 pub mod truncate;
 
 // Re-export commonly used items
-pub use file_lock::{
-    lock_file, lock_file_timeout, FileLockError, FileLockGuard, DEFAULT_LOCK_TIMEOUT,
+pub use g_lock::{
+    g_lock, g_lock_timeout, GLockError, GLockGuard, DEFAULT_LOCK_TIMEOUT,
 };
 pub use file_state::FileStateStore;
 pub use file_utils::{get_mtime, get_mtimes_concurrent, MAX_FILE_SIZE};
