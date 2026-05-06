@@ -2281,9 +2281,9 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
                     MouseAction::Copied(text) => {
                         // Show status message with copied text preview (limit display width)
                         let msg = format!("📋 {text}");
-                        Some(Msg::Notification(Notification::info(msg, 2000)))
+                        Some(Msg::Notification(Notification::unknown(msg, 2000)))
                     }
-                    MouseAction::CodeCopied => Some(Msg::Notification(Notification::info(
+                    MouseAction::CodeCopied => Some(Msg::Notification(Notification::unknown(
                         "📋 Code copied".to_string(),
                         1500,
                     ))),

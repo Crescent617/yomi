@@ -1880,7 +1880,7 @@ impl InputComponent {
                     // If selection was copied, show status message
                     if matches!(kind, tuirealm::event::MouseEventKind::Up(_)) {
                         if let Some(text) = self.component.get_selected_text() {
-                            return Some(Msg::Notification(Notification::info(
+                            return Some(Msg::Notification(Notification::unknown(
                                 format!("📋 {text}"),
                                 2000,
                             )));
