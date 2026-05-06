@@ -29,7 +29,8 @@ impl Tool for TodoWriteTool {
     }
 
     fn desc(&self) -> &'static str {
-        r"Manage a todo list for tracking tasks. When to use it:
+        r"Write todo list for tracking tasks.
+When to use:
 - Tasks with 3+ distinct steps
 - User provides multiple tasks or a list of things to do
 - Complex refactoring or feature implementation
@@ -169,9 +170,9 @@ impl Tool for TodoUpdateTool {
 
     fn desc(&self) -> &'static str {
         r"Update a single existing todo item by id. Supports partial updates - only provided fields are modified.
-Guidelines:
-- Mark tasks as `in_progress` BEFORE starting work on them
-- Mark tasks as `completed` IMMEDIATELY after finishing"
+When to use:
+- Mark task as `in_progress` BEFORE starting work on them
+- Mark task as `completed` IMMEDIATELY after finishing"
     }
 
     fn schema(&self) -> Value {

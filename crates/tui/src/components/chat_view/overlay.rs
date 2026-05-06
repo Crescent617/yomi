@@ -204,3 +204,184 @@ pub fn line_display_width(line: &Arc<Line<'static>>) -> u16 {
     let line_text = line_to_text(line);
     unicode_width::UnicodeWidthStr::width(line_text.as_str()) as u16
 }
+
+/// Context menu actions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextMenuAction {
+    /// Copy the raw message content
+    CopyContent,
+    /// Copy as pretty JSON
+    CopyPrettyJson,
+}
+
+/// Context menu item
+#[derive(Debug, Clone)]
+pub struct ContextMenuItem {
+    /// Display label
+    pub label: &'static str,
+    /// Action to perform
+    pub action: ContextMenuAction,
+}
+
+impl ContextMenuItem {
+    const ITEMS: [ContextMenuItem; 2] = [
+        ContextMenuItem {
+            label: "Copy content",
+            action: ContextMenuAction::CopyContent,
+        },
+        ContextMenuItem {
+            label: "Copy pretty JSON",
+            action: ContextMenuAction::CopyPrettyJson,
+        },
+    ];
+
+    /// Get all menu items
+    pub fn all() -> &'static [ContextMenuItem] {
+        &Self::ITEMS
+    }
+}
+
+/// Context menu overlay for message actions
+#[derive(Debug, Clone)]
+pub struct ContextMenu {
+    /// Screen position of the menu
+    rect: Rect,
+    /// Message index this menu is for
+    pub message_idx: usize,
+    /// Currently hovered item index (None if none)
+    pub hovered_idx: Option<usize>,
+}
+
+impl ContextMenu {
+    /// Create a new context menu at the given screen position
+    pub fn new(x: u16, y: u16, message_idx: usize, area: Rect) -> Option<Self> {
+        let items = ContextMenuItem::all();
+        // Height: items + top/bottom border (no padding)
+        let height = items.len() as u16 + 2;
+
+        // Calculate max label width
+        let max_label_width = items
+            .iter()
+            .map(|item| unicode_width::UnicodeWidthStr::width(item.label))
+            .max()
+            .unwrap_or(0) as u16;
+        // Width: content + left/right border + small padding
+        let width = max_label_width + 4;
+
+        // Adjust position to stay within area
+        let mut menu_x = x;
+        let mut menu_y = y;
+
+        if menu_x + width > area.x + area.width {
+            menu_x = area.x + area.width - width;
+        }
+        if menu_y + height > area.y + area.height {
+            menu_y = y.saturating_sub(height);
+        }
+
+        // Ensure we don't go above the area
+        if menu_y < area.y {
+            menu_y = area.y;
+        }
+
+        Some(Self {
+            rect: Rect::new(menu_x, menu_y, width, height),
+            message_idx,
+            hovered_idx: None,
+        })
+    }
+
+    /// Get the rectangle for a specific item (directly inside border, no extra padding)
+    fn item_rect(&self, idx: usize) -> Rect {
+        Rect::new(
+            self.rect.x + 2,                   // Left border + 1 space padding
+            self.rect.y + 1 + idx as u16,      // Top border + item index
+            self.rect.width.saturating_sub(4), // Remove left/right borders and padding
+            1,
+        )
+    }
+
+    /// Check if point is inside the menu
+    pub fn contains(&self, x: u16, y: u16) -> bool {
+        self.rect.contains(Position::new(x, y))
+    }
+
+    /// Update hovered item based on mouse position
+    pub fn update_hover(&mut self, x: u16, y: u16) {
+        if !self.contains(x, y) {
+            self.hovered_idx = None;
+            return;
+        }
+
+        let items = ContextMenuItem::all();
+        for (idx, _) in items.iter().enumerate() {
+            let rect = self.item_rect(idx);
+            if rect.contains(Position::new(x, y)) {
+                self.hovered_idx = Some(idx);
+                return;
+            }
+        }
+        self.hovered_idx = None;
+    }
+
+    /// Get the action at the given position, if any
+    pub fn get_action_at(&self, x: u16, y: u16) -> Option<ContextMenuAction> {
+        if !self.contains(x, y) {
+            return None;
+        }
+
+        let items = ContextMenuItem::all();
+        for (idx, item) in items.iter().enumerate() {
+            let rect = self.item_rect(idx);
+            if rect.contains(Position::new(x, y)) {
+                return Some(item.action);
+            }
+        }
+        None
+    }
+
+    /// Render the context menu
+    pub fn render(&self, frame: &mut Frame) {
+        use tuirealm::ratatui::{
+            symbols,
+            widgets::{Block, Borders},
+        };
+
+        let items = ContextMenuItem::all();
+
+        // Fill the entire menu area with spaces to cover content behind
+        let spaces = " ".repeat(self.rect.width as usize);
+        for y in self.rect.y..self.rect.y + self.rect.height {
+            let line_rect = Rect::new(self.rect.x, y, self.rect.width, 1);
+            frame.render_widget(
+                Paragraph::new(spaces.clone()).style(Style::default().fg(colors::text_primary())),
+                line_rect,
+            );
+        }
+
+        // Render rounded border with emoji title
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_set(symbols::border::ROUNDED)
+            .border_style(Style::default().fg(colors::accent_system()))
+            .title(" ");
+        frame.render_widget(block, self.rect);
+
+        // Render each item
+        for (idx, item) in items.iter().enumerate() {
+            let rect = self.item_rect(idx);
+            let is_hovered = self.hovered_idx == Some(idx);
+
+            let style = if is_hovered {
+                Style::default()
+                    .fg(colors::accent_system())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::text_primary())
+            };
+
+            let paragraph = Paragraph::new(item.label).style(style);
+            frame.render_widget(paragraph, rect);
+        }
+    }
+}

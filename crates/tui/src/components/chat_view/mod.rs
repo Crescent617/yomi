@@ -11,5 +11,5 @@ pub use core::{ChatView, ChatViewComponent, HistoryMessage, MouseAction, Selecti
 // Re-export from overlay
 pub use overlay::{
     line_display_width, line_to_text, logical_to_visual_line, scan_code_blocks, CodeBlockOverlay,
-    CodeBlockOverlayManager,
+    CodeBlockOverlayManager, ContextMenu, ContextMenuAction,
 };

@@ -20,7 +20,7 @@ use tuirealm::{
 
 use crate::components::chat_view::{
     line_display_width, logical_to_visual_line, scan_code_blocks, CodeBlockOverlay,
-    CodeBlockOverlayManager,
+    CodeBlockOverlayManager, ContextMenu, ContextMenuAction,
 };
 use crate::components::wrap_paragraph::WrapParagraph;
 
@@ -66,6 +66,8 @@ pub enum MouseAction {
     ScrollToBottom,
     /// Code block was copied
     CodeCopied,
+    /// Context menu action completed
+    MenuAction(String),
     /// No action taken
     None,
 }
@@ -184,6 +186,8 @@ pub struct ChatView {
     total_visual_lines: usize,
     // Copy button overlays for visible code blocks
     code_block_overlay_manager: CodeBlockOverlayManager,
+    // Context menu for message actions (right-click)
+    context_menu: Option<ContextMenu>,
 }
 
 impl Default for ChatView {
@@ -220,6 +224,7 @@ impl Default for ChatView {
             scroll_button_area: None,
             total_visual_lines: 0,
             code_block_overlay_manager: CodeBlockOverlayManager::new(),
+            context_menu: None,
         }
     }
 }
@@ -1654,7 +1659,39 @@ impl ChatView {
         x: u16,
         y: u16,
     ) -> MouseAction {
-        use tuirealm::event::MouseEventKind;
+        use tuirealm::event::{MouseButton, MouseEventKind};
+
+        // Handle context menu interactions first (if menu is open)
+        if let Some(ref menu) = self.context_menu {
+            match kind {
+                MouseEventKind::Moved => {
+                    // Update hover state
+                    if let Some(ref mut menu) = self.context_menu {
+                        menu.update_hover(x, y);
+                    }
+                    return MouseAction::None;
+                }
+                MouseEventKind::Down(_) => {
+                    // Check if clicked outside menu - close it
+                    if !menu.contains(x, y) {
+                        self.context_menu = None;
+                    }
+                    // Clicked inside or outside menu - consume the event
+                    return MouseAction::None;
+                }
+                MouseEventKind::Up(_) => {
+                    // Check if an item was clicked
+                    if let Some(action) = menu.get_action_at(x, y) {
+                        let msg_idx = menu.message_idx;
+                        self.context_menu = None;
+                        return self.handle_context_menu_action(action, msg_idx);
+                    }
+                    // Clicked inside menu but not on an item - keep menu open
+                    return MouseAction::None;
+                }
+                _ => return MouseAction::None,
+            }
+        }
 
         // Check if scroll button was clicked (on Down event)
         if matches!(kind, MouseEventKind::Down(_)) && self.is_click_on_scroll_button(x, y) {
@@ -1677,6 +1714,15 @@ impl ChatView {
         let width = self.current_area.map_or(80, |a| a.width as usize);
 
         match kind {
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Open context menu for message at position
+                if let Some(msg_idx) = self.screen_to_message_index(x, y, width) {
+                    if let Some(area) = self.current_area {
+                        self.context_menu = ContextMenu::new(x, y, msg_idx, area);
+                    }
+                }
+                MouseAction::None
+            }
             MouseEventKind::Down(_) => {
                 if let Some((line, col)) = self.screen_to_position(x, y, width) {
                     if self.is_double_click(line, col) {
@@ -1716,6 +1762,204 @@ impl ChatView {
             }
             _ => MouseAction::None,
         }
+    }
+
+    /// Handle a context menu action for a specific message
+    fn handle_context_menu_action(&self, action: ContextMenuAction, msg_idx: usize) -> MouseAction {
+        let msg = match self.messages.get(msg_idx) {
+            Some(m) => m,
+            None => return MouseAction::None,
+        };
+
+        match action {
+            ContextMenuAction::CopyContent => {
+                let content = Self::get_message_raw_content(msg);
+                if let Err(e) = crate::utils::clipboard::copy_text(&content) {
+                    tracing::debug!("Failed to copy message content: {}", e);
+                    MouseAction::None
+                } else {
+                    MouseAction::MenuAction("Message copied".to_string())
+                }
+            }
+            ContextMenuAction::CopyPrettyJson => {
+                let json = Self::get_message_pretty_json(msg);
+                if let Err(e) = crate::utils::clipboard::copy_text(&json) {
+                    tracing::debug!("Failed to copy message JSON: {}", e);
+                    MouseAction::None
+                } else {
+                    MouseAction::MenuAction("JSON copied".to_string())
+                }
+            }
+        }
+    }
+
+    /// Convert screen coordinates to message index
+    fn screen_to_message_index(&self, x: u16, y: u16, width: usize) -> Option<usize> {
+        let area = self.current_area?;
+
+        // Check if click is within our area
+        if x < area.x || x >= area.x + area.width || y < area.y || y >= area.y + area.height {
+            return None;
+        }
+
+        let terminal_row = (y - area.y) as usize;
+
+        // Calculate which logical line is at this position
+        let viewport_start = self.last_viewport.0;
+        let adjusted_terminal_row = terminal_row + self.viewport_first_row_offset;
+        let mut current_row = 0;
+
+        for (i, line) in self.viewport_lines.iter().enumerate() {
+            let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let wrapped_height = Self::calculate_wrap_boundaries(&line_text, width).len();
+
+            if current_row + wrapped_height > adjusted_terminal_row {
+                // This is the logical line - now map to message index
+                let global_line_idx = viewport_start + i;
+                return self.line_to_message_index(global_line_idx);
+            }
+
+            current_row += wrapped_height;
+        }
+
+        None
+    }
+
+    /// Convert a global line index to message index
+    fn line_to_message_index(&self, line_idx: usize) -> Option<usize> {
+        // Account for banner lines
+        let banner_len = self.banner_cache.len();
+        if line_idx < banner_len {
+            return None; // Clicked on banner
+        }
+
+        let mut current_line = banner_len;
+
+        for (msg_idx, cache) in self.msg_cache.iter().enumerate() {
+            let msg_lines = cache.as_ref()?.len();
+            // Add separator line between messages (except for last message)
+            let separator = usize::from(msg_idx < self.messages.len() - 1);
+
+            if line_idx >= current_line && line_idx < current_line + msg_lines + separator {
+                return Some(msg_idx);
+            }
+
+            current_line += msg_lines + separator;
+        }
+
+        None
+    }
+
+    /// Extract raw text content from a `HistoryMessage`
+    fn get_message_raw_content(msg: &HistoryMessage) -> String {
+        match msg {
+            HistoryMessage::User(blocks) => Self::extract_text_from_blocks(blocks),
+            HistoryMessage::Assistant {
+                content, thinking, ..
+            } => {
+                let mut result = String::new();
+                if let Some(thinking) = thinking {
+                    result.push_str("<thinking>\n");
+                    result.push_str(thinking);
+                    result.push_str("\n</thinking>\n\n");
+                }
+                result.push_str(content);
+                result
+            }
+            HistoryMessage::Tool {
+                tool_name,
+                arguments,
+                output,
+                error,
+                ..
+            } => {
+                let mut result = format!("Tool: {tool_name}\n");
+                if let Some(args) = arguments {
+                    result.push_str("Arguments: ");
+                    result.push_str(args);
+                    result.push('\n');
+                }
+                if let Some(err) = error {
+                    result.push_str("Error: ");
+                    result.push_str(err);
+                } else if let Some(out) = output {
+                    result.push_str("Output: ");
+                    result.push_str(out);
+                }
+                result
+            }
+            HistoryMessage::Error(error) => error.clone(),
+        }
+    }
+
+    /// Convert a message to pretty JSON
+    fn get_message_pretty_json(msg: &HistoryMessage) -> String {
+        // Create a serializable representation
+        #[derive(serde::Serialize)]
+        struct SerializableMessage {
+            role: String,
+            content: Option<String>,
+            thinking: Option<String>,
+            tool_name: Option<String>,
+            tool_arguments: Option<String>,
+            tool_output: Option<String>,
+            tool_error: Option<String>,
+            error: Option<String>,
+        }
+
+        let serializable = match msg {
+            HistoryMessage::User(blocks) => SerializableMessage {
+                role: "user".to_string(),
+                content: Some(Self::extract_text_from_blocks(blocks)),
+                thinking: None,
+                tool_name: None,
+                tool_arguments: None,
+                tool_output: None,
+                tool_error: None,
+                error: None,
+            },
+            HistoryMessage::Assistant {
+                content, thinking, ..
+            } => SerializableMessage {
+                role: "assistant".to_string(),
+                content: Some(content.clone()),
+                thinking: thinking.clone(),
+                tool_name: None,
+                tool_arguments: None,
+                tool_output: None,
+                tool_error: None,
+                error: None,
+            },
+            HistoryMessage::Tool {
+                tool_name,
+                arguments,
+                output,
+                error,
+                ..
+            } => SerializableMessage {
+                role: "tool".to_string(),
+                content: None,
+                thinking: None,
+                tool_name: Some(tool_name.clone()),
+                tool_arguments: arguments.clone(),
+                tool_output: output.clone(),
+                tool_error: error.clone(),
+                error: None,
+            },
+            HistoryMessage::Error(error) => SerializableMessage {
+                role: "error".to_string(),
+                content: None,
+                thinking: None,
+                tool_name: None,
+                tool_arguments: None,
+                tool_output: None,
+                tool_error: None,
+                error: Some(error.clone()),
+            },
+        };
+
+        serde_json::to_string_pretty(&serializable)
+            .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize: {e}\"}}"))
     }
 
     /// Draw scroll-to-bottom button at the bottom center
@@ -1956,6 +2200,11 @@ impl Component for ChatView {
         // Draw scroll-to-bottom button if user has scrolled up
         if self.is_scrolled_up() {
             self.draw_scroll_button(frame, area);
+        }
+
+        // Render context menu if open
+        if let Some(ref menu) = self.context_menu {
+            menu.render(frame);
         }
     }
 
@@ -2287,9 +2536,12 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
                         "📋 Code copied".to_string(),
                         1500,
                     ))),
+                    MouseAction::MenuAction(msg) => {
+                        Some(Msg::Notification(Notification::unknown(msg, 1500)))
+                    }
                     MouseAction::None => {
                         if matches!(kind, MouseEventKind::Down(_) | MouseEventKind::Drag(_)) {
-                            // Selection in progress, just redraw
+                            // Selection in progress or context menu opened, just redraw
                             Some(Msg::Redraw)
                         } else {
                             None
