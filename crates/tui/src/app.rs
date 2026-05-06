@@ -1254,7 +1254,7 @@ impl Model {
                     let phase_str = format!("{phase:?}");
                     if is_recoverable {
                         // Recoverable error: show in status bar with warning color
-                        let message = format!(" {phase_str} error (will retry): {error}");
+                        let message = format!("{phase_str} error (will retry): {error}");
                         self.show_notification(&Notification::warn(message, 3000));
                         self.state.should_redraw = true;
                     } else {
@@ -1272,7 +1272,7 @@ impl Model {
                     reason,
                     ..
                 }) => {
-                    let message = format!(" Retrying ({attempt}/{max_attempts}): {reason}");
+                    let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
                     // 0 = no timeout, persists until cleared
                     self.show_notification(&Notification::info(message, 0));
                     self.state.should_redraw = true;
@@ -1744,9 +1744,9 @@ impl Model {
 
                     // Show status message
                     let msg = if new_level == Level::Dangerous {
-                        " YOLO mode enabled - all tools will be auto-approved"
+                        "YOLO mode enabled - all tools will be auto-approved"
                     } else {
-                        " YOLO mode disabled"
+                        "YOLO mode disabled"
                     };
                     self.show_notification(&Notification::info(msg, 5000));
 

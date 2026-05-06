@@ -48,6 +48,17 @@ impl NotificationLevel {
             NotificationLevel::Success => colors::accent_success(),
         }
     }
+
+    /// Returns the prefix icon for this level, if any.
+    fn icon(self) -> Option<&'static str> {
+        match self {
+            NotificationLevel::Unknown => None,
+            NotificationLevel::Info => Some(" "),
+            NotificationLevel::Warn => Some(" "),
+            NotificationLevel::Error => Some(" "),
+            NotificationLevel::Success => Some(" "),
+        }
+    }
 }
 
 /// Notification message for info bar
@@ -82,6 +93,11 @@ impl Notification {
 
     pub fn success(content: impl Into<String>, duration_ms: u64) -> Self {
         Self::new(content, NotificationLevel::Success, duration_ms)
+    }
+
+    /// Create an unknown-level notification (no icon prefix, for custom content with emoji)
+    pub fn unknown(content: impl Into<String>, duration_ms: u64) -> Self {
+        Self::new(content, NotificationLevel::Unknown, duration_ms)
     }
 
     /// Convert to `AttrValue` using `PropPayload::Any` for downcast
@@ -281,15 +297,19 @@ impl InfoBar {
             return Line::from("");
         }
 
+        // Add level icon prefix (Unknown level has no icon to allow custom emoji)
+        let icon = level.icon().unwrap_or("");
+        let full_text = format!("{icon}{text}");
+
         // Use display width (accounts for CJK characters being 2 columns)
-        let text_width = text.width_cjk();
+        let text_width = full_text.width_cjk();
 
         // Truncate if too long, right-aligned
         let display = if text_width > width {
-            truncate_by_width(text, width, "...")
+            truncate_by_width(&full_text, width, "...")
         } else {
             let padding = width.saturating_sub(text_width);
-            format!("{:>padding$}{}", "", text, padding = padding)
+            format!("{:>padding$}{}", "", full_text, padding = padding)
         };
 
         let span = Span::styled(
