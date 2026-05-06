@@ -13,6 +13,26 @@ use crate::table::StreamingTableRenderer;
 use crate::theme::{chars, colors, Styles};
 use crate::utils::text::preprocess;
 
+/// Information about a rendered code block
+#[derive(Debug, Clone)]
+pub struct CodeBlockInfo {
+    /// Starting line index (relative to current render output)
+    pub start_line: usize,
+    /// Ending line index (exclusive)
+    pub end_line: usize,
+    /// Programming language if specified
+    pub language: Option<String>,
+    /// Code content
+    pub content: String,
+}
+
+impl CodeBlockInfo {
+    /// Get the actual code content (excluding `` ``` `` markers)
+    pub fn code_content(&self) -> &str {
+        &self.content
+    }
+}
+
 /// Tracks the state of markdown parsing for incremental rendering
 #[derive(Debug, Clone, Copy)]
 enum ListState {
@@ -52,11 +72,25 @@ pub struct StreamingMarkdownRenderer {
     state: ParseState,
     table_renderer: Option<StreamingTableRenderer>,
     dirty: bool,
+    /// Track code blocks for copy functionality
+    code_blocks: Vec<CodeBlockInfo>,
 }
 
 impl StreamingMarkdownRenderer {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            content: String::new(),
+            lines: Vec::new(),
+            state: ParseState::default(),
+            table_renderer: None,
+            dirty: false,
+            code_blocks: Vec::new(),
+        }
+    }
+
+    /// Get the list of code blocks detected during rendering
+    pub fn code_blocks(&self) -> &[CodeBlockInfo] {
+        &self.code_blocks
     }
 
     /// Append new text and re-render
@@ -96,6 +130,7 @@ impl StreamingMarkdownRenderer {
     /// Force re-render
     fn render(&mut self) -> &[Line<'static>] {
         self.lines.clear();
+        self.code_blocks.clear();
 
         let options =
             Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
@@ -106,6 +141,8 @@ impl StreamingMarkdownRenderer {
         let mut current_line: Vec<Span> = Vec::new();
         let mut in_code_block = self.state.in_code_block;
         let mut code_language = self.state.code_language.clone();
+        let mut code_block_start: Option<usize> = None;
+        let mut code_block_content: String = String::new();
         let mut list_stack: Vec<ListState> = self.state.list_stack.clone();
         let mut current_style = self.state.current_style;
         let mut in_table = self.state.in_table;
@@ -130,6 +167,8 @@ impl StreamingMarkdownRenderer {
                     }
                     Tag::CodeBlock(kind) => {
                         in_code_block = true;
+                        code_block_start = Some(self.lines.len());
+                        code_block_content.clear();
                         if !current_line.is_empty() {
                             self.lines.push(Line::from(current_line));
                             current_line = Vec::new();
@@ -249,10 +288,21 @@ impl StreamingMarkdownRenderer {
                                 ));
                                 current_line = Vec::new();
                             }
+                            // Record code block info
+                            if let Some(start) = code_block_start {
+                                self.code_blocks.push(CodeBlockInfo {
+                                    start_line: start,
+                                    end_line: self.lines.len(),
+                                    language: code_language.clone(),
+                                    content: code_block_content.clone(),
+                                });
+                            }
                             // Show closing ```
                             self.lines
                                 .push(Line::from(Span::styled("```", Styles::code_lang())));
                             code_language = None;
+                            code_block_start = None;
+                            code_block_content.clear();
                         }
                         TagEnd::Item
                             // End of list item, push current line and add spacing
@@ -316,6 +366,12 @@ impl StreamingMarkdownRenderer {
                 MdEvent::Text(text) => {
                     if in_code_block {
                         for line in text.lines() {
+                            // Accumulate code content for copy functionality
+                            if !code_block_content.is_empty() {
+                                code_block_content.push('\n');
+                            }
+                            code_block_content.push_str(line);
+
                             // Show ```{lang} at start of code block
                             if current_line.is_empty() && code_language.is_some() {
                                 let lang = code_language.take().unwrap();

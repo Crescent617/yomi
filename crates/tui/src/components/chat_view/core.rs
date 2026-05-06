@@ -18,7 +18,11 @@ use tuirealm::{
     state::{State, StateValue},
 };
 
-use super::wrap_paragraph::WrapParagraph;
+use crate::components::chat_view::{
+    line_display_width, logical_to_visual_line, scan_code_blocks, CodeBlockOverlay,
+    CodeBlockOverlayManager,
+};
+use crate::components::wrap_paragraph::WrapParagraph;
 
 use crate::{
     attr,
@@ -42,7 +46,7 @@ use kernel::{
     tools::TODO_WRITE_TOOL_NAME,
 };
 
-use super::banner::MascotAnimator;
+use crate::components::banner::MascotAnimator;
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +64,8 @@ pub enum MouseAction {
     Copied(String),
     /// Scroll-to-bottom button was clicked
     ScrollToBottom,
+    /// Code block was copied
+    CodeCopied,
     /// No action taken
     None,
 }
@@ -176,6 +182,8 @@ pub struct ChatView {
     scroll_button_area: Option<Rect>,
     // Cached total visual line count (updated in view)
     total_visual_lines: usize,
+    // Copy button overlays for visible code blocks
+    code_block_overlay_manager: CodeBlockOverlayManager,
 }
 
 impl Default for ChatView {
@@ -211,6 +219,7 @@ impl Default for ChatView {
             current_area: None,
             scroll_button_area: None,
             total_visual_lines: 0,
+            code_block_overlay_manager: CodeBlockOverlayManager::new(),
         }
     }
 }
@@ -1653,6 +1662,17 @@ impl ChatView {
             return MouseAction::ScrollToBottom;
         }
 
+        // Check if code block copy button was clicked (on Down event)
+        if matches!(kind, MouseEventKind::Down(_)) {
+            if let Some(content) = self.code_block_overlay_manager.find_and_copy(x, y) {
+                if let Err(e) = crate::utils::clipboard::copy_text(content) {
+                    tracing::debug!("Failed to copy code block: {}", e);
+                } else {
+                    return MouseAction::CodeCopied;
+                }
+            }
+        }
+
         // Get width from current area for coordinate conversion
         let width = self.current_area.map_or(80, |a| a.width as usize);
 
@@ -1757,6 +1777,84 @@ impl ChatView {
             )
         })
     }
+
+    /// Calculate and render copy buttons for code blocks
+    fn render_code_block_buttons(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        visual_scroll: usize,
+        width: usize,
+    ) {
+        self.code_block_overlay_manager.clear();
+
+        let all_lines = self.all_lines();
+        let blocks = self.collect_code_blocks();
+
+        for (logical_line, content) in blocks {
+            let visual_line = logical_to_visual_line(&all_lines, logical_line, width, |text, w| {
+                Self::calculate_wrap_boundaries(text, w)
+            });
+
+            // Check visibility
+            if visual_line < visual_scroll || visual_line >= visual_scroll + area.height as usize {
+                continue;
+            }
+            let relative_line = visual_line - visual_scroll;
+
+            let header_width = all_lines.get(logical_line).map_or(0, line_display_width);
+
+            if let Some(overlay) = CodeBlockOverlay::new(relative_line, content, area, header_width)
+            {
+                overlay.render(frame);
+                self.code_block_overlay_manager.push(overlay);
+            }
+        }
+    }
+
+    /// Collect all code blocks from messages
+    fn collect_code_blocks(&self) -> Vec<(usize, String)> {
+        let mut blocks = Vec::new();
+
+        // Pre-calculate message offsets to avoid O(n²) computation
+        let mut msg_offsets: Vec<usize> = Vec::with_capacity(self.messages.len() + 1);
+        msg_offsets.push(self.banner_cache.len());
+        for i in 0..self.messages.len() {
+            let prev_offset = msg_offsets[i];
+            let cache_len = self
+                .msg_cache
+                .get(i)
+                .and_then(|c| c.as_ref())
+                .map_or(0, |c| c.len());
+            let separator = usize::from(i < self.messages.len() - 1);
+            msg_offsets.push(prev_offset + cache_len + separator);
+        }
+
+        // Check streaming content (offset at messages.len())
+        if !self.streaming_content.is_empty() {
+            let offset = msg_offsets[self.messages.len()];
+            let separator = usize::from(!self.messages.is_empty());
+            for block in self.md_renderer.code_blocks() {
+                blocks.push((offset + separator + block.start_line, block.content.clone()));
+            }
+        }
+
+        // Check historical messages
+        for (i, msg) in self.messages.iter().enumerate() {
+            if let HistoryMessage::Assistant { content, .. } = msg {
+                if !content.is_empty() {
+                    if let Some(cache) = &self.msg_cache[i] {
+                        let offset = msg_offsets[i];
+                        for (j, content) in scan_code_blocks(cache) {
+                            blocks.push((offset + j, content));
+                        }
+                    }
+                }
+            }
+        }
+
+        blocks
+    }
 }
 
 impl Component for ChatView {
@@ -1851,6 +1949,9 @@ impl Component for ChatView {
             .highlight_style(highlight_style);
 
         frame.render_widget(paragraph, area);
+
+        // Render copy buttons for visible code blocks
+        self.render_code_block_buttons(frame, area, visual_scroll, width);
 
         // Draw scroll-to-bottom button if user has scrolled up
         if self.is_scrolled_up() {
@@ -2182,6 +2283,10 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
                         let msg = format!("📋 {text}");
                         Some(Msg::Notification(Notification::info(msg, 2000)))
                     }
+                    MouseAction::CodeCopied => Some(Msg::Notification(Notification::info(
+                        "📋 Code copied".to_string(),
+                        1500,
+                    ))),
                     MouseAction::None => {
                         if matches!(kind, MouseEventKind::Down(_) | MouseEventKind::Drag(_)) {
                             // Selection in progress, just redraw
