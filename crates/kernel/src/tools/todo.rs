@@ -1,4 +1,5 @@
 use crate::storage::TodoStore;
+use crate::tools::helper::g_lock::g_lock;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -76,6 +77,9 @@ Guidelines:
     }
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+        // Lock on session_id to prevent concurrent todo modifications
+        let _lock = g_lock(format!("todo-{}", ctx.session_id)).await;
+
         let todos_array = args["todos"]
             .as_array()
             .ok_or_else(|| KernelError::tool("todos must be an array"))?;
@@ -197,6 +201,9 @@ Guidelines:
     }
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+        // Lock on session_id to prevent concurrent todo modifications
+        let _lock = g_lock(format!("todo-{}", ctx.session_id)).await;
+
         let id = args["id"]
             .as_str()
             .ok_or_else(|| KernelError::tool("id is required"))?;

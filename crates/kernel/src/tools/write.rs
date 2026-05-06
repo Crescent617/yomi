@@ -1,4 +1,4 @@
-use crate::tools::helper::{get_mtime, lock_file_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT};
+use crate::tools::helper::{get_mtime, g_lock_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -114,7 +114,7 @@ impl Tool for WriteTool {
         };
 
         // Write file: acquire lock to serialize concurrent tool calls
-        let _guard = lock_file_timeout(&path, DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 
         if is_append {
             let mut file = tokio::fs::OpenOptions::new()

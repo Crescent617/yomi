@@ -1,5 +1,5 @@
 use crate::tools::helper::{
-    get_mtime, lock_file_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
+    get_mtime, g_lock_timeout, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
 };
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
@@ -124,7 +124,7 @@ impl Tool for EditTool {
         }
 
         // Acquire lock to serialize concurrent tool calls
-        let _guard = lock_file_timeout(&path, DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 
         // Read file content (now protected by exclusive lock)
         let content = tokio::fs::read_to_string(&path).await?;

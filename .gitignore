@@ -21,3 +21,4 @@ Cargo.lock
 
 .worktrees
 *.log
+.DS_Store

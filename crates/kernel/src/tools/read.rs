@@ -1,5 +1,5 @@
 use crate::tools::helper::{
-    get_mtime, lock_file_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
+    get_mtime, g_lock_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
     MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH,
 };
 use crate::tools::{Tool, ToolExecCtx};
@@ -31,7 +31,7 @@ impl ReadTool {
     /// Read an image file and return `ToolOutput` with image content
     async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
         // Acquire lock before reading to coordinate with writers
-        let _guard = lock_file_timeout(path, DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 
         // Check file size
         let metadata = tokio::fs::metadata(path).await?;
@@ -71,7 +71,7 @@ impl ReadTool {
         line_numbers: bool,
     ) -> Result<ToolOutput> {
         // Acquire lock before reading to coordinate with writers
-        let _guard = lock_file_timeout(path, DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 
         let content = tokio::fs::read_to_string(path).await?;
         let lines: Vec<&str> = content.lines().collect();
