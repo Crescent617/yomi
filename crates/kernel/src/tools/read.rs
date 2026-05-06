@@ -1,5 +1,5 @@
 use crate::tools::helper::{
-    get_mtime, g_lock_timeout, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
+    g_lock_timeout, get_mtime, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
     MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH,
 };
 use crate::tools::{Tool, ToolExecCtx};
