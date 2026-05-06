@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -42,7 +42,7 @@ const MIGRATIONS: &[Migration] = &[
         sqls: &[r"ALTER TABLE sessions ADD COLUMN working_dir TEXT;"],
     },
     Migration {
-        version: 2,
+        version: 3,
         name: "add_token_usage",
         sqls: &[
             r"CREATE TABLE token_usage (
