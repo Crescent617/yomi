@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 authors = ["Huaru Li <crescent617@outlook.com>"]
 license = "MIT"
@@ -75,3 +75,4 @@ scraper = "0.26"
 urlencoding = "2.1"
 notify-rust = { version = "4.16", default-features = false }
 dashmap = "6.1"
+nucleo = "0.5"

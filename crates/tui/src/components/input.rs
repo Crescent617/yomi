@@ -609,6 +609,25 @@ impl InputMock {
         &s[..end]
     }
 
+    /// Align a byte position to the nearest valid char boundary.
+    /// If the position is inside a multi-byte character, it will be
+    /// adjusted to the start of that character.
+    fn align_to_char_boundary(s: &str, pos: usize) -> usize {
+        let len = s.len();
+        if pos >= len {
+            return len;
+        }
+        if s.is_char_boundary(pos) {
+            return pos;
+        }
+        // Search backwards for the nearest char boundary
+        let mut idx = pos;
+        while idx > 0 && !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
     /// Find which visual line contains the cursor position
     fn find_cursor_visual_line(
         &self,
@@ -694,6 +713,12 @@ impl Component for InputMock {
                             norm.start.saturating_sub(line_start).min(vl.text.len());
                         let sel_end_in_line =
                             norm.end.saturating_sub(line_start).min(vl.text.len());
+
+                        // Ensure byte indices are at char boundaries to avoid panic
+                        let sel_start_in_line =
+                            Self::align_to_char_boundary(&vl.text, sel_start_in_line);
+                        let sel_end_in_line =
+                            Self::align_to_char_boundary(&vl.text, sel_end_in_line);
 
                         if sel_start_in_line > 0 {
                             // Unselected prefix
@@ -1442,7 +1467,56 @@ impl InputComponent {
                 }
                 Msg::InputChanged(self.component.content().to_string())
             }
+            // Readline shortcuts: handle directly to avoid recursion
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.delete_word_backward();
+                self.update_command_completion_after_edit();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.kill_to_start_of_line();
+                self.update_command_completion_after_edit();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.move_and_clear_selection(|c| c.move_to_start_of_line());
+                // Cancel completion if cursor moved before /
+                if self.component.cursor_pos() < self.command_start_pos {
+                    self.cancel_command_completion();
+                }
+                Msg::Redraw
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.move_and_clear_selection(|c| c.move_to_end_of_line());
+                Msg::Redraw
+            }
             _ => Msg::Redraw,
+        }
+    }
+
+    /// Update command completion state after edit
+    fn update_command_completion_after_edit(&mut self) {
+        let cursor_pos = self.component.cursor_pos();
+        if cursor_pos < self.command_start_pos {
+            self.cancel_command_completion();
+        } else {
+            self.command_query.clear();
+            if cursor_pos > self.command_start_pos {
+                self.command_query = self.component.content()[self.command_start_pos..cursor_pos].to_string();
+            }
+            self.refresh_command_list();
         }
     }
 
@@ -1532,7 +1606,8 @@ impl InputComponent {
                 self.component.insert_char(*c);
                 let cursor_pos = self.component.cursor_pos();
                 let _ = self.file_completion.handle_input(*c, cursor_pos);
-                Msg::InputChanged(self.component.content().to_string())
+                // Return Redraw to ensure the file completion list updates immediately
+                Msg::Redraw
             }
             // Backspace: let FileCompletion handle it
             Event::Keyboard(KeyEvent {
@@ -1547,11 +1622,60 @@ impl InputComponent {
                 {
                     self.cancel_file_completion();
                 }
+                // Return Redraw to ensure the file completion list updates immediately
+                Msg::Redraw
+            }
+            // Readline shortcuts: handle directly to avoid recursion with handle_normal_input
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.delete_word_backward();
+                self.update_file_completion_after_edit();
                 Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.kill_to_start_of_line();
+                self.update_file_completion_after_edit();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.move_and_clear_selection(|c| c.move_to_start_of_line());
+                // Cancel completion if cursor moved before @
+                if self.component.cursor_pos() < self.file_completion.query_start_pos() {
+                    self.cancel_file_completion();
+                }
+                Msg::Redraw
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.move_and_clear_selection(|c| c.move_to_end_of_line());
+                Msg::Redraw
             }
             _ => Msg::Redraw,
         }
     }
+
+    /// Update file completion state after edit
+    fn update_file_completion_after_edit(&mut self) {
+        let cursor_pos = self.component.cursor_pos();
+        if cursor_pos < self.file_completion.query_start_pos() {
+            self.cancel_file_completion();
+        } else {
+            let content = self.component.content();
+            self.file_completion.sync_query(content, cursor_pos);
+            self.file_completion.refresh_list();
+        }
+    }
+
     /// Set the current mode
     pub const fn set_mode(&mut self, mode: crate::app::AppMode) {
         self.mode = mode;
@@ -1624,6 +1748,11 @@ impl InputComponent {
 
 impl Component for InputComponent {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
+        // Real-time update for file completion (refresh from async scan)
+        if self.file_completion.is_active() {
+            self.file_completion.refresh_list();
+        }
+
         // Render command completion using generic helper
         Self::render_completion_dropdown(
             &mut self.command_completion,
@@ -1680,19 +1809,18 @@ impl Component for InputComponent {
 
         // Render file completion status line (after dropdown, at the reserved footer position)
         if self.file_completion.is_visible() && !self.file_completion.is_empty() {
-            let status_text = if self.file_completion.was_truncated() {
-                format!(
-                    " {} / {}+ files",
-                    self.file_completion.len(),
-                    self.file_completion.total_scanned()
-                )
+            let total_files = self.file_completion.total_files();
+            let truncated_suffix = if self.file_completion.is_truncated() {
+                "+"
             } else {
-                format!(
-                    " {} / {} files",
-                    self.file_completion.len(),
-                    self.file_completion.total_scanned()
-                )
+                ""
             };
+            let status_text = format!(
+                " {} / {}{} files",
+                self.file_completion.len(),
+                total_files,
+                truncated_suffix
+            );
             let status_height = 1u16;
             let status_area = Rect {
                 x: area.x,

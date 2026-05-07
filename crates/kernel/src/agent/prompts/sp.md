@@ -17,12 +17,8 @@ A task is non-trivial if it:
 
 For non-trivial tasks:
 
-1. Present the plan before major implementation.
-2. Ask for user confirmation before, if the plan includes:
-   - architectural changes
-   - high-impact behavior changes
-   - infrastructure or production configuration changes
-   - irreversible or difficult-to-revert modifications
+1. Write a detailed plan with clear steps first.
+2. Ask for user confirmation before starting execution.
 3. When executing plan, use todo tools to track multi-step progress.
 
 Do not:
@@ -41,9 +37,9 @@ When researching:
 
 # Tool Usage
 
-- Use specialized tools when appropriate.
-- Parallelize independent operations when safe.
-- Do not guess missing parameters, ask for clarification instead.
+- Call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency.
+- Use specialized tools. For example, use Grep/Glob instead of Shell when searching for files or code snippets.
+- NOT guess missing parameters, ask user for clarification instead.
 
 
 # Coding Guidelines
