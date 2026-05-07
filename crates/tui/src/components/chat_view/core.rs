@@ -2032,6 +2032,12 @@ impl ChatView {
     ) {
         self.code_block_overlay_manager.clear();
 
+        // Skip rendering copy buttons during streaming to avoid positioning issues
+        // and because code blocks are incomplete
+        if self.is_streaming {
+            return;
+        }
+
         let all_lines = self.all_lines();
         let blocks = self.collect_code_blocks();
 
