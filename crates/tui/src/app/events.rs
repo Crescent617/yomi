@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use tuirealm::props::{AttrValue, Attribute};
+use tuirealm::terminal::TerminalAdapter;
 
 use crate::{attr, id::Id};
 use kernel::event::{AgentStatus, Event, StopReason};
