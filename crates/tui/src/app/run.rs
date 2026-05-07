@@ -56,20 +56,14 @@ impl Model {
         );
 
         // Send initial message if provided (from CLI prompt arg)
+        // Note: We only send to coordinator here. The user message will be displayed
+        // via kernel's Event::User, avoiding duplicate display.
         if let Some(initial_msg) = self.state.initial_message.take() {
             let blocks = vec![ContentBlock::Text { text: initial_msg }];
-            // Send to coordinator
-            if let Err(e) = self.input_tx.try_send(blocks.clone()) {
+            // Send to coordinator (display will be handled by process_kernel_event)
+            if let Err(e) = self.input_tx.try_send(blocks) {
                 tracing::error!("Failed to send initial message: {}", e);
             }
-            // Display user message in chat with content blocks
-            // (streaming will be started by ModelEvent::Request)
-            let blocks_json = serde_json::to_string(&blocks).unwrap_or_default();
-            let _ = self.app.attr(
-                &crate::id::Id::ChatView,
-                tuirealm::props::Attribute::Custom(crate::attr::ADD_USER_MESSAGE),
-                tuirealm::props::AttrValue::String(blocks_json),
-            );
         }
 
         while !self.state.quit {

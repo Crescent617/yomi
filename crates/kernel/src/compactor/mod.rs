@@ -102,6 +102,7 @@ fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
 
 /// Compactor for managing conversation context
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Compactor {
     /// Token threshold to trigger compaction
     pub compact_threshold: u32,

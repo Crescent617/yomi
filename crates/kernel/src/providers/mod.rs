@@ -84,6 +84,7 @@ pub struct ToolCallRequest {
 
 /// Thinking configuration for supported models
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ThinkingConfig {
     pub enabled: bool,
     pub budget_tokens: u32,
@@ -104,6 +105,7 @@ impl Default for ThinkingConfig {
 
 /// Model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ModelConfig {
     pub provider: crate::config::ModelProvider,
     pub model_id: String,
