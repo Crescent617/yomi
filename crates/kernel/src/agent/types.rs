@@ -9,6 +9,7 @@ use thiserror::Error;
 
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AgentConfig {
     pub model: ModelConfig,
     pub max_iterations: usize,

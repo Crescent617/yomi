@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use tuirealm::props::{AttrValue, Attribute};
+#[cfg(windows)]
 use tuirealm::terminal::TerminalAdapter;
 
 use crate::{attr, id::Id};
