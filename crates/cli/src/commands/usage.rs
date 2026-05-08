@@ -5,6 +5,7 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Attribute, Cell, Color, ContentArrangement,
     Table,
 };
+use kernel::storage::usage::UsageFilter;
 use kernel::StorageSet;
 
 /// Format a number with compact notation (K, M, B)
@@ -28,6 +29,18 @@ fn fmt_cache_rate(cached: u64, prompt: u64) -> String {
         "-".to_string()
     } else {
         format!("{:.0}%", (cached as f64 / prompt as f64) * 100.0)
+    }
+}
+
+/// Format model list for display, truncating if too long (safe at char boundary)
+fn fmt_models(models: &[String]) -> String {
+    if models.is_empty() {
+        return "-".to_string();
+    }
+    let joined = models.join(", ");
+    match joined.char_indices().nth(27) {
+        None => joined,
+        Some((idx, _)) => format!("{}...", &joined[..idx]),
     }
 }
 
@@ -57,7 +70,7 @@ fn color_by_percentile(value: u64, sorted_values: &[u64]) -> Color {
 }
 
 /// Show token usage for a time range (default: last 7 days)
-pub async fn show(global: GlobalArgs, days: i64) -> Result<()> {
+pub async fn show(global: GlobalArgs, days: i64, filter: Option<UsageFilter>) -> Result<()> {
     let storage = StorageSet::open(&crate::utils::data_dir(&global)?).await?;
 
     // Calculate date range by whole days in local timezone
@@ -76,8 +89,22 @@ pub async fn show(global: GlobalArgs, days: i64) -> Result<()> {
 
     let daily = storage
         .usage_store()
-        .daily_summary(start_utc, end_utc)
+        .daily_summary(start_utc, end_utc, filter.as_ref())
         .await?;
+
+    // Print active filters
+    if let Some(ref f) = filter {
+        let mut parts = Vec::new();
+        if let Some(ref model) = f.model {
+            parts.push(format!("model={model}"));
+        }
+        if let Some(ref provider) = f.provider {
+            parts.push(format!("provider={provider}"));
+        }
+        if !parts.is_empty() {
+            println!("Filters: {}", parts.join(", "));
+        }
+    }
 
     if daily.is_empty() {
         println!("No data");
@@ -117,6 +144,7 @@ pub async fn show(global: GlobalArgs, days: i64) -> Result<()> {
             "Cache%",
             "Total",
             "Req",
+            "Models",
         ]);
 
     for day in &daily {
@@ -141,6 +169,7 @@ pub async fn show(global: GlobalArgs, days: i64) -> Result<()> {
             Cell::new(fmt_compact(day.total_tokens()))
                 .fg(color_by_percentile(day.total_tokens(), &total_values)),
             Cell::new(day.request_count),
+            Cell::new(fmt_models(&day.models)),
         ]);
     }
 
@@ -154,6 +183,7 @@ pub async fn show(global: GlobalArgs, days: i64) -> Result<()> {
         Cell::new(fmt_cache_rate(total_cached, total_prompt)).add_attribute(Attribute::Bold),
         Cell::new(fmt_compact(total_tokens)).add_attribute(Attribute::Bold),
         Cell::new(total_requests).add_attribute(Attribute::Bold),
+        Cell::new(""),
     ]);
 
     println!("{table}");

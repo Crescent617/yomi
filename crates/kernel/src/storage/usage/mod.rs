@@ -117,6 +117,8 @@ pub struct DailyUsage {
     pub completion_tokens: u64,
     pub cached_tokens: u64,
     pub request_count: u64,
+    /// Distinct models used on this day
+    pub models: Vec<String>,
 }
 
 impl DailyUsage {
@@ -126,20 +128,37 @@ impl DailyUsage {
     }
 }
 
+/// Filter criteria for usage queries
+#[derive(Debug, Clone, Default)]
+pub struct UsageFilter {
+    /// Filter by model name (exact match)
+    pub model: Option<String>,
+    /// Filter by provider name (exact match)
+    pub provider: Option<String>,
+    /// Filter by usage type
+    pub usage_type: Option<UsageType>,
+}
+
 /// Storage for token usage records and aggregation
 #[async_trait]
 pub trait UsageStore: Send + Sync {
     /// Record a token usage entry
     async fn record(&self, record: &UsageRecord) -> Result<()>;
 
-    /// Get aggregated summary for a time range
-    async fn summarize(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<UsageSummary>;
+    /// Get aggregated summary for a time range, optionally filtered
+    async fn summarize(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        filter: Option<&UsageFilter>,
+    ) -> Result<UsageSummary>;
 
-    /// Get daily aggregated usage for a time range
+    /// Get daily aggregated usage for a time range, optionally filtered
     async fn daily_summary(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
+        filter: Option<&UsageFilter>,
     ) -> Result<Vec<DailyUsage>>;
 }
 

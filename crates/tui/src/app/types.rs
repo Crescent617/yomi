@@ -11,10 +11,7 @@ use crate::{
 use kernel::event::{ControlCommand, Event};
 use kernel::types::{ContentBlock, Message};
 use std::sync::Arc;
-use tuirealm::{
-    application::Application,
-    terminal::CrosstermTerminalAdapter,
-};
+use tuirealm::{application::Application, terminal::CrosstermTerminalAdapter};
 
 /// Result type returned by TUI
 pub struct TuiResult {

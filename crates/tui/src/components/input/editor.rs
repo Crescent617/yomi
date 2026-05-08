@@ -338,8 +338,7 @@ impl InputEditor {
 
     /// Check if this is a double click (within 300ms and same position)
     fn is_double_click(&mut self, pos: usize) -> bool {
-        const DOUBLE_CLICK_THRESHOLD: std::time::Duration =
-            std::time::Duration::from_millis(300);
+        const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(300);
 
         let now = std::time::Instant::now();
         let is_double = self

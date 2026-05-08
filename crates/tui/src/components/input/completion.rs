@@ -329,8 +329,8 @@ impl InputComponent {
         } else {
             self.command_query.clear();
             if cursor_pos > self.command_start_pos {
-                self.command_query = self.component.content()[self.command_start_pos..cursor_pos]
-                    .to_string();
+                self.command_query =
+                    self.component.content()[self.command_start_pos..cursor_pos].to_string();
             }
             self.refresh_command_list();
         }

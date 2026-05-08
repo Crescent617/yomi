@@ -1,4 +1,4 @@
-//! InputComponent definition and Component/AppComponent implementations
+//! `InputComponent` definition and Component/AppComponent implementations
 
 use tuirealm::{
     command::{Cmd, CmdResult},
@@ -29,7 +29,7 @@ pub struct InputComponent {
     pub(crate) saved_input: String,          // Buffer for current input when browsing history
     // Command completion
     pub(crate) command_completion: CompletionList<(String, String)>,
-    pub(crate) command_query: String,    // Current query string (text after /)
+    pub(crate) command_query: String, // Current query string (text after /)
     pub(crate) command_start_pos: usize, // Position of '/' in the input
     // File completion (@-mention)
     pub(crate) file_completion: FileCompletion,

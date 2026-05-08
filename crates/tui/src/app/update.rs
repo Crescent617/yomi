@@ -7,9 +7,7 @@ use tuirealm::{
 
 use crate::{
     attr,
-    components::{
-        info_bar::Notification, status_bar::Tip, default_help_sections, PickerItem,
-    },
+    components::{default_help_sections, info_bar::Notification, status_bar::Tip, PickerItem},
     id::Id,
     msg::Msg,
 };

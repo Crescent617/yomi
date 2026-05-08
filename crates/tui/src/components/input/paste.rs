@@ -1,10 +1,6 @@
 //! Clipboard paste, image handling, and content block conversion
 
-use crate::{
-    components::input_edit::TextInput,
-    msg::Msg,
-    utils::text::truncate_by_chars,
-};
+use crate::{components::input_edit::TextInput, msg::Msg, utils::text::truncate_by_chars};
 
 use super::component::InputComponent;
 
@@ -46,12 +42,7 @@ impl InputComponent {
     }
 
     /// Save image bytes to temp file and return placeholder
-    fn save_image_to_temp(
-        &mut self,
-        width: usize,
-        height: usize,
-        bytes: &[u8],
-    ) -> Option<String> {
+    fn save_image_to_temp(&mut self, width: usize, height: usize, bytes: &[u8]) -> Option<String> {
         // Create temp file
         let temp_dir = std::env::temp_dir().join("yomi_images");
         if let Err(e) = std::fs::create_dir_all(&temp_dir) {
@@ -199,8 +190,7 @@ impl InputComponent {
                         }),
                     }
                     remaining = &remaining[end_idx + 1..];
-                } else if let Some(pasted_text) = self.pasted_contents.get(potential_placeholder)
-                {
+                } else if let Some(pasted_text) = self.pasted_contents.get(potential_placeholder) {
                     // Text placeholder
                     blocks.push(ContentBlock::Text {
                         text: pasted_text.clone(),

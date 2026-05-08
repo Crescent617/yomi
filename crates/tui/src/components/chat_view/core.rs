@@ -866,7 +866,9 @@ impl ChatView {
                 if tool_name == GREP_TOOL_NAME {
                     if let Some(ref args) = arguments {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
-                            let mode = value["output_mode"].as_str().unwrap_or("files_with_matches");
+                            let mode = value["output_mode"]
+                                .as_str()
+                                .unwrap_or("files_with_matches");
                             header_spans.push(Span::styled(
                                 format!(" {mode}"),
                                 Style::default().fg(colors::text_secondary()),
