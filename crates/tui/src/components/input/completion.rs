@@ -146,19 +146,64 @@ impl InputComponent {
         self.file_completion.prev();
     }
 
-    /// Accept the selected file completion
-    pub(crate) fn accept_file_completion(&mut self) {
-        if let Some((selected, start, end)) = self.file_completion.accept() {
-            let _current_pos = self.component.cursor_pos();
-            // Delete the query part (from @ to current position)
-            // The range is returned by accept()
-            for _ in 0..(end - start) {
+    /// Accept the selected file completion.
+    /// `add_space` controls whether a trailing space is appended.
+    /// For progressive completion in root dir mode, pressing Enter/Tab on a
+    /// directory will navigate into it instead of completing.
+    pub(crate) fn accept_file_completion(&mut self, add_space: bool) {
+        let is_root_dir = self.file_completion.mode()
+            == crate::components::file_completion::CompletionMode::RootDir;
+        let is_dir = self.file_completion.is_selected_dir();
+
+        // Progressive completion: in root dir mode when pressing Tab on a directory,
+        // navigate into it instead of completing.
+        if is_root_dir && is_dir && !add_space {
+            let _ = self.file_completion.accept_and_continue();
+            // Get the new query which includes the selected directory
+            let new_query = self.file_completion.query().to_string();
+
+            // Update the input: delete old content and insert new query
+            let cursor_pos = self.component.cursor_pos();
+            let query_start = self.file_completion.query_start_pos();
+            let chars_to_delete = {
+                let content = self.component.content();
+                content[query_start..cursor_pos].chars().count()
+            };
+            for _ in 0..chars_to_delete {
                 self.component.backspace();
             }
-            // Insert the selected file path followed by a space
-            self.component.insert_str(&selected);
+            self.component.insert_str(&new_query);
+            // Stay in completion mode, don't hide
+            return;
+        }
+
+        let selected = match self.file_completion.selected_full_path() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Delete the query part (from @ to current cursor position, by character count)
+        let start = self.file_completion.query_start_pos();
+        let end = self.component.cursor_pos();
+        let chars_to_delete = {
+            let content = self.component.content();
+            content[start..end].chars().count()
+        };
+        for _ in 0..chars_to_delete {
+            self.component.backspace();
+        }
+
+        // Insert the selected file path
+        self.component.insert_str(&selected);
+
+        if add_space {
             self.component.insert_char(' ');
-            // accept() already hides the completion
+            // Close completion on Enter
+            self.file_completion.accept();
+        } else {
+            // Keep completion open for continued searching on Tab
+            self.file_completion.reset_for_continue();
+            self.file_completion.refresh_list();
         }
     }
 
@@ -344,15 +389,23 @@ impl InputComponent {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
         match *ev {
-            // Enter or Tab: accept completion
+            // Enter: accept completion and append a space
             Event::Keyboard(KeyEvent {
-                code: Key::Enter | Key::Tab,
+                code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                self.accept_file_completion();
+                self.accept_file_completion(true);
                 Msg::InputChanged(self.component.content().to_string())
             }
-            // Shift+Tab, Up arrow or Ctrl+P: navigate up
+            // Tab: accept completion without appending a space
+            Event::Keyboard(KeyEvent {
+                code: Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.accept_file_completion(false);
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Shift+Tab, Up arrow, or Ctrl+P: navigate up
             Event::Keyboard(
                 KeyEvent {
                     code: Key::BackTab,

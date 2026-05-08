@@ -38,6 +38,7 @@ When researching:
 # Tool Usage
 
 - Call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make all independent tool calls in parallel. Maximize use of parallel tool calls where possible to increase efficiency.
+  - For example, you can read multiple files, or write multiple files, or even edit same file multiple times in a single response.
 - Use specialized tools. For example, use Grep/Glob instead of Shell when searching for files or code snippets.
 - NOT guess missing parameters, ask user for clarification instead.
 

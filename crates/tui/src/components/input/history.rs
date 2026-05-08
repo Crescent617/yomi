@@ -1,7 +1,5 @@
 //! History navigation for the input component
 
-use crate::components::input_edit::TextInput;
-
 use super::component::InputComponent;
 use super::editor::InputEditor;
 

@@ -116,6 +116,61 @@ impl TextInput for InputEditor {
 impl InputEditor {
     // InputEditor-specific methods that extend TextInput trait functionality
 
+    /// Insert a character at cursor position, clearing any selection first.
+    pub fn insert_char(&mut self, c: char) {
+        if self.has_selection() {
+            self.delete_selection();
+        }
+        let pos = self.cursor_pos();
+        self.content.insert(pos, c);
+        self.cursor_pos = pos + c.len_utf8();
+    }
+
+    /// Insert a string at cursor position, clearing any selection first.
+    pub fn insert_str(&mut self, s: &str) {
+        if self.has_selection() {
+            self.delete_selection();
+        }
+        let pos = self.cursor_pos();
+        self.content.insert_str(pos, s);
+        self.cursor_pos = pos + s.len();
+    }
+
+    /// Delete character before cursor (Backspace), clearing any selection first.
+    pub fn backspace(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let pos = self.cursor_pos();
+        if pos == 0 {
+            return;
+        }
+        let mut idx = pos - 1;
+        while idx > 0 && !self.content.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        self.content.drain(idx..pos);
+        self.cursor_pos = idx;
+    }
+
+    /// Delete character at cursor (Delete key), clearing any selection first.
+    pub fn delete_char(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let pos = self.cursor_pos();
+        if pos >= self.content.len() {
+            return;
+        }
+        let mut idx = pos + 1;
+        while idx < self.content.len() && !self.content.is_char_boundary(idx) {
+            idx += 1;
+        }
+        self.content.drain(pos..idx);
+    }
+
     /// Move cursor to previous line, keeping column position if possible
     pub fn move_up(&mut self) {
         // Find the start of current line
@@ -300,8 +355,13 @@ impl InputEditor {
         if let Some(sel) = self.selection {
             let norm = sel.normalized();
             if !norm.is_empty() {
-                self.content.drain(norm.start..norm.end);
-                self.cursor_pos = norm.start;
+                let len = self.content.len();
+                let start = norm.start.min(len);
+                let end = norm.end.min(len);
+                if start < end {
+                    self.content.drain(start..end);
+                    self.cursor_pos = start;
+                }
             }
             self.clear_selection();
         }
