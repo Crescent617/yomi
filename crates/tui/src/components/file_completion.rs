@@ -200,17 +200,20 @@ impl FileCompletion {
 
     /// Accept the current selection
     pub fn accept(&mut self) -> Option<(String, usize, usize)> {
-        self.completion.get_selected().cloned().and_then(|selected| {
-            if selected == PLACEHOLDER_SCANNING || selected == PLACEHOLDER_NO_MATCHES {
-                return None;
-            }
-            let start = self.query_start_pos;
-            let end = self.query_start_pos + self.query.len();
-            self.active = false;
-            self.query.clear();
-            self.completion.hide();
-            Some((selected, start, end))
-        })
+        self.completion
+            .get_selected()
+            .cloned()
+            .and_then(|selected| {
+                if selected == PLACEHOLDER_SCANNING || selected == PLACEHOLDER_NO_MATCHES {
+                    return None;
+                }
+                let start = self.query_start_pos;
+                let end = self.query_start_pos + self.query.len();
+                self.active = false;
+                self.query.clear();
+                self.completion.hide();
+                Some((selected, start, end))
+            })
     }
 
     /// Cancel file completion
@@ -255,8 +258,7 @@ impl FileCompletion {
     pub fn total_files(&self) -> usize {
         self.nucleo
             .as_ref()
-            .map(|n| n.snapshot().item_count() as usize)
-            .unwrap_or(0)
+            .map_or(0, |n| n.snapshot().item_count() as usize)
     }
 
     /// Check if file list was truncated at `MAX_FILES`
@@ -448,7 +450,8 @@ mod tests {
         fc.query_start_pos = 0;
         fc.query.clear();
 
-        fc.completion.set_items(vec![PLACEHOLDER_SCANNING.to_string()]);
+        fc.completion
+            .set_items(vec![PLACEHOLDER_SCANNING.to_string()]);
         assert!(fc.accept().is_none());
 
         fc.completion

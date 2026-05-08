@@ -12,5 +12,5 @@ mod streaming;
 mod update;
 mod view;
 
-pub use types::{format_short_id, AppMode, FeatureGates, OnInputHook, Model, TuiResult};
 pub use run::run_tui;
+pub use types::{format_short_id, AppMode, FeatureGates, Model, OnInputHook, TuiResult};

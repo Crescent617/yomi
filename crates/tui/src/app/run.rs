@@ -3,10 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
-use tuirealm::{
-    application::PollStrategy,
-    terminal::TerminalAdapter,
-};
+use tuirealm::{application::PollStrategy, terminal::TerminalAdapter};
 
 use kernel::event::{ControlCommand, Event};
 use kernel::types::{ContentBlock, Message};

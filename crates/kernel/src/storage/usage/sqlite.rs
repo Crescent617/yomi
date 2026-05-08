@@ -17,6 +17,31 @@ impl SqliteUsageStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
+
+    /// Append filter conditions to SQL string and return bound values.
+    fn push_filter(
+        sql: &mut String,
+        filter: Option<&super::UsageFilter>,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let (model, provider, usage_type) = match filter {
+            Some(f) => (
+                f.model.clone(),
+                f.provider.clone(),
+                f.usage_type.map(|t| t.as_str().to_string()),
+            ),
+            None => (None, None, None),
+        };
+        if model.is_some() {
+            sql.push_str(" AND model = ?");
+        }
+        if provider.is_some() {
+            sql.push_str(" AND provider = ?");
+        }
+        if usage_type.is_some() {
+            sql.push_str(" AND usage_type = ?");
+        }
+        (model, provider, usage_type)
+    }
 }
 
 #[async_trait]
@@ -45,8 +70,13 @@ impl UsageStore for SqliteUsageStore {
         Ok(())
     }
 
-    async fn summarize(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<UsageSummary> {
-        let row = sqlx::query_as::<_, SummaryRow>(
+    async fn summarize(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        filter: Option<&super::UsageFilter>,
+    ) -> Result<UsageSummary> {
+        let mut sql = String::from(
             "SELECT 
                 COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
@@ -54,12 +84,25 @@ impl UsageStore for SqliteUsageStore {
                 COUNT(*) as request_count
              FROM token_usage 
              WHERE created_at >= ? AND created_at <= ?",
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to summarize usage: {e}")))?;
+        );
+
+        let (model, provider, usage_type) = Self::push_filter(&mut sql, filter);
+
+        let mut query = sqlx::query_as::<_, SummaryRow>(&sql).bind(start).bind(end);
+        if let Some(v) = model {
+            query = query.bind(v);
+        }
+        if let Some(v) = provider {
+            query = query.bind(v);
+        }
+        if let Some(v) = usage_type {
+            query = query.bind(v);
+        }
+
+        let row = query
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to summarize usage: {e}")))?;
 
         Ok(UsageSummary {
             prompt_tokens: row.prompt_tokens as u64,
@@ -73,25 +116,40 @@ impl UsageStore for SqliteUsageStore {
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
+        filter: Option<&super::UsageFilter>,
     ) -> Result<Vec<DailyUsage>> {
-        // Use 'localtime' modifier to group by local timezone dates
-        let rows = sqlx::query_as::<_, DailyRow>(
+        let mut sql = String::from(
             "SELECT 
                 date(created_at, 'localtime') as date,
                 COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                 COALESCE(SUM(cached_tokens), 0) as cached_tokens,
-                COUNT(*) as request_count
+                COUNT(*) as request_count,
+                COALESCE(GROUP_CONCAT(DISTINCT model), '') as models
              FROM token_usage 
-             WHERE created_at >= ? AND created_at <= ?
-             GROUP BY date(created_at, 'localtime')
-             ORDER BY date(created_at, 'localtime') ASC",
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to get daily summary: {e}")))?;
+             WHERE created_at >= ? AND created_at <= ?",
+        );
+
+        let (model, provider, usage_type) = Self::push_filter(&mut sql, filter);
+        sql.push_str(
+            " GROUP BY date(created_at, 'localtime') ORDER BY date(created_at, 'localtime') ASC",
+        );
+
+        let mut query = sqlx::query_as::<_, DailyRow>(&sql).bind(start).bind(end);
+        if let Some(v) = model {
+            query = query.bind(v);
+        }
+        if let Some(v) = provider {
+            query = query.bind(v);
+        }
+        if let Some(v) = usage_type {
+            query = query.bind(v);
+        }
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to get daily summary: {e}")))?;
 
         Ok(rows
             .into_iter()
@@ -101,6 +159,11 @@ impl UsageStore for SqliteUsageStore {
                 completion_tokens: r.completion_tokens as u64,
                 cached_tokens: r.cached_tokens as u64,
                 request_count: r.request_count as u64,
+                models: if r.models.is_empty() {
+                    Vec::new()
+                } else {
+                    r.models.split(',').map(|s| s.to_string()).collect()
+                },
             })
             .collect())
     }
@@ -123,6 +186,7 @@ struct DailyRow {
     completion_tokens: i64,
     cached_tokens: i64,
     request_count: i64,
+    models: String,
 }
 
 #[cfg(test)]
@@ -160,7 +224,7 @@ mod tests {
         store.record(&record).await.unwrap();
 
         let summary = store
-            .summarize(Utc::now() - chrono::Duration::hours(1), Utc::now())
+            .summarize(Utc::now() - chrono::Duration::hours(1), Utc::now(), None)
             .await
             .unwrap();
 

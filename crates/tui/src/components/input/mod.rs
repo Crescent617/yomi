@@ -1,7 +1,7 @@
 //! Input component module
 
-mod component;
 mod completion;
+mod component;
 mod editor;
 mod handlers;
 mod history;

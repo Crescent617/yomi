@@ -225,8 +225,9 @@ impl Model {
                                     // Normal completion
                                     self.finalize_assistant_message();
                                     self.stop_streaming(StreamingStatus::Completed);
-                                    let message =
-                                        format!("😸 Task completed ({total_iterations} iterations)");
+                                    let message = format!(
+                                        "😸 Task completed ({total_iterations} iterations)"
+                                    );
                                     Self::send_desktop_notification("Yomi", &message);
                                     self.show_notification(
                                         &crate::components::info_bar::Notification::success(
@@ -281,9 +282,9 @@ impl Model {
                     if is_recoverable {
                         // Recoverable error: show in status bar with warning color
                         let message = format!("{phase_str} error (will retry): {error}");
-                        self.show_notification(
-                            &crate::components::info_bar::Notification::warn(message, 3000),
-                        );
+                        self.show_notification(&crate::components::info_bar::Notification::warn(
+                            message, 3000,
+                        ));
                         self.state.should_redraw = true;
                     } else {
                         // Non-recoverable error: stop streaming and add to chat view
@@ -302,9 +303,9 @@ impl Model {
                 }) => {
                     let message = format!("Retrying ({attempt}/{max_attempts}): {reason}");
                     // 0 = no timeout, persists until cleared
-                    self.show_notification(
-                        &crate::components::info_bar::Notification::info(message, 0),
-                    );
+                    self.show_notification(&crate::components::info_bar::Notification::info(
+                        message, 0,
+                    ));
                     self.state.should_redraw = true;
                 }
                 // Session shutdown - only handle error cases (normal completion handled by ReActLoopEnd)

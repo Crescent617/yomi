@@ -13,8 +13,8 @@ use crate::{
     attr,
     components::{
         tips::get_random_tip, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
-        InfoBarComponent, InputComponent, PickerConfig, SelectDialogComponent,
-        StatusBarComponent, TodoListComponent,
+        InfoBarComponent, InputComponent, PickerConfig, SelectDialogComponent, StatusBarComponent,
+        TodoListComponent,
     },
     id::Id,
     msg::{Msg, UserEvent},

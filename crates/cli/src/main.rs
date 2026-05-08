@@ -116,6 +116,14 @@ struct UsageArgs {
     /// Number of days to look back
     #[arg(short = 'n', long, default_value = "7")]
     days: i64,
+
+    /// Filter by model name (e.g. claude-3-5-sonnet, gpt-4o)
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Filter by provider name (e.g. anthropic, openai)
+    #[arg(long)]
+    provider: Option<String>,
 }
 
 #[tokio::main]
@@ -160,5 +168,14 @@ async fn run_config(args: ConfigArgs) -> Result<()> {
 }
 
 async fn run_usage(args: UsageArgs) -> Result<()> {
-    commands::usage::show(args.global, args.days).await
+    let filter = if args.model.is_none() && args.provider.is_none() {
+        None
+    } else {
+        Some(kernel::storage::usage::UsageFilter {
+            model: args.model,
+            provider: args.provider,
+            usage_type: None,
+        })
+    };
+    commands::usage::show(args.global, args.days, filter).await
 }
