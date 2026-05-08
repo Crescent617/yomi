@@ -1,7 +1,7 @@
 //! Input editing utilities for text components
 //!
 //! Provides readline-style editing operations that can be shared between
-//! `InputMock`, `CommandPalette`, and any other text input component.
+//! `InputEditor`, `CommandPalette`, and any other text input component.
 
 /// A trait for components that have editable text content with a cursor position
 pub trait TextInput {
