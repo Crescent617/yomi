@@ -22,7 +22,7 @@ impl InputComponent {
         footer_lines: u16,
         render_item: impl Fn(&T, usize, usize) -> Line,
     ) {
-        // Note: visibility is controlled by the caller (e.g., FileCompletion::is_visible)
+        // Note: callers check if completion is active before calling this function
         // We only check if the list has items to render
         if list.is_empty() {
             return;
@@ -343,7 +343,7 @@ impl InputComponent {
     ) -> Msg {
         use tuirealm::event::{Key, KeyEvent, KeyModifiers};
 
-        match ev {
+        match *ev {
             // Enter or Tab: accept completion
             Event::Keyboard(KeyEvent {
                 code: Key::Enter | Key::Tab,
@@ -370,28 +370,21 @@ impl InputComponent {
                 self.file_completion_prev();
                 Msg::Redraw
             }
-            // Escape or Ctrl+C: cancel completion
-            Event::Keyboard(
-                KeyEvent {
-                    code: Key::Esc,
-                    modifiers: KeyModifiers::NONE,
-                }
-                | KeyEvent {
-                    code: Key::Char('c'),
-                    modifiers: KeyModifiers::CONTROL,
-                },
-            ) => {
+            // Escape: cancel completion
+            Event::Keyboard(KeyEvent {
+                code: Key::Esc,
+                modifiers: KeyModifiers::NONE,
+            }) => {
                 self.cancel_file_completion();
-                // Also clear the input when Ctrl+C is pressed during completion
-                if matches!(
-                    ev,
-                    Event::Keyboard(KeyEvent {
-                        code: Key::Char('c'),
-                        modifiers: KeyModifiers::CONTROL,
-                    })
-                ) {
-                    self.component.clear();
-                }
+                Msg::Redraw
+            }
+            // Ctrl+C: cancel completion and clear input
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.cancel_file_completion();
+                self.component.clear();
                 Msg::Redraw
             }
             // Down arrow or Ctrl+N: navigate down
@@ -422,9 +415,9 @@ impl InputComponent {
                 code: Key::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
-                self.component.insert_char(*c);
+                self.component.insert_char(c);
                 let cursor_pos = self.component.cursor_pos();
-                let _ = self.file_completion.handle_input(*c, cursor_pos);
+                let _ = self.file_completion.handle_input(c, cursor_pos);
                 // Return Redraw to ensure the file completion list updates immediately
                 Msg::Redraw
             }

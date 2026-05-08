@@ -153,11 +153,6 @@ impl FileCompletion {
         self.active
     }
 
-    /// Check if completion should be visible (active and has items)
-    pub fn is_visible(&self) -> bool {
-        self.active && !self.completion.is_empty()
-    }
-
     /// Get the currently selected file path
     pub fn get_selected(&self) -> Option<&str> {
         self.completion.get_selected().map(|s| s.as_str())
@@ -339,7 +334,7 @@ impl FileCompletion {
                     .matched_items(0..limit)
                     .map(|item| item.data.clone())
                     .collect();
-                self.completion.set_items(items);
+                self.update_items(items);
             } else {
                 self.set_placeholder(PLACEHOLDER_SCANNING);
             }
@@ -361,11 +356,25 @@ impl FileCompletion {
             .map(|item| item.data.clone())
             .collect();
 
-        self.completion.set_items(items);
+        self.update_items(items);
     }
 
     fn set_placeholder(&mut self, msg: &str) {
         self.completion.set_items(vec![msg.to_string()]);
+    }
+
+    /// Update items while preserving selection if possible
+    fn update_items(&mut self, items: Vec<String>) {
+        let old_selected = self.completion.get_selected().cloned();
+        self.completion.set_items(items);
+        // Try to restore selection if the old item still exists
+        if let Some(old_item) = old_selected {
+            if let Some(idx) = self.completion.items().iter().position(|x| x == &old_item) {
+                if idx < self.completion.len() {
+                    self.completion.set_selected(idx);
+                }
+            }
+        }
     }
 }
 

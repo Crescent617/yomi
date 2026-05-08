@@ -143,7 +143,7 @@ impl Component for InputComponent {
         );
 
         // Render file completion status line (after dropdown, at the reserved footer position)
-        if self.file_completion.is_visible() && !self.file_completion.is_empty() {
+        if self.file_completion.is_active() && !self.file_completion.is_empty() {
             let total_files = self.file_completion.total_files();
             let truncated_suffix = if self.file_completion.is_truncated() {
                 "+"
