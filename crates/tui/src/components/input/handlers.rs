@@ -365,6 +365,9 @@ impl InputComponent {
                 if self.command_completion.is_visible() {
                     self.completion_prev();
                     Some(Msg::Redraw)
+                } else if self.file_completion.is_active() {
+                    self.file_completion_prev();
+                    Some(Msg::Redraw)
                 } else if self.component.is_on_first_line() {
                     self.history_prev();
                     Some(Msg::InputChanged(self.component.content().to_string()))
@@ -380,6 +383,9 @@ impl InputComponent {
             }) => {
                 if self.command_completion.is_visible() {
                     self.completion_next();
+                    Some(Msg::Redraw)
+                } else if self.file_completion.is_active() {
+                    self.file_completion_next();
                     Some(Msg::Redraw)
                 } else if self.component.is_on_last_line() {
                     self.history_next();
@@ -397,6 +403,9 @@ impl InputComponent {
                 if self.command_completion.is_visible() {
                     self.completion_prev();
                     Some(Msg::Redraw)
+                } else if self.file_completion.is_active() {
+                    self.file_completion_prev();
+                    Some(Msg::Redraw)
                 } else {
                     self.history_prev();
                     Some(Msg::InputChanged(self.component.content().to_string()))
@@ -409,6 +418,9 @@ impl InputComponent {
             }) => {
                 if self.command_completion.is_visible() {
                     self.completion_next();
+                    Some(Msg::Redraw)
+                } else if self.file_completion.is_active() {
+                    self.file_completion_next();
                     Some(Msg::Redraw)
                 } else {
                     self.history_next();
