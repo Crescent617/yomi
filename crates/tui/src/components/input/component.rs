@@ -11,7 +11,7 @@ use tuirealm::{
 
 use crate::{
     attr,
-    components::{input_edit::TextInput, CompletionList, FileCompletion},
+    components::{CompletionList, FileCompletion},
     msg::Msg,
     theme::colors,
 };

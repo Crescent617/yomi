@@ -1,6 +1,6 @@
 //! Clipboard paste, image handling, and content block conversion
 
-use crate::{components::input_edit::TextInput, msg::Msg, utils::text::truncate_by_chars};
+use crate::{msg::Msg, utils::text::truncate_by_chars};
 
 use super::component::InputComponent;
 

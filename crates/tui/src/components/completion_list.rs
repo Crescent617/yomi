@@ -50,6 +50,30 @@ impl<T> CompletionList<T> {
         self.scroll_offset = 0;
     }
 
+    /// Set items while preserving selection if possible
+    /// Returns true if selection was preserved, false if reset
+    pub fn update_items_preserving_selection(&mut self, items: Vec<T>) -> bool
+    where
+        T: PartialEq + Clone,
+    {
+        let old_selected = self.items.get(self.selected).cloned();
+        self.items = items;
+        self.visible = !self.items.is_empty();
+
+        // Try to restore selection if the old item still exists
+        if let Some(old_item) = old_selected {
+            if let Some(idx) = self.items.iter().position(|x| x == &old_item) {
+                self.selected = idx;
+                return true;
+            }
+        }
+
+        // Reset if couldn't preserve
+        self.selected = 0;
+        self.scroll_offset = 0;
+        false
+    }
+
     /// Hide the completion list and clear items
     pub fn hide(&mut self) {
         self.visible = false;
