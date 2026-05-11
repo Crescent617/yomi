@@ -281,6 +281,8 @@ pub struct AgentShared {
     pub skill_folders: Vec<std::path::PathBuf>,
     /// File state store for tracking file modification times (cleared on compaction)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+    /// Optional user message interceptor for injecting reminders/context
+    pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
 }
 
 impl AgentShared {
@@ -310,6 +312,7 @@ impl AgentShared {
             permission_state,
             skill_folders,
             file_state_store,
+            message_interceptor: None,
         }
     }
 
@@ -325,6 +328,16 @@ impl AgentShared {
             file_state_store,
             ..self.clone()
         }
+    }
+
+    /// Set the user message interceptor
+    #[must_use]
+    pub fn with_message_interceptor(
+        mut self,
+        interceptor: Arc<dyn super::UserMessageInterceptor>,
+    ) -> Self {
+        self.message_interceptor = Some(interceptor);
+        self
     }
 }
 
