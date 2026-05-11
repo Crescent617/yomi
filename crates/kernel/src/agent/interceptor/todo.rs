@@ -1,7 +1,5 @@
-use crate::agent::{InterceptCtx, UserMessageInterceptor};
-use crate::storage::todo::{
-    TodoListData, TodoStatus, SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,
-};
+use super::{InterceptCtx, UserMessageInterceptor};
+use crate::storage::todo::{TodoListData, TodoStatus, SYSTEM_REMINDER_END, SYSTEM_REMINDER_START};
 use crate::storage::TodoStore;
 use crate::types::{ContentBlock, Message, Role};
 use async_trait::async_trait;
@@ -31,7 +29,8 @@ impl TodoReminderInterceptor {
     }
 
     async fn build_reminder(&self, session_id: &str) -> Option<String> {
-        let json_str = self.todo_storage.load(session_id).await.ok()??;
+        let json_str = self.todo_storage.load(session_id).await.ok()?;
+        let json_str = json_str?;
         let data: TodoListData = serde_json::from_str(&json_str).ok()?;
 
         let mut reminder = String::new();
@@ -46,10 +45,10 @@ impl TodoReminderInterceptor {
             }
             let icon = match todo.status {
                 TodoStatus::Pending => "[ ]",
-                TodoStatus::InProgress => "[~]",
+                TodoStatus::InProgress => "[/]",
                 // Unreachable: only Pending/InProgress items reach this point
                 // (see filter above). Kept for exhaustive match.
-                TodoStatus::Completed => "•",
+                TodoStatus::Completed => "[x]",
             };
             reminder.push('\n');
             reminder.push_str(icon);
@@ -79,14 +78,16 @@ impl TodoReminderInterceptor {
 
         let last_todo_idx = history.iter().rposition(|msg| {
             msg.role == Role::Assistant
-                && msg
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|calls| calls.iter().any(|c| TODO_TOOLS.contains(&c.name.as_str())))
+                && msg.tool_calls.as_ref().is_some_and(|calls| {
+                    calls.iter().any(|c| TODO_TOOLS.contains(&c.name.as_str()))
+                })
         });
 
         let start = last_todo_idx.map_or(0, |i| i + 1);
-        history[start..].iter().filter(|msg| msg.role == Role::User).count()
+        history[start..]
+            .iter()
+            .filter(|msg| msg.role == Role::User)
+            .count()
     }
 }
 
@@ -136,9 +137,7 @@ mod tests {
     }
 
     fn history_with_user_msgs(count: usize) -> Vec<Arc<Message>> {
-        (0..count)
-            .map(|_| Arc::new(Message::user("hi")))
-            .collect()
+        (0..count).map(|_| Arc::new(Message::user("hi"))).collect()
     }
 
     fn history_with_todo_then_users(user_count: usize) -> Vec<Arc<Message>> {
@@ -176,7 +175,9 @@ mod tests {
         let mut content = vec![ContentBlock::Text {
             text: "hello".into(),
         }];
-        interceptor.intercept(&mut content, &ctx(&empty_history())).await;
+        interceptor
+            .intercept(&mut content, &ctx(&empty_history()))
+            .await;
         assert_eq!(content.len(), 1);
         assert_eq!(extract_text(&content), "hello");
     }

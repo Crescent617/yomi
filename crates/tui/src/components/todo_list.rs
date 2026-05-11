@@ -2,8 +2,8 @@
 //!
 //! Displays pending and in-progress todos from todoWrite tool on the right side.
 
-pub use kernel::storage::todo::{TodoItem, TodoStatus};
 use kernel::storage::todo::TodoListData;
+pub use kernel::storage::todo::{TodoItem, TodoStatus};
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},

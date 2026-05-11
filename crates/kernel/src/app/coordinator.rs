@@ -45,8 +45,9 @@ impl Coordinator {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
         let todo_storage = storage.todo_store();
-        let todo_interceptor =
-            Arc::new(crate::agent::TodoReminderInterceptor::new(todo_storage.clone()));
+        let todo_interceptor = Arc::new(crate::agent::TodoReminderInterceptor::new(
+            todo_storage.clone(),
+        ));
         let agent_shared = Arc::new(
             AgentShared::new(
                 provider,

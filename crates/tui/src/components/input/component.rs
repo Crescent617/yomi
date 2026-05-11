@@ -23,6 +23,7 @@ use super::editor::InputEditor;
 pub struct InputComponent {
     pub(crate) component: InputEditor,
     pub(crate) mode: crate::app::AppMode,
+    pub(crate) has_queued_message: bool,
     // History fields
     pub(crate) history: Vec<String>,
     pub(crate) history_index: Option<usize>, // None = new input, Some(i) = editing history[i]
@@ -50,6 +51,7 @@ impl InputComponent {
         Self {
             component: InputEditor::new(),
             mode: crate::app::AppMode::Normal,
+            has_queued_message: false,
             history: Vec::new(),
             history_index: None,
             saved_input: String::new(),
@@ -209,6 +211,11 @@ impl Component for InputComponent {
                 if let AttrValue::String(content) = value {
                     self.component.clear();
                     self.component.insert_str(&content);
+                }
+            }
+            Attribute::Custom(attr::HAS_QUEUED_MESSAGE) => {
+                if let AttrValue::Flag(has_queued) = value {
+                    self.has_queued_message = has_queued;
                 }
             }
             _ => self.component.attr(attr, value),

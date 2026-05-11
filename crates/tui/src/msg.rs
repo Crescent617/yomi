@@ -44,6 +44,7 @@ pub enum Msg {
 
     // Request control
     CancelRequest,
+    ClearQueuedMessage, // Clear queued message (ESC when queue is not empty)
 
     // Notification message with level and duration (shown in InfoBar)
     Notification(Notification),

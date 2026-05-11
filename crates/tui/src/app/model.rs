@@ -353,6 +353,14 @@ impl Model {
         ) {
             tracing::warn!("Failed to set queued message in ChatView: {}", e);
         }
+        // Update InputComponent to know there's a queued message
+        if let Err(e) = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
+            AttrValue::Flag(true),
+        ) {
+            tracing::warn!("Failed to set has_queued_message in InputBox: {}", e);
+        }
         self.queued_message = Some(blocks);
         self.state.should_redraw = true;
     }
@@ -365,6 +373,14 @@ impl Model {
             AttrValue::Flag(true),
         ) {
             tracing::warn!("Failed to clear queued message in ChatView: {}", e);
+        }
+        // Update InputComponent to know there's no queued message
+        if let Err(e) = self.app.attr(
+            &Id::InputBox,
+            Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
+            AttrValue::Flag(false),
+        ) {
+            tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
         }
         self.queued_message = None;
         self.state.should_redraw = true;
@@ -380,6 +396,14 @@ impl Model {
                 AttrValue::Flag(true),
             ) {
                 tracing::warn!("Failed to clear queued message in ChatView: {}", e);
+            }
+            // Update InputComponent to know there's no queued message
+            if let Err(e) = self.app.attr(
+                &Id::InputBox,
+                Attribute::Custom(attr::HAS_QUEUED_MESSAGE),
+                AttrValue::Flag(false),
+            ) {
+                tracing::warn!("Failed to clear has_queued_message in InputBox: {}", e);
             }
             // Send to kernel (streaming will be started by ModelEvent::Request)
             if let Err(e) = self.input_tx.try_send(blocks) {
