@@ -39,5 +39,8 @@ pub(crate) mod migrations;
 pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
 pub use message::{JsonlMessageStore, MessageStore};
 pub use session::{ListArgs, SessionInfo, SessionStore, SqliteSessionStore};
-pub use todo::{JsonTodoStore, TodoStore};
+pub use todo::{
+    strip_system_reminders, JsonTodoStore, TodoItem, TodoListData, TodoStatus, TodoStore,
+    SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,
+};
 pub use usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType};

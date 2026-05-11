@@ -1,7 +1,7 @@
 use super::message_buffer::MessageBuffer;
 use super::{
     AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
-    CancelToken,
+    CancelToken, InterceptCtx,
 };
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
@@ -325,7 +325,7 @@ impl Agent {
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User {
-                content,
+                mut content,
                 generation,
             }) => {
                 // Check if this input was sent before the last cancellation
@@ -341,6 +341,16 @@ impl Agent {
                 }
 
                 self.cancel_token.reset_if_cancelled();
+
+                // Run user message interceptors
+                if let Some(ref interceptor) = self.shared.message_interceptor {
+                    let ctx = InterceptCtx {
+                        session_id: &self.session_id,
+                        history: self.message_buffer.messages(),
+                    };
+                    interceptor.intercept(&mut content, &ctx).await;
+                }
+
                 let _ = self
                     .event_tx
                     .send(Event::User(crate::event::UserEvent::Message {

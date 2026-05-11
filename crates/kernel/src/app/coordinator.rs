@@ -44,19 +44,25 @@ impl Coordinator {
     ) -> Self {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
-        let agent_shared = Arc::new(AgentShared::new(
-            provider,
-            Arc::new(model_config),
-            task_store,
-            Some(storage.todo_store()),
-            compactor,
-            Some(session_store),
-            Some(message_store),
-            Some(storage.usage_store()),
-            None,
-            skill_folders,
-            None,
-        ));
+        let todo_storage = storage.todo_store();
+        let todo_interceptor =
+            Arc::new(crate::agent::TodoReminderInterceptor::new(todo_storage.clone()));
+        let agent_shared = Arc::new(
+            AgentShared::new(
+                provider,
+                Arc::new(model_config),
+                task_store,
+                Some(todo_storage),
+                compactor,
+                Some(session_store),
+                Some(message_store),
+                Some(storage.usage_store()),
+                None,
+                skill_folders,
+                None,
+            )
+            .with_message_interceptor(todo_interceptor),
+        );
         Self {
             agent_shared,
             sessions: Arc::new(RwLock::new(HashMap::new())),

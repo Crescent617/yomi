@@ -39,6 +39,7 @@ use kernel::tools::{
     SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_READ_TOOL_NAME,
     TODO_UPDATE_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
+use kernel::storage::todo::strip_system_reminders;
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
 use kernel::{
@@ -687,7 +688,8 @@ impl ChatView {
                 for block in content_blocks {
                     match block {
                         ContentBlock::Text { text } => {
-                            for line in text.lines() {
+                            let filtered = strip_system_reminders(text);
+                            for line in filtered.lines() {
                                 let prefix = if line_idx == 0 {
                                     chars::INPUT_PROMPT
                                 } else {
@@ -1104,12 +1106,19 @@ impl ChatView {
         lines
     }
 
-    /// Extract text content from content blocks
+    /// Extract text content from content blocks, stripping system reminders.
     fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
         blocks
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::Text { text } => Some(text.as_str()),
+                ContentBlock::Text { text } => {
+                    let filtered = strip_system_reminders(text);
+                    if filtered.is_empty() {
+                        None
+                    } else {
+                        Some(filtered)
+                    }
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()

@@ -2,7 +2,8 @@
 //!
 //! Displays pending and in-progress todos from todoWrite tool on the right side.
 
-use serde::Deserialize;
+pub use kernel::storage::todo::{TodoItem, TodoStatus};
+use kernel::storage::todo::TodoListData;
 use tuirealm::{
     command::{Cmd, CmdResult},
     component::{AppComponent, Component},
@@ -28,29 +29,6 @@ const MIN_SCREEN_WIDTH: u16 = 60;
 const PANEL_MARGIN: u16 = 3;
 /// Icon width: "○ " or "● " = 2 chars
 const ICON_WIDTH: usize = 2;
-
-/// Todo item status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-}
-
-/// A todo item
-#[derive(Debug, Clone, Deserialize)]
-pub struct TodoItem {
-    pub id: String,
-    pub content: String,
-    pub status: TodoStatus,
-}
-
-/// Todo list data structure for JSON parsing
-#[derive(Debug, Clone, Deserialize)]
-struct TodoListData {
-    todos: Vec<TodoItem>,
-}
 
 /// Todo list floating panel component
 #[derive(Debug, Default)]
