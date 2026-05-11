@@ -282,23 +282,6 @@ impl Model {
                     self.state.quit = true;
                     None
                 }
-                Msg::CommandClear => {
-                    // Clear chat history
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::CLEAR_HISTORY),
-                        AttrValue::Flag(true),
-                    );
-                    // Clear todo list
-                    let _ = self.app.attr(
-                        &Id::TodoList,
-                        Attribute::Custom(attr::CLEAR_TODOS),
-                        AttrValue::Flag(true),
-                    );
-                    // Clear any queued message to keep state consistent
-                    self.clear_queued_message();
-                    None
-                }
                 Msg::CommandTodos => {
                     // Toggle todo list visibility
                     let _ = self.app.attr(

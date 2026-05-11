@@ -65,7 +65,6 @@ pub enum Msg {
 
     // Slash commands
     CommandNew,      // /new - create new session
-    CommandClear,    // /clear - clear history
     CommandYolo,     // /yolo - toggle yolo mode
     CommandBrowse,   // /browse - toggle browse mode
     CommandCompact,  // /compact - force message compaction
