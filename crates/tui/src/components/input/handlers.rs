@@ -430,7 +430,13 @@ impl InputComponent {
             Event::Keyboard(KeyEvent {
                 code: Key::Esc,
                 modifiers: KeyModifiers::NONE,
-            }) => Some(Msg::CancelRequest),
+            }) => {
+                if self.has_queued_message {
+                    Some(Msg::ClearQueuedMessage)
+                } else {
+                    Some(Msg::CancelRequest)
+                }
+            }
             Event::Keyboard(KeyEvent {
                 code: Key::Char('c'),
                 modifiers: KeyModifiers::CONTROL,

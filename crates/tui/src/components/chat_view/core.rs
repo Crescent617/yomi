@@ -34,12 +34,12 @@ use crate::{
         char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars, truncate_by_width,
     },
 };
+use kernel::storage::todo::strip_system_reminders;
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
     SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_READ_TOOL_NAME,
     TODO_UPDATE_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
-use kernel::storage::todo::strip_system_reminders;
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
 use kernel::{

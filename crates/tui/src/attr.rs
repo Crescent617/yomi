@@ -39,6 +39,8 @@ pub const APPEND_THINKING: &str = "append_thinking";
 pub const SET_QUEUED_MESSAGE: &str = "set_queued_message";
 /// Attribute for clearing queued message.
 pub const CLEAR_QUEUED_MESSAGE: &str = "clear_queued_message";
+/// Attribute for setting whether there's a queued message.
+pub const HAS_QUEUED_MESSAGE: &str = "has_queued_message";
 
 // =============================================================================
 // Scrolling

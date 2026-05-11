@@ -197,12 +197,12 @@ impl InputComponent {
                     });
                     remaining = &remaining[end_idx + 1..];
                 }
-                // Not a recognized placeholder, treat '[' as regular text
+                // Not a recognized placeholder, treat the whole bracketed text as regular text
                 else {
                     blocks.push(ContentBlock::Text {
-                        text: "[".to_string(),
+                        text: potential_placeholder.to_string(),
                     });
-                    remaining = &remaining[start + 1..];
+                    remaining = &remaining[end_idx + 1..];
                 }
             } else {
                 // No closing ']', treat as regular text

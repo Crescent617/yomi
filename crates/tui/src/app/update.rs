@@ -97,6 +97,10 @@ impl Model {
                     let _ = self.ctrl_tx.try_send(ControlCommand::Cancel);
                     None
                 }
+                Msg::ClearQueuedMessage => {
+                    self.clear_queued_message();
+                    None
+                }
                 Msg::Redraw => {
                     self.state.should_redraw = true;
                     None
@@ -291,6 +295,8 @@ impl Model {
                         Attribute::Custom(attr::CLEAR_TODOS),
                         AttrValue::Flag(true),
                     );
+                    // Clear any queued message to keep state consistent
+                    self.clear_queued_message();
                     None
                 }
                 Msg::CommandTodos => {
