@@ -15,7 +15,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Available slash commands with descriptions
 const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
-    ("/clear", "Clear chat history"),
     ("/todos", "Toggle todo list visibility"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),

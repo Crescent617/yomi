@@ -79,7 +79,6 @@ impl InputComponent {
 
         match parts[0] {
             "/new" => Some(Msg::CommandNew),
-            "/clear" => Some(Msg::CommandClear),
             "/todos" => Some(Msg::CommandTodos),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
