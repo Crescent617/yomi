@@ -35,10 +35,7 @@ pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
-pub use todo::{
-    TodoReadTool, TodoUpdateTool, TodoWriteTool, TODO_READ_TOOL_NAME, TODO_UPDATE_TOOL_NAME,
-    TODO_WRITE_TOOL_NAME,
-};
+pub use todo::{TodoTool, TODO_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
@@ -243,10 +240,8 @@ impl ToolRegistry {
 }
 
 impl ToolRegistry {
-    /// Register todo tools (replaces the heavier task tools)
+    /// Register todo tool for task tracking
     pub fn register_todo_tool(&mut self, storage: std::sync::Arc<dyn crate::storage::TodoStore>) {
-        self.register(TodoWriteTool::new(storage.clone()));
-        self.register(TodoReadTool::new(storage.clone()));
-        self.register(TodoUpdateTool::new(storage));
+        self.register(TodoTool::new(storage));
     }
 }

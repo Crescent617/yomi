@@ -7,7 +7,7 @@ use tuirealm::terminal::TerminalAdapter;
 
 use crate::{attr, id::Id};
 use kernel::event::{AgentStatus, Event, StopReason};
-use kernel::tools::{TODO_READ_TOOL_NAME, TODO_UPDATE_TOOL_NAME, TODO_WRITE_TOOL_NAME};
+use kernel::tools::TODO_TOOL_NAME;
 use kernel::types::FinishReason;
 
 use super::types::{Model, StreamingStatus};
@@ -124,10 +124,7 @@ impl Model {
                         AttrValue::String(combined),
                     )?;
 
-                    if matches!(
-                        tool_name.as_str(),
-                        TODO_WRITE_TOOL_NAME | TODO_UPDATE_TOOL_NAME | TODO_READ_TOOL_NAME
-                    ) {
+                    if tool_name == TODO_TOOL_NAME {
                         // If the tool is a todo tool, refresh the todo list after completion
                         if let Err(e) = self.init_todo_list().await {
                             tracing::error!(
