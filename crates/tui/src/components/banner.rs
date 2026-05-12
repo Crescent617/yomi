@@ -1,7 +1,9 @@
 //! Banner component for chat header
 //!
-//! Shows mascot and system info with blinking animation.
+//! Shows mascot and system info. The mascot blinks by default, but animation
+//! can be disabled via the `{ENV_PREFIX}DISABLE_ANIMATION` environment variable.
 
+use kernel::ENV_PREFIX;
 use tuirealm::ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -21,30 +23,57 @@ const MASCOT_FRAMES: &[(&str, u8)] = &[
     (include_str!("assets/mascot_eye_closed.txt"), 2), // 200ms blink
 ];
 
-/// Simple mascot animator - cycles through frames with different durations
+/// Returns a random frame index using the system's RNG.
+fn random_frame_index() -> usize {
+    rand::random::<u32>() as usize % MASCOT_FRAMES.len()
+}
+
+/// Check if animation is disabled via `{ENV_PREFIX}DISABLE_ANIMATION` env var.
+fn is_animation_disabled() -> bool {
+    std::env::var(format!("{ENV_PREFIX}DISABLE_ANIMATION")).is_ok()
+}
+
+/// Mascot animator with optional blinking.
+///
+/// By default, the mascot cycles through frames (blink animation).
+/// When `{ENV_PREFIX}DISABLE_ANIMATION` is set, a random frame is chosen on startup
+/// and held statically.
 #[derive(Debug, Clone)]
 pub struct MascotAnimator {
     frame_index: usize,
     ticks_remaining: u8,
+    animation_disabled: bool,
 }
 
 impl Default for MascotAnimator {
     fn default() -> Self {
-        Self {
-            frame_index: 0,
-            ticks_remaining: MASCOT_FRAMES[0].1,
+        if is_animation_disabled() {
+            Self {
+                frame_index: random_frame_index(),
+                ticks_remaining: 0,
+                animation_disabled: true,
+            }
+        } else {
+            Self {
+                frame_index: 0,
+                ticks_remaining: MASCOT_FRAMES[0].1,
+                animation_disabled: false,
+            }
         }
     }
 }
 
 impl MascotAnimator {
-    /// Called on each tick (10Hz), returns true if frame changed
+    /// Called on each tick (10Hz), returns true if frame changed.
     pub fn tick(&mut self) -> bool {
+        if self.animation_disabled {
+            return false;
+        }
+
         if self.ticks_remaining > 0 {
             self.ticks_remaining -= 1;
             false
         } else {
-            // Move to next frame
             self.frame_index = (self.frame_index + 1) % MASCOT_FRAMES.len();
             self.ticks_remaining = MASCOT_FRAMES[self.frame_index].1;
             true
