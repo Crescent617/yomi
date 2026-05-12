@@ -33,6 +33,7 @@ base64 = { workspace = true }
 # Desktop notifications (optional, controlled by YOMI_DESKTOP_NOTIFY env var)
 notify-rust = { workspace = true, features = ["z"] }
 
+rand = { workspace = true }
 # Fast directory walking with gitignore support
 ignore = { workspace = true }
 # High-performance fuzzy matching (fzf-style)
