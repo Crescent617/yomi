@@ -68,19 +68,16 @@ impl TodoReminderInterceptor {
     /// Count user messages since the most recent todo tool call in history.
     ///
     /// A "todo tool call" is an assistant message whose `tool_calls` contain
-    /// todoWrite / todoUpdate / todoRead.
+    /// the unified todo tool.
     fn user_msgs_since_last_todo(history: &[Arc<Message>]) -> usize {
-        const TODO_TOOLS: &[&str] = &[
-            crate::tools::TODO_WRITE_TOOL_NAME,
-            crate::tools::TODO_UPDATE_TOOL_NAME,
-            crate::tools::TODO_READ_TOOL_NAME,
-        ];
+        const TODO_TOOL: &str = crate::tools::TODO_TOOL_NAME;
 
         let last_todo_idx = history.iter().rposition(|msg| {
             msg.role == Role::Assistant
-                && msg.tool_calls.as_ref().is_some_and(|calls| {
-                    calls.iter().any(|c| TODO_TOOLS.contains(&c.name.as_str()))
-                })
+                && msg
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| calls.iter().any(|c| c.name == TODO_TOOL))
         });
 
         let start = last_todo_idx.map_or(0, |i| i + 1);
@@ -148,7 +145,7 @@ mod tests {
             content: vec![],
             tool_calls: Some(vec![crate::types::ToolCall {
                 id: "call_1".into(),
-                name: crate::tools::TODO_WRITE_TOOL_NAME.into(),
+                name: crate::tools::TODO_TOOL_NAME.into(),
                 arguments: serde_json::json!({}),
             }]),
             tool_call_id: None,
@@ -352,7 +349,7 @@ mod tests {
             content: vec![],
             tool_calls: Some(vec![crate::types::ToolCall {
                 id: "call_2".into(),
-                name: crate::tools::TODO_WRITE_TOOL_NAME.into(),
+                name: crate::tools::TODO_TOOL_NAME.into(),
                 arguments: serde_json::json!({}),
             }]),
             tool_call_id: None,

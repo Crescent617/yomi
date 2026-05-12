@@ -6,84 +6,35 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub const TODO_WRITE_TOOL_NAME: &str = "todoWrite";
-pub const TODO_READ_TOOL_NAME: &str = "todoRead";
-pub const TODO_UPDATE_TOOL_NAME: &str = "todoUpdate";
+pub const TODO_TOOL_NAME: &str = "todo";
 
-/// `TodoWriteTool` - Simple todo list management tool
-/// Persists todo list to file for persistence and TUI display
-pub struct TodoWriteTool {
+/// `TodoTool` - Unified todo list management tool
+/// Supports read, write (full replace), and update (partial batch) operations
+pub struct TodoTool {
     storage: Arc<dyn TodoStore>,
 }
 
-impl TodoWriteTool {
+impl TodoTool {
     pub fn new(storage: Arc<dyn TodoStore>) -> Self {
         Self { storage }
     }
-}
 
-#[async_trait]
-impl Tool for TodoWriteTool {
-    fn name(&self) -> &str {
-        TODO_WRITE_TOOL_NAME
+    /// Handle read action
+    async fn handle_read(&self, ctx: &ToolExecCtx<'_>) -> Result<ToolOutput> {
+        match self.storage.load(&ctx.session_id).await? {
+            Some(json_str) => Ok(ToolOutput::text(json_str)),
+            None => Ok(ToolOutput::text(r#"{"todos": []}"#)),
+        }
     }
 
-    fn desc(&self) -> &'static str {
-        r"Write todo list for tracking tasks.
-When to use:
-- Tasks with 3+ distinct steps
-- User provides multiple tasks or a list of things to do
-- Complex refactoring or feature implementation
-- Rewrite entire todo list
-
-Guidelines:
-- Include clear, actionable task descriptions
-- Skip for trivial single-step tasks"
-    }
-
-    fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "todos": {
-                    "type": "array",
-                    "description": "The complete todo list to replace the current list",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Unique identifier for this todo item"
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "The task description"
-                            },
-                            "status": {
-                                "type": "string",
-                                "enum": ["pending", "in_progress", "completed"],
-                                "description": "Current status of the task"
-                            },
-                            "notes": {
-                                "type": "string",
-                                "description": "Optional additional notes"
-                            }
-                        },
-                        "required": ["id", "content", "status"]
-                    }
-                }
-            },
-            "required": ["todos"]
-        })
-    }
-
-    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    /// Handle write action (full replace)
+    async fn handle_write(
+        &self,
+        todos_array: &[Value],
+        ctx: &ToolExecCtx<'_>,
+    ) -> Result<ToolOutput> {
         // Lock on session_id to prevent concurrent todo modifications
         let _lock = g_lock(format!("todo-{}", ctx.session_id)).await;
-
-        let todos_array = args["todos"]
-            .as_array()
-            .ok_or_else(|| KernelError::tool("todos must be an array"))?;
 
         // Validate todo items
         for item in todos_array {
@@ -103,111 +54,22 @@ Guidelines:
         if todos_array.is_empty() {
             self.storage.clear(&ctx.session_id).await?;
         } else {
-            let json_str = serde_json::to_string(&args)?;
+            let data = json!({ "todos": todos_array });
+            let json_str = serde_json::to_string(&data)?;
             self.storage.save(&ctx.session_id, &json_str).await?;
         }
 
         Ok(ToolOutput::text("Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with your current tasks if applicable"))
     }
-}
 
-/// `TodoReadTool` - Read the current todo list
-/// Returns the current todo list from storage
-pub struct TodoReadTool {
-    storage: Arc<dyn TodoStore>,
-}
-
-impl TodoReadTool {
-    pub fn new(storage: Arc<dyn TodoStore>) -> Self {
-        Self { storage }
-    }
-}
-
-#[async_trait]
-impl Tool for TodoReadTool {
-    fn name(&self) -> &str {
-        TODO_READ_TOOL_NAME
-    }
-
-    fn desc(&self) -> &'static str {
-        r"Read the current todo list. Use this when lost track of your tasks or want to review the list"
-    }
-
-    fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        })
-    }
-
-    async fn exec(&self, _args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
-        // Load todo list from storage
-        match self.storage.load(&ctx.session_id).await? {
-            Some(json_str) => Ok(ToolOutput::text(json_str)),
-            None => Ok(ToolOutput::text(r#"{"todos": []}"#)),
-        }
-    }
-}
-
-/// `TodoUpdateTool` - Update a single todo item by id
-/// Allows partial updates to status and/or content
-pub struct TodoUpdateTool {
-    storage: Arc<dyn TodoStore>,
-}
-
-impl TodoUpdateTool {
-    pub fn new(storage: Arc<dyn TodoStore>) -> Self {
-        Self { storage }
-    }
-}
-
-#[async_trait]
-impl Tool for TodoUpdateTool {
-    fn name(&self) -> &str {
-        TODO_UPDATE_TOOL_NAME
-    }
-
-    fn desc(&self) -> &'static str {
-        r"Update a single existing todo item by id. Supports partial updates - only provided fields are modified.
-When to use:
-- Mark task as `in_progress` BEFORE starting work on them
-- Mark task as `completed` IMMEDIATELY after finishing"
-    }
-
-    fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Unique identifier of the todo item to update"
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["pending", "in_progress", "completed"],
-                    "description": "New status for the todo (optional)"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "New content for the todo (optional)"
-                },
-                "notes": {
-                    "type": "string",
-                    "description": "New notes for the todo (optional)"
-                }
-            },
-            "required": ["id"]
-        })
-    }
-
-    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    /// Handle update action (partial batch update)
+    async fn handle_update(
+        &self,
+        updates_array: &[Value],
+        ctx: &ToolExecCtx<'_>,
+    ) -> Result<ToolOutput> {
         // Lock on session_id to prevent concurrent todo modifications
         let _lock = g_lock(format!("todo-{}", ctx.session_id)).await;
-
-        let id = args["id"]
-            .as_str()
-            .ok_or_else(|| KernelError::tool("id is required"))?;
 
         // Load current todos
         let mut todos: Value = match self.storage.load(&ctx.session_id).await? {
@@ -219,48 +81,141 @@ When to use:
             .as_array_mut()
             .ok_or_else(|| KernelError::tool("invalid todos format"))?;
 
-        // Find and update the todo, keeping reference to the updated todo
-        let mut updated_todo: Option<&Value> = None;
-        for todo in todos_array.iter_mut() {
-            if todo["id"].as_str() == Some(id) {
-                // Update status if provided
-                if let Some(status) = args["status"].as_str() {
-                    match status {
-                        "pending" | "in_progress" | "completed" => {
-                            todo["status"] = json!(status);
+        let mut updated_todos = Vec::new();
+
+        for update in updates_array {
+            let id = update["id"]
+                .as_str()
+                .ok_or_else(|| KernelError::tool("update item must have id"))?;
+
+            // Find and update the todo
+            let mut found = false;
+            for todo in todos_array.iter_mut() {
+                if todo["id"].as_str() == Some(id) {
+                    // Update status if provided
+                    if let Some(status) = update["status"].as_str() {
+                        match status {
+                            "pending" | "in_progress" | "completed" => {
+                                todo["status"] = json!(status);
+                            }
+                            _ => return Err(KernelError::tool("invalid status")),
                         }
-                        _ => return Err(KernelError::tool("invalid status")),
                     }
-                }
-                // Update content if provided
-                if let Some(content) = args["content"].as_str() {
-                    todo["content"] = json!(content);
-                }
-                // Update notes if provided
-                if args.get("notes").is_some() {
-                    if let Some(notes) = args["notes"].as_str() {
-                        todo["notes"] = json!(notes);
-                    } else if args["notes"].is_null() {
-                        todo.as_object_mut().unwrap().remove("notes");
+                    // Update content if provided
+                    if let Some(content) = update["content"].as_str() {
+                        todo["content"] = json!(content);
                     }
+                    // Update notes if provided
+                    if update.get("notes").is_some() {
+                        if let Some(notes) = update["notes"].as_str() {
+                            todo["notes"] = json!(notes);
+                        } else if update["notes"].is_null() {
+                            todo.as_object_mut().unwrap().remove("notes");
+                        }
+                    }
+                    updated_todos.push(todo.clone());
+                    found = true;
+                    break;
                 }
-                updated_todo = Some(todo);
-                break;
+            }
+
+            if !found {
+                return Err(KernelError::tool(format!("todo with id '{id}' not found")));
             }
         }
-
-        let updated = updated_todo
-            .ok_or_else(|| KernelError::tool(format!("todo with id '{id}' not found")))?;
-
-        // Clone the updated todo before saving
-        let result = updated.to_string();
 
         // Save updated todos
         let json_str = serde_json::to_string(&todos)?;
         self.storage.save(&ctx.session_id, &json_str).await?;
 
-        // Return the complete updated todo entry
-        Ok(ToolOutput::text(result))
+        // Return all updated todos
+        let result = json!({ "updated": updated_todos });
+        Ok(ToolOutput::text(result.to_string()))
+    }
+}
+
+#[async_trait]
+impl Tool for TodoTool {
+    fn name(&self) -> &str {
+        TODO_TOOL_NAME
+    }
+
+    fn desc(&self) -> &'static str {
+        r"Manage todo list for tracking tasks.
+When to use:
+- Tasks with 3+ distinct steps
+- User provides multiple tasks or a list of things to do
+- Complex refactoring or feature implementation
+
+Guidelines:
+- Include clear, actionable task descriptions
+- Mark task as `in_progress` by action `update` BEFORE starting work on them
+- Mark task as `completed` by action `update` IMMEDIATELY after finishing
+- Skip for trivial single-step tasks"
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["read", "write", "update"],
+                    "description": "Operation type: read - get current list, write - full replace (needs id/content/status), update - batch partial update (only id required)"
+                },
+                "todos": {
+                    "type": "array",
+                    "description": "Required for write/update. For write: full todo list with all fields. For update: items with id + fields to change",
+                    "items": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Unique identifier for this todo item"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The task description (required for write)"
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                                "description": "Current status (required for write)"
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "Optional additional notes"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+        let action = args["action"]
+            .as_str()
+            .ok_or_else(|| KernelError::tool("action is required"))?;
+
+        match action {
+            "read" => self.handle_read(&ctx).await,
+            "write" => {
+                let todos = args["todos"]
+                    .as_array()
+                    .ok_or_else(|| KernelError::tool("todos array is required for write"))?;
+                self.handle_write(todos, &ctx).await
+            }
+            "update" => {
+                let todos = args["todos"]
+                    .as_array()
+                    .ok_or_else(|| KernelError::tool("todos array is required for update"))?;
+                self.handle_update(todos, &ctx).await
+            }
+            _ => Err(KernelError::tool(format!("unknown action: {action}"))),
+        }
     }
 }
 
@@ -277,112 +232,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_todo_write_tool() {
+    async fn test_todo_read_empty() {
         let (storage, _temp) = create_test_storage().await;
-        let tool = TodoWriteTool::new(storage.clone());
-
-        let input = json!({
-            "todos": [
-                {
-                    "id": "1",
-                    "content": "Fix bug",
-                    "status": "pending"
-                },
-                {
-                    "id": "2",
-                    "content": "Write tests",
-                    "status": "in_progress"
-                }
-            ]
-        });
+        let tool = TodoTool::new(storage);
 
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = tool.exec(input.clone(), ctx).await.unwrap();
+        let result = tool.exec(json!({"action": "read"}), ctx).await.unwrap();
 
-        // Check success message
-        let text = result.text_content();
-        assert!(text.contains("Todos have been modified successfully"));
-
-        // Verify file was saved
-        let loaded = storage.load("test-session").await.unwrap().unwrap();
-        let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
-        assert_eq!(loaded_json, input);
+        assert_eq!(result.text_content(), r#"{"todos": []}"#);
     }
 
     #[tokio::test]
-    async fn test_todo_write_tool_empty_list_clears() {
+    async fn test_todo_write_and_read() {
         let (storage, _temp) = create_test_storage().await;
-        let tool = TodoWriteTool::new(storage.clone());
+        let tool = TodoTool::new(storage.clone());
+
+        // Write todos
+        let write_input = json!({
+            "action": "write",
+            "todos": [
+                {"id": "1", "content": "Task 1", "status": "pending"},
+                {"id": "2", "content": "Task 2", "status": "in_progress"}
+            ]
+        });
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(write_input, ctx).await.unwrap();
+        assert!(result.text_content().contains("modified successfully"));
+
+        // Read them back
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(json!({"action": "read"}), ctx).await.unwrap();
+
+        let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
+        assert_eq!(result_json["todos"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_todo_write_empty_clears() {
+        let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
         // First add some todos
         let input1 = json!({
+            "action": "write",
             "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
         tool.exec(input1, ctx).await.unwrap();
         assert!(storage.load("test-session").await.unwrap().is_some());
 
-        // Then clear with empty list - should delete the file
-        let input2 = json!({ "todos": [] });
+        // Then clear with empty list
+        let input2 = json!({"action": "write", "todos": []});
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = tool.exec(input2, ctx).await.unwrap();
+        tool.exec(input2, ctx).await.unwrap();
 
-        let text = result.text_content();
-        assert!(text.contains("Todos have been modified successfully"));
         // Verify file was deleted
         assert!(storage.load("test-session").await.unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn test_todo_write_tool_invalid_status() {
+    async fn test_todo_write_missing_content() {
         let (storage, _temp) = create_test_storage().await;
-        let tool = TodoWriteTool::new(storage);
+        let tool = TodoTool::new(storage);
 
         let input = json!({
-            "todos": [
-                {"id": "1", "content": "Task 1", "status": "invalid_status"}
-            ]
+            "action": "write",
+            "todos": [{"id": "1", "status": "pending"}]
         });
-
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
         let result = tool.exec(input, ctx).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid status"));
-    }
 
-    #[tokio::test]
-    async fn test_todo_write_tool_missing_id() {
-        let (storage, _temp) = create_test_storage().await;
-        let tool = TodoWriteTool::new(storage);
-
-        let input = json!({
-            "todos": [
-                {"content": "Task 1", "status": "pending"}
-            ]
-        });
-
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = tool.exec(input, ctx).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("todo id is required"));
-    }
-
-    #[tokio::test]
-    async fn test_todo_write_tool_missing_content() {
-        let (storage, _temp) = create_test_storage().await;
-        let tool = TodoWriteTool::new(storage);
-
-        let input = json!({
-            "todos": [
-                {"id": "1", "status": "pending"}
-            ]
-        });
-
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = tool.exec(input, ctx).await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -391,275 +310,224 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_todo_read_tool_with_data() {
+    async fn test_todo_write_invalid_status() {
         let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage);
+
+        let input = json!({
+            "action": "write",
+            "todos": [{"id": "1", "content": "Task 1", "status": "invalid"}]
+        });
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(input, ctx).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid status"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_update_single_status() {
+        let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
         // First write some todos
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
+        let write_input = json!({
+            "action": "write",
             "todos": [
                 {"id": "1", "content": "Task 1", "status": "pending"},
                 {"id": "2", "content": "Task 2", "status": "in_progress"}
             ]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input.clone(), ctx).await.unwrap();
-
-        // Then read them back
-        let read_tool = TodoReadTool::new(storage);
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = read_tool.exec(json!({}), ctx).await.unwrap();
-
-        let text = result.text_content();
-        let result_json: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(result_json["todos"].as_array().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_todo_read_tool_empty() {
-        let (storage, _temp) = create_test_storage().await;
-        let tool = TodoReadTool::new(storage);
-
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = tool.exec(json!({}), ctx).await.unwrap();
-
-        let text = result.text_content();
-        assert_eq!(text, r#"{"todos": []}"#);
-    }
-
-    #[tokio::test]
-    async fn test_todo_update_tool_status() {
-        let (storage, _temp) = create_test_storage().await;
-
-        // First create some todos
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
-            "todos": [
-                {"id": "1", "content": "Task 1", "status": "pending"},
-                {"id": "2", "content": "Task 2", "status": "in_progress"}
-            ]
-        });
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        tool.exec(write_input, ctx).await.unwrap();
 
         // Update status of todo "1"
-        let update_tool = TodoUpdateTool::new(storage.clone());
-        let update = json!({
-            "id": "1",
-            "status": "completed"
+        let update_input = json!({
+            "action": "update",
+            "todos": [{"id": "1", "status": "completed"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await.unwrap();
+        let result = tool.exec(update_input, ctx).await.unwrap();
 
-        // Verify result returns the complete updated todo
         let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
-        assert_eq!(result_json["id"], "1");
-        assert_eq!(result_json["status"], "completed");
-        assert_eq!(result_json["content"], "Task 1");
+        let updated = result_json["updated"].as_array().unwrap();
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0]["status"], "completed");
+        assert_eq!(updated[0]["content"], "Task 1");
 
-        // Verify the update in storage
+        // Verify storage
         let loaded = storage.load("test-session").await.unwrap().unwrap();
         let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
         let todos = loaded_json["todos"].as_array().unwrap();
         assert_eq!(todos[0]["status"], "completed");
-        assert_eq!(todos[0]["content"], "Task 1"); // content unchanged
-        assert_eq!(todos[1]["status"], "in_progress"); // other todo unchanged
+        assert_eq!(todos[1]["status"], "in_progress");
     }
 
     #[tokio::test]
-    async fn test_todo_update_tool_content() {
+    async fn test_todo_update_batch_multiple() {
         let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
-        // First create a todo
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
+        // First write some todos
+        let write_input = json!({
+            "action": "write",
             "todos": [
-                {"id": "1", "content": "Old content", "status": "pending"}
+                {"id": "1", "content": "Task 1", "status": "pending"},
+                {"id": "2", "content": "Task 2", "status": "pending"},
+                {"id": "3", "content": "Task 3", "status": "pending"}
             ]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        tool.exec(write_input, ctx).await.unwrap();
 
-        // Update content
-        let update_tool = TodoUpdateTool::new(storage.clone());
-        let update = json!({
-            "id": "1",
-            "content": "New content"
-        });
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await.unwrap();
-
-        // Verify result returns the complete updated todo
-        let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
-        assert_eq!(result_json["id"], "1");
-        assert_eq!(result_json["content"], "New content");
-        assert_eq!(result_json["status"], "pending"); // status unchanged
-
-        // Verify the update in storage
-        let loaded = storage.load("test-session").await.unwrap().unwrap();
-        let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
-        let todos = loaded_json["todos"].as_array().unwrap();
-        assert_eq!(todos[0]["content"], "New content");
-        assert_eq!(todos[0]["status"], "pending"); // status unchanged
-    }
-
-    #[tokio::test]
-    async fn test_todo_update_tool_both() {
-        let (storage, _temp) = create_test_storage().await;
-
-        // First create a todo
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
+        // Batch update multiple todos
+        let update_input = json!({
+            "action": "update",
             "todos": [
-                {"id": "1", "content": "Task 1", "status": "pending"}
+                {"id": "1", "status": "in_progress"},
+                {"id": "2", "status": "completed"}
             ]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        let result = tool.exec(update_input, ctx).await.unwrap();
 
-        // Update both status and content
-        let update_tool = TodoUpdateTool::new(storage.clone());
-        let update = json!({
-            "id": "1",
-            "status": "in_progress",
-            "content": "Updated task"
-        });
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await.unwrap();
-
-        // Verify result returns the complete updated todo
         let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
-        assert_eq!(result_json["id"], "1");
-        assert_eq!(result_json["status"], "in_progress");
-        assert_eq!(result_json["content"], "Updated task");
+        let updated = result_json["updated"].as_array().unwrap();
+        assert_eq!(updated.len(), 2);
 
-        // Verify the update in storage
+        // Verify storage
         let loaded = storage.load("test-session").await.unwrap().unwrap();
         let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
         let todos = loaded_json["todos"].as_array().unwrap();
         assert_eq!(todos[0]["status"], "in_progress");
-        assert_eq!(todos[0]["content"], "Updated task");
+        assert_eq!(todos[1]["status"], "completed");
+        assert_eq!(todos[2]["status"], "pending");
     }
 
     #[tokio::test]
-    async fn test_todo_update_tool_notes() {
+    async fn test_todo_update_content_and_notes() {
         let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
-        // First create a todo with notes
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
-            "todos": [
-                {"id": "1", "content": "Task 1", "status": "pending", "notes": "Initial note"}
-            ]
+        // First write a todo
+        let write_input = json!({
+            "action": "write",
+            "todos": [{"id": "1", "content": "Task 1", "status": "pending", "notes": "Original note"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        tool.exec(write_input, ctx).await.unwrap();
 
-        // Update notes
-        let update_tool = TodoUpdateTool::new(storage.clone());
-        let update = json!({
-            "id": "1",
-            "notes": "Updated note"
+        // Update content and remove notes
+        let update_input = json!({
+            "action": "update",
+            "todos": [{"id": "1", "content": "Updated Task", "notes": null}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await.unwrap();
+        let result = tool.exec(update_input, ctx).await.unwrap();
 
-        // Verify result returns the complete updated todo
         let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
-        assert_eq!(result_json["id"], "1");
-        assert_eq!(result_json["notes"], "Updated note");
-        assert_eq!(result_json["status"], "pending"); // unchanged
-        assert_eq!(result_json["content"], "Task 1"); // unchanged
+        let updated = result_json["updated"].as_array().unwrap();
+        assert_eq!(updated[0]["content"], "Updated Task");
+        assert!(updated[0]["notes"].is_null());
+        assert_eq!(updated[0]["status"], "pending"); // unchanged
 
-        // Verify the update in storage
+        // Verify storage
         let loaded = storage.load("test-session").await.unwrap().unwrap();
         let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
         let todos = loaded_json["todos"].as_array().unwrap();
-        assert_eq!(todos[0]["notes"], "Updated note");
+        assert_eq!(todos[0]["content"], "Updated Task");
+        assert!(todos[0].get("notes").is_none());
     }
 
     #[tokio::test]
-    async fn test_todo_update_tool_notes_null() {
+    async fn test_todo_update_not_found() {
         let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
-        // First create a todo with notes
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
-            "todos": [
-                {"id": "1", "content": "Task 1", "status": "pending", "notes": "Some note"}
-            ]
-        });
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
-
-        // Remove notes by setting to null
-        let update_tool = TodoUpdateTool::new(storage.clone());
-        let update = json!({
-            "id": "1",
-            "notes": null
-        });
-        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await.unwrap();
-
-        // Verify result returns the updated todo without notes
-        let result_json: Value = serde_json::from_str(&result.text_content()).unwrap();
-        assert_eq!(result_json["id"], "1");
-        assert!(!result_json.as_object().unwrap().contains_key("notes"));
-
-        // Verify the update in storage
-        let loaded = storage.load("test-session").await.unwrap().unwrap();
-        let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
-        let todos = loaded_json["todos"].as_array().unwrap();
-        assert!(!todos[0].as_object().unwrap().contains_key("notes"));
-    }
-
-    #[tokio::test]
-    async fn test_todo_update_tool_not_found() {
-        let (storage, _temp) = create_test_storage().await;
-
-        // Create a todo
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
+        // First write a todo
+        let write_input = json!({
+            "action": "write",
             "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        tool.exec(write_input, ctx).await.unwrap();
 
         // Try to update non-existent todo
-        let update_tool = TodoUpdateTool::new(storage);
-        let update = json!({
-            "id": "999",
-            "status": "completed"
+        let update_input = json!({
+            "action": "update",
+            "todos": [{"id": "999", "status": "completed"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await;
+        let result = tool.exec(update_input, ctx).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[tokio::test]
-    async fn test_todo_update_tool_invalid_status() {
+    async fn test_todo_update_invalid_status() {
         let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage.clone());
 
-        // Create a todo
-        let write_tool = TodoWriteTool::new(storage.clone());
-        let input = json!({
+        // First write a todo
+        let write_input = json!({
+            "action": "write",
             "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        write_tool.exec(input, ctx).await.unwrap();
+        tool.exec(write_input, ctx).await.unwrap();
 
         // Try to update with invalid status
-        let update_tool = TodoUpdateTool::new(storage);
-        let update = json!({
-            "id": "1",
-            "status": "invalid_status"
+        let update_input = json!({
+            "action": "update",
+            "todos": [{"id": "1", "status": "invalid_status"}]
         });
         let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
-        let result = update_tool.exec(update, ctx).await;
+        let result = tool.exec(update_input, ctx).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("invalid status"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_missing_action() {
+        let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage);
+
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(json!({}), ctx).await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("action is required"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_missing_todos_for_write() {
+        let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage);
+
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(json!({"action": "write"}), ctx).await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("todos array is required"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_unknown_action() {
+        let (storage, _temp) = create_test_storage().await;
+        let tool = TodoTool::new(storage);
+
+        let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+        let result = tool.exec(json!({"action": "delete"}), ctx).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown action"));
     }
 }
