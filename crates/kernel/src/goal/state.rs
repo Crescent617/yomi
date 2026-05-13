@@ -118,10 +118,10 @@ impl GoalState {
     /// even when the system prompt was built without `with_goal_rules`.
     pub fn to_user_message(&self) -> String {
         format!(
-            "<system_reminder>\n\
+            "Goal: {}\n\
+            <system_reminder>\n\
              # Goal Mode\n\
              When a goal is active, work autonomously toward it. Take actions, read files, write code, run tests, and iterate until the goal is fully achieved.\n\
-             Goal: {}\n\
              IMPORTANT: If you have completed the goal, output '{}'.\n\
              </system_reminder>",
             self.description, self.completion_marker

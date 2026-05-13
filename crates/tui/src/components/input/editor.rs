@@ -350,18 +350,23 @@ impl InputEditor {
         Some(text)
     }
 
+    /// Delete a range of bytes from the content
+    pub fn delete_range(&mut self, start: usize, end: usize) {
+        let len = self.content.len();
+        let start = start.min(len);
+        let end = end.min(len);
+        if start < end {
+            self.content.drain(start..end);
+            self.cursor_pos = start;
+        }
+    }
+
     /// Delete the selected text and clear selection
     pub fn delete_selection(&mut self) {
         if let Some(sel) = self.selection {
             let norm = sel.normalized();
             if !norm.is_empty() {
-                let len = self.content.len();
-                let start = norm.start.min(len);
-                let end = norm.end.min(len);
-                if start < end {
-                    self.content.drain(start..end);
-                    self.cursor_pos = start;
-                }
+                self.delete_range(norm.start, norm.end);
             }
             self.clear_selection();
         }
