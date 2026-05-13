@@ -530,24 +530,36 @@ impl ChatView {
     pub fn append_streaming_content(&mut self, text: &str) {
         self.streaming_content.push_str(text);
         self.md_renderer.append(text);
-        // Streaming content affects rendered output
-        self.msg_cache_dirty = true;
+        // Note: streaming content is rendered separately, don't mark history cache dirty
+        // The view() method handles streaming content independently
     }
 
     pub fn append_streaming_thinking(&mut self, text: &str) {
         self.streaming_thinking.push_str(text);
-        // Streaming content affects rendered output
-        self.msg_cache_dirty = true;
+        // Note: streaming content is rendered separately, don't mark history cache dirty
     }
 
-    pub fn tick(&mut self) {
+    /// Tick handler for animation. Returns true if visual state changed and needs redraw.
+    pub fn tick(&mut self) -> bool {
+        let mut needs_redraw = false;
+
+        // Check if streaming spinner frame changed
         if self.is_streaming {
+            let old_spinner_idx = (self.tick_frame / 3) % 3;
             self.tick_frame = self.tick_frame.wrapping_add(1);
+            let new_spinner_idx = (self.tick_frame / 3) % 3;
+            if old_spinner_idx != new_spinner_idx {
+                needs_redraw = true;
+            }
         }
+
         // Update mascot blink animation
         if self.mascot_animator.tick() {
             self.banner_dirty = true;
+            needs_redraw = true;
         }
+
+        needs_redraw
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
@@ -2512,8 +2524,12 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
 
         match *ev {
             Event::Tick => {
-                self.component.tick();
-                Some(Msg::Redraw)
+                // Tick returns true if spinner frame changed or mascot blinked
+                if self.component.tick() {
+                    Some(Msg::Redraw)
+                } else {
+                    None
+                }
             }
             // Keyboard scrolling - PageUp/PageDown
             Event::Keyboard(KeyEvent {

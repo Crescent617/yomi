@@ -203,9 +203,15 @@ impl InfoBar {
         self.token_count += tokens::estimate_tokens_f64(text);
     }
 
-    pub const fn tick(&mut self) {
+    /// Tick handler for animation. Returns true if spinner frame changed and needs redraw.
+    pub fn tick(&mut self) -> bool {
         if self.state.is_active() {
+            let old_spinner_idx = (self.tick_frame / 3) % 3;
             self.tick_frame = self.tick_frame.wrapping_add(1);
+            let new_spinner_idx = (self.tick_frame / 3) % 3;
+            old_spinner_idx != new_spinner_idx
+        } else {
+            false
         }
     }
 
@@ -488,8 +494,15 @@ impl AppComponent<Msg, crate::msg::UserEvent> for InfoBarComponent {
     fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         match *ev {
             Event::Tick => {
-                self.component.tick();
-                Some(Msg::Redraw)
+                // Tick returns true if spinner frame changed
+                let spinner_changed = self.component.tick();
+                // Also redraw if notification expired
+                let notification_expired = self.component.notification.check_timeout();
+                if spinner_changed || notification_expired {
+                    Some(Msg::Redraw)
+                } else {
+                    None
+                }
             }
             // Note: Content updates come through attr() from app.rs, not here
             _ => None,
