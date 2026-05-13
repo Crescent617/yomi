@@ -208,7 +208,7 @@ impl InputComponent {
                 self.component.insert_newline();
                 Some(Msg::InputChanged(self.component.content().to_string()))
             }
-            // Enter: submit input
+            // Enter: submit input (or insert newline if preceded by backslash)
             Event::Keyboard(KeyEvent {
                 code: Key::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -218,6 +218,20 @@ impl InputComponent {
                     self.accept_completion();
                     self.update_completion();
                     return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
+                // Check if cursor is preceded by backslash - if so, delete backslash and insert newline
+                let cursor_pos = self.component.cursor_pos();
+                if cursor_pos > 0 {
+                    let content = self.component.content();
+                    // Get the last character before cursor
+                    let last_char = content[..cursor_pos].chars().next_back();
+                    if last_char == Some('\\') {
+                        // Remove backslash and insert newline
+                        self.component
+                            .delete_range(cursor_pos - 1, cursor_pos);
+                        self.component.insert_newline();
+                        return Some(Msg::InputChanged(self.component.content().to_string()));
+                    }
                 }
                 // Get content blocks (supports multi-modal: text, images, etc.)
                 let content_blocks = self.get_content_blocks();
