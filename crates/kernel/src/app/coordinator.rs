@@ -293,6 +293,24 @@ impl Coordinator {
         result
     }
 
+    /// Start autonomous goal-mode for a session
+    pub async fn start_goal(
+        &self,
+        session_id: &SessionId,
+        state: crate::goal::GoalState,
+    ) -> Result<()> {
+        let session = self.require_session(session_id).await?;
+        let mut session_guard = session.write().await;
+        session_guard.start_goal(state).await
+    }
+
+    /// Stop autonomous goal-mode for a session
+    pub async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session(session_id).await?;
+        let mut session_guard = session.write().await;
+        session_guard.stop_goal().await
+    }
+
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.session_store().delete(session_id).await

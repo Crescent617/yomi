@@ -34,7 +34,7 @@ use crate::{
         char_idx_to_byte_idx, preprocess, substring_by_chars, truncate_by_chars, truncate_by_width,
     },
 };
-use kernel::storage::todo::strip_system_reminders;
+
 use kernel::task::{
     TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
 };
@@ -687,8 +687,7 @@ impl ChatView {
                 for block in content_blocks {
                     match block {
                         ContentBlock::Text { text } => {
-                            let filtered = strip_system_reminders(text);
-                            for line in filtered.lines() {
+                            for line in text.lines() {
                                 let prefix = if line_idx == 0 {
                                     chars::INPUT_PROMPT
                                 } else {
@@ -1105,17 +1104,16 @@ impl ChatView {
         lines
     }
 
-    /// Extract text content from content blocks, stripping system reminders.
+    /// Extract text content from content blocks.
     fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
         blocks
             .iter()
             .filter_map(|b| match b {
                 ContentBlock::Text { text } => {
-                    let filtered = strip_system_reminders(text);
-                    if filtered.is_empty() {
+                    if text.is_empty() {
                         None
                     } else {
-                        Some(filtered)
+                        Some(text.as_str())
                     }
                 }
                 _ => None,

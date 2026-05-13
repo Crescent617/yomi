@@ -35,6 +35,8 @@ pub enum AgentInput {
     Shutdown,
     /// Force compaction of message buffer
     Compact,
+    /// Dynamically set or clear goal context
+    SetGoal(Option<crate::goal::GoalContext>),
 }
 
 pub struct Agent {
@@ -55,6 +57,8 @@ pub struct Agent {
     working_dir: std::path::PathBuf,
     /// Generation counter: inputs with lower generation are stale (cancelled before send)
     input_stale_since: Arc<AtomicU64>,
+    /// Optional goal context (state + store) for autonomous goal-mode execution
+    goal_ctx: Option<crate::goal::GoalContext>,
 }
 
 impl Agent {
@@ -68,7 +72,7 @@ impl Agent {
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        // Build system prompt with project memory (auto-loaded from working_dir) and skills
+        // Build system prompt with project memory and skills
         let system_prompt = SystemPromptBuilder::new()
             .base_prompt(&args.base_prompt)
             .with_skills(&args.skills)
@@ -82,6 +86,23 @@ impl Agent {
             system_prompt
         );
         let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
+
+        // Insert the goal description as a user message so it participates in
+        // conversation history (preserves prompt-cache hits on the system prefix).
+        // Skip if the history already contains the goal marker (resume case).
+        if let Some(ref goal_ctx) = args.goal_ctx {
+            let already_present = args.history.iter().any(|m| {
+                m.role == Role::User
+                    && m.content.iter().any(|b| {
+                        b.as_text()
+                            .is_some_and(|t| t.contains(&goal_ctx.completion_marker))
+                    })
+            });
+            if !already_present {
+                messages.push(Arc::new(Message::user(goal_ctx.to_user_message())));
+            }
+        }
+
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
         let message_buffer = MessageBuffer::from_arc_messages(&messages);
 
@@ -129,6 +150,7 @@ impl Agent {
             permission_checker,
             working_dir: args.working_dir,
             input_stale_since: Arc::clone(&input_stale_since),
+            goal_ctx: args.goal_ctx,
         };
 
         let handle_id = id.clone();
@@ -214,8 +236,13 @@ impl Agent {
             let result = match state {
                 AgentState::Idle => {
                     self.context.reset_iteration();
-                    tracing::debug!("Agent {} waiting for input", self.id);
-                    self.handle_wait_for_input().await
+                    if self.goal_ctx.is_some() {
+                        tracing::debug!("Agent {} in goal mode, handling idle", self.id);
+                        self.handle_goal_idle().await
+                    } else {
+                        tracing::debug!("Agent {} waiting for input", self.id);
+                        self.handle_wait_for_input().await
+                    }
                 }
                 AgentState::Streaming => {
                     tracing::debug!("Agent {} starting streaming", self.id);
@@ -325,7 +352,7 @@ impl Agent {
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User {
-                mut content,
+                content,
                 generation,
             }) => {
                 // Check if this input was sent before the last cancellation
@@ -339,29 +366,7 @@ impl Agent {
                     );
                     return Ok(());
                 }
-
-                self.cancel_token.reset_if_cancelled();
-
-                // Run user message interceptors
-                if let Some(ref interceptor) = self.shared.message_interceptor {
-                    let ctx = InterceptCtx {
-                        session_id: &self.session_id,
-                        history: self.message_buffer.messages(),
-                    };
-                    interceptor.intercept(&mut content, &ctx).await;
-                }
-
-                let _ = self
-                    .event_tx
-                    .send(Event::User(crate::event::UserEvent::Message {
-                        content: content.clone(),
-                    }))
-                    .await;
-                let msg = Message::with_blocks(Role::User, content);
-                self.persist_message(&msg).await;
-                self.message_buffer.push(msg);
-                self.context.transition_to(AgentState::Streaming);
-                Ok(())
+                self.inject_user_message(content).await
             }
             Some(AgentInput::TaskResult { task_id, content }) => {
                 tracing::debug!("Task result received: {}", task_id);
@@ -394,11 +399,167 @@ impl Agent {
                 // User-initiated compact doesn't auto-continue, stay in WaitingForInput
                 Ok(())
             }
+            Some(AgentInput::SetGoal(goal)) => {
+                if goal.is_some() {
+                    tracing::info!("Agent {} goal mode activated", self.id);
+                } else {
+                    tracing::info!("Agent {} goal mode deactivated", self.id);
+                }
+                self.goal_ctx = goal;
+                // If a goal was set and we are in Idle, the caller (start_loop)
+                // will immediately re-evaluate and trigger auto-continue on the
+                // next iteration because goal_ctx.is_some() is true.
+                Ok(())
+            }
             None => {
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
         }
+    }
+
+    /// Goal-mode idle handler.
+    ///
+    /// Drains pending external inputs. User messages are treated as interventions
+    /// (goal stays active). If nothing is pending, auto-continue.
+    async fn handle_goal_idle(&mut self) -> Result<(), AgentError> {
+        while let Ok(input) = self.input_rx.try_recv() {
+            match input {
+                AgentInput::Shutdown => {
+                    self.context.transition_to(AgentState::Closed);
+                    return Ok(());
+                }
+                AgentInput::SetGoal(None) => {
+                    self.goal_ctx = None;
+                    return Ok(());
+                }
+                AgentInput::SetGoal(Some(state)) => {
+                    self.goal_ctx = Some(state);
+                }
+                AgentInput::User {
+                    content,
+                    generation,
+                } => {
+                    if generation >= self.input_stale_since.load(Ordering::Relaxed) {
+                        return self.inject_user_message(content).await;
+                    }
+                }
+                AgentInput::TaskResult { content, .. } => {
+                    self.cancel_token.reset_if_cancelled();
+                    let msg = Message::with_blocks(Role::User, content);
+                    self.persist_message(&msg).await;
+                    self.message_buffer.push(msg);
+                    self.context.transition_to(AgentState::Streaming);
+                    return Ok(());
+                }
+                AgentInput::Compact => {
+                    let _ = self.force_full_compact().await;
+                }
+                other => {
+                    tracing::debug!("Agent {} ignored input in goal idle: {:?}", self.id, other);
+                }
+            }
+        }
+
+        if self.cancel_token.is_cancelled() {
+            tracing::info!("Agent {} goal mode interrupted by cancel", self.id);
+            self.goal_ctx = None;
+            self.cancel_token.reset_if_cancelled();
+            return Ok(());
+        }
+
+        let Some(ref mut goal) = self.goal_ctx else {
+            return self.handle_wait_for_input().await;
+        };
+
+        if goal.is_doom_loop() {
+            tracing::warn!("Agent {} detected doom loop, stopping goal", self.id);
+            goal.mark_fail(crate::goal::GoalFailureReason::DoomLoop).await;
+            let _ = self
+                .event_tx
+                .send(Event::Agent(AgentEvent::Lifecycle {
+                    agent_id: self.id.clone(),
+                    state: AgentStatus::Stopped {
+                        reason: StopReason::Failed {
+                            error: "Doom loop detected".into(),
+                        },
+                    },
+                }))
+                .await;
+            self.goal_ctx = None;
+            return Ok(());
+        }
+
+        if let Some(max) = goal.max_iterations {
+            if goal.iteration_count >= max {
+                tracing::warn!(
+                    "Agent {} reached max iterations ({}) for goal, stopping",
+                    self.id,
+                    max
+                );
+                goal.mark_fail(crate::goal::GoalFailureReason::MaxIterations).await;
+                let _ = self
+                    .event_tx
+                    .send(Event::Agent(AgentEvent::Lifecycle {
+                        agent_id: self.id.clone(),
+                        state: AgentStatus::Stopped {
+                            reason: StopReason::MaxIterations {
+                                reached: goal.iteration_count,
+                            },
+                        },
+                    }))
+                    .await;
+                self.goal_ctx = None;
+                return Ok(());
+            }
+        }
+
+        if goal.clear_context {
+            let system = self
+                .message_buffer
+                .messages()
+                .iter()
+                .find(|m| m.role == Role::System)
+                .cloned();
+            self.message_buffer.messages_mut().clear();
+            if let Some(sys) = system {
+                self.message_buffer.push((*sys).clone());
+            }
+            self.message_buffer
+                .push(Message::user(goal.to_user_message()));
+        }
+
+        let msg = Message::user(goal.build_continue_prompt());
+        self.persist_message(&msg).await;
+        self.message_buffer.push(msg);
+        self.context.transition_to(AgentState::Streaming);
+        Ok(())
+    }
+
+    /// Inject a user message (with interceptors) and transition to Streaming.
+    async fn inject_user_message(
+        &mut self,
+        mut content: Vec<ContentBlock>,
+    ) -> Result<(), AgentError> {
+        self.cancel_token.reset_if_cancelled();
+        if let Some(ref interceptor) = self.shared.message_interceptor {
+            let ctx = InterceptCtx {
+                session_id: &self.session_id,
+                history: self.message_buffer.messages(),
+            };
+            interceptor.intercept(&mut content, &ctx).await;
+        }
+        let _ = self
+            .event_tx
+            .send(Event::User(crate::event::UserEvent::Message {
+                content: content.clone(),
+            }))
+            .await;
+        let msg = Message::with_blocks(Role::User, content);
+        self.persist_message(&msg).await;
+        self.message_buffer.push(msg);
+        self.context.transition_to(AgentState::Streaming);
+        Ok(())
     }
 
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
@@ -791,7 +952,7 @@ impl Agent {
 
     /// Transition to appropriate state after streaming completes
     async fn transition_after_streaming(
-        &self,
+        &mut self,
         finish_reason: Option<crate::types::FinishReason>,
     ) -> Result<(), AgentError> {
         let has_tool_calls = self
@@ -817,6 +978,34 @@ impl Agent {
             );
             self.context.transition_to(AgentState::ExecutingTool);
         } else {
+            // Check goal completion if a goal is active
+            if let Some(ref mut goal) = self.goal_ctx {
+                if let Some(last_msg) = self.message_buffer.messages().last() {
+                    if goal.check_completion(last_msg) {
+                        tracing::info!("Agent {} goal completed", self.id);
+                        goal.mark_complete().await;
+                        if let Err(e) =
+                            self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                                agent_id: self.id.clone(),
+                                state: AgentStatus::Stopped {
+                                    reason: StopReason::Completed,
+                                },
+                            }))
+                        {
+                            tracing::warn!(
+                                "Agent {} failed to send goal completion event: {}",
+                                self.id,
+                                e
+                            );
+                        }
+                        self.goal_ctx = None;
+                        self.context.transition_to(AgentState::Idle);
+                        return Ok(());
+                    }
+                    goal.record_turn_and_save(last_msg).await;
+                }
+            }
+
             tracing::debug!(
                 "Agent {} streaming complete, waiting for next input",
                 self.id

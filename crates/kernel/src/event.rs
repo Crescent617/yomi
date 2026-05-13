@@ -27,6 +27,10 @@ pub enum ControlCommand {
     SetLevel(Level),
     /// Force message compaction
     Compact,
+    /// Start autonomous goal-mode execution
+    StartGoal(crate::goal::GoalState),
+    /// Stop autonomous goal-mode execution
+    StopGoal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

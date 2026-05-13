@@ -79,6 +79,15 @@ impl InputComponent {
 
         match parts[0] {
             "/new" => Some(Msg::CommandNew),
+            "/goal" => {
+                let description = parts[1..].join(" ");
+                if description.trim().is_empty() {
+                    None // bare /goal is treated as regular message
+                } else {
+                    Some(Msg::CommandGoal(description))
+                }
+            }
+            "/goal:stop" => Some(Msg::CommandGoalStop),
             "/todos" => Some(Msg::CommandTodos),
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
@@ -218,22 +227,24 @@ impl InputComponent {
                     _ => true,
                 });
                 if has_content {
+                    // Capture raw text before clearing the input
+                    let raw_text = self.component.content().to_string();
+
                     // Check if it's a command (only supports text-only content)
-                    let text_content = self.component.content();
-                    if let Some(cmd_msg) = Self::parse_command(text_content) {
-                        // It's a command, return the command message
-                        // Clear input after submitting command
-                        let _ = self.component.submit();
-                        Some(cmd_msg)
+                    let inner_msg = if let Some(cmd_msg) = Self::parse_command(&raw_text) {
+                        cmd_msg
                     } else {
-                        // Regular input with multi-modal support
-                        // Clear input and mappings after submitting
-                        let _ = self.component.submit();
-                        self.placeholder_counter = 0;
-                        self.image_paths.clear();
-                        self.pasted_contents.clear();
-                        Some(Msg::InputSubmit(content_blocks))
-                    }
+                        Msg::InputSubmit(content_blocks)
+                    };
+
+                    // Clear input and mappings after submitting
+                    let _ = self.component.submit();
+                    self.placeholder_counter = 0;
+                    self.image_paths.clear();
+                    self.pasted_contents.clear();
+
+                    // Wrap with raw text for history tracking
+                    Some(Msg::InputEntry(raw_text, Box::new(inner_msg)))
                 } else {
                     None
                 }

@@ -36,6 +36,8 @@ pub struct AgentSpawnArgs {
     pub cancel_token: Option<super::CancelToken>,
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+    /// Optional goal context (state + store) for autonomous goal-mode execution
+    pub goal_ctx: Option<crate::goal::GoalContext>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -51,6 +53,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
             .field("file_state_store", &self.file_state_store.is_some())
+            .field("goal_ctx", &self.goal_ctx.is_some())
             .finish()
     }
 }
@@ -69,6 +72,7 @@ impl AgentSpawnArgs {
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             cancel_token: None,
             file_state_store: None,
+            goal_ctx: None,
         }
     }
 
@@ -134,6 +138,13 @@ impl AgentSpawnArgs {
         store: Arc<crate::tools::helper::FileStateStore>,
     ) -> Self {
         self.file_state_store = Some(store);
+        self
+    }
+
+    /// Set goal context for autonomous goal-mode execution
+    #[must_use]
+    pub fn with_goal_ctx(mut self, ctx: crate::goal::GoalContext) -> Self {
+        self.goal_ctx = Some(ctx);
         self
     }
 }

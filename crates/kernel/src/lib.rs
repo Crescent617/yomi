@@ -18,6 +18,7 @@ pub mod app;
 pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod goal;
 pub mod memory;
 pub mod misc;
 pub mod permissions;
