@@ -92,7 +92,7 @@ impl InputComponent {
             && content
                 .chars()
                 .skip(1)
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ':');
 
         if should_show && !self.command_completion.is_visible() {
             self.start_command_completion(1);

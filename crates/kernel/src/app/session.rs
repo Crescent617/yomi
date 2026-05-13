@@ -1,3 +1,4 @@
+use crate::goal::JsonGoalStore;
 use crate::permissions::{Level, PermissionState};
 use crate::storage::file_state::JsonlFileStateStore;
 use crate::types::{AgentId, KernelError, Result, SessionId};
@@ -21,6 +22,8 @@ pub struct Session {
     /// File state store for tracking file modification times
     #[allow(dead_code)]
     file_state_store: Arc<crate::tools::helper::FileStateStore>,
+    /// Goal store for persisting active goal state
+    goal_store: Arc<dyn crate::goal::GoalStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +44,8 @@ impl Session {
         agent_shared: Arc<AgentShared>,
     ) -> Result<(Self, mpsc::Receiver<Event>)> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
+        let goal_store: Arc<dyn crate::goal::GoalStore> =
+            Arc::new(JsonGoalStore::new(&config.data_dir));
 
         let permission_state = Self::create_permission_state(&config);
 
@@ -49,6 +54,7 @@ impl Session {
             &config,
             &agent_shared,
             &file_state_store,
+            &goal_store,
             permission_state.clone(),
         )
         .await?;
@@ -60,6 +66,7 @@ impl Session {
             main_agent: Some(main_agent),
             permission_state,
             file_state_store,
+            goal_store,
         };
         Ok((session, event_rx))
     }
@@ -97,6 +104,7 @@ impl Session {
         config: &SessionConfig,
         agent_shared: &Arc<AgentShared>,
         file_state_store: &Arc<crate::tools::helper::FileStateStore>,
+        goal_store: &Arc<dyn crate::goal::GoalStore>,
         permission_state: Option<PermissionState>,
     ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
         let history = agent_shared
@@ -107,13 +115,28 @@ impl Session {
             .await
             .unwrap_or_default();
 
-        let spawn_args = AgentSpawnArgs::new(config.agent.system_prompt.clone(), id.0.clone())
+        // Resume active goal if one exists
+        let goal_state = goal_store
+            .load(&id.0)
+            .await
+            .ok()
+            .flatten()
+            .filter(|g| matches!(g.status, crate::goal::GoalStatus::Active));
+
+        let mut spawn_args = AgentSpawnArgs::new(config.agent.system_prompt.clone(), id.0.clone())
             .with_skills(config.agent.skills.clone())
             .with_history(history)
             .with_max_iterations(config.agent.max_iterations)
             .with_working_dir(config.project_path.clone())
             .with_subagent(config.agent.enable_subagent)
             .with_file_state_store(Arc::clone(file_state_store));
+
+        let goal_ctx = goal_state.map(|state| {
+            crate::goal::GoalContext::new(state, Some(Arc::clone(goal_store)), id.0.clone())
+        });
+        if let Some(ctx) = goal_ctx {
+            spawn_args = spawn_args.with_goal_ctx(ctx);
+        }
 
         let shared = Arc::new(
             agent_shared.with_per_session(permission_state, Some(Arc::clone(file_state_store))),
@@ -217,5 +240,43 @@ impl Session {
             }
             None => Err(KernelError::session("Session not initialized")),
         }
+    }
+
+    /// Start autonomous goal-mode execution.
+    ///
+    /// Order matters: we first activate goal mode via `set_goal`, then send the
+    /// goal description as a user message. This ensures the Agent sees the
+    /// description in its conversation history and begins checking for
+    /// `<goal_complete>` on the very next turn.
+    pub async fn start_goal(&mut self, state: crate::goal::GoalState) -> Result<()> {
+        if let Some(ref handle) = self.main_agent {
+            let user_message = state.to_user_message();
+            let ctx = crate::goal::GoalContext::new(
+                state.clone(),
+                Some(Arc::clone(&self.goal_store)),
+                self.id.0.clone(),
+            );
+            // 1. Activate goal mode so the next Idle turn enters goal idle
+            handle.set_goal(Some(ctx)).await?;
+            // 2. Push the goal description as a user message into the conversation
+            handle.send_text(user_message).await?;
+        }
+        // Persist only after agent activation succeeds so that resume never
+        // restores a goal that was never actually started.
+        self.goal_store.save(&self.id.0, &state).await?;
+        tracing::info!("Session {} goal mode started", self.id.0);
+        Ok(())
+    }
+
+    /// Stop autonomous goal-mode execution
+    pub async fn stop_goal(&mut self) -> Result<()> {
+        // Always clear storage first so that resume never restores a stale goal,
+        // even if the agent handle is already closed.
+        self.goal_store.delete(&self.id.0).await?;
+        if let Some(ref handle) = self.main_agent {
+            let _ = handle.set_goal(None).await;
+        }
+        tracing::info!("Session {} goal mode stopped", self.id.0);
+        Ok(())
     }
 }

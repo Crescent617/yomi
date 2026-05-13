@@ -63,14 +63,16 @@ pub enum Msg {
     DialogSelected(usize), // Selected option index
     DialogCancelled,       // Dialog was cancelled
 
-    // Slash commands
-    CommandNew,      // /new - create new session
-    CommandYolo,     // /yolo - toggle yolo mode
-    CommandBrowse,   // /browse - toggle browse mode
-    CommandCompact,  // /compact - force message compaction
-    CommandHelp,     // /help - show help dialog
-    CommandSessions, // /sessions - switch session
-    CommandTodos,    // /todos - toggle todo list visibility
+    // Slash commands (String = raw user input, e.g. "/goal do stuff")
+    CommandNew,          // /new - create new session
+    CommandGoal(String), // /goal <description> - start autonomous goal mode
+    CommandGoalStop,     // /goal:stop - stop autonomous goal mode
+    CommandYolo,         // /yolo - toggle yolo mode
+    CommandBrowse,       // /browse - toggle browse mode
+    CommandCompact,      // /compact - force message compaction
+    CommandHelp,         // /help - show help dialog
+    CommandSessions,     // /sessions - switch session
+    CommandTodos,        // /todos - toggle todo list visibility
 
     // Session picker
     SessionSelected(String), // User selected a session to switch to
@@ -78,6 +80,10 @@ pub enum Msg {
 
     // Suspend process to background (Ctrl-Z)
     Suspend,
+
+    // History: raw submitted text + the actual message to process.
+    // Emitted whenever the user presses Enter; the raw text goes into input history.
+    InputEntry(String, Box<Msg>),
 
     // History picker (C-r)
     ShowHistoryPicker,       // Show fuzzy history search

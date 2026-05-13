@@ -115,4 +115,12 @@ impl AgentHandle {
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }
+
+    /// Set or clear the agent's goal context dynamically
+    pub async fn set_goal(&self, goal: Option<crate::goal::GoalContext>) -> Result<(), AgentError> {
+        self.input_tx
+            .send(AgentInput::SetGoal(goal))
+            .await
+            .map_err(|_| AgentError::ChannelClosed)
+    }
 }

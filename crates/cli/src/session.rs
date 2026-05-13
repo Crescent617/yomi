@@ -188,6 +188,19 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to compact session: {}", e);
                     }
                 }
+                ControlCommand::StartGoal(config) => {
+                    if let Err(e) = coord_for_ctrl
+                        .start_goal(&session_id_for_ctrl, config)
+                        .await
+                    {
+                        tracing::error!("Failed to start goal: {}", e);
+                    }
+                }
+                ControlCommand::StopGoal => {
+                    if let Err(e) = coord_for_ctrl.stop_goal(&session_id_for_ctrl).await {
+                        tracing::error!("Failed to stop goal: {}", e);
+                    }
+                }
             }
         }
     });

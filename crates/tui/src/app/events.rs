@@ -237,7 +237,20 @@ impl Model {
                         }
                         AgentStatus::Stopped { reason } => match reason {
                             StopReason::Completed => {
-                                // Normal completion - already handled by TurnCompleted
+                                // Goal-mode completion skips TurnCompleted, so ensure cleanup
+                                // happens here if streaming is still active.
+                                if self.state.is_streaming {
+                                    self.finalize_assistant_message();
+                                    self.stop_streaming(StreamingStatus::Completed);
+                                    self.state.should_redraw = true;
+                                }
+                                let message = "🎯 Goal completed";
+                                Self::send_desktop_notification("Yomi", message);
+                                self.show_notification(
+                                    &crate::components::info_bar::Notification::success(
+                                        message, 5000,
+                                    ),
+                                );
                             }
                             StopReason::Cancelled { operation } => {
                                 // Cancelled - no desktop notification, just update UI

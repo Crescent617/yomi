@@ -13,7 +13,6 @@ use crate::{
 };
 use kernel::event::ControlCommand;
 use kernel::permissions::Level;
-use kernel::types::ContentBlock;
 
 use super::types::{AppMode, Model};
 
@@ -23,6 +22,16 @@ impl Model {
             self.state.should_redraw = true;
 
             match msg {
+                // Every user submission wraps its raw text here for history.
+                // We save the text and then forward to the actual message.
+                Msg::InputEntry(raw, inner) => {
+                    if !raw.trim().is_empty() {
+                        self.input_history.retain(|h| h != &raw);
+                        self.input_history.push(raw);
+                        let _ = self.init_input_history();
+                    }
+                    self.update(Some(*inner))
+                }
                 Msg::Quit => {
                     self.state.quit = true;
                     None
@@ -31,22 +40,6 @@ impl Model {
                 Msg::InputSubmit(blocks) => {
                     if self.mode == AppMode::Browse {
                         return None;
-                    }
-                    // Extract text content for history navigation
-                    let text_content: String = blocks
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    // Save to history for C-n/C-p navigation
-                    if !text_content.trim().is_empty() {
-                        // Remove duplicate if exists, keeping only the most recent
-                        self.input_history.retain(|h| h != &text_content);
-                        self.input_history.push(text_content.clone());
-                        let _ = self.init_input_history();
                     }
 
                     // Call input hook if provided (e.g., for saving session)
@@ -280,6 +273,23 @@ impl Model {
                     // Signal that a new session should be created
                     self.state.should_create_new_session = true;
                     self.state.quit = true;
+                    None
+                }
+                Msg::CommandGoal(description) => {
+                    let state = kernel::goal::GoalState::new(description);
+                    let _ = self.ctrl_tx.try_send(ControlCommand::StartGoal(state));
+                    self.show_notification(&Notification::info(
+                        "Goal mode activated. Agent will work autonomously. Use /goal:stop to interrupt.",
+                        5000,
+                    ));
+                    None
+                }
+                Msg::CommandGoalStop => {
+                    let _ = self.ctrl_tx.try_send(ControlCommand::StopGoal);
+                    self.show_notification(&Notification::info(
+                        "Goal mode stopped. Agent will wait for your input.",
+                        3000,
+                    ));
                     None
                 }
                 Msg::CommandTodos => {
