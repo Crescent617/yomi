@@ -392,8 +392,12 @@ impl AppComponent<Msg, crate::msg::UserEvent> for StatusBarComponent {
     fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
         match *ev {
             Event::Tick => {
-                self.component.tick();
-                Some(Msg::Redraw)
+                // Only redraw if tip expired (was cleared)
+                if self.component.tip.check_timeout() {
+                    Some(Msg::Redraw)
+                } else {
+                    None
+                }
             }
             _ => None,
         }
