@@ -69,6 +69,7 @@ impl Model {
             permission_level: crate::config().auto_approve,
             queued_message: None,
             on_input_hook,
+            last_terminal_size: (0, 0),
         })
     }
 

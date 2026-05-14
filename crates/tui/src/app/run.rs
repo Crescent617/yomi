@@ -83,6 +83,15 @@ impl Model {
                 _ => {}
             }
 
+            // Detect terminal resize and force redraw
+            if let Ok(size) = self.terminal.raw().size() {
+                let new_size = (size.width, size.height);
+                if new_size != self.last_terminal_size {
+                    self.last_terminal_size = new_size;
+                    self.state.should_redraw = true;
+                }
+            }
+
             // Redraw if needed
             if self.state.should_redraw {
                 self.view();
