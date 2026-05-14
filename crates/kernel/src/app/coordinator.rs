@@ -48,22 +48,26 @@ impl Coordinator {
         let todo_interceptor = Arc::new(crate::agent::TodoReminderInterceptor::new(
             todo_storage.clone(),
         ));
-        let agent_shared = Arc::new(
-            AgentShared::new(
-                provider,
-                Arc::new(model_config),
-                task_store,
-                Some(todo_storage),
-                compactor,
-                Some(session_store),
-                Some(message_store),
-                Some(storage.usage_store()),
-                None,
-                skill_folders,
-                None,
-            )
-            .with_message_interceptor(todo_interceptor),
-        );
+        let mut agent_shared = AgentShared::new(
+            provider,
+            Arc::new(model_config),
+            task_store,
+            Some(todo_storage),
+            compactor,
+            Some(session_store),
+            Some(message_store),
+            Some(storage.usage_store()),
+            None,
+            skill_folders,
+            None,
+        )
+        .with_message_interceptor(todo_interceptor);
+
+        // Load user hooks from ~/.yomi/hooks.toml
+        let hook_registry = crate::hooks::load_user_hooks(storage.data_dir());
+        agent_shared = agent_shared.with_hook_registry(hook_registry);
+
+        let agent_shared = Arc::new(agent_shared);
         Self {
             agent_shared,
             sessions: Arc::new(RwLock::new(HashMap::new())),

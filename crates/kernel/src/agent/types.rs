@@ -294,6 +294,8 @@ pub struct AgentShared {
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     /// Optional user message interceptor for injecting reminders/context
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
+    /// Hook registry for lifecycle event handlers
+    pub hook_registry: Option<crate::hooks::HookRegistry>,
 }
 
 impl AgentShared {
@@ -324,6 +326,7 @@ impl AgentShared {
             skill_folders,
             file_state_store,
             message_interceptor: None,
+            hook_registry: None,
         }
     }
 
@@ -348,6 +351,13 @@ impl AgentShared {
         interceptor: Arc<dyn super::UserMessageInterceptor>,
     ) -> Self {
         self.message_interceptor = Some(interceptor);
+        self
+    }
+
+    /// Set the hook registry
+    #[must_use]
+    pub fn with_hook_registry(mut self, registry: crate::hooks::HookRegistry) -> Self {
+        self.hook_registry = Some(registry);
         self
     }
 }
