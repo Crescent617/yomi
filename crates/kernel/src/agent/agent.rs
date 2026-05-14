@@ -1097,7 +1097,7 @@ impl Agent {
             .collect();
 
         // === PreToolUse hooks ===
-        let (pre_approved, pre_contexts) = super::hooks::run_pre_tool_hooks(
+        approved_calls = super::hooks::run_pre_tool_hooks(
             &self.id,
             &self.session_id,
             &self.working_dir,
@@ -1107,15 +1107,6 @@ impl Agent {
             &mut denied_results,
         )
         .await;
-        approved_calls = pre_approved;
-
-        // Inject PreToolUse hook contexts as independent messages
-        // (aligned with Claude Code's `additionalContext` behaviour).
-        for ctx_text in pre_contexts {
-            let msg = Message::user(ctx_text);
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
-        }
 
         // Create runtime token for this tool execution batch
         let cancel_token = self.create_runtime_token();
@@ -1137,7 +1128,7 @@ impl Agent {
         };
 
         // === PostToolUse hooks ===
-        let (post_results, continue_session, hook_contexts) = super::hooks::run_post_tool_hooks(
+        let (post_results, continue_session, post_contexts) = super::hooks::run_post_tool_hooks(
             &self.id,
             &self.session_id,
             &self.working_dir,
@@ -1147,14 +1138,6 @@ impl Agent {
             &tool_calls,
         )
         .await;
-
-        // Inject hook contexts as independent messages (aligned with Claude Code's
-        // `additionalContext` behaviour — not merged into tool result text).
-        for ctx_text in hook_contexts {
-            let msg = Message::user(ctx_text);
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
-        }
 
         // Combine denied and executed results
         let all_results: Vec<_> = denied_results.into_iter().chain(post_results).collect();
@@ -1166,6 +1149,15 @@ impl Agent {
             let _ = self.event_tx.send(Event::Tool(result.event)).await;
             self.persist_message(&result.message).await;
             self.message_buffer.push(result.message);
+        }
+
+        // Inject PostToolUse hook contexts as independent messages after all
+        // tool results. This keeps the tool call chain contiguous so
+        // `sanitize()` won't strip the chain.
+        for ctx_text in post_contexts {
+            let msg = Message::user(ctx_text);
+            self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
         }
 
         if continue_session {
