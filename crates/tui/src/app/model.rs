@@ -240,27 +240,36 @@ impl Model {
         visual_lines as u16 + 2 // Add 2 for top/bottom borders
     }
 
+    /// Build the `\x00`-separated payload used for `ADD_ASSISTANT_MSG`.
+    /// Returns `None` when both content and thinking buffers are empty.
+    pub(crate) fn build_assistant_payload(&self) -> Option<String> {
+        if self.current_content.is_empty() && self.current_thinking.is_empty() {
+            return None;
+        }
+        let elapsed_ms = self
+            .thinking_start_time
+            .map(|start| start.elapsed().as_millis() as u64);
+
+        let combined = if self.current_thinking.is_empty() {
+            if let Some(ms) = elapsed_ms {
+                format!("{}\x00\x00{}", self.current_content, ms)
+            } else {
+                self.current_content.clone()
+            }
+        } else {
+            format!(
+                "{}\x00{}\x00{}",
+                self.current_content,
+                self.current_thinking,
+                elapsed_ms.unwrap_or(0)
+            )
+        };
+        Some(combined)
+    }
+
     /// Save partial content (content and thinking) to chat history
     pub(crate) fn save_partial_content(&mut self) -> anyhow::Result<()> {
-        if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
-            let elapsed_ms = self
-                .thinking_start_time
-                .map(|start| start.elapsed().as_millis() as u64);
-
-            let combined = if self.current_thinking.is_empty() {
-                if let Some(ms) = elapsed_ms {
-                    format!("{}\x00\x00{}", self.current_content, ms)
-                } else {
-                    self.current_content.clone()
-                }
-            } else {
-                format!(
-                    "{}\x00{}\x00{}",
-                    self.current_content,
-                    self.current_thinking,
-                    elapsed_ms.unwrap_or(0)
-                )
-            };
+        if let Some(combined) = self.build_assistant_payload() {
             self.app.attr(
                 &Id::ChatView,
                 Attribute::Custom(attr::ADD_ASSISTANT_MSG),

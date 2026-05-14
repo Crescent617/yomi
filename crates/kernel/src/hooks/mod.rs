@@ -90,8 +90,9 @@ pub struct PreToolDecision {
     /// Claude Code convention: `permissionDecision: "allow"` + `updatedInput`.
     #[serde(skip_serializing_if = "Option::is_none", alias = "updatedInput")]
     pub updated_input: Option<Value>,
-    /// Extra context injected into the conversation.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Extra context injected into the conversation as an independent message
+    /// (aligned with Claude Code `additionalContext`).
+    #[serde(skip_serializing_if = "Option::is_none", alias = "additionalContext")]
     pub context: Option<String>,
 }
 
@@ -119,8 +120,9 @@ pub struct PostToolDecision {
     /// Text appended after the original output.
     #[serde(skip_serializing_if = "Option::is_none", alias = "appendOutput")]
     pub append_output: Option<String>,
-    /// Extra context injected into the conversation.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Extra context injected into the conversation as an independent message
+    /// (aligned with Claude Code `additionalContext`).
+    #[serde(skip_serializing_if = "Option::is_none", alias = "additionalContext")]
     pub context: Option<String>,
 }
 
@@ -240,52 +242,33 @@ pub(crate) fn default_timeout() -> u64 {
     30
 }
 
-/// User-level hook configuration (e.g. `~/.yomi/hooks.toml`).
-#[derive(Debug, Default, Deserialize)]
-pub struct UserHooksConfig {
-    #[serde(default, alias = "hook")]
-    pub hooks: Vec<UserHookEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UserHookEntry {
+/// Hook entry for global configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookEntry {
     pub name: String,
     pub event: HookEvent,
     pub matcher: String,
-    #[serde(default)]
-    #[serde(rename = "type")]
+    #[serde(default, rename = "type")]
     pub handler_type: String,
+    /// Shell command to execute (always run through `sh -c` / `cmd /C`).
     pub command: String,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 }
 
-/// Load `hooks.toml` from `data_dir` (e.g. `~/.yomi`) and register command hooks.
-pub fn load_user_hooks(data_dir: &std::path::Path) -> HookRegistry {
+/// Build a `HookRegistry` from global configuration entries.
+pub fn build_registry(entries: &[HookEntry]) -> HookRegistry {
     let mut registry = HookRegistry::new();
-    let hooks_path = data_dir.join("hooks.toml");
+    let mut seen = std::collections::HashSet::new();
 
-    if !hooks_path.exists() {
-        return registry;
-    }
-
-    let toml_str = match std::fs::read_to_string(&hooks_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("Failed to read hooks.toml: {e}");
-            return registry;
+    for entry in entries {
+        if !seen.insert(&entry.name) {
+            tracing::warn!(
+                "Duplicate hook name '{}', skipping subsequent definitions",
+                entry.name
+            );
+            continue;
         }
-    };
-
-    let config: UserHooksConfig = match toml::from_str(&toml_str) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("Failed to parse hooks.toml: {e}");
-            return registry;
-        }
-    };
-
-    for entry in config.hooks {
         match entry.handler_type.as_str() {
             "command" | "" => {
                 let Ok(handler) = CommandHookHandler::new(
@@ -297,7 +280,8 @@ pub fn load_user_hooks(data_dir: &std::path::Path) -> HookRegistry {
                     tracing::warn!("Invalid matcher for hook '{}'", entry.name);
                     continue;
                 };
-                registry.register(std::sync::Arc::new(handler.with_timeout(entry.timeout)));
+                let handler = handler.with_timeout(entry.timeout);
+                registry.register(std::sync::Arc::new(handler));
                 tracing::info!("Registered user hook: {} ({:?})", entry.name, entry.event);
             }
             other => {

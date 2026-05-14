@@ -63,6 +63,29 @@ impl WebSearchTool {
         query: &str,
         num_results: usize,
     ) -> std::result::Result<Vec<SearchResult>, String> {
+        // Try the original query first
+        match self.search_raw(query, num_results).await {
+            Ok(results) => Ok(results),
+            Err(err) => {
+                // Fallback: strip quotes and retry. DuckDuckGo's HTML interface
+                // does not handle `"phrase1" OR "phrase2"` well, but works fine
+                // with plain keywords.
+                let cleaned = query.replace('"', "");
+                if cleaned != query && !cleaned.trim().is_empty() {
+                    self.search_raw(&cleaned, num_results).await
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /// Raw search request to `DuckDuckGo` (no fallback)
+    async fn search_raw(
+        &self,
+        query: &str,
+        num_results: usize,
+    ) -> std::result::Result<Vec<SearchResult>, String> {
         let client = get_client();
 
         // Use DuckDuckGo HTML interface

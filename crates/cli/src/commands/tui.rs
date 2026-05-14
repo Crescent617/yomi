@@ -89,6 +89,10 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         Some(task_store),
         Some(config.agent.compactor.clone()),
         coordinator_skill_folders,
+        config
+            .features
+            .hooks
+            .then(|| kernel::hooks::build_registry(&config.hooks)),
     ));
 
     let mk_agent_config = || AgentConfig {

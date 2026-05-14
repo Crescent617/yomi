@@ -122,26 +122,7 @@ impl Model {
 
     /// Save assistant message to chat history and clear streaming
     pub(crate) fn finalize_assistant_message(&mut self) {
-        // Save if there's either content or thinking
-        if !self.current_content.is_empty() || !self.current_thinking.is_empty() {
-            let elapsed_ms = self
-                .thinking_start_time
-                .map(|start| start.elapsed().as_millis() as u64);
-
-            let combined = if self.current_thinking.is_empty() {
-                if let Some(ms) = elapsed_ms {
-                    format!("{}\x00\x00{}", self.current_content, ms)
-                } else {
-                    self.current_content.clone()
-                }
-            } else {
-                format!(
-                    "{}\x00{}\x00{}",
-                    self.current_content,
-                    self.current_thinking,
-                    elapsed_ms.unwrap_or(0)
-                )
-            };
+        if let Some(combined) = self.build_assistant_payload() {
             let _ = self.app.attr(
                 &Id::ChatView,
                 Attribute::Custom(attr::ADD_ASSISTANT_MSG),

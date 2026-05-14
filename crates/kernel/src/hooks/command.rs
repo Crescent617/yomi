@@ -2,9 +2,16 @@ use super::{HookContext, HookEvent, HookHandler, HookResult};
 use crate::types::Result;
 use async_trait::async_trait;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::time::timeout;
+
+/// Read all bytes from an async pipe into a buffer.
+async fn read_pipe(mut pipe: impl tokio::io::AsyncRead + Unpin) -> Vec<u8> {
+    let mut buf = Vec::new();
+    AsyncReadExt::read_to_end(&mut pipe, &mut buf).await.ok();
+    buf
+}
 
 /// Run an external command as a hook.
 /// Compatible with Claude Code / Codex hook scripts.
@@ -14,7 +21,6 @@ pub struct CommandHookHandler {
     events: Vec<HookEvent>,
     matcher: regex::Regex,
     command: String,
-    args: Vec<String>,
     timeout_secs: u64,
 }
 
@@ -30,15 +36,8 @@ impl CommandHookHandler {
             events: vec![event],
             matcher: super::case_insensitive_regex(matcher.as_ref())?,
             command: command.into(),
-            args: Vec::new(),
             timeout_secs: 30,
         })
-    }
-
-    #[must_use]
-    pub fn with_args(mut self, args: Vec<String>) -> Self {
-        self.args = args;
-        self
     }
 
     #[must_use]
@@ -66,11 +65,17 @@ impl HookHandler for CommandHookHandler {
         let input = serde_json::to_string(ctx)
             .map_err(|e| crate::types::KernelError::serde(e.to_string()))?;
 
-        let mut cmd = Command::new(&self.command);
-        if !self.args.is_empty() {
-            cmd.args(&self.args);
-        }
-        cmd.current_dir(&ctx.cwd)
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C");
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c");
+            c
+        };
+        cmd.arg(&self.command)
+            .current_dir(&ctx.cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -79,6 +84,7 @@ impl HookHandler for CommandHookHandler {
             .spawn()
             .map_err(|e| crate::types::KernelError::tool(format!("Hook spawn failed: {e}")))?;
 
+        // Write stdin asynchronously.
         let mut stdin = child
             .stdin
             .take()
@@ -88,34 +94,62 @@ impl HookHandler for CommandHookHandler {
             if let Err(e) = stdin.write_all(&input_bytes).await {
                 tracing::warn!("Failed to write hook stdin: {e}");
             }
+            let _ = stdin.shutdown().await;
         });
 
-        let dur = Duration::from_secs(self.timeout_secs);
-        let result = timeout(dur, child.wait_with_output()).await;
+        // Start reading stdout/stderr concurrently to avoid pipe deadlock.
+        let stdout_handle = {
+            let pipe = child.stdout.take().expect("piped stdout");
+            tokio::spawn(read_pipe(pipe))
+        };
+        let stderr_handle = {
+            let pipe = child.stderr.take().expect("piped stderr");
+            tokio::spawn(read_pipe(pipe))
+        };
 
-        let output = match result {
-            Ok(Ok(o)) => o,
+        let abort_readers = || {
+            stdout_handle.abort();
+            stderr_handle.abort();
+        };
+
+        let dur = Duration::from_secs(self.timeout_secs);
+        let wait_result = timeout(dur, child.wait()).await;
+
+        let status = match wait_result {
+            Ok(Ok(s)) => s,
             Ok(Err(e)) => {
+                abort_readers();
                 return Err(crate::types::KernelError::tool(format!(
                     "Hook command failed: {e}"
-                )))
+                )));
             }
             Err(_) => {
+                if let Err(e) = child.kill().await {
+                    tracing::warn!("Failed to kill timed-out hook '{}': {}", self.name, e);
+                }
+                abort_readers();
                 return Err(crate::types::KernelError::tool(format!(
                     "Hook '{}' timed out after {}s",
                     self.name, self.timeout_secs
-                )))
+                )));
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout_bytes = stdout_handle.await.unwrap_or_default();
+        let stderr_bytes = stderr_handle.await.unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&stdout_bytes);
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
         let trimmed = stdout.trim();
 
+        // Always trace stderr when present.
+        if !stderr.is_empty() {
+            tracing::trace!("Hook '{}' stderr: {}", self.name, stderr);
+        }
+
         // Exit code 2 = block (Claude Code convention)
-        if output.status.code() == Some(2) {
+        if status.code() == Some(2) {
             return match ctx.event {
                 HookEvent::PreToolUse => {
-                    // Try to parse stdout as structured decision first.
                     if let Ok(d) = serde_json::from_str::<super::PreToolDecision>(trimmed) {
                         Ok(HookResult::PreTool(d))
                     } else {
@@ -150,12 +184,11 @@ impl HookHandler for CommandHookHandler {
             };
         }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
             tracing::warn!(
                 "Hook '{}' exited with {:?}: stderr={}",
                 self.name,
-                output.status.code(),
+                status.code(),
                 stderr
             );
             return Ok(HookResult::Passthrough);
