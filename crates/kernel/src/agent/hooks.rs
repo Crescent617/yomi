@@ -6,10 +6,10 @@ use std::path::PathBuf;
 
 /// Run `PreToolUse` hooks over approved calls.
 ///
-/// Returns `(still-approved calls, context_messages)`.
-/// `context_messages` are additional context strings that should be injected
-/// into the conversation as independent messages (aligned with Claude Code's
-/// `additionalContext` behaviour).
+/// Returns the still-approved calls. Any call that is blocked by a hook is
+/// converted into a denied result (added to `denied_results`) with the hook's
+/// `context` merged into the error text so that the user/LLM can see it.
+/// When a hook allows the call, its `context` is ignored.
 pub async fn run_pre_tool_hooks(
     agent_id: &AgentId,
     session_id: &str,
@@ -18,12 +18,11 @@ pub async fn run_pre_tool_hooks(
     msg_count: usize,
     approved_calls: Vec<ToolCall>,
     denied_results: &mut Vec<ToolExecutionResult>,
-) -> (Vec<ToolCall>, Vec<String>) {
+) -> Vec<ToolCall> {
     if hook_registry.is_empty() {
-        return (approved_calls, Vec::new());
+        return approved_calls;
     }
     let mut pre_approved = Vec::new();
-    let mut contexts = Vec::new();
     for call in approved_calls {
         let ctx = HookContext::pre_tool(
             session_id,
@@ -41,20 +40,26 @@ pub async fn run_pre_tool_hooks(
                     let reason = decision
                         .reason
                         .unwrap_or_else(|| format!("Blocked by hook for tool '{}'", call.name));
+                    let final_reason = if hook_contexts.is_empty() {
+                        reason
+                    } else {
+                        let mut parts = hook_contexts;
+                        parts.push(reason);
+                        parts.join("\n\n")
+                    };
                     denied_results.push(ToolExecutionResult {
                         tool_call_id: call.id.clone(),
                         event: ToolEvent::Error {
                             agent_id: agent_id.clone(),
                             tool_id: call.id.clone(),
-                            error: reason.clone(),
+                            error: final_reason.clone(),
                             content_blocks: Vec::new(),
                             elapsed_ms: 0,
                         },
-                        message: Message::tool_result(call.id, reason),
+                        message: Message::tool_result(call.id, final_reason),
                     });
                 }
                 crate::hooks::PreToolAction::Allow => {
-                    contexts.extend(hook_contexts);
                     let mut modified = call;
                     if let Some(new_args) = decision.updated_input {
                         modified.arguments = new_args;
@@ -63,12 +68,11 @@ pub async fn run_pre_tool_hooks(
                 }
             },
             _ => {
-                contexts.extend(hook_contexts);
                 pre_approved.push(call);
             }
         }
     }
-    (pre_approved, contexts)
+    pre_approved
 }
 
 /// Run `PostToolUse` hooks over executed results.

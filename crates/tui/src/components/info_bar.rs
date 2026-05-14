@@ -287,6 +287,16 @@ impl InfoBar {
             spans.push(Span::styled(time_str, token_style));
         }
 
+        // Interrupt hint during streaming
+        if self.state == InfoBarState::Streaming {
+            spans.push(Span::styled(
+                " · esc to interrupt".to_string(),
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
+
         Line::from(spans)
     }
 
