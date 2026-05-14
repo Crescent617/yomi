@@ -121,6 +121,8 @@ pub struct Model {
     pub(crate) queued_message: Option<Vec<ContentBlock>>,
     /// Hook called when user submits input (for saving session, etc.)
     pub(crate) on_input_hook: Option<OnInputHook>,
+    /// Last known terminal size to detect resize events
+    pub(crate) last_terminal_size: (u16, u16),
 }
 
 /// Format a session ID for display, truncating long IDs with ellipsis.

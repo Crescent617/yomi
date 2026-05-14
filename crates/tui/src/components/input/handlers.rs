@@ -294,14 +294,14 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.move_and_clear_selection(|c| c.move_left());
-                None
+                Some(Msg::Redraw)
             }
             Event::Keyboard(KeyEvent {
                 code: Key::Right,
                 modifiers: KeyModifiers::NONE,
             }) => {
                 self.component.move_and_clear_selection(|c| c.move_right());
-                None
+                Some(Msg::Redraw)
             }
             // Home or Ctrl+A: move to start of line
             Event::Keyboard(
@@ -316,7 +316,7 @@ impl InputComponent {
             ) => {
                 self.component
                     .move_and_clear_selection(|c| c.move_to_start_of_line());
-                None
+                Some(Msg::Redraw)
             }
             // End or Ctrl+E: move to end of line
             Event::Keyboard(
@@ -331,7 +331,7 @@ impl InputComponent {
             ) => {
                 self.component
                     .move_and_clear_selection(|c| c.move_to_end_of_line());
-                None
+                Some(Msg::Redraw)
             }
             // Alt+B: move backward one word
             Event::Keyboard(KeyEvent {
@@ -340,7 +340,7 @@ impl InputComponent {
             }) => {
                 self.component
                     .move_and_clear_selection(|c| c.move_word_left());
-                None
+                Some(Msg::Redraw)
             }
             // Alt+F: move forward one word
             Event::Keyboard(KeyEvent {
@@ -349,7 +349,7 @@ impl InputComponent {
             }) => {
                 self.component
                     .move_and_clear_selection(|c| c.move_word_right());
-                None
+                Some(Msg::Redraw)
             }
             Event::Keyboard(KeyEvent {
                 code: Key::Char('u'),
@@ -397,7 +397,7 @@ impl InputComponent {
                     Some(Msg::InputChanged(self.component.content().to_string()))
                 } else {
                     self.component.move_and_clear_selection(|c| c.move_up());
-                    None
+                    Some(Msg::Redraw)
                 }
             }
             // Down arrow: navigate completion or history
@@ -416,7 +416,7 @@ impl InputComponent {
                     Some(Msg::InputChanged(self.component.content().to_string()))
                 } else {
                     self.component.move_and_clear_selection(|c| c.move_down());
-                    None
+                    Some(Msg::Redraw)
                 }
             }
             // Ctrl+P: navigate completion or history
