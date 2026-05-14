@@ -59,6 +59,8 @@ pub struct Agent {
     input_stale_since: Arc<AtomicU64>,
     /// Optional goal context (state + store) for autonomous goal-mode execution
     goal_ctx: Option<crate::goal::GoalContext>,
+    /// Hook registry for `PreToolUse` / `PostToolUse` lifecycle hooks
+    hook_registry: crate::hooks::HookRegistry,
 }
 
 impl Agent {
@@ -122,6 +124,21 @@ impl Agent {
             .with_file_state_store(args.file_state_store.clone()),
         );
 
+        // Build hook registry: start with user-level hooks from shared state,
+        // then append skill-level hooks so both sources are active.
+        let mut hook_registry = shared.hook_registry.clone().unwrap_or_default();
+        for skill in &args.skills {
+            if let Some(ref hooks_value) = skill.hooks {
+                if let Err(e) = crate::hooks::skill::SkillHookHandler::load_and_register_from_value(
+                    &skill.name,
+                    hooks_value,
+                    &mut hook_registry,
+                ) {
+                    tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
+                }
+            }
+        }
+
         // Create permission checker and responder from shared state
         // If no permission_state in shared (YOLO mode), all tools auto-approve
         let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
@@ -151,6 +168,7 @@ impl Agent {
             working_dir: args.working_dir,
             input_stale_since: Arc::clone(&input_stale_since),
             goal_ctx: args.goal_ctx,
+            hook_registry,
         };
 
         let handle_id = id.clone();
@@ -474,7 +492,8 @@ impl Agent {
 
         if goal.is_doom_loop() {
             tracing::warn!("Agent {} detected doom loop, stopping goal", self.id);
-            goal.mark_fail(crate::goal::GoalFailureReason::DoomLoop).await;
+            goal.mark_fail(crate::goal::GoalFailureReason::DoomLoop)
+                .await;
             let _ = self
                 .event_tx
                 .send(Event::Agent(AgentEvent::Lifecycle {
@@ -497,7 +516,8 @@ impl Agent {
                     self.id,
                     max
                 );
-                goal.mark_fail(crate::goal::GoalFailureReason::MaxIterations).await;
+                goal.mark_fail(crate::goal::GoalFailureReason::MaxIterations)
+                    .await;
                 let _ = self
                     .event_tx
                     .send(Event::Agent(AgentEvent::Lifecycle {
@@ -1025,16 +1045,15 @@ impl Agent {
     }
 
     async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
-        let tool_calls = self
+        let tool_calls: Vec<_> = self
             .message_buffer
             .messages()
             .last()
-            .and_then(|m| m.tool_calls.as_deref())
-            .unwrap_or(&[]);
+            .and_then(|m| m.tool_calls.clone())
+            .unwrap_or_default();
 
         // First: Send Started event for ALL tool calls (before permission check)
-        // This ensures the UI shows all tools that are being attempted
-        for call in tool_calls {
+        for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
                 .event_tx
@@ -1049,14 +1068,14 @@ impl Agent {
 
         // Check permissions for each tool call
         let permission_result = crate::permissions::check_tool_permissions(
-            tool_calls,
+            &tool_calls,
             self.permission_checker.as_deref(),
             &self.id,
         )
         .await;
 
-        let approved_calls = permission_result.approved;
-        let denied_results: Vec<_> = permission_result
+        let mut approved_calls = permission_result.approved;
+        let mut denied_results: Vec<_> = permission_result
             .denied
             .into_iter()
             .map(|(tool_call_id, error_msg)| ToolExecutionResult {
@@ -1071,6 +1090,27 @@ impl Agent {
                 message: Message::tool_result(tool_call_id, error_msg),
             })
             .collect();
+
+        // === PreToolUse hooks ===
+        let (pre_approved, contexts) = super::hooks::run_pre_tool_hooks(
+            &self.id,
+            &self.session_id,
+            &self.working_dir,
+            &self.hook_registry,
+            self.message_buffer.len(),
+            approved_calls,
+            &mut denied_results,
+        )
+        .await;
+        approved_calls = pre_approved;
+
+        // Inject contexts from Allow decisions into the conversation.
+        if !contexts.is_empty() {
+            let ctx_text = contexts.join("\n");
+            let msg = Message::system(format!("[Hook context]\n{ctx_text}"));
+            self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
+        }
 
         // Create runtime token for this tool execution batch
         let cancel_token = self.create_runtime_token();
@@ -1091,8 +1131,20 @@ impl Agent {
             .await
         };
 
+        // === PostToolUse hooks ===
+        let (post_results, continue_session) = super::hooks::run_post_tool_hooks(
+            &self.id,
+            &self.session_id,
+            &self.working_dir,
+            &self.hook_registry,
+            self.message_buffer.len(),
+            results,
+            &tool_calls,
+        )
+        .await;
+
         // Combine denied and executed results
-        let all_results: Vec<_> = denied_results.into_iter().chain(results).collect();
+        let all_results: Vec<_> = denied_results.into_iter().chain(post_results).collect();
 
         for result in all_results {
             if self.cancel_token.is_cancelled() {
@@ -1103,7 +1155,21 @@ impl Agent {
             self.message_buffer.push(result.message);
         }
 
-        self.context.transition_to(AgentState::Streaming);
+        if continue_session {
+            self.context.transition_to(AgentState::Streaming);
+        } else {
+            tracing::info!("Agent {} stopping after tool execution (hook requested)", self.id);
+            if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                agent_id: self.id.clone(),
+                state: AgentStatus::TurnCompleted {
+                    total_iterations: self.context.iteration_count(),
+                    finish_reason: None,
+                },
+            })) {
+                tracing::warn!("Failed to send TurnCompleted event: {}", e);
+            }
+            self.context.transition_to(AgentState::Idle);
+        }
         Ok(())
     }
 

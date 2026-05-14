@@ -2,6 +2,7 @@
 mod agent;
 mod cancel;
 mod handle;
+mod hooks;
 mod interceptor;
 mod message_buffer;
 mod simple;

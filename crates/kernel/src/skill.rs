@@ -10,6 +10,9 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
+    /// Raw hooks value from frontmatter (parsed later into `HookRegistry`)
+    #[serde(skip)]
+    pub hooks: Option<serde_yaml::Value>,
     #[serde(skip)]
     pub source_path: PathBuf,
 }
@@ -26,6 +29,9 @@ struct SkillFrontmatter {
     description: String,
     #[serde(default)]
     triggers: Vec<String>,
+    /// Optional hooks declaration (YAML array string or inline table array)
+    #[serde(default)]
+    hooks: Option<serde_yaml::Value>,
 }
 
 /// Skill loader that scans directories for SKILL.md files
@@ -114,10 +120,8 @@ impl SkillLoader {
         Ok(())
     }
 
-    /// Load a single skill from a file
-    /// Only reads the frontmatter portion for efficiency
-    /// Derives skill name from relative path (e.g., `skill_dir/a/b/SKILL.md` -> a:b)
-    fn load_skill(path: &Path, root_folder: &Path) -> Result<Skill> {
+    /// Parse the YAML frontmatter from a SKILL.md file.
+    fn parse_skill_frontmatter(path: &Path) -> Result<SkillFrontmatter> {
         use std::io::{BufRead, BufReader};
 
         let file = std::fs::File::open(path).map_err(|e| {
@@ -157,18 +161,22 @@ impl SkillLoader {
 
         // Parse just the frontmatter YAML
         let yaml_content = yaml_lines.join("\n");
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content).map_err(|e| {
-            KernelError::skill(format!("Failed to parse skill frontmatter YAML: {e}"))
-        })?;
+        serde_yaml::from_str(&yaml_content)
+            .map_err(|e| KernelError::skill(format!("Failed to parse skill frontmatter YAML: {e}")))
+    }
 
-        // Derive skill name from relative path
-        // e.g., ~/.claude/skills/superpowers/writing/SKILL.md -> superpowers:writing
+    /// Load a single skill from a file
+    /// Only reads the frontmatter portion for efficiency
+    /// Derives skill name from relative path (e.g., `skill_dir/a/b/SKILL.md` -> a:b)
+    fn load_skill(path: &Path, root_folder: &Path) -> Result<Skill> {
+        let frontmatter = Self::parse_skill_frontmatter(path)?;
         let skill_name = Self::derive_skill_name(path, root_folder);
 
         Ok(Skill {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
+            hooks: frontmatter.hooks,
             source_path: path.to_path_buf(),
         })
     }
@@ -301,55 +309,14 @@ impl SkillLoader {
     }
 
     fn load_plugin_skill(path: &Path, plugin_name: &str) -> Result<Skill> {
-        use std::io::{BufRead, BufReader};
-
         let skill_name = Self::derive_plugin_skill_name(path, plugin_name)?;
-
-        let file = std::fs::File::open(path).map_err(|e| {
-            KernelError::skill(format!(
-                "Failed to open skill file: {}: {e}",
-                path.display()
-            ))
-        })?;
-        let reader = BufReader::new(file);
-
-        let mut lines = reader.lines();
-
-        // Check if file starts with ---
-        let first_line = lines.next().transpose()?;
-        if first_line.as_deref() != Some("---") {
-            return Err(KernelError::skill(
-                "Skill file must start with frontmatter delimiter ---",
-            ));
-        }
-
-        // Collect frontmatter lines until second ---
-        let mut yaml_lines = Vec::new();
-        let mut found_end = false;
-
-        for line in lines {
-            let line = line?;
-            if line == "---" {
-                found_end = true;
-                break;
-            }
-            yaml_lines.push(line);
-        }
-
-        if !found_end {
-            return Err(KernelError::skill("Frontmatter end delimiter not found"));
-        }
-
-        // Parse just the frontmatter YAML
-        let yaml_content = yaml_lines.join("\n");
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(&yaml_content).map_err(|e| {
-            KernelError::skill(format!("Failed to parse skill frontmatter YAML: {e}"))
-        })?;
+        let frontmatter = Self::parse_skill_frontmatter(path)?;
 
         Ok(Skill {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
+            hooks: frontmatter.hooks,
             source_path: path.to_path_buf(),
         })
     }
