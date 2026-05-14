@@ -448,31 +448,26 @@ impl ChatView {
         }
     }
 
-    /// Flush pending streaming content to history
-    /// Called when a new block starts (tool, code block, etc.) to preserve current content
+    /// Flush pending streaming content to history.
+    /// Called when a new block starts (tool, code block, etc.) to preserve current content.
     pub fn flush_streaming(&mut self) {
-        // If there's pending thinking content, save it as an assistant message
-        if !self.streaming_thinking.is_empty() {
-            self.messages.push(HistoryMessage::Assistant {
-                content: String::new(),
-                thinking: Some(self.streaming_thinking.clone()),
-                thinking_folded: !self.expand_all,
-                thinking_elapsed_ms: None,
-            });
-            self.push_new_msg_cache();
-            self.streaming_thinking.clear();
+        let content = std::mem::take(&mut self.streaming_content);
+        let thinking = std::mem::take(&mut self.streaming_thinking);
+        let has_content = !content.is_empty();
+        let has_thinking = !thinking.is_empty();
+        if !has_content && !has_thinking {
+            return;
         }
 
-        // If there's pending content, save it as an assistant message
-        if !self.streaming_content.is_empty() {
-            self.messages.push(HistoryMessage::Assistant {
-                content: self.streaming_content.clone(),
-                thinking: None,
-                thinking_folded: true,
-                thinking_elapsed_ms: None,
-            });
-            self.push_new_msg_cache();
-            self.streaming_content.clear();
+        self.messages.push(HistoryMessage::Assistant {
+            content,
+            thinking: has_thinking.then_some(thinking),
+            thinking_folded: !has_thinking || !self.expand_all,
+            thinking_elapsed_ms: None,
+        });
+        self.push_new_msg_cache();
+
+        if has_content {
             self.md_renderer = StreamingMarkdownRenderer::new();
         }
     }

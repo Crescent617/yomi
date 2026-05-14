@@ -227,8 +227,7 @@ impl InputComponent {
                     let last_char = content[..cursor_pos].chars().next_back();
                     if last_char == Some('\\') {
                         // Remove backslash and insert newline
-                        self.component
-                            .delete_range(cursor_pos - 1, cursor_pos);
+                        self.component.delete_range(cursor_pos - 1, cursor_pos);
                         self.component.insert_newline();
                         return Some(Msg::InputChanged(self.component.content().to_string()));
                     }

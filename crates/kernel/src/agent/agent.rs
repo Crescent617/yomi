@@ -124,17 +124,22 @@ impl Agent {
             .with_file_state_store(args.file_state_store.clone()),
         );
 
-        // Build hook registry: start with user-level hooks from shared state,
-        // then append skill-level hooks so both sources are active.
+        // Build hook registry: if user-level hooks are enabled (Some), also load
+        // skill-level hooks. When hooks are disabled (None) the registry stays
+        // empty and `run_*_tool_hooks` will short-circuit without spawning.
         let mut hook_registry = shared.hook_registry.clone().unwrap_or_default();
-        for skill in &args.skills {
-            if let Some(ref hooks_value) = skill.hooks {
-                if let Err(e) = crate::hooks::skill::SkillHookHandler::load_and_register_from_value(
-                    &skill.name,
-                    hooks_value,
-                    &mut hook_registry,
-                ) {
-                    tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
+        if shared.hook_registry.is_some() {
+            for skill in &args.skills {
+                if let Some(ref hooks_value) = skill.hooks {
+                    if let Err(e) =
+                        crate::hooks::skill::SkillHookHandler::load_and_register_from_value(
+                            &skill.name,
+                            hooks_value,
+                            &mut hook_registry,
+                        )
+                    {
+                        tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
+                    }
                 }
             }
         }
@@ -1092,7 +1097,7 @@ impl Agent {
             .collect();
 
         // === PreToolUse hooks ===
-        let (pre_approved, contexts) = super::hooks::run_pre_tool_hooks(
+        let (pre_approved, pre_contexts) = super::hooks::run_pre_tool_hooks(
             &self.id,
             &self.session_id,
             &self.working_dir,
@@ -1104,10 +1109,10 @@ impl Agent {
         .await;
         approved_calls = pre_approved;
 
-        // Inject contexts from Allow decisions into the conversation.
-        if !contexts.is_empty() {
-            let ctx_text = contexts.join("\n");
-            let msg = Message::system(format!("[Hook context]\n{ctx_text}"));
+        // Inject PreToolUse hook contexts as independent messages
+        // (aligned with Claude Code's `additionalContext` behaviour).
+        for ctx_text in pre_contexts {
+            let msg = Message::user(ctx_text);
             self.persist_message(&msg).await;
             self.message_buffer.push(msg);
         }
@@ -1132,7 +1137,7 @@ impl Agent {
         };
 
         // === PostToolUse hooks ===
-        let (post_results, continue_session) = super::hooks::run_post_tool_hooks(
+        let (post_results, continue_session, hook_contexts) = super::hooks::run_post_tool_hooks(
             &self.id,
             &self.session_id,
             &self.working_dir,
@@ -1142,6 +1147,14 @@ impl Agent {
             &tool_calls,
         )
         .await;
+
+        // Inject hook contexts as independent messages (aligned with Claude Code's
+        // `additionalContext` behaviour — not merged into tool result text).
+        for ctx_text in hook_contexts {
+            let msg = Message::user(ctx_text);
+            self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
+        }
 
         // Combine denied and executed results
         let all_results: Vec<_> = denied_results.into_iter().chain(post_results).collect();
@@ -1158,7 +1171,10 @@ impl Agent {
         if continue_session {
             self.context.transition_to(AgentState::Streaming);
         } else {
-            tracing::info!("Agent {} stopping after tool execution (hook requested)", self.id);
+            tracing::info!(
+                "Agent {} stopping after tool execution (hook requested)",
+                self.id
+            );
             if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
                 agent_id: self.id.clone(),
                 state: AgentStatus::TurnCompleted {

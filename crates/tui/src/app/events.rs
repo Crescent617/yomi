@@ -261,7 +261,6 @@ impl Model {
                                 self.handle_streaming_error(StreamingStatus::Cancelled, message);
                             }
                             StopReason::Failed { error } => {
-                                self.finalize_assistant_message();
                                 let message = format!(" Task failed: {error}");
                                 Self::send_desktop_notification("Yomi - Error", &message);
                                 self.handle_streaming_error(
@@ -270,7 +269,6 @@ impl Model {
                                 );
                             }
                             StopReason::MaxIterations { reached } => {
-                                self.finalize_assistant_message();
                                 let message = format!(" Max iterations reached ({reached})");
                                 Self::send_desktop_notification("Yomi - Stopped", &message);
                                 self.handle_streaming_error(
@@ -322,7 +320,6 @@ impl Model {
                 Event::System(kernel::event::SystemEvent::Shutdown {
                     error: Some(err), ..
                 }) => {
-                    self.finalize_assistant_message();
                     self.handle_streaming_error(
                         StreamingStatus::Failed,
                         format!("Session closed with error: {err}"),

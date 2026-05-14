@@ -132,6 +132,14 @@ impl std::fmt::Display for ModelProvider {
     }
 }
 
+/// Feature flags for experimental capabilities.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct FeaturesConfig {
+    /// Enable `PreToolUse` / `PostToolUse` lifecycle hooks.
+    pub hooks: bool,
+}
+
 /// Complete yomi configuration from environment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -148,6 +156,11 @@ pub struct Config {
     pub claude_plugin_dirs: Vec<PathBuf>,
     /// Load skills from claude plugins cache (default: true)
     pub load_claude_plugins: bool,
+    /// Global user-level hooks
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub hooks: Vec<crate::hooks::HookEntry>,
+    /// Experimental feature flags
+    pub features: FeaturesConfig,
 }
 
 impl Config {
@@ -205,7 +218,9 @@ impl Default for Config {
             log_dir: None,
             skill_folders: None,
             claude_plugin_dirs: vec![expand_tilde("~/.claude/plugins/cache")],
-            load_claude_plugins: true,
+            load_claude_plugins: false,
+            hooks: Vec::new(),
+            features: FeaturesConfig::default(),
         }
     }
 }
@@ -376,6 +391,7 @@ mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::{HookEntry, HookEvent};
     use crate::ENV_PREFIX;
 
     #[test]
@@ -430,7 +446,17 @@ mod tests {
 
     #[test]
     fn test_config_serialization_roundtrip() {
-        let config = Config::default();
+        let config = Config {
+            hooks: vec![HookEntry {
+                name: "test-hook".to_string(),
+                event: HookEvent::PreToolUse,
+                matcher: "shell".to_string(),
+                handler_type: String::new(),
+                command: "echo test".to_string(),
+                timeout: 10,
+            }],
+            ..Config::default()
+        };
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
 
@@ -438,6 +464,10 @@ mod tests {
         assert_eq!(parsed.agent.model.provider, config.agent.model.provider);
         assert_eq!(parsed.yolo, config.yolo);
         assert_eq!(parsed.data_dir, config.data_dir);
+        assert_eq!(parsed.hooks.len(), 1);
+        assert_eq!(parsed.hooks[0].name, "test-hook");
+        assert_eq!(parsed.hooks[0].command, "echo test");
+        assert_eq!(parsed.hooks[0].timeout, 10);
     }
 
     #[test]
@@ -445,5 +475,19 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.model().provider, config.agent.model.provider);
         assert_eq!(config.model().model_id, config.agent.model.model_id);
+    }
+
+    #[test]
+    fn test_hook_entry_default_timeout() {
+        let entry: HookEntry = toml::from_str(
+            r#"
+            name = "default-timeout-hook"
+            event = "PreToolUse"
+            matcher = "shell"
+            command = "echo ok"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(entry.timeout, 30);
     }
 }

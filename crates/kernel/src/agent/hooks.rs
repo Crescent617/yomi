@@ -2,13 +2,14 @@ use crate::event::ToolEvent;
 use crate::hooks::{HookContext, HookRegistry, HookResult};
 use crate::tools::executor::ToolExecutionResult;
 use crate::types::{AgentId, Message, ToolCall};
-use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// Run `PreToolUse` hooks over approved calls.
 ///
-/// Returns the still-approved calls and a list of context strings to inject
-/// into the conversation.
+/// Returns `(still-approved calls, context_messages)`.
+/// `context_messages` are additional context strings that should be injected
+/// into the conversation as independent messages (aligned with Claude Code's
+/// `additionalContext` behaviour).
 pub async fn run_pre_tool_hooks(
     agent_id: &AgentId,
     session_id: &str,
@@ -18,8 +19,11 @@ pub async fn run_pre_tool_hooks(
     approved_calls: Vec<ToolCall>,
     denied_results: &mut Vec<ToolExecutionResult>,
 ) -> (Vec<ToolCall>, Vec<String>) {
+    if hook_registry.is_empty() {
+        return (approved_calls, Vec::new());
+    }
     let mut pre_approved = Vec::new();
-    let mut allow_contexts = Vec::new();
+    let mut contexts = Vec::new();
     for call in approved_calls {
         let ctx = HookContext::pre_tool(
             session_id,
@@ -30,19 +34,13 @@ pub async fn run_pre_tool_hooks(
             call.arguments.clone(),
             msg_count,
         );
-        let (result, contexts) = hook_registry.run_pre_tool(&ctx).await;
+        let (result, hook_contexts) = hook_registry.run_pre_tool(&ctx).await;
         match result {
             HookResult::PreTool(decision) => match decision.action {
                 crate::hooks::PreToolAction::Block => {
-                    let mut reason = decision
+                    let reason = decision
                         .reason
                         .unwrap_or_else(|| format!("Blocked by hook for tool '{}'", call.name));
-                    if !contexts.is_empty() {
-                        reason.push_str("\n\nHook context:\n");
-                        for ctx in &contexts {
-                            let _ = writeln!(reason, "- {ctx}");
-                        }
-                    }
                     denied_results.push(ToolExecutionResult {
                         tool_call_id: call.id.clone(),
                         event: ToolEvent::Error {
@@ -56,23 +54,29 @@ pub async fn run_pre_tool_hooks(
                     });
                 }
                 crate::hooks::PreToolAction::Allow => {
+                    contexts.extend(hook_contexts);
                     let mut modified = call;
                     if let Some(new_args) = decision.updated_input {
                         modified.arguments = new_args;
                     }
                     pre_approved.push(modified);
-                    allow_contexts.extend(contexts);
                 }
             },
-            _ => pre_approved.push(call),
+            _ => {
+                contexts.extend(hook_contexts);
+                pre_approved.push(call);
+            }
         }
     }
-    (pre_approved, allow_contexts)
+    (pre_approved, contexts)
 }
 
 /// Run `PostToolUse` hooks over executed results.
 ///
-/// Returns `(modified_results, continue_session)`.
+/// Returns `(modified_results, continue_session, context_messages)`.
+/// `context_messages` are additional context strings that should be injected
+/// into the conversation as independent messages (aligned with Claude Code's
+/// `additionalContext` behaviour).
 /// If any hook sets `continue_session: false`, the overall result is `false`.
 pub async fn run_post_tool_hooks(
     agent_id: &AgentId,
@@ -82,17 +86,20 @@ pub async fn run_post_tool_hooks(
     msg_count: usize,
     results: Vec<ToolExecutionResult>,
     tool_calls: &[ToolCall],
-) -> (Vec<ToolExecutionResult>, bool) {
+) -> (Vec<ToolExecutionResult>, bool, Vec<String>) {
+    if hook_registry.is_empty() {
+        return (results, true, Vec::new());
+    }
     let mut post_results = Vec::new();
     let mut continue_session = true;
+    let mut contexts = Vec::new();
     for mut result in results {
         let tool_name = tool_calls
             .iter()
             .find(|c| c.id == result.tool_call_id)
             .map(|c| c.name.clone())
             .unwrap_or_default();
-        let mut hook_tool_output =
-            crate::types::ToolOutput::text(result.message.text_content());
+        let mut hook_tool_output = crate::types::ToolOutput::text(result.message.text_content());
         hook_tool_output.is_error = matches!(result.event, ToolEvent::Error { .. });
         let ctx = HookContext::post_tool(
             session_id,
@@ -103,7 +110,8 @@ pub async fn run_post_tool_hooks(
             &hook_tool_output,
             msg_count,
         );
-        let (hook_result, contexts) = hook_registry.run_post_tool(&ctx).await;
+        let (hook_result, hook_contexts) = hook_registry.run_post_tool(&ctx).await;
+        contexts.extend(hook_contexts);
         if let HookResult::PostTool(decision) = hook_result {
             if !decision.continue_session {
                 continue_session = false;
@@ -120,15 +128,6 @@ pub async fn run_post_tool_hooks(
                     final_text.push('\n');
                 }
                 final_text.push_str(&append);
-                modified = true;
-            }
-            if !contexts.is_empty() {
-                let ctx_text = contexts.join("\n");
-                if !final_text.is_empty() {
-                    final_text.push_str("\n\n");
-                }
-                final_text.push_str("[Hook context]\n");
-                final_text.push_str(&ctx_text);
                 modified = true;
             }
 
@@ -190,5 +189,5 @@ pub async fn run_post_tool_hooks(
         }
         post_results.push(result);
     }
-    (post_results, continue_session)
+    (post_results, continue_session, contexts)
 }

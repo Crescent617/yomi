@@ -41,6 +41,7 @@ impl Coordinator {
         task_store: Option<Arc<crate::task::TaskStore>>,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
+        hook_registry: Option<crate::hooks::HookRegistry>,
     ) -> Self {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -48,7 +49,7 @@ impl Coordinator {
         let todo_interceptor = Arc::new(crate::agent::TodoReminderInterceptor::new(
             todo_storage.clone(),
         ));
-        let mut agent_shared = AgentShared::new(
+        let agent_shared = AgentShared::new(
             provider,
             Arc::new(model_config),
             task_store,
@@ -62,10 +63,10 @@ impl Coordinator {
             None,
         )
         .with_message_interceptor(todo_interceptor);
-
-        // Load user hooks from ~/.yomi/hooks.toml
-        let hook_registry = crate::hooks::load_user_hooks(storage.data_dir());
-        agent_shared = agent_shared.with_hook_registry(hook_registry);
+        let agent_shared = match hook_registry {
+            Some(registry) => agent_shared.with_hook_registry(registry),
+            None => agent_shared,
+        };
 
         let agent_shared = Arc::new(agent_shared);
         Self {

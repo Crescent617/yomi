@@ -17,6 +17,10 @@ impl HookRegistry {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.handlers.is_empty()
+    }
+
     /// Register a hook handler.
     pub fn register(&mut self, handler: Arc<dyn HookHandler>) {
         tracing::debug!("Registered hook handler: {}", handler.name());
@@ -34,6 +38,9 @@ impl HookRegistry {
 
     /// Convenience: run all matching `PreToolUse` hooks and merge decisions.
     /// Returns (`final_decision`, `context_messages`).
+    ///
+    /// `context_messages` are injected as independent user messages by the agent
+    /// before the tool is executed (aligned with Claude Code `additionalContext`).
     pub async fn run_pre_tool(&self, ctx: &HookContext) -> (HookResult, Vec<String>) {
         let handlers = self.matching(HookEvent::PreToolUse, ctx);
         if handlers.is_empty() {
@@ -76,6 +83,9 @@ impl HookRegistry {
 
     /// Convenience: run all matching `PostToolUse` hooks and merge decisions.
     /// Returns (`final_decision`, `context_messages`).
+    ///
+    /// `context_messages` are injected as independent user messages by the agent
+    /// (aligned with Claude Code `additionalContext`).
     pub async fn run_post_tool(&self, ctx: &HookContext) -> (HookResult, Vec<String>) {
         let handlers = self.matching(HookEvent::PostToolUse, ctx);
         if handlers.is_empty() {
