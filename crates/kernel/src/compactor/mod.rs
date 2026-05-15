@@ -372,7 +372,7 @@ async fn generate_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MessageTokenUsage;
+    use crate::types::{MessageId, MessageTokenUsage};
     use std::sync::Arc;
 
     #[test]
@@ -403,10 +403,18 @@ mod tests {
         let compactor = Compactor::new(100, 200, 2, 1000); // keep last 2 messages
         let messages: Vec<Arc<Message>> = vec![
             Arc::new(Message::user("Task 1")),
-            Arc::new(Message::tool_result("call-1", "Result 1")), // will be cleared (index 1)
+            Arc::new(Message::tool_result(
+                MessageId::default(),
+                "call-1",
+                "Result 1",
+            )), // will be cleared (index 1)
             Arc::new(Message::user("Task 2")),
-            Arc::new(Message::tool_result("call-2", "Result 2")), // kept (index 3, in keep_recent)
-            Arc::new(Message::user("Current task")),              // kept (index 4)
+            Arc::new(Message::tool_result(
+                MessageId::default(),
+                "call-2",
+                "Result 2",
+            )), // kept (index 3, in keep_recent)
+            Arc::new(Message::user("Current task")), // kept (index 4)
         ];
 
         let compacted = compactor.micro_compact(&messages);

@@ -157,6 +157,7 @@ impl StorageSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::SessionId;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -165,7 +166,12 @@ mod tests {
         let storage = StorageSet::open(temp_dir.path()).await.unwrap();
 
         // Verify all stores are functional
-        let session_id = storage.session_store().create(None).await.unwrap();
+        let session_id = SessionId::new();
+        storage
+            .session_store()
+            .create(&session_id, None)
+            .await
+            .unwrap();
         storage
             .message_store()
             .append(&session_id.0, &[])

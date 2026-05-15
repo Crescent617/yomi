@@ -153,6 +153,7 @@ mod tests {
             token_usage: None,
             response_id: None,
             finish_reason: None,
+            ..Default::default()
         }));
         for _ in 0..user_count {
             msgs.push(Arc::new(Message::user("hi")));
@@ -357,6 +358,7 @@ mod tests {
             token_usage: None,
             response_id: None,
             finish_reason: None,
+            ..Default::default()
         }));
         for _ in 0..3 {
             history2.push(Arc::new(Message::user("hi")));
@@ -401,6 +403,7 @@ mod tests {
             token_usage: None,
             response_id: None,
             finish_reason: None,
+            ..Default::default()
         }));
         for _ in 0..4 {
             history.push(Arc::new(Message::user("hi")));

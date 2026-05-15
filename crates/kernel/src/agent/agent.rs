@@ -8,8 +8,9 @@ use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolE
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::ToolExecutionResult;
-use crate::types::{AgentId, ContentBlock, Message, MessageTokenUsage, Role};
+use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
 use futures::TryStreamExt;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -372,6 +373,24 @@ impl Agent {
         }
     }
 
+    /// Emit `TurnCompleted` lifecycle event.
+    fn emit_turn_completed(
+        &self,
+        finish_reason: Option<crate::types::FinishReason>,
+        last_message_id: Option<MessageId>,
+    ) {
+        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+            agent_id: self.id.clone(),
+            state: AgentStatus::TurnCompleted {
+                total_iterations: self.context.iteration_count(),
+                finish_reason,
+                last_message_id,
+            },
+        })) {
+            tracing::warn!("Failed to send TurnCompleted event: {}", e);
+        }
+    }
+
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User {
@@ -574,13 +593,14 @@ impl Agent {
             };
             interceptor.intercept(&mut content, &ctx).await;
         }
+        let msg = Message::with_blocks(Role::User, content);
         let _ = self
             .event_tx
             .send(Event::User(crate::event::UserEvent::Message {
-                content: content.clone(),
+                message_id: msg.id.clone(),
+                content: msg.content.clone(),
             }))
             .await;
-        let msg = Message::with_blocks(Role::User, content);
         self.persist_message(&msg).await;
         self.message_buffer.push(msg);
         self.context.transition_to(AgentState::Streaming);
@@ -605,10 +625,12 @@ impl Agent {
             self.max_iterations,
         );
 
+        let assistant_msg_id = MessageId::new();
         let _ = self
             .event_tx
             .send(Event::Model(ModelEvent::Request {
                 agent_id: self.id.clone(),
+                message_id: assistant_msg_id.clone(),
                 message_count: self.message_buffer.len(),
             }))
             .await;
@@ -644,10 +666,13 @@ impl Agent {
             }
         };
 
-        let result = self.collect_stream_output(&mut stream).await?;
+        let result = self
+            .collect_stream_output(&mut stream, assistant_msg_id.clone())
+            .await?;
 
         if !result.content_blocks.is_empty() || !result.tool_calls.is_empty() {
             let mut msg = Message::with_blocks(Role::Assistant, result.content_blocks);
+            msg.id = assistant_msg_id.clone();
             if !result.tool_calls.is_empty() {
                 msg.tool_calls = Some(result.tool_calls);
             }
@@ -671,6 +696,7 @@ impl Agent {
 
         if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Completed {
             agent_id: self.id.clone(),
+            message_id: assistant_msg_id.clone(),
         })) {
             tracing::warn!("Failed to send completed event: {}", e);
         }
@@ -682,6 +708,7 @@ impl Agent {
     async fn collect_stream_output(
         &mut self,
         stream: &mut crate::providers::ModelStream,
+        message_id: MessageId,
     ) -> Result<super::stream_collector::StreamCollectionResult, AgentError> {
         use super::stream_collector::StreamCollectorState;
         use crate::providers::ModelStreamItem;
@@ -700,6 +727,7 @@ impl Agent {
                             state.handle_chunk(&chunk);
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Chunk {
                                 agent_id: self.id.clone(),
+                                message_id: message_id.clone(),
                                 content: chunk,
                             })) {
                                 tracing::warn!("Failed to send chunk event: {}", e);
@@ -709,6 +737,7 @@ impl Agent {
                             // Forward incremental tool call update to TUI for UI feedback
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::ToolCallDelta {
                                 agent_id: self.id.clone(),
+                                message_id: message_id.clone(),
                                 tool_id: id,
                                 tool_name: name,
                                 arguments_delta,
@@ -723,6 +752,7 @@ impl Agent {
                         ModelStreamItem::Fallback { from, to } => {
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Fallback {
                                 agent_id: self.id.clone(),
+                                message_id: message_id.clone(),
                                 from,
                                 to,
                             })) {
@@ -745,6 +775,7 @@ impl Agent {
                                 .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
                             if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
+                                message_id: message_id.clone(),
                                 prompt_tokens: usage.prompt_tokens,
                                 completion_tokens: usage.completion_tokens,
                                 total_tokens: total,
@@ -1035,15 +1066,8 @@ impl Agent {
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
-            if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
-                agent_id: self.id.clone(),
-                state: AgentStatus::TurnCompleted {
-                    total_iterations: self.context.iteration_count(),
-                    finish_reason,
-                },
-            })) {
-                tracing::warn!("Failed to send TurnCompleted event: {}", e);
-            }
+            let last_message_id = self.message_buffer.messages().last().map(|m| m.id.clone());
+            self.emit_turn_completed(finish_reason, last_message_id);
             self.context.transition_to(AgentState::Idle);
         }
         Ok(())
@@ -1057,13 +1081,22 @@ impl Agent {
             .and_then(|m| m.tool_calls.clone())
             .unwrap_or_default();
 
+        // Pre-generate MessageId for each tool call so Start/End events and
+        // the resulting Message all share the same identifier.
+        let mut tool_message_ids: HashMap<String, MessageId> = HashMap::new();
+        for call in &tool_calls {
+            tool_message_ids.insert(call.id.clone(), MessageId::new());
+        }
+
         // First: Send Started event for ALL tool calls (before permission check)
         for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
+            let message_id = tool_message_ids[&call.id].clone();
             let _ = self
                 .event_tx
                 .send(Event::Tool(ToolEvent::Start {
                     agent_id: self.id.clone(),
+                    message_id,
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
                     arguments: args_str,
@@ -1083,19 +1116,29 @@ impl Agent {
         let mut denied_results: Vec<_> = permission_result
             .denied
             .into_iter()
-            .map(|(tool_call_id, error_msg)| ToolExecutionResult {
-                tool_call_id: tool_call_id.clone(),
-                event: ToolEvent::End {
-                    agent_id: self.id.clone(),
-                    tool_id: tool_call_id.clone(),
-                    tool_name: String::new(),
-                    content_blocks: vec![crate::types::ToolOutputBlock::Text {
-                        text: error_msg.clone(),
-                    }],
-                    elapsed_ms: 0,
-                    is_error: true,
-                },
-                message: Message::tool_result(tool_call_id, error_msg),
+            .map(|(tool_call_id, error_msg)| {
+                let message_id = tool_message_ids[&tool_call_id].clone();
+                let message = Message::tool_result(
+                    message_id.clone(),
+                    tool_call_id.clone(),
+                    error_msg.clone(),
+                );
+                ToolExecutionResult {
+                    tool_call_id: tool_call_id.clone(),
+                    message_id: message_id.clone(),
+                    event: ToolEvent::End {
+                        agent_id: self.id.clone(),
+                        message_id,
+                        tool_id: tool_call_id.clone(),
+                        tool_name: String::new(),
+                        content_blocks: vec![crate::types::ToolOutputBlock::Text {
+                            text: error_msg.clone(),
+                        }],
+                        elapsed_ms: 0,
+                        is_error: true,
+                    },
+                    message,
+                }
             })
             .collect();
 
@@ -1126,6 +1169,7 @@ impl Agent {
                 Some(self.message_buffer.messages()),
                 &self.working_dir,
                 &self.session_id,
+                &tool_message_ids,
             )
             .await
         };
@@ -1170,15 +1214,13 @@ impl Agent {
                 "Agent {} stopping after tool execution (hook requested)",
                 self.id
             );
-            if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
-                agent_id: self.id.clone(),
-                state: AgentStatus::TurnCompleted {
-                    total_iterations: self.context.iteration_count(),
-                    finish_reason: None,
-                },
-            })) {
-                tracing::warn!("Failed to send TurnCompleted event: {}", e);
-            }
+            let last_assistant_id = self
+                .message_buffer
+                .messages()
+                .iter()
+                .rfind(|m| m.role == Role::Assistant)
+                .map(|m| m.id.clone());
+            self.emit_turn_completed(None, last_assistant_id);
             self.context.transition_to(AgentState::Idle);
         }
         Ok(())

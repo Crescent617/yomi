@@ -16,7 +16,8 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let storage = StorageSet::open(PathBuf::from("~/.yomi")).await?;
-//! let session_id = storage.session_store().create(None).await?;
+//! let session_id = SessionId::new();
+//! storage.session_store().create(&session_id, None).await?;
 //! # Ok(())
 //! # }
 //! ```

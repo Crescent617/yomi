@@ -1094,6 +1094,7 @@ mod tests {
                 ..Default::default()
             }),
             Arc::new(Message::tool_result(
+                crate::types::MessageId::default(),
                 "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
                 "72°F and sunny",
             )),

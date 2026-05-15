@@ -95,7 +95,11 @@ impl TuiArgs {
                         }
                     }
                     let trimmed = buffer.trim_end().to_string();
-                    Ok(if trimmed.is_empty() { None } else { Some(trimmed) })
+                    Ok(if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed)
+                    })
                 }
                 Err(e) => Err(e),
             }

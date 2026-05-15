@@ -68,8 +68,8 @@ impl Default for ListArgs {
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// Create a new session with optional working directory
-    async fn create(&self, working_dir: Option<&str>) -> Result<SessionId>;
+    /// Create a new session with the given ID and optional working directory
+    async fn create(&self, id: &SessionId, working_dir: Option<&str>) -> Result<()>;
 
     /// Fork a session, copying its metadata
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;
