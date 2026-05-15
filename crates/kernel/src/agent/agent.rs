@@ -1062,7 +1062,7 @@ impl Agent {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let _ = self
                 .event_tx
-                .send(Event::Tool(ToolEvent::Started {
+                .send(Event::Tool(ToolEvent::Start {
                     agent_id: self.id.clone(),
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
@@ -1085,12 +1085,15 @@ impl Agent {
             .into_iter()
             .map(|(tool_call_id, error_msg)| ToolExecutionResult {
                 tool_call_id: tool_call_id.clone(),
-                event: ToolEvent::Error {
+                event: ToolEvent::End {
                     agent_id: self.id.clone(),
                     tool_id: tool_call_id.clone(),
-                    error: error_msg.clone(),
-                    content_blocks: Vec::new(),
+                    tool_name: String::new(),
+                    content_blocks: vec![crate::types::ToolOutputBlock::Text {
+                        text: error_msg.clone(),
+                    }],
                     elapsed_ms: 0,
+                    is_error: true,
                 },
                 message: Message::tool_result(tool_call_id, error_msg),
             })

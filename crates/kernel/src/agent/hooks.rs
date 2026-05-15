@@ -16,14 +16,14 @@ pub async fn run_pre_tool_hooks(
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
     msg_count: usize,
-    approved_calls: Vec<ToolCall>,
+    toolcalls: Vec<ToolCall>,
     denied_results: &mut Vec<ToolExecutionResult>,
 ) -> Vec<ToolCall> {
     if hook_registry.is_empty() {
-        return approved_calls;
+        return toolcalls;
     }
     let mut pre_approved = Vec::new();
-    for call in approved_calls {
+    for call in toolcalls {
         let ctx = HookContext::pre_tool(
             session_id,
             agent_id.to_string(),
@@ -49,12 +49,15 @@ pub async fn run_pre_tool_hooks(
                     };
                     denied_results.push(ToolExecutionResult {
                         tool_call_id: call.id.clone(),
-                        event: ToolEvent::Error {
+                        event: ToolEvent::End {
                             agent_id: agent_id.clone(),
                             tool_id: call.id.clone(),
-                            error: final_reason.clone(),
-                            content_blocks: Vec::new(),
+                            tool_name: call.name.clone(),
+                            content_blocks: vec![crate::types::ToolOutputBlock::Text {
+                                text: final_reason.clone(),
+                            }],
                             elapsed_ms: 0,
+                            is_error: true,
                         },
                         message: Message::tool_result(call.id, final_reason),
                     });
@@ -104,7 +107,7 @@ pub async fn run_post_tool_hooks(
             .map(|c| c.name.clone())
             .unwrap_or_default();
         let mut hook_tool_output = crate::types::ToolOutput::text(result.message.text_content());
-        hook_tool_output.is_error = matches!(result.event, ToolEvent::Error { .. });
+        hook_tool_output.is_error = matches!(result.event, ToolEvent::End { is_error: true, .. });
         let ctx = HookContext::post_tool(
             session_id,
             agent_id.to_string(),
@@ -138,10 +141,11 @@ pub async fn run_post_tool_hooks(
             if modified {
                 result.message = Message::tool_result(&result.tool_call_id, &final_text);
                 result.event = match result.event {
-                    ToolEvent::Output {
+                    ToolEvent::End {
                         tool_id,
                         elapsed_ms,
                         mut content_blocks,
+                        is_error,
                         ..
                     } => {
                         if let Some(crate::types::ToolOutputBlock::Text {
@@ -154,37 +158,13 @@ pub async fn run_post_tool_hooks(
                                 text: final_text.clone(),
                             });
                         }
-                        ToolEvent::Output {
+                        ToolEvent::End {
                             agent_id: agent_id.clone(),
                             tool_id,
                             tool_name: tool_name.clone(),
-                            output: final_text,
                             content_blocks,
                             elapsed_ms,
-                        }
-                    }
-                    ToolEvent::Error {
-                        tool_id,
-                        elapsed_ms,
-                        mut content_blocks,
-                        ..
-                    } => {
-                        if let Some(crate::types::ToolOutputBlock::Text {
-                            text: ref mut existing,
-                        }) = content_blocks.last_mut()
-                        {
-                            existing.clone_from(&final_text);
-                        } else {
-                            content_blocks.push(crate::types::ToolOutputBlock::Text {
-                                text: final_text.clone(),
-                            });
-                        }
-                        ToolEvent::Error {
-                            agent_id: agent_id.clone(),
-                            tool_id,
-                            error: final_text,
-                            content_blocks,
-                            elapsed_ms,
+                            is_error,
                         }
                     }
                     other => other,

@@ -216,7 +216,7 @@ impl SimpleAgent {
             // Send Started event for all tool calls first
             for call in &tool_calls {
                 let args_str = serde_json::to_string(&call.arguments).ok();
-                on_event(Event::Tool(ToolEvent::Started {
+                on_event(Event::Tool(ToolEvent::Start {
                     agent_id: self.agent_id.clone(),
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
