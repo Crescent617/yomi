@@ -38,6 +38,32 @@ pub fn truncate_by_chars(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Calculate wrap boundaries using display width (Unicode-aware).
+/// Returns vector of byte indices where each visual row starts.
+pub fn calc_wrap_boundaries(text: &str, width: usize) -> Vec<usize> {
+    if width == 0 || text.is_empty() {
+        return vec![0];
+    }
+
+    let mut boundaries = vec![0];
+    let mut current_width = 0;
+    let mut byte_idx = 0;
+
+    for ch in text.chars() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+
+        if current_width + ch_width > width && current_width > 0 {
+            boundaries.push(byte_idx);
+            current_width = ch_width;
+        } else {
+            current_width += ch_width;
+        }
+        byte_idx += ch.len_utf8();
+    }
+
+    boundaries
+}
+
 /// Truncate text by display width (accounts for CJK characters being 2 columns).
 /// Returns the truncated string with suffix appended if truncated.
 ///

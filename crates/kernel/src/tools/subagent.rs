@@ -389,7 +389,7 @@ impl SubagentTool {
         event_tx: &mpsc::Sender<Event>,
         agent_id: AgentId,
         tool_id: &str,
-        message_id: crate::types::MessageId,
+        message_id: &crate::types::MessageId,
     ) {
         match event {
             Event::Model(ModelEvent::TokenUsage {
@@ -476,7 +476,7 @@ impl SubagentTool {
                     &event_tx,
                     agent_id.clone(),
                     &tool_id_owned,
-                    message_id.clone(),
+                    &message_id,
                 );
             })
             .await;

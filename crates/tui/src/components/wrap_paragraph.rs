@@ -13,6 +13,8 @@ use tuirealm::ratatui::{
     text::{Line, Span, Text},
     widgets::Widget,
 };
+
+use crate::utils::text::calc_wrap_boundaries;
 use unicode_width::UnicodeWidthChar;
 
 /// Selection range: ((`start_line`, `start_col`), (`end_line`, `end_col`))
@@ -103,38 +105,8 @@ impl<'a> WrapParagraph<'a> {
             return 1;
         }
 
-        let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
+        let boundaries = calc_wrap_boundaries(&line_text, width);
         boundaries.len()
-    }
-
-    /// Calculate character indices where each visual row starts.
-    ///
-    /// Returns a vector of byte indices into the UTF-8 string where
-    /// wrapping should occur. The first element is always 0.
-    fn calculate_wrap_boundaries(text: &str, width: usize) -> Vec<usize> {
-        if width == 0 || text.is_empty() {
-            return vec![0];
-        }
-
-        let mut boundaries = vec![0];
-        let mut current_width = 0;
-        let mut byte_idx = 0;
-
-        for ch in text.chars() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-
-            // If adding this character would exceed width, wrap here
-            if current_width + ch_width > width && current_width > 0 {
-                boundaries.push(byte_idx);
-                current_width = ch_width;
-            } else {
-                current_width += ch_width;
-            }
-
-            byte_idx += ch.len_utf8();
-        }
-
-        boundaries
     }
 
     /// Extract a segment of a line as a new Line, preserving styles.
@@ -361,7 +333,7 @@ impl Widget for WrapParagraph<'_> {
 
         for (global_line_idx, line) in self.text.lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let boundaries = Self::calculate_wrap_boundaries(&line_text, width);
+            let boundaries = calc_wrap_boundaries(&line_text, width);
 
             // Render each wrapped row of this line
             for (row_in_line, &start_byte) in boundaries.iter().enumerate() {
@@ -485,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_wrap_boundaries_ascii() {
-        let boundaries = WrapParagraph::calculate_wrap_boundaries("Hello World", 5);
+        let boundaries = calc_wrap_boundaries("Hello World", 5);
         assert_eq!(boundaries, vec![0, 5, 10]);
     }
 
@@ -493,7 +465,7 @@ mod tests {
     fn test_wrap_boundaries_cjk() {
         // CJK characters are width 2, 3 bytes each in UTF-8
         // "你好世界" at width 4 fits 2 chars per row
-        let boundaries = WrapParagraph::calculate_wrap_boundaries("你好世界", 4);
+        let boundaries = calc_wrap_boundaries("你好世界", 4);
         assert_eq!(boundaries, vec![0, 6]); // Row 1: bytes 0-5, Row 2: bytes 6-11
     }
 

@@ -178,27 +178,6 @@ pub fn scan_code_blocks(lines: &[Arc<Line<'static>>]) -> Vec<(usize, String)> {
     blocks
 }
 
-/// Convert logical line index to visual line index (accounting for wrapping)
-pub fn logical_to_visual_line(
-    lines: &[Arc<Line<'static>>],
-    target_logical: usize,
-    width: usize,
-    calculate_wrap_boundaries: impl Fn(&str, usize) -> Vec<usize>,
-) -> usize {
-    let mut visual_line = 0usize;
-
-    for (i, line) in lines.iter().enumerate() {
-        if i >= target_logical {
-            break;
-        }
-        let line_text = line_to_text(line);
-        let wrapped_height = calculate_wrap_boundaries(&line_text, width).len();
-        visual_line += wrapped_height.max(1);
-    }
-
-    visual_line
-}
-
 /// Get the display width of a line
 pub fn line_display_width(line: &Arc<Line<'static>>) -> u16 {
     let line_text = line_to_text(line);
