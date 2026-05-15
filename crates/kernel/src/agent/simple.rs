@@ -15,7 +15,8 @@ use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::permissions::Checker;
 use crate::providers::{ModelConfig, Provider};
 use crate::tools::{ToolExecCtx, ToolRegistry};
-use crate::types::{AgentId, KernelError, Message, Result, ToolCall};
+use crate::types::{AgentId, KernelError, Message, MessageId, Result, ToolCall};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -160,14 +161,16 @@ impl SimpleAgent {
 
             // iteration is 0-based, so add 1 to get actual count
             metrics.iteration_count = iteration + 1;
+            let assistant_msg_id = MessageId::new();
             on_event(Event::Model(ModelEvent::Request {
                 agent_id: self.agent_id.clone(),
+                message_id: assistant_msg_id.clone(),
                 message_count: messages.len(),
             }));
 
             // Get model response
             let (assistant_msg, token_usage) = self
-                .stream_model(&messages, &cancel_token, &mut on_event)
+                .stream_model(&messages, &cancel_token, &mut on_event, assistant_msg_id)
                 .await?;
 
             // Update token usage if available
@@ -181,6 +184,7 @@ impl SimpleAgent {
                 metrics.token_usage = usage;
                 on_event(Event::Model(ModelEvent::TokenUsage {
                     agent_id: self.agent_id.clone(),
+                    message_id: assistant_msg.id.clone(),
                     prompt_tokens: usage.prompt_tokens,
                     completion_tokens: usage.completion_tokens,
                     total_tokens: usage.total_tokens(),
@@ -213,11 +217,19 @@ impl SimpleAgent {
             // Get tool calls
             let tool_calls = assistant_arc.tool_calls.clone().unwrap_or_default();
 
+            // Pre-generate MessageId for each tool call
+            let mut tool_message_ids: HashMap<String, MessageId> = HashMap::new();
+            for call in &tool_calls {
+                tool_message_ids.insert(call.id.clone(), MessageId::new());
+            }
+
             // Send Started event for all tool calls first
             for call in &tool_calls {
                 let args_str = serde_json::to_string(&call.arguments).ok();
+                let message_id = tool_message_ids[&call.id].clone();
                 on_event(Event::Tool(ToolEvent::Start {
                     agent_id: self.agent_id.clone(),
+                    message_id,
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
                     arguments: args_str,
@@ -238,13 +250,16 @@ impl SimpleAgent {
                     return Err(cancelled_error("execution cancelled"));
                 }
 
-                let result = self.execute_tool(&call, &cancel_token).await?;
+                let message_id = tool_message_ids[&call.id].clone();
+                let result = self.execute_tool(&call, &cancel_token, message_id).await?;
                 messages.push(Arc::new(result));
             }
 
             // Add denied results as tool result messages
             for (tool_call_id, error_msg) in permission_result.denied {
-                messages.push(Arc::new(Message::tool_result(tool_call_id, error_msg)));
+                let message_id = tool_message_ids[&tool_call_id].clone();
+                let msg = Message::tool_result(message_id, tool_call_id, error_msg);
+                messages.push(Arc::new(msg));
             }
         }
 
@@ -273,6 +288,7 @@ impl SimpleAgent {
         messages: &[Arc<Message>],
         cancel_token: &CancellationToken,
         on_event: &mut F,
+        message_id: MessageId,
     ) -> Result<(Message, Option<crate::providers::TokenUsage>)>
     where
         F: FnMut(Event),
@@ -303,6 +319,7 @@ impl SimpleAgent {
                             state.handle_chunk(&chunk);
                             on_event(Event::Model(ModelEvent::Chunk {
                                 agent_id: self.agent_id.clone(),
+                                message_id: message_id.clone(),
                                 content: chunk,
                             }));
                         }
@@ -310,6 +327,7 @@ impl SimpleAgent {
                             // Forward incremental tool call update for UI feedback
                             on_event(Event::Model(ModelEvent::ToolCallDelta {
                                 agent_id: self.agent_id.clone(),
+                                message_id: message_id.clone(),
                                 tool_id: id,
                                 tool_name: name,
                                 arguments_delta,
@@ -329,6 +347,7 @@ impl SimpleAgent {
                         ModelStreamItem::Fallback { from, to } => {
                             on_event(Event::Model(ModelEvent::Fallback {
                                 agent_id: self.agent_id.clone(),
+                                message_id: message_id.clone(),
                                 from,
                                 to,
                             }));
@@ -348,10 +367,16 @@ impl SimpleAgent {
         } else {
             Message::with_blocks(crate::types::Role::Assistant, result.content_blocks)
         };
+        msg.id = message_id;
 
         if !result.tool_calls.is_empty() {
             msg.tool_calls = Some(result.tool_calls);
         }
+
+        on_event(Event::Model(ModelEvent::Completed {
+            agent_id: self.agent_id.clone(),
+            message_id: msg.id.clone(),
+        }));
 
         Ok((msg, result.token_usage))
     }
@@ -361,6 +386,7 @@ impl SimpleAgent {
         &self,
         call: &ToolCall,
         cancel_token: &CancellationToken,
+        message_id: MessageId,
     ) -> Result<Message> {
         let tool = self
             .tool_registry
@@ -373,10 +399,15 @@ impl SimpleAgent {
             Some(cancel_token.clone()),
             &self.working_dir,
             &self.session_id,
+            message_id.clone(),
         );
 
         let output = tool.exec(call.arguments.clone(), ctx).await?;
 
-        Ok(Message::tool_result(call.id.clone(), output.text_content()))
+        Ok(Message::tool_result(
+            message_id,
+            call.id.clone(),
+            output.text_content(),
+        ))
     }
 }

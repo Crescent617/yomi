@@ -79,7 +79,8 @@ impl Coordinator {
     /// Create a new session with the given configuration
     pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
         let working_dir = config.project_path.to_string_lossy().to_string();
-        let id = self.session_store().create(Some(&working_dir)).await?;
+        let id = SessionId::new();
+        self.session_store().create(&id, Some(&working_dir)).await?;
         self.init_session(id.clone(), config).await?;
         tracing::info!("Session {} created", id.0);
         Ok(id)

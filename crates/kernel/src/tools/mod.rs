@@ -52,6 +52,9 @@ pub struct ToolExecCtx<'a> {
     pub working_dir: std::path::PathBuf,
     /// Session ID for session-scoped operations (e.g., todo storage)
     pub session_id: String,
+    /// Pre-generated `MessageId` for the tool result message, allowing progress
+    /// events and the final result to share a consistent identifier.
+    pub message_id: crate::types::MessageId,
 }
 
 impl<'a> ToolExecCtx<'a> {
@@ -67,6 +70,7 @@ impl<'a> ToolExecCtx<'a> {
             cancel_token: None,
             working_dir: working_dir.into(),
             session_id: session_id.into(),
+            message_id: crate::types::MessageId::default(),
         }
     }
 
@@ -79,6 +83,7 @@ impl<'a> ToolExecCtx<'a> {
         cancel_token: Option<tokio_util::sync::CancellationToken>,
         working_dir: impl Into<std::path::PathBuf>,
         session_id: impl Into<String>,
+        message_id: crate::types::MessageId,
     ) -> Self {
         Self {
             tool_call_id,
@@ -86,6 +91,7 @@ impl<'a> ToolExecCtx<'a> {
             cancel_token,
             working_dir: working_dir.into(),
             session_id: session_id.into(),
+            message_id,
         }
     }
 

@@ -1,7 +1,7 @@
 use crate::event::ToolEvent;
 use crate::hooks::{HookContext, HookRegistry, HookResult};
 use crate::tools::executor::ToolExecutionResult;
-use crate::types::{AgentId, Message, ToolCall};
+use crate::types::{AgentId, Message, MessageId, ToolCall};
 use std::path::PathBuf;
 
 /// Run `PreToolUse` hooks over approved calls.
@@ -47,10 +47,18 @@ pub async fn run_pre_tool_hooks(
                         parts.push(reason);
                         parts.join("\n\n")
                     };
+                    let message_id = MessageId::new();
+                    let message = Message::tool_result(
+                        message_id.clone(),
+                        call.id.clone(),
+                        final_reason.clone(),
+                    );
                     denied_results.push(ToolExecutionResult {
                         tool_call_id: call.id.clone(),
+                        message_id: message_id.clone(),
                         event: ToolEvent::End {
                             agent_id: agent_id.clone(),
+                            message_id,
                             tool_id: call.id.clone(),
                             tool_name: call.name.clone(),
                             content_blocks: vec![crate::types::ToolOutputBlock::Text {
@@ -59,7 +67,7 @@ pub async fn run_pre_tool_hooks(
                             elapsed_ms: 0,
                             is_error: true,
                         },
-                        message: Message::tool_result(call.id, final_reason),
+                        message,
                     });
                 }
                 crate::hooks::PreToolAction::Allow => {
@@ -139,9 +147,12 @@ pub async fn run_post_tool_hooks(
             }
 
             if modified {
-                result.message = Message::tool_result(&result.tool_call_id, &final_text);
+                let message_id = result.message_id.clone();
+                result.message =
+                    Message::tool_result(message_id.clone(), &result.tool_call_id, &final_text);
                 result.event = match result.event {
                     ToolEvent::End {
+                        message_id,
                         tool_id,
                         elapsed_ms,
                         mut content_blocks,
@@ -160,6 +171,7 @@ pub async fn run_post_tool_hooks(
                         }
                         ToolEvent::End {
                             agent_id: agent_id.clone(),
+                            message_id,
                             tool_id,
                             tool_name: tool_name.clone(),
                             content_blocks,

@@ -3,7 +3,7 @@ use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
 use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
-use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, ToolOutput};
+use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
 use crate::utils::tokens::format_actual_tokens;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -208,12 +208,15 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         // Build system prompt (role definition only, no task specifics)
         let system_prompt = self.build_system_prompt(inherit_context);
 
-        // Create session for transcript recording if storage is available
+        // Create session for transcript recording if storage is available.
+        // Reuse the pre-generated tool-call message_id as the session id so
+        // that the sub-agent transcript is directly traceable from the tool
+        // event stream.
         let subagent_session_id = if let Some(session_store) = &self.session_store {
-            // Use parent's working_dir (from ctx.working_dir) for the subagent session
             let working_dir = ctx.working_dir.to_string_lossy().to_string();
-            match session_store.create(Some(&working_dir)).await {
-                Ok(sid) => {
+            let sid = SessionId(ctx.message_id.as_str().to_string());
+            match session_store.create(&sid, Some(&working_dir)).await {
+                Ok(()) => {
                     tracing::debug!(
                         "Created sub-agent session: {} for agent {}",
                         sid.0,
@@ -263,6 +266,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                 // Clone shared resources for the async block
                 let shared = self.shared.clone();
                 let parent_session_id = self.parent_session_id.clone();
+                let message_id = ctx.message_id.clone();
                 tokio::spawn(async move {
                     let (output, status) = Self::execute_simple_agent_with_shared(
                         &mut simple_agent,
@@ -275,6 +279,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                         &tool_id,
                         shared,
                         parent_session_id,
+                        message_id,
                     )
                     .await;
 
@@ -304,6 +309,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                         &self.parent_event_tx,
                         &self.parent_id,
                         ctx.tool_call_id,
+                        ctx.message_id.clone(),
                     )
                     .await;
 
@@ -363,9 +369,11 @@ impl SubagentTool {
         tool_id: &str,
         message: String,
         tokens: Option<u32>,
+        message_id: crate::types::MessageId,
     ) {
         if let Err(e) = event_tx.try_send(Event::Tool(ToolEvent::Progress {
             agent_id,
+            message_id,
             tool_id: tool_id.to_string(),
             message,
             tokens,
@@ -381,6 +389,7 @@ impl SubagentTool {
         event_tx: &mpsc::Sender<Event>,
         agent_id: AgentId,
         tool_id: &str,
+        message_id: crate::types::MessageId,
     ) {
         match event {
             Event::Model(ModelEvent::TokenUsage {
@@ -398,6 +407,7 @@ impl SubagentTool {
                         format_actual_tokens(total)
                     ),
                     Some(total),
+                    message_id.clone(),
                 );
             }
             Event::Model(ModelEvent::Request { .. }) => {
@@ -408,6 +418,7 @@ impl SubagentTool {
                     tool_id,
                     format!("iteration {iteration_count} · running..."),
                     None,
+                    message_id.clone(),
                 );
             }
             // Show tool calls in progress for BROWSE mode
@@ -418,6 +429,7 @@ impl SubagentTool {
                     tool_id,
                     format!("iteration {iteration_count} · {tool_name}"),
                     None,
+                    message_id.clone(),
                 );
             }
             _ => {}
@@ -449,6 +461,7 @@ impl SubagentTool {
         tool_id: &str,
         shared: Arc<AgentShared>,
         parent_session_id: String,
+        message_id: crate::types::MessageId,
     ) -> (String, SubAgentStatus) {
         let event_tx = parent_event_tx.clone();
         let agent_id = parent_id.clone();
@@ -463,6 +476,7 @@ impl SubagentTool {
                     &event_tx,
                     agent_id.clone(),
                     &tool_id_owned,
+                    message_id.clone(),
                 );
             })
             .await;
@@ -482,6 +496,7 @@ impl SubagentTool {
                         tool_id,
                         format!("completed · {} tokens", format_actual_tokens(total)),
                         Some(total),
+                        message_id.clone(),
                     );
                     SubAgentStatus::Completed
                 } else {
@@ -495,6 +510,7 @@ impl SubagentTool {
                             format_actual_tokens(total)
                         ),
                         Some(total),
+                        message_id.clone(),
                     );
                     SubAgentStatus::Failed(format!(
                         "Task did not complete within {} iterations. \
@@ -515,7 +531,14 @@ impl SubagentTool {
                         SubAgentStatus::Failed(error_str),
                     )
                 };
-                Self::send_progress(parent_event_tx, parent_id.clone(), tool_id, msg, None);
+                Self::send_progress(
+                    parent_event_tx,
+                    parent_id.clone(),
+                    tool_id,
+                    msg,
+                    None,
+                    message_id.clone(),
+                );
                 (String::new(), status)
             }
         }
@@ -533,6 +556,7 @@ impl SubagentTool {
         parent_event_tx: &mpsc::Sender<Event>,
         parent_id: &AgentId,
         tool_id: &str,
+        message_id: crate::types::MessageId,
     ) -> (String, SubAgentStatus) {
         Self::execute_simple_agent_with_shared(
             simple_agent,
@@ -545,6 +569,7 @@ impl SubagentTool {
             tool_id,
             self.shared.clone(),
             self.parent_session_id.clone(),
+            message_id,
         )
         .await
     }

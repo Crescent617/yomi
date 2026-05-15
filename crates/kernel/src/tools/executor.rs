@@ -1,7 +1,8 @@
 use crate::event::ToolEvent;
 use crate::tools::helper::truncate::{truncate_output, TRUNCATION_MESSAGE};
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME};
-use crate::types::{AgentId, ContentBlock, Message, Role, ToolCall, ToolOutput};
+use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -13,6 +14,7 @@ const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
 /// Tool execution result
 pub struct ToolExecutionResult {
     pub tool_call_id: String,
+    pub message_id: MessageId,
     pub message: Message,
     pub event: ToolEvent,
 }
@@ -68,62 +70,40 @@ fn to_content_blocks(blocks: &[crate::types::ToolOutputBlock]) -> Vec<ContentBlo
         .collect()
 }
 
-/// Build success result from tool output
-fn build_success_result(
+/// Build a tool result (success or error) from tool output.
+fn build_tool_result(
     agent_id: &AgentId,
     call_id: &str,
     tool_name: &str,
-    result: &ToolOutput,
+    output: &ToolOutput,
     elapsed_ms: u64,
+    message_id: MessageId,
 ) -> (ToolEvent, Message) {
-    let truncated = truncate_and_convert_blocks(&result.contents, tool_name);
-    let content_blocks = to_content_blocks(&truncated);
+    let (blocks, content, is_error) = if output.success() {
+        let truncated = truncate_and_convert_blocks(&output.contents, tool_name);
+        let content = to_content_blocks(&truncated);
+        (truncated, content, false)
+    } else {
+        let text = format!("Error: {}", output.error_text());
+        let blocks = vec![crate::types::ToolOutputBlock::Text { text: text.clone() }];
+        let content = vec![ContentBlock::Text { text }];
+        (blocks, content, true)
+    };
 
     let event = ToolEvent::End {
         agent_id: agent_id.clone(),
+        message_id: message_id.clone(),
         tool_id: call_id.to_string(),
         tool_name: tool_name.to_string(),
-        content_blocks: truncated,
+        content_blocks: blocks,
         elapsed_ms,
-        is_error: false,
+        is_error,
     };
 
     let message = Message {
+        id: message_id,
         role: Role::Tool,
-        content: content_blocks,
-        tool_call_id: Some(call_id.to_string()),
-        ..Default::default()
-    };
-
-    (event, message)
-}
-
-/// Build error result from tool output
-fn build_error_result(
-    agent_id: &AgentId,
-    call_id: &str,
-    result: &ToolOutput,
-    elapsed_ms: u64,
-) -> (ToolEvent, Message) {
-    let error_text = result.error_text();
-    let content_blocks = vec![crate::types::ToolOutputBlock::Text {
-        text: format!("Error: {error_text}"),
-    }];
-
-    let event = ToolEvent::End {
-        agent_id: agent_id.clone(),
-        tool_id: call_id.to_string(),
-        tool_name: String::new(),
-        content_blocks: content_blocks.clone(),
-        elapsed_ms,
-        is_error: true,
-    };
-
-    let message = Message {
-        role: Role::Tool,
-        content: vec![ContentBlock::Text {
-            text: format!("Error: {error_text}"),
-        }],
+        content,
         tool_call_id: Some(call_id.to_string()),
         ..Default::default()
     };
@@ -176,6 +156,10 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
 /// Accepts tokio native `CancellationToken` for runtime cancellation control.
 /// The `cancel_token` should be created from Agent's custom `CancelToken` at the
 /// start of each request.
+///
+/// `message_ids` maps each `tool_call_id` to a pre-generated `MessageId` for the
+/// resulting tool result message. This allows `ToolEvent::Start` and `ToolEvent::End`
+/// to carry a consistent message identifier.
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],
@@ -184,6 +168,7 @@ pub async fn execute_tools_parallel(
     parent_messages: Option<&[Arc<Message>]>,
     working_dir: &std::path::Path,
     session_id: &str,
+    message_ids: &HashMap<String, MessageId>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -201,6 +186,7 @@ pub async fn execute_tools_parallel(
         let arguments = call.arguments.clone();
         let tool_opt = tool_registry.get(&call_name);
         let session_id = session_id.to_string();
+        let message_id = message_ids[&call_id].clone();
 
         if tool_opt.is_none() {
             tracing::error!(
@@ -224,6 +210,7 @@ pub async fn execute_tools_parallel(
                         cancel_token_for_task,
                         &working_dir,
                         session_id,
+                        message_id.clone(),
                     );
                     execute_single_tool_with_ctx(tool, arguments, ctx).await
                 }
@@ -231,14 +218,18 @@ pub async fn execute_tools_parallel(
             };
             let elapsed = start.elapsed().as_millis() as u64;
 
-            let (event, message) = if result.success() {
-                build_success_result(&agent_id, &call_id, &call_name, &result, elapsed)
-            } else {
-                build_error_result(&agent_id, &call_id, &result, elapsed)
-            };
+            let (event, message) = build_tool_result(
+                &agent_id,
+                &call_id,
+                &call_name,
+                &result,
+                elapsed,
+                message_id.clone(),
+            );
 
             ToolExecutionResult {
                 tool_call_id: call_id,
+                message_id,
                 message,
                 event,
             }

@@ -22,15 +22,14 @@ impl SqliteSessionStore {
 
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
-    async fn create(&self, working_dir: Option<&str>) -> Result<SessionId> {
-        let id = SessionId::new();
+    async fn create(&self, id: &SessionId, working_dir: Option<&str>) -> Result<()> {
         sqlx::query("INSERT INTO sessions (id, working_dir) VALUES (?, ?)")
             .bind(&id.0)
             .bind(working_dir)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
-        Ok(id)
+        Ok(())
     }
 
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
@@ -236,7 +235,8 @@ mod tests {
     async fn test_create_and_get() {
         let store = create_test_store().await;
 
-        let id = store.create(None).await.unwrap();
+        let id = SessionId::new();
+        store.create(&id, None).await.unwrap();
         let info = store.get(&id).await.unwrap().unwrap();
 
         assert_eq!(info.id.0, id.0);
@@ -247,7 +247,8 @@ mod tests {
     async fn test_create_with_working_dir() {
         let store = create_test_store().await;
 
-        let id = store.create(Some("/test/dir")).await.unwrap();
+        let id = SessionId::new();
+        store.create(&id, Some("/test/dir")).await.unwrap();
         let info = store.get(&id).await.unwrap().unwrap();
 
         assert_eq!(info.working_dir, Some("/test/dir".to_string()));
@@ -257,7 +258,8 @@ mod tests {
     async fn test_fork() {
         let store = create_test_store().await;
 
-        let parent = store.create(Some("/parent/dir")).await.unwrap();
+        let parent = SessionId::new();
+        store.create(&parent, Some("/parent/dir")).await.unwrap();
         let child = store.fork(&parent).await.unwrap();
 
         let child_info = store.get(&child).await.unwrap().unwrap();
@@ -269,8 +271,10 @@ mod tests {
     async fn test_list_ordering() {
         let store = create_test_store().await;
 
-        let id1 = store.create(None).await.unwrap();
-        let id2 = store.create(None).await.unwrap();
+        let id1 = SessionId::new();
+        store.create(&id1, None).await.unwrap();
+        let id2 = SessionId::new();
+        store.create(&id2, None).await.unwrap();
 
         // Update id1 to make it more recent
         store.update_message_count(&id1, 1).await.unwrap();
@@ -284,9 +288,12 @@ mod tests {
     async fn test_list_filter_by_working_dir() {
         let store = create_test_store().await;
 
-        let id1 = store.create(Some("/foo/bar")).await.unwrap();
-        let _id2 = store.create(Some("/baz/qux")).await.unwrap();
-        let id3 = store.create(Some("/foo/bar")).await.unwrap();
+        let id1 = SessionId::new();
+        store.create(&id1, Some("/foo/bar")).await.unwrap();
+        let id2 = SessionId::new();
+        store.create(&id2, Some("/baz/qux")).await.unwrap();
+        let id3 = SessionId::new();
+        store.create(&id3, Some("/foo/bar")).await.unwrap();
 
         let args = ListArgs {
             working_dir: Some("/foo/bar".to_string()),
@@ -306,7 +313,9 @@ mod tests {
         // Create 5 sessions with explicit delays to ensure different timestamps
         let mut ids = Vec::new();
         for i in 0..5 {
-            ids.push(store.create(None).await.unwrap());
+            let id = SessionId::new();
+            store.create(&id, None).await.unwrap();
+            ids.push(id);
             // Update message count to change updated_at, with increasing delays
             tokio::time::sleep(tokio::time::Duration::from_millis(10 + i as u64 * 5)).await;
             store
@@ -345,7 +354,8 @@ mod tests {
         let store = create_test_store().await;
 
         // Create a session and manually set its updated_at to 10 days ago
-        let old_id = store.create(Some("/test")).await.unwrap();
+        let old_id = SessionId::new();
+        store.create(&old_id, Some("/test")).await.unwrap();
         sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
             .bind(&old_id.0)
             .execute(&store.pool)
@@ -353,7 +363,8 @@ mod tests {
             .unwrap();
 
         // Create a recent session
-        let recent_id = store.create(Some("/test")).await.unwrap();
+        let recent_id = SessionId::new();
+        store.create(&recent_id, Some("/test")).await.unwrap();
 
         // Cleanup sessions older than 7 days
         let deleted = store.cleanup(7).await.unwrap();
@@ -374,8 +385,10 @@ mod tests {
         let store = create_test_store().await;
 
         // Create only recent sessions
-        let _id1 = store.create(None).await.unwrap();
-        let _id2 = store.create(None).await.unwrap();
+        let id1 = SessionId::new();
+        store.create(&id1, None).await.unwrap();
+        let id2 = SessionId::new();
+        store.create(&id2, None).await.unwrap();
 
         // Cleanup sessions older than 30 days
         let deleted = store.cleanup(30).await.unwrap();

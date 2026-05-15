@@ -51,6 +51,38 @@ impl Default for SessionId {
     }
 }
 
+/// Unique identifier for messages
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MessageId(SmolStr);
+
+impl MessageId {
+    pub fn new() -> Self {
+        Self(SmolStr::new(Uuid::now_v7().to_string()))
+    }
+
+    /// Create from an existing string (used for database retrieval)
+    pub fn from_string(s: impl Into<String>) -> Self {
+        Self(SmolStr::new(s.into()))
+    }
+
+    /// Get the string representation
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for MessageId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Message role
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -175,6 +207,8 @@ pub struct MessageTokenUsage {
 /// Chat message with content blocks (OpenAI-style)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default)]
+    pub id: MessageId,
     pub role: Role,
     /// Content blocks - can be single string (simple) or array of blocks (rich)
     /// For serialization, we use a custom format that handles both
@@ -200,6 +234,7 @@ pub struct Message {
 impl Default for Message {
     fn default() -> Self {
         Self {
+            id: MessageId::new(),
             role: Role::User,
             content: Vec::new(),
             tool_calls: None,
@@ -319,9 +354,14 @@ impl Message {
         }
     }
 
-    /// Create a tool result message
-    pub fn tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
+    /// Create a tool result message with a pre-assigned identifier.
+    pub fn tool_result(
+        message_id: MessageId,
+        tool_call_id: impl Into<String>,
+        output: impl Into<String>,
+    ) -> Self {
         Self {
+            id: message_id,
             role: Role::Tool,
             content: vec![output.into().into()],
             tool_call_id: Some(tool_call_id.into()),

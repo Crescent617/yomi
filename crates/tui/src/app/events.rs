@@ -18,7 +18,7 @@ impl Model {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 // User message from kernel (render after kernel accepts it)
-                Event::User(kernel::event::UserEvent::Message { content }) => {
+                Event::User(kernel::event::UserEvent::Message { content, .. }) => {
                     let blocks_json = serde_json::to_string(&content).unwrap_or_default();
                     let _ = self.app.attr(
                         &Id::ChatView,
@@ -188,17 +188,10 @@ impl Model {
                         AgentStatus::Running => {
                             // Agent started - could show in status bar if needed
                         }
-                        AgentStatus::IterationCompleted {
-                            iteration,
-                            messages,
-                        } => {
-                            tracing::debug!(
-                                "Iteration {iteration} completed with {messages} messages"
-                            );
-                        }
                         AgentStatus::TurnCompleted {
                             total_iterations,
                             finish_reason,
+                            ..
                         } => {
                             // Task naturally completed - check for special finish reasons
                             match finish_reason {

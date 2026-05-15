@@ -1,5 +1,5 @@
 use crate::permissions::Level;
-use crate::types::{AgentId, SessionId, ToolOutputBlock};
+use crate::types::{AgentId, MessageId, SessionId, ToolOutputBlock};
 use serde::{Deserialize, Serialize};
 
 /// Top-level event wrapper - modular design prevents enum explosion
@@ -37,6 +37,7 @@ pub enum ControlCommand {
 pub enum UserEvent {
     /// User message with multi-modal content blocks
     Message {
+        message_id: MessageId,
         content: Vec<crate::types::ContentBlock>,
     },
 }
@@ -82,13 +83,13 @@ pub enum AgentEvent {
 pub enum AgentStatus {
     /// Agent 开始运行
     Running,
-    /// 一次 `ReAct` 迭代完成（原 Completed）
-    IterationCompleted { iteration: usize, messages: usize },
     /// 任务自然结束（原 `ReActLoopEnd`）
     TurnCompleted {
         total_iterations: usize,
         /// API 返回的 finish reason（如 `MaxTokens`, `ContentFilter`）
         finish_reason: Option<crate::types::FinishReason>,
+        /// 最后一条 assistant 消息的 ID
+        last_message_id: Option<MessageId>,
     },
     /// Agent 停止（包含各种结束原因）
     Stopped { reason: StopReason },
@@ -124,17 +125,20 @@ pub enum ErrorPhase {
 pub enum ModelEvent {
     Request {
         agent_id: AgentId,
+        message_id: MessageId,
         message_count: usize,
     },
     /// Content chunk (text or thinking)
     Chunk {
         agent_id: AgentId,
+        message_id: MessageId,
         content: ContentChunk,
     },
     /// Incremental tool call update (for UI feedback during argument streaming)
     /// Only contains the newly added fragment, not the accumulated arguments.
     ToolCallDelta {
         agent_id: AgentId,
+        message_id: MessageId,
         tool_id: String,
         tool_name: String,
         /// Newly added argument fragment (delta), not the full accumulated string
@@ -142,19 +146,23 @@ pub enum ModelEvent {
     },
     Completed {
         agent_id: AgentId,
+        message_id: MessageId,
     },
     Error {
         agent_id: AgentId,
+        message_id: MessageId,
         error: String,
     },
     Fallback {
         agent_id: AgentId,
+        message_id: MessageId,
         from: String,
         to: String,
     },
     /// Token usage update from provider
     TokenUsage {
         agent_id: AgentId,
+        message_id: MessageId,
         prompt_tokens: u32,
         completion_tokens: u32,
         total_tokens: u32,
@@ -162,10 +170,7 @@ pub enum ModelEvent {
         context_window: u32,
     },
     /// Context compaction in progress
-    Compacting {
-        agent_id: AgentId,
-        active: bool,
-    },
+    Compacting { agent_id: AgentId, active: bool },
 }
 
 /// Content chunk for streaming
@@ -183,12 +188,14 @@ pub enum ContentChunk {
 pub enum ToolEvent {
     Start {
         agent_id: AgentId,
+        message_id: MessageId,
         tool_id: String,
         tool_name: String,
         arguments: Option<String>,
     },
     End {
         agent_id: AgentId,
+        message_id: MessageId,
         tool_id: String,
         tool_name: String,
         /// Content blocks for multimodal support (text, images, etc.)
@@ -200,6 +207,7 @@ pub enum ToolEvent {
     /// Progress update for long-running tools (e.g., sub-agent)
     Progress {
         agent_id: AgentId,
+        message_id: MessageId,
         tool_id: String,
         /// Progress message (e.g., "iteration 3/20", "streaming...")
         message: String,
