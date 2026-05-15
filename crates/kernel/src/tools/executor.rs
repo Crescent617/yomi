@@ -160,6 +160,7 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
 /// `message_ids` maps each `tool_call_id` to a pre-generated `MessageId` for the
 /// resulting tool result message. This allows `ToolEvent::Start` and `ToolEvent::End`
 /// to carry a consistent message identifier.
+#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
     tool_calls: &[ToolCall],

@@ -4,12 +4,13 @@
 
 mod core;
 mod overlay;
+mod wrap_cache;
 
 // Re-export from core
 pub use core::{ChatView, ChatViewComponent, HistoryMessage, MouseAction, Selection, ToolStatus};
 
 // Re-export from overlay
 pub use overlay::{
-    line_display_width, line_to_text, logical_to_visual_line, scan_code_blocks, CodeBlockOverlay,
-    CodeBlockOverlayManager, ContextMenu, ContextMenuAction,
+    line_display_width, line_to_text, scan_code_blocks, CodeBlockOverlay, CodeBlockOverlayManager,
+    ContextMenu, ContextMenuAction,
 };
