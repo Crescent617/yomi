@@ -87,7 +87,7 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                Event::Tool(kernel::event::ToolEvent::Started {
+                Event::Tool(kernel::event::ToolEvent::Start {
                     tool_id,
                     tool_name,
                     arguments,
@@ -103,34 +103,56 @@ impl Model {
                     )?;
                     self.state.should_redraw = true;
                 }
-                Event::Tool(kernel::event::ToolEvent::Output {
+                Event::Tool(kernel::event::ToolEvent::End {
                     tool_id,
-                    output,
                     content_blocks,
                     elapsed_ms,
                     tool_name,
+                    is_error,
                     ..
                 }) => {
                     // Clear tool call state from info bar (tool execution is complete)
                     self.clear_tool_call_delta();
-                    // Show tool output in chat view
-                    // Format: tool_id\x00output\x00elapsed_ms\x00content_blocks_json
-                    let blocks_json = serde_json::to_string(&content_blocks).unwrap_or_default();
-                    let combined =
-                        format!("{tool_id}\x00{output}\x00{elapsed_ms}\x00{blocks_json}");
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::COMPLETE_TOOL),
-                        AttrValue::String(combined),
-                    )?;
 
-                    if tool_name == TODO_TOOL_NAME {
-                        // If the tool is a todo tool, refresh the todo list after completion
-                        if let Err(e) = self.init_todo_list().await {
-                            tracing::error!(
-                                "Failed to refresh todo list after tool execution: {}",
-                                e
-                            );
+                    // Extract text from content blocks
+                    let output: String = content_blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            kernel::types::ToolOutputBlock::Text { text } => Some(text.as_str()),
+                            kernel::types::ToolOutputBlock::Image { .. } => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .concat();
+
+                    if is_error {
+                        // Show tool error in chat view
+                        let combined = format!("{tool_id}\x00{output}\x00{elapsed_ms}");
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom(attr::FAIL_TOOL),
+                            AttrValue::String(combined),
+                        )?;
+                    } else {
+                        // Show tool output in chat view
+                        // Format: tool_id\x00output\x00elapsed_ms\x00content_blocks_json
+                        let blocks_json =
+                            serde_json::to_string(&content_blocks).unwrap_or_default();
+                        let combined =
+                            format!("{tool_id}\x00{output}\x00{elapsed_ms}\x00{blocks_json}");
+                        self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom(attr::COMPLETE_TOOL),
+                            AttrValue::String(combined),
+                        )?;
+
+                        if tool_name == TODO_TOOL_NAME {
+                            // If the tool is a todo tool, refresh the todo list after completion
+                            if let Err(e) = self.init_todo_list().await {
+                                tracing::error!(
+                                    "Failed to refresh todo list after tool execution: {}",
+                                    e
+                                );
+                            }
                         }
                     }
 
@@ -138,28 +160,6 @@ impl Model {
 
                     // Windows workaround: re-enable mouse capture after shell commands
                     // Shell tools may disable ENABLE_MOUSE_INPUT console mode on Windows
-                    #[cfg(target_os = "windows")]
-                    {
-                        let _ = self.terminal.enable_mouse_capture();
-                    }
-                }
-                Event::Tool(kernel::event::ToolEvent::Error {
-                    tool_id,
-                    error,
-                    elapsed_ms,
-                    ..
-                }) => {
-                    // Clear tool call state from info bar (tool execution failed)
-                    self.clear_tool_call_delta();
-                    // Show tool error in chat view
-                    let combined = format!("{tool_id}\x00{error}\x00{elapsed_ms}");
-                    self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::FAIL_TOOL),
-                        AttrValue::String(combined),
-                    )?;
-                    self.state.should_redraw = true;
-                    // Windows workaround: re-enable mouse capture after shell commands
                     #[cfg(target_os = "windows")]
                     {
                         let _ = self.terminal.enable_mouse_capture();

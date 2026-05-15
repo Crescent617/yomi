@@ -411,7 +411,7 @@ impl SubagentTool {
                 );
             }
             // Show tool calls in progress for BROWSE mode
-            Event::Tool(ToolEvent::Started { tool_name, .. }) => {
+            Event::Tool(ToolEvent::Start { tool_name, .. }) => {
                 Self::send_progress(
                     event_tx,
                     agent_id,

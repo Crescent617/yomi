@@ -181,30 +181,21 @@ pub enum ContentChunk {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEvent {
-    Started {
+    Start {
         agent_id: AgentId,
         tool_id: String,
         tool_name: String,
         arguments: Option<String>,
     },
-    Output {
+    End {
         agent_id: AgentId,
         tool_id: String,
         tool_name: String,
-        /// Text output for backward compatibility
-        output: String,
-        /// Content blocks for multimodal support (images, etc.)
+        /// Content blocks for multimodal support (text, images, etc.)
         content_blocks: Vec<ToolOutputBlock>,
         elapsed_ms: u64,
-    },
-    Error {
-        agent_id: AgentId,
-        tool_id: String,
-        /// Text error for backward compatibility
-        error: String,
-        /// Content blocks for multimodal support (e.g., screenshots of errors)
-        content_blocks: Vec<ToolOutputBlock>,
-        elapsed_ms: u64,
+        /// Whether this output represents an error
+        is_error: bool,
     },
     /// Progress update for long-running tools (e.g., sub-agent)
     Progress {

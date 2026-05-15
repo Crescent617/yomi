@@ -78,24 +78,14 @@ fn build_success_result(
 ) -> (ToolEvent, Message) {
     let truncated = truncate_and_convert_blocks(&result.contents, tool_name);
     let content_blocks = to_content_blocks(&truncated);
-    // Skip truncation for tools that handle it themselves
-    let output = if tool_handles_truncation(tool_name) {
-        result.text_content()
-    } else {
-        truncate_output(
-            &result.text_content(),
-            MAX_TOOL_OUTPUT_LENGTH,
-            TRUNCATION_MESSAGE,
-        )
-    };
 
-    let event = ToolEvent::Output {
+    let event = ToolEvent::End {
         agent_id: agent_id.clone(),
         tool_id: call_id.to_string(),
-        output,
         tool_name: tool_name.to_string(),
         content_blocks: truncated,
         elapsed_ms,
+        is_error: false,
     };
 
     let message = Message {
@@ -115,19 +105,25 @@ fn build_error_result(
     result: &ToolOutput,
     elapsed_ms: u64,
 ) -> (ToolEvent, Message) {
-    let error = format!("Error: {}", result.error_text());
+    let error_text = result.error_text();
+    let content_blocks = vec![crate::types::ToolOutputBlock::Text {
+        text: format!("Error: {error_text}"),
+    }];
 
-    let event = ToolEvent::Error {
+    let event = ToolEvent::End {
         agent_id: agent_id.clone(),
         tool_id: call_id.to_string(),
-        error: error.clone(),
-        content_blocks: Vec::new(),
+        tool_name: String::new(),
+        content_blocks: content_blocks.clone(),
         elapsed_ms,
+        is_error: true,
     };
 
     let message = Message {
         role: Role::Tool,
-        content: vec![ContentBlock::Text { text: error }],
+        content: vec![ContentBlock::Text {
+            text: format!("Error: {error_text}"),
+        }],
         tool_call_id: Some(call_id.to_string()),
         ..Default::default()
     };
@@ -135,27 +131,42 @@ fn build_error_result(
     (event, message)
 }
 
+/// Extract text from content blocks for logging
+fn content_blocks_to_text(blocks: &[crate::types::ToolOutputBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            crate::types::ToolOutputBlock::Text { text } => Some(text.as_str()),
+            crate::types::ToolOutputBlock::Image { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .concat()
+}
+
 /// Log result and push to results vector
 fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecutionResult) {
-    match &result.event {
-        ToolEvent::Output { elapsed_ms, .. } => {
+    if let ToolEvent::End {
+        elapsed_ms,
+        is_error,
+        content_blocks,
+        ..
+    } = &result.event
+    {
+        if *is_error {
+            let text = content_blocks_to_text(content_blocks);
+            tracing::warn!(
+                "Tool {} failed in {}ms: {}",
+                result.tool_call_id,
+                elapsed_ms,
+                text
+            );
+        } else {
             tracing::debug!(
                 "Tool {} completed successfully in {}ms",
                 result.tool_call_id,
                 elapsed_ms
             );
         }
-        ToolEvent::Error {
-            error, elapsed_ms, ..
-        } => {
-            tracing::warn!(
-                "Tool {} failed in {}ms: {}",
-                result.tool_call_id,
-                elapsed_ms,
-                error
-            );
-        }
-        _ => {}
     }
     results.push(result);
 }
@@ -262,7 +273,15 @@ pub async fn execute_tools_parallel(
 
     let success_count = results
         .iter()
-        .filter(|r| matches!(r.event, ToolEvent::Output { .. }))
+        .filter(|r| {
+            matches!(
+                r.event,
+                ToolEvent::End {
+                    is_error: false,
+                    ..
+                }
+            )
+        })
         .count();
     tracing::info!(
         "Tool execution completed: {}/{} succeeded",
