@@ -1,7 +1,11 @@
 //! Utility functions for the TUI crate
 
 pub mod clipboard;
+pub mod notification;
 pub mod text;
+
+// Re-export notification functions
+pub use notification::{notify_osc, notify_osc777, notify_osc9, send_desktop_notification};
 
 // Re-export from kernel for consistency
 pub use kernel::utils::{strs, tokens};
