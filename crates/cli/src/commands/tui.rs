@@ -16,9 +16,13 @@ use kernel::{
     utils::strs,
     AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
 };
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Maximum stdin size to prevent OOM (400KB)
+const MAX_STDIN_SIZE: u64 = 400 * 1024;
 
 #[derive(Default, clap::Parser)]
 pub struct TuiArgs {
@@ -53,6 +57,71 @@ pub struct TuiArgs {
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
+}
+
+impl TuiArgs {
+    /// Build initial message from prompt (-p) and stdin content.
+    ///
+    /// Reads stdin if piped (non-TTY), with 400KB size limit.
+    /// Combines prompt and stdin content:
+    /// - prompt + stdin: "{prompt}\n\n```\n{stdin}\n```"
+    /// - prompt only: "{prompt}"
+    /// - stdin only: "{stdin}"
+    /// - neither: None
+    pub async fn build_initial_message(&self) -> Result<Option<String>> {
+        let prompt = self.prompt.clone();
+
+        // Quick check: if TTY, no stdin to read
+        if io::stdin().is_terminal() {
+            return Ok(prompt);
+        }
+
+        // Read stdin in blocking thread to avoid blocking async runtime
+        let stdin_result = tokio::task::spawn_blocking(move || {
+            // Pre-allocate up to 8KB initially to avoid over-allocation for small input
+            let mut buffer = String::with_capacity((MAX_STDIN_SIZE as usize).min(8192));
+            let mut stdin = io::stdin().take(MAX_STDIN_SIZE);
+
+            match stdin.read_to_string(&mut buffer) {
+                Ok(0) => Ok(None),
+                Ok(n) => {
+                    // Only warn if we actually hit the limit (have more data waiting)
+                    // This avoids false positives when stdin is exactly MAX_STDIN_SIZE
+                    if n >= MAX_STDIN_SIZE as usize {
+                        // Try to read one more byte to confirm truncation
+                        let mut extra = [0u8; 1];
+                        if io::stdin().read(&mut extra).is_ok_and(|n| n > 0) {
+                            tracing::warn!("Stdin truncated at {}KB limit", MAX_STDIN_SIZE / 1024);
+                        }
+                    }
+                    let trimmed = buffer.trim_end().to_string();
+                    Ok(if trimmed.is_empty() { None } else { Some(trimmed) })
+                }
+                Err(e) => Err(e),
+            }
+        })
+        .await;
+
+        // Handle JoinError (panic in blocking task) vs IO error
+        let stdin_content = match stdin_result {
+            Ok(Ok(content)) => content,
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to read stdin: {}", e);
+                None
+            }
+            Err(e) => {
+                tracing::warn!("Stdin reading task panicked: {}", e);
+                None
+            }
+        };
+
+        Ok(match (prompt, stdin_content) {
+            (Some(p), Some(s)) => Some(format!("{p}\n\n```\n{s}\n```")),
+            (Some(p), None) => Some(p),
+            (None, Some(s)) => Some(s),
+            (None, None) => None,
+        })
+    }
 }
 
 pub async fn run(args: TuiArgs) -> Result<()> {
@@ -123,16 +192,16 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         .await
         .unwrap_or_default();
 
-    let mut session_arg = if let Some(fork) = args.fork {
+    let mut session_arg = if let Some(ref fork) = args.fork {
         // --fork takes precedence
         match fork {
             None => SessionArg::ForkLast,
-            Some(id) => SessionArg::ForkSpecific(id),
+            Some(id) => SessionArg::ForkSpecific(id.clone()),
         }
     } else {
         match args.resume {
             Some(None) => SessionArg::Last,
-            Some(Some(id)) => SessionArg::Specific(id),
+            Some(Some(ref id)) => SessionArg::Specific(id.clone()),
             None => SessionArg::New,
         }
     };
@@ -154,6 +223,13 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             .await
             .unwrap_or_default();
 
+        // Build initial message only on first launch (combines -p prompt and stdin)
+        let initial_message = if is_launch {
+            args.build_initial_message().await?
+        } else {
+            None
+        };
+
         let result = run_session_loop(
             coordinator.clone(),
             session_id,
@@ -162,7 +238,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             input_history.clone(),
             session_messages,
             is_launch,
-            args.prompt.clone(),
+            initial_message,
         )
         .await?;
 
