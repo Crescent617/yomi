@@ -187,6 +187,8 @@ pub struct ChatView {
     total_visual_lines: usize,
     // Wrap height cache with prefix sum
     wrap_cache: WrapCache,
+    // Reusable buffer for all lines (avoids per-frame allocation)
+    all_lines_buf: Vec<Arc<Line<'static>>>,
     // Copy button overlays for visible code blocks
     code_block_overlay_manager: CodeBlockOverlayManager,
     // Context menu for message actions (right-click)
@@ -227,6 +229,7 @@ impl Default for ChatView {
             scroll_button_area: None,
             total_visual_lines: 0,
             wrap_cache: WrapCache::new(),
+            all_lines_buf: Vec::new(),
             code_block_overlay_manager: CodeBlockOverlayManager::new(),
             context_menu: None,
         }
@@ -272,6 +275,7 @@ impl ChatView {
         self.msg_cache_dirty = true;
         self.banner_dirty = true;
         self.wrap_cache.clear();
+        self.all_lines_buf.clear();
         self.selection = None;
         self.is_selecting = false;
     }
@@ -539,6 +543,20 @@ impl ChatView {
         // Note: streaming content is rendered separately, don't mark history cache dirty
     }
 
+    /// Check if banner is (or will be) visible in the current viewport.
+    fn banner_in_viewport(&self) -> bool {
+        if self.banner.is_none() {
+            return false;
+        }
+        if self.banner_cache.is_empty() {
+            return true; // need at least one build
+        }
+        let viewport_top = self.total_visual_lines
+            .saturating_sub(self.last_visible_height)
+            .saturating_sub(self.scroll_offset);
+        viewport_top < self.banner_cache.len()
+    }
+
     /// Tick handler for animation. Returns true if visual state changed and needs redraw.
     pub fn tick(&mut self) -> bool {
         let mut needs_redraw = false;
@@ -554,7 +572,8 @@ impl ChatView {
         }
 
         // Update mascot blink animation
-        if self.mascot_animator.tick() {
+        let mascot_changed = self.mascot_animator.tick();
+        if mascot_changed && self.banner_in_viewport() {
             self.banner_dirty = true;
             needs_redraw = true;
         }
@@ -1108,11 +1127,7 @@ impl ChatView {
             lines.push(Arc::new(line.clone()));
         }
 
-        // Add empty line placeholder only if no thinking (thinking already adds one)
-        if md_lines.is_empty() && self.streaming_thinking.is_empty() {
-            lines.push(Arc::new(Line::from("")));
-        }
-
+        lines.push(Arc::new(Line::from("")));
         lines
     }
 
@@ -1226,9 +1241,10 @@ impl ChatView {
     const MOUSE_SCROLL_LINES: usize = 2;
 
     /// Rebuild banner cache (separate because mascot animates).
-    fn rebuild_banner_cache(&mut self) {
+    /// Returns `true` if the cache was actually rebuilt.
+    fn rebuild_banner_cache(&mut self) -> bool {
         if !self.banner_dirty {
-            return;
+            return false;
         }
         self.banner_cache.clear();
 
@@ -1257,63 +1273,47 @@ impl ChatView {
             self.banner_cache.push(Arc::new(Line::from("")));
         }
         self.banner_dirty = false;
+        true
     }
 
     /// Rebuild `msg_lines` from `msg_cache` if dirty.
-    fn rebuild_msg_cache(&mut self) {
+    ///
+    /// Only re-renders messages starting from the first dirty one;
+    /// earlier cached messages are reused.
+    /// Returns `true` if the cache was actually rebuilt.
+    fn rebuild_msg_cache(&mut self) -> bool {
         if !self.msg_cache_dirty {
-            return;
+            return false;
         }
-        self.msg_lines.clear();
 
-        // Get width from current area for calculating output peek (2 lines max)
         let width = self.current_area.map_or(80, |a| a.width as usize);
+        let first_dirty = self.msg_cache.iter().position(|c| c.is_none()).unwrap_or(0);
 
-        for (i, msg) in self.messages.iter().enumerate() {
-            let msg_lines = match &self.msg_cache[i] {
+        if first_dirty == 0 || self.msg_lines.is_empty() {
+            self.msg_lines.clear();
+        } else {
+            let mut truncate_to = 0;
+            for i in 0..first_dirty {
+                truncate_to += self.msg_cache[i].as_ref().map_or(0, |c| c.len()) + 1; // +sep
+            }
+            self.msg_lines.truncate(truncate_to);
+        }
+
+        for i in first_dirty..self.messages.len() {
+            let rendered = match &self.msg_cache[i] {
                 Some(lines) => lines,
                 None => {
-                    let rendered = Self::render_message(msg, width);
-                    self.msg_cache[i] = Some(rendered);
+                    let lines = Self::render_message(&self.messages[i], width);
+                    self.msg_cache[i] = Some(lines);
                     self.msg_cache[i].as_ref().unwrap()
                 }
             };
-            self.msg_lines.extend(msg_lines.iter().cloned());
-            if i < self.messages.len() - 1 {
-                self.msg_lines.push(Arc::new(Line::from("")));
-            }
+            self.msg_lines.extend(rendered.iter().cloned());
+            self.msg_lines.push(Arc::new(Line::from("")));
         }
 
         self.msg_cache_dirty = false;
-    }
-
-    /// Rebuild wrap height cache for the given lines and width (single pass).
-    /// Get all lines (banner + messages + streaming) for viewport calculation.
-    fn all_lines(&mut self) -> Vec<Arc<Line<'static>>> {
-        self.rebuild_banner_cache();
-        self.rebuild_msg_cache();
-
-        let mut result = self.banner_cache.clone();
-        result.extend(self.msg_lines.iter().cloned());
-
-        // Add streaming content if any
-        let has_streaming = self.is_streaming
-            || !self.streaming_content.is_empty()
-            || !self.streaming_thinking.is_empty();
-        if !self.messages.is_empty() && has_streaming {
-            result.push(Arc::new(Line::from("")));
-        }
-        if has_streaming {
-            result.extend(self.render_streaming());
-        }
-
-        // Add queued message if any (displayed at bottom during streaming)
-        if let Some(ref queued) = self.queued_message {
-            result.push(Arc::new(Line::from("")));
-            result.extend(Self::render_queued_message(queued));
-        }
-
-        result
+        true
     }
 
     /// Convert display column to character index within a visual row.
@@ -1439,10 +1439,8 @@ impl ChatView {
             return None;
         }
 
-        let all_lines = self.all_lines_for_selection();
+        let all_lines = &self.all_lines_buf;
         tracing::debug!("get_selected_text: all_lines len={}", all_lines.len());
-
-        let norm = sel.normalized();
         let mut result = String::new();
 
         for (line_idx, line) in all_lines.iter().enumerate() {
@@ -1474,65 +1472,6 @@ impl ChatView {
 
         tracing::debug!("get_selected_text: result len={}", result.len());
         Some(result)
-    }
-
-    /// Get all lines for selection extraction (without modifying state).
-    fn all_lines_for_selection(&self) -> Vec<Arc<Line<'static>>> {
-        let mut result = self.banner_cache.clone();
-        result.extend(self.msg_lines.iter().cloned());
-
-        // Add streaming content if any
-        let has_streaming = self.is_streaming
-            || !self.streaming_content.is_empty()
-            || !self.streaming_thinking.is_empty();
-        if !self.messages.is_empty() && has_streaming {
-            result.push(Arc::new(Line::from("")));
-        }
-        if has_streaming {
-            result.extend(self.render_streaming_static());
-        }
-
-        // Add queued message if any
-        if let Some(ref queued) = self.queued_message {
-            result.push(Arc::new(Line::from("")));
-            result.extend(Self::render_queued_message(queued));
-        }
-
-        result
-    }
-
-    /// Static version of `render_streaming` for selection (doesn't modify self).
-    fn render_streaming_static(&self) -> Vec<Arc<Line<'static>>> {
-        let mut lines = Vec::new();
-
-        // Render thinking if present
-        if !self.streaming_thinking.is_empty() {
-            lines.push(Arc::new(Line::from(vec![Span::styled(
-                format!(
-                    "Thinking ({} tokens)",
-                    tokens::estimate_tokens(&self.streaming_thinking)
-                ),
-                Style::default()
-                    .fg(colors::text_secondary())
-                    .add_modifier(Modifier::ITALIC),
-            )])));
-        }
-
-        // Add separator
-        if !self.streaming_thinking.is_empty() && !self.streaming_content.is_empty() {
-            lines.push(Arc::new(Line::from("")));
-        }
-
-        // Render content
-        if !self.streaming_content.is_empty() {
-            let mut md_renderer = StreamingMarkdownRenderer::new();
-            md_renderer.set_content(self.streaming_content.clone());
-            for line in md_renderer.lines() {
-                lines.push(Arc::new(line.clone()));
-            }
-        }
-
-        lines
     }
 
     /// Copy the current selection to clipboard.
@@ -1576,7 +1515,7 @@ impl ChatView {
 
     /// Select a word at the given position (double-click).
     fn select_word_at(&mut self, line: usize, col: usize) {
-        let all_lines = self.all_lines_for_selection();
+        let all_lines = &self.all_lines_buf;
         if line >= all_lines.len() {
             return;
         }
@@ -2034,7 +1973,6 @@ impl ChatView {
         frame: &mut Frame,
         area: Rect,
         visual_scroll: usize,
-        all_lines: &[Arc<Line<'static>>],
     ) {
         self.code_block_overlay_manager.clear();
 
@@ -2055,7 +1993,7 @@ impl ChatView {
             }
             let relative_line = visual_line - visual_scroll;
 
-            let header_width = all_lines.get(logical_line).map_or(0, line_display_width);
+            let header_width = self.all_lines_buf.get(logical_line).map_or(0, line_display_width);
 
             if let Some(overlay) = CodeBlockOverlay::new(relative_line, content, area, header_width)
             {
@@ -2120,11 +2058,41 @@ impl Component for ChatView {
 
         let prev_total_lines = self.total_visual_lines;
 
-        // Build all lines once
-        let all_lines = self.all_lines();
+        // Ensure banner and message caches are up-to-date.
+        // Skip banner rebuild only when it's both filled and scrolled out of view.
+        let banner_changed = if self.banner_in_viewport() {
+            self.rebuild_banner_cache()
+        } else {
+            false
+        };
+        let msg_changed = self.rebuild_msg_cache();
+        let history_changed = banner_changed || msg_changed;
 
-        // Rebuild wrap cache (single O(total_chars) pass per frame)
-        self.wrap_cache.rebuild(&all_lines, width);
+        let has_streaming = self.is_streaming
+            || !self.streaming_content.is_empty()
+            || !self.streaming_thinking.is_empty();
+        let suffix_changed = has_streaming || self.queued_message.is_some();
+
+        // Only rebuild all_lines_buf when content actually changed.
+        // Scroll without streaming → skip entirely (O(1)).
+        if history_changed || suffix_changed || self.all_lines_buf.is_empty() {
+            self.all_lines_buf.truncate(0);
+            self.all_lines_buf.extend(self.banner_cache.iter().cloned());
+            self.all_lines_buf.extend(self.msg_lines.iter().cloned());
+            if has_streaming {
+                let streaming_lines = self.render_streaming();
+                self.all_lines_buf.extend(streaming_lines);
+            }
+            if let Some(ref queued) = self.queued_message {
+                self.all_lines_buf.extend(Self::render_queued_message(queued));
+            }
+        }
+
+        // Prefix = banner + messages (both have stable line count; wrap heights unchanged).
+        let prefix_len = self.banner_cache.len() + self.msg_lines.len();
+
+        // Rebuild wrap cache: prefix reused, suffix recomputed.
+        self.wrap_cache.rebuild(&self.all_lines_buf, width, prefix_len);
 
         // Total visual lines - O(1)
         self.total_visual_lines = self.wrap_cache.total_lines();
@@ -2150,7 +2118,7 @@ impl Component for ChatView {
         // Collect visible lines
         self.viewport_lines.clear();
         let mut visible_rows_needed = visible_height;
-        for (i, line) in all_lines.iter().enumerate().skip(viewport_start) {
+        for (i, line) in self.all_lines_buf.iter().enumerate().skip(viewport_start) {
             if visible_rows_needed == 0 {
                 break;
             }
@@ -2194,7 +2162,7 @@ impl Component for ChatView {
         frame.render_widget(paragraph, area);
 
         // Render copy buttons for visible code blocks
-        self.render_code_block_buttons(frame, area, visual_scroll, &all_lines);
+        self.render_code_block_buttons(frame, area, visual_scroll);
 
         // Draw scroll-to-bottom button if user has scrolled up
         if self.is_scrolled_up() {

@@ -41,20 +41,49 @@ impl WrapCache {
         self.width = 0;
     }
 
-    /// Rebuild cache for the given lines and width (single `O(total_chars)` pass).
-    pub fn rebuild(&mut self, lines: &[Arc<Line<'static>>], width: usize) {
-        self.heights.clear();
-        self.prefix.clear();
-        self.width = width;
+    /// Rebuild cache.
+    ///
+    /// `prefix_len` = number of leading lines that are guaranteed unchanged
+    /// from the previous frame (e.g. banner + history messages).  When
+    /// `width` is stable and `prefix_len` ≤ current cache length, only the
+    /// suffix after `prefix_len` is recomputed.
+    ///
+    /// Typical callers:
+    /// - Scroll without content change → `prefix_len` = number of stable lines (skip).
+    /// - Streaming (history stable, suffix grows) → `prefix_len` = `history_end`.
+    /// - Resize / new message → `prefix_len` = 0 (full rebuild).
+    pub fn rebuild(&mut self, lines: &[Arc<Line<'static>>], width: usize, prefix_len: usize) {
+        // Safety guard: prefix must not exceed current cache or new lines.
+        let safe_prefix = prefix_len.min(self.heights.len()).min(lines.len());
 
-        let mut sum = 0;
-        for line in lines {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let h = calc_wrap_boundaries(&text, width).len().max(1);
-            self.heights.push(h);
-            sum += h;
-            self.prefix.push(sum);
+        if width != self.width || lines.len() < self.heights.len() || safe_prefix == 0 {
+            self.clear();
+            self.width = width;
+            for line in lines {
+                self.push_line(line, width);
+            }
+            return;
         }
+
+        if lines.len() == self.heights.len() {
+            // Nothing changed.
+            return;
+        }
+
+        // Reuse prefix, rebuild suffix.
+        self.heights.truncate(safe_prefix);
+        self.prefix.truncate(safe_prefix);
+        for line in lines.iter().skip(safe_prefix) {
+            self.push_line(line, width);
+        }
+    }
+
+    fn push_line(&mut self, line: &Arc<Line<'static>>, width: usize) {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let h = calc_wrap_boundaries(&text, width).len().max(1);
+        self.heights.push(h);
+        let sum = self.prefix.last().copied().unwrap_or(0) + h;
+        self.prefix.push(sum);
     }
 
     /// Total visual lines (O(1)).
