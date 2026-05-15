@@ -71,8 +71,7 @@ image = { version = "0.25", default-features = false }
 regex = "1"
 lru = "0.18"
 html2text = "0.17"
-scraper = "0.26"
+scraper = "0.27"
 urlencoding = "2.1"
-notify-rust = { version = "4.16", default-features = false }
 dashmap = "6.1"
 nucleo = "0.5"
