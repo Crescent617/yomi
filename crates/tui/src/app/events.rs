@@ -319,6 +319,55 @@ impl Model {
                     );
                     self.state.should_redraw = true;
                 }
+                // Rewind completed - refresh messages from the event
+                Event::System(kernel::event::SystemEvent::Rewound { messages, .. }) => {
+                    // Recalculate token usage first (before moving messages)
+                    let context_window = crate::config().agent.compactor.context_window;
+                    let total_tokens: u32 = messages
+                        .iter()
+                        .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
+                        .next_back()
+                        .unwrap_or_else(|| {
+                            use kernel::utils::tokens;
+                            messages
+                                .iter()
+                                .map(|m| tokens::estimate_tokens(&m.text_content()))
+                                .sum::<usize>() as u32
+                        });
+
+                    // Refresh chat view with updated messages (truncate to before checkpoint)
+                    // Note: We use CLEAR_HISTORY + INIT_HISTORY because there's no truncate API
+                    let _ = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom(attr::CLEAR_HISTORY),
+                        AttrValue::Flag(true),
+                    );
+
+                    if !messages.is_empty() {
+                        // Pass Vec<Arc<Message>> directly - avoids cloning Message content
+                        let _ = self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom(attr::INIT_HISTORY),
+                            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(
+                                messages,
+                            ))),
+                        );
+                    }
+
+                    // Update token usage in status bar
+                    let usage_str = format!("{total_tokens}\x00{context_window}");
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom(attr::SET_CTX_USAGE),
+                        AttrValue::String(usage_str),
+                    );
+
+                    self.show_notification(&crate::components::info_bar::Notification::success(
+                        "Rewound to checkpoint",
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed
                 Event::Agent(kernel::event::AgentEvent::PermissionRequest {

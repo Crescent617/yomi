@@ -223,6 +223,24 @@ impl Model {
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
+        // Mount checkpoint picker component (hidden by default, for /rewind command)
+        let checkpoint_picker = FuzzyPickerComponent::new(
+            PickerConfig::new("Rewind to Checkpoint")
+                .with_placeholder(
+                    "Search checkpoints... (Enter=Both, C-c=Conversation only, C-f=Files only)",
+                )
+                .with_max_height(15),
+        )
+        .with_callbacks(
+            |id| crate::msg::Msg::CheckpointSelected(id, crate::msg::RewindTarget::Both),
+            || crate::msg::Msg::CloseCheckpointPicker,
+        );
+        app.mount(
+            Id::CheckpointPicker,
+            Box::new(checkpoint_picker),
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
+        )?;
+
         // Mount help dialog component (hidden by default)
         app.mount(
             Id::HelpDialog,
@@ -240,6 +258,27 @@ impl Model {
         // Set focus to input box
         app.active(&Id::InputBox)?;
 
+        // Debug-only: verify all overlay components are properly mounted
+        // This catches the common mistake of adding to OVERLAY_COMPONENTS but forgetting to mount
+        #[cfg(debug_assertions)]
+        Self::verify_overlays_mounted(&app);
+
         Ok(app)
+    }
+
+    /// Verify that all overlay components declared in `OVERLAY_COMPONENTS` are mounted.
+    /// Panics in debug mode if there's a mismatch, helping catch setup errors early.
+    #[cfg(debug_assertions)]
+    fn verify_overlays_mounted(app: &Application<Id, Msg, UserEvent>) {
+        use crate::app::view::OVERLAY_COMPONENTS;
+
+        for id in OVERLAY_COMPONENTS {
+            // Query any attribute to verify component exists
+            assert!(
+                app.query(id, Attribute::Focus).is_ok(),
+                "Overlay component {id:?} is in OVERLAY_COMPONENTS but not mounted! \
+                 Did you forget to call app.mount() in init_app()?",
+            );
+        }
     }
 }

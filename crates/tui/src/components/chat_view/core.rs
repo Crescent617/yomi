@@ -241,6 +241,11 @@ impl ChatView {
         Self::default()
     }
 
+    /// Get all messages (used for checkpoint picker)
+    pub fn get_messages(&self) -> &[HistoryMessage] {
+        &self.messages
+    }
+
     /// Invalidate cache for a specific message by index.
     fn invalidate_msg_cache(&mut self, idx: usize) {
         if idx < self.msg_cache.len() {
@@ -551,7 +556,8 @@ impl ChatView {
         if self.banner_cache.is_empty() {
             return true; // need at least one build
         }
-        let viewport_top = self.total_visual_lines
+        let viewport_top = self
+            .total_visual_lines
             .saturating_sub(self.last_visible_height)
             .saturating_sub(self.scroll_offset);
         viewport_top < self.banner_cache.len()
@@ -1294,7 +1300,8 @@ impl ChatView {
         } else {
             let mut truncate_to = 0;
             for i in 0..first_dirty {
-                truncate_to += self.msg_cache[i].as_ref().map_or(0, |c| c.len()) + 1; // +sep
+                truncate_to += self.msg_cache[i].as_ref().map_or(0, |c| c.len()) + 1;
+                // +sep
             }
             self.msg_lines.truncate(truncate_to);
         }
@@ -1968,12 +1975,7 @@ impl ChatView {
     }
 
     /// Calculate and render copy buttons for code blocks
-    fn render_code_block_buttons(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        visual_scroll: usize,
-    ) {
+    fn render_code_block_buttons(&mut self, frame: &mut Frame, area: Rect, visual_scroll: usize) {
         self.code_block_overlay_manager.clear();
 
         // Skip rendering copy buttons during streaming to avoid positioning issues
@@ -1993,7 +1995,10 @@ impl ChatView {
             }
             let relative_line = visual_line - visual_scroll;
 
-            let header_width = self.all_lines_buf.get(logical_line).map_or(0, line_display_width);
+            let header_width = self
+                .all_lines_buf
+                .get(logical_line)
+                .map_or(0, line_display_width);
 
             if let Some(overlay) = CodeBlockOverlay::new(relative_line, content, area, header_width)
             {
@@ -2084,7 +2089,8 @@ impl Component for ChatView {
                 self.all_lines_buf.extend(streaming_lines);
             }
             if let Some(ref queued) = self.queued_message {
-                self.all_lines_buf.extend(Self::render_queued_message(queued));
+                self.all_lines_buf
+                    .extend(Self::render_queued_message(queued));
             }
         }
 
@@ -2092,7 +2098,8 @@ impl Component for ChatView {
         let prefix_len = self.banner_cache.len() + self.msg_lines.len();
 
         // Rebuild wrap cache: prefix reused, suffix recomputed.
-        self.wrap_cache.rebuild(&self.all_lines_buf, width, prefix_len);
+        self.wrap_cache
+            .rebuild(&self.all_lines_buf, width, prefix_len);
 
         // Total visual lines - O(1)
         self.total_visual_lines = self.wrap_cache.total_lines();
@@ -2375,39 +2382,51 @@ impl ChatViewComponent {
     /// Initialize history from kernel messages (for session resume)
     pub fn init_history(&mut self, messages: &[kernel::types::Message]) {
         for msg in messages {
-            match msg.role {
-                kernel::types::Role::User => {
-                    if !msg.content.is_empty() {
-                        self.component.add_user_message(msg.content.clone());
-                    }
-                }
-                kernel::types::Role::Assistant => {
-                    let content = msg.text_content();
-                    let thinking = msg.thinking_content();
-                    self.component
-                        .add_assistant_message(content, thinking, None);
+            self.add_message_to_history(msg);
+        }
+    }
 
-                    // Handle tool calls
-                    if let Some(ref tool_calls) = msg.tool_calls {
-                        for call in tool_calls {
-                            let args = serde_json::to_string(&call.arguments).ok();
-                            self.component
-                                .start_tool(call.id.clone(), call.name.clone(), args);
-                        }
-                    }
+    /// Initialize history from Arc<Messages> (used for rewind - avoids cloning)
+    pub fn init_history_arc(&mut self, messages: &[std::sync::Arc<kernel::types::Message>]) {
+        for msg in messages {
+            self.add_message_to_history(msg.as_ref());
+        }
+    }
+
+    /// Helper to add a single message to history
+    fn add_message_to_history(&mut self, msg: &kernel::types::Message) {
+        match msg.role {
+            kernel::types::Role::User => {
+                if !msg.content.is_empty() {
+                    self.component.add_user_message(msg.content.clone());
                 }
-                kernel::types::Role::Tool => {
-                    if let Some(ref tool_call_id) = msg.tool_call_id {
-                        let output = msg.text_content();
-                        // For tool messages, we need to find the corresponding tool in history
-                        // and mark it as completed. Since we don't have elapsed_ms, use 0.
-                        // Content blocks are not available during history init, pass empty vec.
-                        self.component
-                            .complete_tool(tool_call_id.clone(), output, 0, Vec::new());
-                    }
-                }
-                kernel::types::Role::System => {}
             }
+            kernel::types::Role::Assistant => {
+                let content = msg.text_content();
+                let thinking = msg.thinking_content();
+                self.component
+                    .add_assistant_message(content, thinking, None);
+
+                // Handle tool calls
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    for call in tool_calls {
+                        let args = serde_json::to_string(&call.arguments).ok();
+                        self.component
+                            .start_tool(call.id.clone(), call.name.clone(), args);
+                    }
+                }
+            }
+            kernel::types::Role::Tool => {
+                if let Some(ref tool_call_id) = msg.tool_call_id {
+                    let output = msg.text_content();
+                    // For tool messages, we need to find the corresponding tool in history
+                    // and mark it as completed. Since we don't have elapsed_ms, use 0.
+                    // Content blocks are not available during history init, pass empty vec.
+                    self.component
+                        .complete_tool(tool_call_id.clone(), output, 0, Vec::new());
+                }
+            }
+            kernel::types::Role::System => {}
         }
     }
 }
@@ -2427,8 +2446,15 @@ impl Component for ChatViewComponent {
             Attribute::Custom(attr::INIT_HISTORY) => {
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
                     let any = payload.as_any();
+                    // Try Vec<Message> first (for session resume)
                     if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {
                         self.init_history(messages);
+                    }
+                    // Try Vec<Arc<Message>> (for rewind - avoids cloning)
+                    else if let Some(messages) =
+                        any.downcast_ref::<Vec<std::sync::Arc<kernel::types::Message>>>()
+                    {
+                        self.init_history_arc(messages);
                     }
                 }
             }

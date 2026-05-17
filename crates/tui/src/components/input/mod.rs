@@ -13,14 +13,16 @@ pub use editor::{InputEditor, InputSelection, MouseEventResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Available slash commands with descriptions
-const SLASH_COMMANDS: &[(&str, &str)] = &[
+pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
-    ("/goal", "Start autonomous goal mode"),
+    ("/goal", "<description> Start goal mode with optional description"),
     ("/goal:stop", "Stop goal mode"),
     ("/todos", "Toggle todo list visibility"),
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
     ("/sessions", "Switch to another session"),
+    ("/rewind", "Restore conversation/file checkpoint"),
+    ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),
     ("/help", "Show keyboard shortcuts help"),
 ];

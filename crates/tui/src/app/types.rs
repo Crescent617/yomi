@@ -95,6 +95,10 @@ pub struct Model {
     pub ctrl_tx: mpsc::Sender<ControlCommand>,
     /// Storage for loading sessions list
     pub(crate) session_store: Arc<dyn kernel::storage::SessionStore>,
+    /// Storage for checkpoints
+    pub(crate) checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
+    /// Data directory for checkpoint operations (unused but kept for API compatibility)
+    pub(crate) _data_dir: std::path::PathBuf,
     /// Current assistant response content (for adding to history when complete)
     pub(crate) current_content: String,
     /// Current assistant thinking (for adding to history when complete)

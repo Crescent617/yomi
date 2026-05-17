@@ -138,9 +138,12 @@ impl Session {
             spawn_args = spawn_args.with_goal_ctx(ctx);
         }
 
-        let shared = Arc::new(
-            agent_shared.with_per_session(permission_state, Some(Arc::clone(file_state_store))),
-        );
+        let checkpoint_store = agent_shared.checkpoint_store.clone();
+        let shared = Arc::new(agent_shared.with_per_session(
+            permission_state,
+            Some(Arc::clone(file_state_store)),
+            checkpoint_store,
+        ));
 
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args).await;
         tracing::info!("Main agent {} spawned for session {}", handle.id, id.0);
@@ -237,6 +240,29 @@ impl Session {
             Some(handle) => {
                 handle.force_compact().await?;
                 Ok(())
+            }
+            None => Err(KernelError::session("Session not initialized")),
+        }
+    }
+
+    /// Rewind to a specific checkpoint
+    pub async fn rewind(
+        &self,
+        message_id: crate::types::MessageId,
+        target: crate::checkpoint::RewindTarget,
+    ) -> Result<()> {
+        tracing::info!(
+            "Session {} rewinding to message {} (target: {:?})",
+            self.id.0,
+            message_id.as_str(),
+            target
+        );
+        match &self.main_agent {
+            Some(handle) => {
+                let result = handle.rewind(message_id, target).await.map_err(|e| {
+                    KernelError::session(format!("Failed to send rewind request: {e}"))
+                })?;
+                result.map_err(|e| KernelError::session(format!("Rewind failed: {e}")))
             }
             None => Err(KernelError::session("Session not initialized")),
         }

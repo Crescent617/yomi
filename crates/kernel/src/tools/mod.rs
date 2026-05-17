@@ -55,6 +55,9 @@ pub struct ToolExecCtx<'a> {
     /// Pre-generated `MessageId` for the tool result message, allowing progress
     /// events and the final result to share a consistent identifier.
     pub message_id: crate::types::MessageId,
+    /// Current turn for file tracking and checkpointing
+    /// Tools use this to track modified files
+    pub turn: Option<std::sync::Arc<crate::agent::Turn>>,
 }
 
 impl<'a> ToolExecCtx<'a> {
@@ -71,6 +74,7 @@ impl<'a> ToolExecCtx<'a> {
             working_dir: working_dir.into(),
             session_id: session_id.into(),
             message_id: crate::types::MessageId::default(),
+            turn: None,
         }
     }
 
@@ -92,6 +96,7 @@ impl<'a> ToolExecCtx<'a> {
             working_dir: working_dir.into(),
             session_id: session_id.into(),
             message_id,
+            turn: None,
         }
     }
 
@@ -119,6 +124,16 @@ impl<'a> ToolExecCtx<'a> {
             None => {
                 // If no token, never complete (always pending)
                 Either::Right(std::future::pending())
+            }
+        }
+    }
+
+    /// Track a file edit (backup current state BEFORE modifying)
+    /// Must be called BEFORE file is modified
+    pub async fn track_edit(&self, path: &std::path::Path) {
+        if let Some(ref turn) = self.turn {
+            if let Err(e) = turn.track_file(path).await {
+                tracing::warn!("Failed to track file {}: {}", path.display(), e);
             }
         }
     }

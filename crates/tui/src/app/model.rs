@@ -37,6 +37,8 @@ impl Model {
         initial_message: Option<String>,
         session_id: String,
         on_input_hook: Option<OnInputHook>,
+        checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
+        _data_dir: std::path::PathBuf,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app()?;
@@ -56,6 +58,8 @@ impl Model {
             input_tx,
             ctrl_tx,
             session_store,
+            checkpoint_store,
+            _data_dir,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,

@@ -160,6 +160,11 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
 /// `message_ids` maps each `tool_call_id` to a pre-generated `MessageId` for the
 /// resulting tool result message. This allows `ToolEvent::Start` and `ToolEvent::End`
 /// to carry a consistent message identifier.
+///
+/// `checkpoint_manager` is used to immediately backup files when tools call `track_edit`,
+/// ensuring checkpoints capture the state BEFORE modification.
+///
+/// Returns both the execution results and any files that were tracked for checkpointing.
 #[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 pub async fn execute_tools_parallel(
     agent_id: &AgentId,
@@ -170,6 +175,7 @@ pub async fn execute_tools_parallel(
     working_dir: &std::path::Path,
     session_id: &str,
     message_ids: &HashMap<String, MessageId>,
+    turn: Option<Arc<crate::agent::Turn>>,
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -200,21 +206,21 @@ pub async fn execute_tools_parallel(
         let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
         let cancel_token_for_task = cancel_token.cloned();
         let working_dir = working_dir.to_path_buf();
+        let turn_for_task = turn.clone();
 
         join_set.spawn(async move {
             let start = std::time::Instant::now();
+            let mut ctx = ToolExecCtx::with_parent_ctx(
+                &call_id,
+                parent_messages_for_task.as_deref(),
+                cancel_token_for_task,
+                &working_dir,
+                session_id,
+                message_id.clone(),
+            );
+            ctx.turn = turn_for_task;
             let result = match tool_opt {
-                Some(tool) => {
-                    let ctx = ToolExecCtx::with_parent_ctx(
-                        &call_id,
-                        parent_messages_for_task.as_deref(),
-                        cancel_token_for_task,
-                        &working_dir,
-                        session_id,
-                        message_id.clone(),
-                    );
-                    execute_single_tool_with_ctx(tool, arguments, ctx).await
-                }
+                Some(tool) => execute_single_tool_with_ctx(tool, arguments, ctx).await,
                 None => ToolOutput::error(format!("Unknown tool: {call_name}")),
             };
             let elapsed = start.elapsed().as_millis() as u64;
@@ -250,7 +256,9 @@ pub async fn execute_tools_parallel(
                 }
                 result = join_set.join_next() => {
                     match result {
-                        Some(Ok(r)) => log_and_push_result(&mut results, r),
+                        Some(Ok(r)) => {
+                            log_and_push_result(&mut results, r);
+                        }
                         Some(Err(e)) => tracing::warn!("Tool task panicked: {}", e),
                         None => break,
                     }

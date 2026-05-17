@@ -93,6 +93,8 @@ impl InputComponent {
             "/browse" => Some(Msg::CommandBrowse),
             "/sessions" => Some(Msg::CommandSessions),
             "/compact" => Some(Msg::CommandCompact),
+            "/rewind" => Some(Msg::CommandRewind),
+            "/undo" => Some(Msg::CommandUndo),
             "/help" => Some(Msg::CommandHelp),
             _ => None, // Unknown command: treat as regular message
         }

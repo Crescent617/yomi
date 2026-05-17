@@ -92,6 +92,20 @@ pub enum Msg {
 
     // Help dialog
     CloseHelpDialog, // Close the help dialog
+
+    // Checkpoint commands
+    CommandRewind,                            // /rewind - show checkpoint picker
+    CommandUndo, // /undo - undo last turn (rewind to latest checkpoint)
+    CheckpointSelected(String, RewindTarget), // message_id, target (Conversation/Files/Both)
+    CloseCheckpointPicker, // Close checkpoint picker without selection
+}
+
+/// Target for rewinding (mirrors `kernel::checkpoint::RewindTarget`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewindTarget {
+    Conversation,
+    Files,
+    Both,
 }
 
 impl From<AppEvent> for Msg {

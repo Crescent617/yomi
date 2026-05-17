@@ -1,3 +1,27 @@
+/// Truncate a string by character count with a custom suffix.
+///
+/// # Behavior
+/// - If char count <= `max_chars`: returns `s` as-is (no suffix added)
+/// - If char count > `max_chars`: truncates to `max_chars` chars and appends suffix
+///
+/// This ensures the result never exceeds `max_chars` characters (plus suffix).
+pub fn truncate_by_chars(s: &str, max_chars: usize, suffix: &str) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s.to_string();
+    }
+
+    let mut result = String::with_capacity(max_chars + suffix.len());
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            break;
+        }
+        result.push(ch);
+    }
+    result.push_str(suffix);
+    result
+}
+
 /// Truncate a string by byte length with a custom suffix (UTF-8 safe).
 /// Finds a valid UTF-8 boundary before truncating.
 ///

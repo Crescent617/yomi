@@ -10,6 +10,21 @@ use crate::id::Id;
 
 use super::types::{AppMode, Model};
 
+/// Overlay components that render on top of the main UI.
+/// These components manage their own visibility internally.
+///
+/// When adding a new overlay component:
+/// 1. Add its Id to this list
+/// 2. Ensure it's mounted in `init_app()` in `init.rs`
+pub(crate) const OVERLAY_COMPONENTS: &[Id] = &[
+    Id::Dialog,
+    Id::HistoryPicker,
+    Id::SessionPicker,
+    Id::CheckpointPicker,
+    Id::HelpDialog,
+    Id::TodoList,
+];
+
 impl Model {
     /// Main view method - renders all components
     pub fn view(&mut self) {
@@ -71,20 +86,10 @@ impl Model {
                 self.app.view(&Id::StatusBar, f, chunks[3]);
             }
 
-            // Render dialog on top if active (uses full screen for centering)
-            self.app.view(&Id::Dialog, f, f.area());
-
-            // Render history picker on top if active
-            self.app.view(&Id::HistoryPicker, f, f.area());
-
-            // Render session picker on top if active
-            self.app.view(&Id::SessionPicker, f, f.area());
-
-            // Render help dialog on top if active
-            self.app.view(&Id::HelpDialog, f, f.area());
-
-            // Render todo list floating panel (renders itself only if visible)
-            self.app.view(&Id::TodoList, f, f.area());
+            // Render overlay components on top (they manage their own visibility)
+            for id in OVERLAY_COMPONENTS {
+                self.app.view(id, f, f.area());
+            }
         });
     }
 }
