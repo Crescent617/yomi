@@ -113,6 +113,11 @@ impl Tool for WriteTool {
             (true, false) => "updated",
         };
 
+        // Track file for checkpoint before modification
+        // For new files, we track them so we can delete them on rewind
+        // For existing files, we backup the current state
+        ctx.track_edit(&path).await;
+
         // Write file: acquire lock to serialize concurrent tool calls
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 

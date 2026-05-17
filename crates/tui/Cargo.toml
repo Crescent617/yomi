@@ -35,6 +35,8 @@ rand = { workspace = true }
 ignore = { workspace = true }
 # High-performance fuzzy matching (fzf-style)
 nucleo = { workspace = true }
+# Date/time formatting for checkpoint picker
+chrono = { workspace = true }
 
 # Unix signal handling for Ctrl-Z (suspend)
 [target.'cfg(unix)'.dependencies]

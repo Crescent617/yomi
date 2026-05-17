@@ -33,6 +33,19 @@ impl Coordinator {
             .expect("message_store not configured")
     }
 
+    /// Get checkpoint store from `agent_shared`
+    pub fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
+        self.agent_shared
+            .checkpoint_store
+            .clone()
+            .expect("checkpoint_store not configured")
+    }
+
+    /// Get data directory from `agent_shared`
+    pub fn data_dir(&self) -> &std::path::PathBuf {
+        &self.agent_shared.data_dir
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: &StorageSet,
@@ -49,7 +62,9 @@ impl Coordinator {
         let todo_interceptor = Arc::new(crate::agent::TodoReminderInterceptor::new(
             todo_storage.clone(),
         ));
-        let agent_shared = AgentShared::new(
+        let checkpoint_store = storage.checkpoint_store();
+        let data_dir = storage.data_dir().to_path_buf();
+        let agent_shared = AgentShared::with_data_dir(
             provider,
             Arc::new(model_config),
             task_store,
@@ -61,6 +76,8 @@ impl Coordinator {
             None,
             skill_folders,
             None,
+            Some(checkpoint_store),
+            data_dir,
         )
         .with_message_interceptor(todo_interceptor);
         let agent_shared = match hook_registry {
@@ -295,6 +312,23 @@ impl Coordinator {
             tracing::error!("Failed to compact session {}: {}", session_id.0, e);
         } else {
             tracing::info!("Compaction requested for session {}", session_id.0);
+        }
+        result
+    }
+
+    /// Rewind a session to a specific checkpoint
+    pub async fn rewind_session(
+        &self,
+        session_id: &SessionId,
+        message_id: crate::types::MessageId,
+        target: crate::checkpoint::RewindTarget,
+    ) -> Result<()> {
+        let session = self.require_session(session_id).await?;
+        let result = session.read().await.rewind(message_id, target).await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to rewind session {}: {}", session_id.0, e);
+        } else {
+            tracing::info!("Session {} rewound successfully", session_id.0);
         }
         result
     }

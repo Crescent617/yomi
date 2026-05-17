@@ -5,12 +5,13 @@ pub enum Id {
     ChatView,
     InfoBar, // Token/stream info above input
     InputBox,
-    StatusBar,     // Mode indicator at bottom (vim-style)
-    Mascot,        // Cat mascot
-    Banner,        // Banner with mascot and system info (empty state)
-    Dialog,        // Select dialog for permission confirmation
-    HistoryPicker, // Fuzzy finder for input history (C-r)
-    SessionPicker, // Fuzzy finder for session switching (/sessions)
-    HelpDialog,    // Help dialog for keyboard shortcuts
-    TodoList,      // Floating todo list panel
+    StatusBar,        // Mode indicator at bottom (vim-style)
+    Mascot,           // Cat mascot
+    Banner,           // Banner with mascot and system info (empty state)
+    Dialog,           // Select dialog for permission confirmation
+    HistoryPicker,    // Fuzzy finder for input history (C-r)
+    SessionPicker,    // Fuzzy finder for session switching (/sessions)
+    CheckpointPicker, // Fuzzy finder for checkpoint rewind (/rewind)
+    HelpDialog,       // Help dialog for keyboard shortcuts
+    TodoList,         // Floating todo list panel
 }

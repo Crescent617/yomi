@@ -292,6 +292,10 @@ pub struct AgentShared {
     pub skill_folders: Vec<std::path::PathBuf>,
     /// File state store for tracking file modification times (cleared on compaction)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+    /// Checkpoint store for file history tracking
+    pub checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
+    /// Data directory for file backup storage
+    pub data_dir: std::path::PathBuf,
     /// Optional user message interceptor for injecting reminders/context
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
     /// Hook registry for lifecycle event handlers
@@ -312,6 +316,40 @@ impl AgentShared {
         permission_state: Option<crate::permissions::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
         file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+        checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
+    ) -> Self {
+        Self::with_data_dir(
+            provider,
+            model_config,
+            task_store,
+            todo_storage,
+            compactor,
+            session_store,
+            message_store,
+            usage_store,
+            permission_state,
+            skill_folders,
+            file_state_store,
+            checkpoint_store,
+            std::path::PathBuf::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_data_dir(
+        provider: Arc<dyn crate::providers::Provider>,
+        model_config: Arc<ModelConfig>,
+        task_store: Option<Arc<crate::task::TaskStore>>,
+        todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
+        compactor: Option<crate::compactor::Compactor>,
+        session_store: Option<Arc<dyn crate::storage::SessionStore>>,
+        message_store: Option<Arc<dyn crate::storage::MessageStore>>,
+        usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
+        permission_state: Option<crate::permissions::PermissionState>,
+        skill_folders: Vec<std::path::PathBuf>,
+        file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+        checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
+        data_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             provider,
@@ -325,6 +363,8 @@ impl AgentShared {
             permission_state,
             skill_folders,
             file_state_store,
+            checkpoint_store,
+            data_dir,
             message_interceptor: None,
             hook_registry: None,
         }
@@ -336,10 +376,12 @@ impl AgentShared {
         &self,
         permission_state: Option<crate::permissions::PermissionState>,
         file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+        checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
     ) -> Self {
         Self {
             permission_state,
             file_state_store,
+            checkpoint_store,
             ..self.clone()
         }
     }

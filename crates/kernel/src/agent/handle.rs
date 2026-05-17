@@ -123,4 +123,23 @@ impl AgentHandle {
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }
+
+    /// Rewind to a specific checkpoint
+    pub async fn rewind(
+        &self,
+        message_id: crate::types::MessageId,
+        target: crate::checkpoint::RewindTarget,
+    ) -> Result<Result<(), String>, AgentError> {
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        self.input_tx
+            .send(AgentInput::Rewind {
+                message_id,
+                target,
+                result_tx,
+            })
+            .await
+            .map_err(|_| AgentError::ChannelClosed)?;
+
+        result_rx.await.map_err(|_| AgentError::ChannelClosed)
+    }
 }

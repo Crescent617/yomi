@@ -131,6 +131,8 @@ pub async fn run_tui(
     initial_message: Option<String>,
     session_id: String,
     on_input_hook: Option<OnInputHook>,
+    checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
+    _data_dir: std::path::PathBuf,
 ) -> anyhow::Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
@@ -144,6 +146,8 @@ pub async fn run_tui(
         initial_message,
         session_id,
         on_input_hook,
+        checkpoint_store,
+        _data_dir,
     )?;
     model.init_banner()?;
     model.init_status_bar()?;

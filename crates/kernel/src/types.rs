@@ -645,6 +645,10 @@ pub enum KernelError {
     #[error("Cancelled: {0}")]
     Cancelled(String),
 
+    /// Checkpoint/rewind error
+    #[error("Checkpoint error: {0}")]
+    Checkpoint(String),
+
     /// Agent execution error (nested for retry/cancellation checks)
     #[error("Agent error: {0}")]
     Agent(#[source] crate::agent::AgentError),
@@ -704,6 +708,11 @@ impl KernelError {
     /// Create a new cancellation error
     pub fn cancelled(msg: impl Into<String>) -> Self {
         Self::Cancelled(msg.into())
+    }
+
+    /// Create a new checkpoint error
+    pub fn checkpoint(msg: impl Into<String>) -> Self {
+        Self::Checkpoint(msg.into())
     }
 
     /// Check if this is a cancellation error

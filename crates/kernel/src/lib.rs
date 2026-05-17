@@ -15,6 +15,7 @@ macro_rules! env_name {
 
 pub mod agent;
 pub mod app;
+pub mod checkpoint;
 pub mod compactor;
 pub mod config;
 pub mod event;
@@ -35,6 +36,9 @@ pub mod utils;
 
 // Re-export permissions types
 pub use permissions::{Checker, Level, ToolLevelResolver};
+
+// Re-export checkpoint types
+pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedFileInfo};
 
 // Re-export commonly used types
 pub use app::{Coordinator, Session, SessionConfig};

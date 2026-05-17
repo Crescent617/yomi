@@ -86,7 +86,7 @@ pub async fn run(global: GlobalArgs, days: i64, yes: bool) -> Result<()> {
     }
 
     println!(
-        "Deleted {} session(s) and {} associated file(s).",
+        "Deleted {} session(s) and {} associated files.",
         deleted_ids.len(),
         files_removed
     );

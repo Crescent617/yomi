@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Input messages that can be sent to an Agent
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum AgentInput {
     /// User message with multi-modal content blocks
     User {
@@ -38,6 +38,40 @@ pub enum AgentInput {
     Compact,
     /// Dynamically set or clear goal context
     SetGoal(Option<crate::goal::GoalContext>),
+    /// Rewind to a specific checkpoint
+    Rewind {
+        message_id: MessageId,
+        target: crate::checkpoint::RewindTarget,
+        /// Channel to send the result back
+        result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+}
+
+impl Clone for AgentInput {
+    fn clone(&self) -> Self {
+        match self {
+            Self::User {
+                content,
+                generation,
+            } => Self::User {
+                content: content.clone(),
+                generation: *generation,
+            },
+            Self::TaskResult { task_id, content } => Self::TaskResult {
+                task_id: task_id.clone(),
+                content: content.clone(),
+            },
+            Self::PermissionResponse { req_id, approved } => Self::PermissionResponse {
+                req_id: req_id.clone(),
+                approved: *approved,
+            },
+            Self::Shutdown => Self::Shutdown,
+            Self::Compact => Self::Compact,
+            Self::SetGoal(goal) => Self::SetGoal(goal.clone()),
+            // Rewind cannot be cloned due to oneshot sender, panic if attempted
+            Self::Rewind { .. } => panic!("Rewind input cannot be cloned"),
+        }
+    }
 }
 
 pub struct Agent {
@@ -62,6 +96,12 @@ pub struct Agent {
     goal_ctx: Option<crate::goal::GoalContext>,
     /// Hook registry for `PreToolUse` / `PostToolUse` lifecycle hooks
     hook_registry: crate::hooks::HookRegistry,
+    /// Checkpoint store for persistence
+    checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
+    /// Data directory for checkpoints
+    data_dir: std::path::PathBuf,
+    /// Current turn (contains tracked files, shared with tools)
+    current_turn: Option<Arc<super::turn::Turn>>,
 }
 
 impl Agent {
@@ -159,6 +199,15 @@ impl Agent {
         // Shared generation counter for tracking stale inputs (incremented on cancel)
         let input_stale_since: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
+        // Get checkpoint store
+        let checkpoint_store = shared.checkpoint_store.clone().unwrap_or_else(|| {
+            Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(
+                &shared.data_dir,
+            ))
+        });
+
+        let data_dir = shared.data_dir.clone();
+
         let agent = Self {
             id: id.clone(),
             shared,
@@ -175,6 +224,9 @@ impl Agent {
             input_stale_since: Arc::clone(&input_stale_since),
             goal_ctx: args.goal_ctx,
             hook_registry,
+            checkpoint_store,
+            data_dir,
+            current_turn: None,
         };
 
         let handle_id = id.clone();
@@ -269,6 +321,8 @@ impl Agent {
                     }
                 }
                 AgentState::Streaming => {
+                    // Start new turn when entering Streaming
+                    self.start_turn_if_needed().await;
                     tracing::debug!("Agent {} starting streaming", self.id);
                     self.handle_streaming_with_retry().await
                 }
@@ -279,6 +333,18 @@ impl Agent {
                 AgentState::Closed => break,
             };
 
+            // Handle state transition after execution
+            let next_state = self.context.current_state();
+
+            // Turn lifecycle: complete on transition to Idle
+            if state != AgentState::Idle && next_state == AgentState::Idle {
+                if let Some(turn) = self.current_turn.take() {
+                    if let Err(e) = turn.complete().await {
+                        tracing::warn!("Failed to complete turn: {}", e);
+                    }
+                }
+            }
+
             if let Err(e) = result {
                 let phase = match state {
                     AgentState::Idle => crate::event::ErrorPhase::Idle,
@@ -287,8 +353,9 @@ impl Agent {
                     AgentState::Closed => unreachable!(),
                 };
                 self.emit_error(phase, &e.to_string(), false).await;
+
                 // Recover to Idle for non-Idle states
-                if state != AgentState::Idle {
+                if next_state != AgentState::Idle {
                     self.context.transition_to(AgentState::Idle);
                 }
             }
@@ -391,6 +458,48 @@ impl Agent {
         }
     }
 
+    /// Extract text summary from content blocks for checkpoint display.
+    /// Returns first 50 chars of the first text block, handling unicode boundaries.
+    /// Replaces newlines with spaces to ensure single-line summary.
+    fn extract_summary(content: &[crate::types::ContentBlock]) -> String {
+        let text = content
+            .iter()
+            .find_map(|block| match block {
+                crate::types::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap_or("(no text)");
+
+        // Replace newlines with spaces to ensure single-line summary
+        let text = text.replace('\n', " ");
+
+        // Truncate to 50 chars
+        crate::utils::strs::truncate_by_chars(&text, 50, "...")
+    }
+
+    /// Start a new turn if not already in one.
+    async fn start_turn_if_needed(&mut self) {
+        if self.current_turn.is_none() {
+            if let Some(msg) = self
+                .message_buffer
+                .messages()
+                .iter()
+                .rfind(|m| m.role == crate::types::Role::User)
+            {
+                // Extract summary from user message content
+                let summary = Self::extract_summary(&msg.content);
+                let turn = Arc::new(super::turn::Turn::new(
+                    msg.id.clone(),
+                    self.session_id.clone(),
+                    summary,
+                    self.checkpoint_store.clone(),
+                    &self.data_dir,
+                ));
+                self.current_turn = Some(turn);
+            }
+        }
+    }
+
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User {
@@ -430,6 +539,9 @@ impl Agent {
             }
             Some(AgentInput::Shutdown) => {
                 tracing::info!("Agent {} received close signal", self.id);
+                if let Some(turn) = self.current_turn.take() {
+                    let _ = turn.cancel().await;
+                }
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
@@ -451,6 +563,70 @@ impl Agent {
                 // If a goal was set and we are in Idle, the caller (start_loop)
                 // will immediately re-evaluate and trigger auto-continue on the
                 // next iteration because goal_ctx.is_some() is true.
+                Ok(())
+            }
+            Some(AgentInput::Rewind {
+                message_id,
+                target,
+                result_tx,
+            }) => {
+                tracing::info!(
+                    "Agent {} received rewind request to message {}",
+                    self.id,
+                    message_id.as_str()
+                );
+                if let Some(turn) = self.current_turn.take() {
+                    let _ = turn.cancel().await;
+                }
+
+                // Truncate messages in memory
+                let truncated = self.truncate_at(&message_id);
+                if !truncated {
+                    let _ =
+                        result_tx.send(Err(format!("Message {} not found", message_id.as_str())));
+                    return Ok(());
+                }
+
+                // Rewind files and delete checkpoints
+                let result = super::turn::Turn::rewind_to_checkpoint(
+                    &self.session_id,
+                    &message_id,
+                    target,
+                    &self.checkpoint_store,
+                )
+                .await;
+
+                if let Err(e) = &result {
+                    let _ = result_tx.send(Err(e.to_string()));
+                    return Ok(());
+                }
+
+                // Update SQLite storage with truncated messages
+                let remaining_messages: Vec<Message> = self
+                    .message_buffer
+                    .messages()
+                    .iter()
+                    .map(|m| (**m).clone())
+                    .collect();
+                if let Some(msg_store) = &self.shared.message_store {
+                    if let Err(e) = msg_store
+                        .replace(&self.session_id, &remaining_messages)
+                        .await
+                    {
+                        tracing::warn!("Failed to update message store after rewind: {}", e);
+                    }
+                }
+
+                // Send rewound event to TUI
+                let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
+                let _ = self
+                    .event_tx
+                    .try_send(Event::System(crate::event::SystemEvent::Rewound {
+                        session_id: crate::types::SessionId(self.session_id.clone()),
+                        messages: updated_messages,
+                    }));
+
+                let _ = result_tx.send(Ok(()));
                 Ok(())
             }
             None => {
@@ -496,6 +672,73 @@ impl Agent {
                 }
                 AgentInput::Compact => {
                     let _ = self.force_full_compact().await;
+                }
+                AgentInput::Rewind {
+                    message_id,
+                    target,
+                    result_tx,
+                } => {
+                    tracing::info!(
+                        "Agent {} received rewind request in goal idle to message {}",
+                        self.id,
+                        message_id.as_str()
+                    );
+                    // Exit goal mode when rewinding
+                    self.goal_ctx = None;
+                    if let Some(turn) = self.current_turn.take() {
+                        let _ = turn.cancel().await;
+                    }
+
+                    // Truncate messages in memory
+                    let truncated = self.truncate_at(&message_id);
+                    if !truncated {
+                        let _ = result_tx
+                            .send(Err(format!("Message {} not found", message_id.as_str())));
+                        return Ok(());
+                    }
+
+                    // Rewind files and delete checkpoints
+                    let result = super::turn::Turn::rewind_to_checkpoint(
+                        &self.session_id,
+                        &message_id,
+                        target,
+                        &self.checkpoint_store,
+                    )
+                    .await;
+
+                    if let Err(e) = &result {
+                        let _ = result_tx.send(Err(e.to_string()));
+                        return Ok(());
+                    }
+
+                    // Update SQLite storage with truncated messages
+                    let remaining_messages: Vec<Message> = self
+                        .message_buffer
+                        .messages()
+                        .iter()
+                        .map(|m| (**m).clone())
+                        .collect();
+                    if let Some(msg_store) = &self.shared.message_store {
+                        if let Err(e) = msg_store
+                            .replace(&self.session_id, &remaining_messages)
+                            .await
+                        {
+                            tracing::warn!("Failed to update message store after rewind: {}", e);
+                        }
+                    }
+
+                    // Send rewound event to TUI
+                    let updated_messages: Vec<Arc<Message>> =
+                        self.message_buffer.messages().to_vec();
+                    let _ =
+                        self.event_tx
+                            .try_send(Event::System(crate::event::SystemEvent::Rewound {
+                                session_id: crate::types::SessionId(self.session_id.clone()),
+                                messages: updated_messages,
+                            }));
+
+                    let _ = result_tx.send(Ok(()));
+                    return Ok(());
                 }
                 other => {
                     tracing::debug!("Agent {} ignored input in goal idle: {:?}", self.id, other);
@@ -581,6 +824,7 @@ impl Agent {
     }
 
     /// Inject a user message (with interceptors) and transition to Streaming.
+    /// Also creates a checkpoint for rewind support.
     async fn inject_user_message(
         &mut self,
         mut content: Vec<ContentBlock>,
@@ -594,6 +838,9 @@ impl Agent {
             interceptor.intercept(&mut content, &ctx).await;
         }
         let msg = Message::with_blocks(Role::User, content);
+
+        // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
+        // We only persist the message here, the turn object is created later
         let _ = self
             .event_tx
             .send(Event::User(crate::event::UserEvent::Message {
@@ -605,6 +852,30 @@ impl Agent {
         self.message_buffer.push(msg);
         self.context.transition_to(AgentState::Streaming);
         Ok(())
+    }
+
+    /// Truncate messages at the given message ID (remove it and everything after).
+    /// This rewinds to the state just before this message was sent.
+    /// Returns true if truncation was performed, false if message not found.
+    fn truncate_at(&mut self, message_id: &MessageId) -> bool {
+        let messages = self.message_buffer.messages_mut();
+
+        // Find the index of the target message
+        let target_index = messages.iter().position(|m| m.id == *message_id);
+
+        if let Some(index) = target_index {
+            // Truncate to keep messages before the target (remove target and everything after)
+            messages.truncate(index);
+
+            tracing::info!(
+                "Truncated to before message {} (kept {} messages)",
+                message_id.as_str(),
+                messages.len()
+            );
+            true
+        } else {
+            false
+        }
     }
 
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
@@ -1067,6 +1338,8 @@ impl Agent {
                 self.id
             );
             let last_message_id = self.message_buffer.messages().last().map(|m| m.id.clone());
+
+            // Note: finish_turn() will be called automatically when transitioning to Idle
             self.emit_turn_completed(finish_reason, last_message_id);
             self.context.transition_to(AgentState::Idle);
         }
@@ -1158,6 +1431,8 @@ impl Agent {
         let cancel_token = self.create_runtime_token();
 
         // Execute only approved calls
+        // Share current_turn with tools for file tracking
+        let turn_for_tools = self.current_turn.clone();
         let results = if approved_calls.is_empty() {
             Vec::new()
         } else {
@@ -1170,9 +1445,14 @@ impl Agent {
                 &self.working_dir,
                 &self.session_id,
                 &tool_message_ids,
+                turn_for_tools,
             )
             .await
         };
+
+        // Track files for checkpointing (via current_turn if exists)
+        // Note: In the new design, tools should call track_file via the turn directly
+        // For now, we track files here after tool execution completes
 
         // === PostToolUse hooks ===
         let (post_results, continue_session, post_contexts) = super::hooks::run_post_tool_hooks(
@@ -1214,13 +1494,9 @@ impl Agent {
                 "Agent {} stopping after tool execution (hook requested)",
                 self.id
             );
-            let last_assistant_id = self
-                .message_buffer
-                .messages()
-                .iter()
-                .rfind(|m| m.role == Role::Assistant)
-                .map(|m| m.id.clone());
-            self.emit_turn_completed(None, last_assistant_id);
+            // Note: We don't finish_turn() here because the turn is not truly complete.
+            // The turn ends when we transition to Idle and wait for next user input.
+            // finish_turn() will be called when Streaming completes (see handle_streaming).
             self.context.transition_to(AgentState::Idle);
         }
         Ok(())

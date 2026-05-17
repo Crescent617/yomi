@@ -201,6 +201,14 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to stop goal: {}", e);
                     }
                 }
+                ControlCommand::Rewind { message_id, target } => {
+                    if let Err(e) = coord_for_ctrl
+                        .rewind_session(&session_id_for_ctrl, message_id, target)
+                        .await
+                    {
+                        tracing::error!("Failed to rewind session: {}", e);
+                    }
+                }
             }
         }
     });
@@ -225,6 +233,13 @@ pub async fn run_session_loop(
         }
     });
 
+    // Get checkpoint store for TUI
+    let checkpoint_store = Some(coordinator.checkpoint_store().clone());
+    tracing::info!(
+        "Initializing TUI with checkpoint_store: {:?}",
+        checkpoint_store.is_some()
+    );
+
     let tui_result = run_tui(
         event_rx,
         input_tx,
@@ -236,6 +251,8 @@ pub async fn run_session_loop(
         initial_message,
         session_id.0.clone(),
         Some(on_input_hook),
+        checkpoint_store,
+        coordinator.data_dir().clone(),
     )
     .await?;
 

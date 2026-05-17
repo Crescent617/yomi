@@ -1,13 +1,22 @@
 #[allow(clippy::module_inception)]
 mod agent;
 mod cancel;
+mod compaction;
 mod handle;
 mod hooks;
 mod interceptor;
 mod message_buffer;
 mod simple;
 mod stream_collector;
+mod streaming;
+mod tool_exec;
+mod turn;
 mod types;
+
+pub use compaction::CompactionManager;
+pub use streaming::StreamingHandler;
+pub use tool_exec::{ExecutionOutcome, ToolExecutionHandler};
+pub use turn::Turn;
 
 pub use agent::{Agent, AgentInput};
 pub use cancel::CancelToken;

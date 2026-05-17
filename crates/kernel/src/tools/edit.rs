@@ -123,6 +123,9 @@ impl Tool for EditTool {
             }
         }
 
+        // Track file for checkpoint before modification
+        ctx.track_edit(&path).await;
+
         // Acquire lock to serialize concurrent tool calls
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
 

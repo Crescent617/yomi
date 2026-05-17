@@ -28,6 +28,8 @@ pub struct StorageSet {
     usage_store: Arc<dyn super::UsageStore>,
     /// Todo list persistence
     todo_store: Arc<dyn super::TodoStore>,
+    /// Checkpoint and file history store
+    checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
 }
 
 impl std::fmt::Debug for StorageSet {
@@ -39,6 +41,7 @@ impl std::fmt::Debug for StorageSet {
             .field("message_store", &"<dyn MessageStore>")
             .field("usage_store", &"<dyn UsageStore>")
             .field("todo_store", &"<dyn TodoStore>")
+            .field("checkpoint_store", &"<dyn CheckpointStore>")
             .finish()
     }
 }
@@ -82,6 +85,12 @@ impl StorageSet {
         // Run migrations
         super::migrations::run_migrations(&pool).await?;
 
+        // Create checkpoint directory
+        let checkpoint_dir = data_dir.join("checkpoints");
+        tokio::fs::create_dir_all(&checkpoint_dir)
+            .await
+            .map_err(|e| KernelError::storage(format!("failed to create checkpoint dir: {e}")))?;
+
         // Create store instances
         let session_store: Arc<dyn super::SessionStore> =
             Arc::new(super::SqliteSessionStore::new(pool.clone()));
@@ -90,6 +99,8 @@ impl StorageSet {
         let usage_store: Arc<dyn super::UsageStore> =
             Arc::new(super::SqliteUsageStore::new(pool.clone()));
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));
+        let checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore> =
+            Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(&data_dir));
 
         Ok(Self {
             pool,
@@ -98,6 +109,7 @@ impl StorageSet {
             message_store,
             usage_store,
             todo_store,
+            checkpoint_store,
         })
     }
 
@@ -139,6 +151,11 @@ impl StorageSet {
     /// Get the todo store
     pub fn todo_store(&self) -> Arc<dyn super::TodoStore> {
         self.todo_store.clone()
+    }
+
+    /// Get the checkpoint store
+    pub fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
+        self.checkpoint_store.clone()
     }
 
     /// Get the data directory path

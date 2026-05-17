@@ -248,6 +248,13 @@ impl Component for HelpDialog {
 
 /// Create default help sections for the TUI application
 pub fn default_help_sections() -> Vec<HelpSection> {
+    // Build slash commands section from SLASH_COMMANDS constant
+    let slash_commands_section = crate::components::input::SLASH_COMMANDS
+        .iter()
+        .fold(HelpSection::new("Slash Commands"), |section, (cmd, desc)| {
+            section.add_binding(*cmd, *desc)
+        });
+
     vec![
         HelpSection::new("Normal Mode")
             .add_binding("Enter", "Send message")
@@ -277,15 +284,7 @@ pub fn default_help_sections() -> Vec<HelpSection> {
             .add_binding("Ctrl+W", "Delete word back")
             .add_binding("Ctrl+P / Up", "Previous history")
             .add_binding("Ctrl+N / Down", "Next history"),
-        HelpSection::new("Slash Commands")
-            .add_binding("/new", "Create new session")
-            .add_binding("/goal <desc>", "Start autonomous goal mode")
-            .add_binding("/goal:stop", "Stop goal mode")
-            .add_binding("/sessions", "Switch to another session")
-            .add_binding("/yolo", "Toggle YOLO mode")
-            .add_binding("/browse", "Toggle browse mode")
-            .add_binding("/compact", "Force message compaction")
-            .add_binding("/help", "Show this help dialog"),
+        slash_commands_section,
     ]
 }
 

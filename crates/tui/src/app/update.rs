@@ -485,6 +485,145 @@ impl Model {
                     self.state.should_redraw = true;
                     None
                 }
+                Msg::CommandRewind => {
+                    // Load checkpoints for current session and show picker
+                    if let Some(ref checkpoint_store) = self.checkpoint_store {
+                        let session_id = self.session_id.clone();
+                        let checkpoints = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current()
+                                .block_on(checkpoint_store.get_session_checkpoints(&session_id))
+                        })
+                        .unwrap_or_default();
+
+                        if checkpoints.is_empty() {
+                            self.show_notification(&Notification::info(
+                                "No checkpoints found for this session",
+                                3000,
+                            ));
+                            return None;
+                        }
+
+                        let items: Vec<PickerItem> = checkpoints
+                            .into_iter()
+                            .map(|cp| {
+                                let time_str =
+                                    chrono::DateTime::from_timestamp(cp.created_at as i64, 0)
+                                        .map_or_else(
+                                            || "?".to_string(),
+                                            |dt| dt.format("%H:%M:%S").to_string(),
+                                        );
+                                let label = format!(
+                                    "[{}] {} - {} files",
+                                    time_str, cp.summary, cp.files_changed
+                                );
+                                PickerItem::new(cp.message_id, label)
+                            })
+                            .collect();
+
+                        // Show the checkpoint picker (like CommandSessions does)
+                        let _ = self.app.attr(
+                            &Id::CheckpointPicker,
+                            Attribute::Custom(attr::PICKER_ITEMS),
+                            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
+                        );
+                        let _ = self.app.attr(
+                            &Id::CheckpointPicker,
+                            Attribute::Custom(attr::DIALOG_SHOW),
+                            AttrValue::Flag(true),
+                        );
+                        // Give focus to checkpoint picker
+                        self.set_focus(&Id::CheckpointPicker);
+                        self.state.should_redraw = true;
+                    } else {
+                        self.show_notification(&Notification::warn(
+                            "Checkpoint store not available",
+                            3000,
+                        ));
+                    }
+                    None
+                }
+                Msg::CommandUndo => {
+                    // Undo last turn: rewind to the latest checkpoint
+                    if let Some(ref checkpoint_store) = self.checkpoint_store {
+                        let session_id = self.session_id.clone();
+                        let checkpoints = tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current()
+                                .block_on(checkpoint_store.get_session_checkpoints(&session_id))
+                        })
+                        .unwrap_or_default();
+
+                        if checkpoints.is_empty() {
+                            self.show_notification(&Notification::error(
+                                "No checkpoints to undo",
+                                3000,
+                            ));
+                            return None;
+                        }
+
+                        // Find the latest checkpoint (highest sequence)
+                        let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
+
+                        if let Some(cp) = latest {
+                            // Send rewind command to coordinator (Both = conversation + files)
+                            let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
+                                message_id: kernel::types::MessageId::from_string(cp.message_id),
+                                target: kernel::checkpoint::RewindTarget::Both,
+                            });
+                            self.show_notification(&Notification::info(
+                                format!("Undoing: {}", cp.summary),
+                                3000,
+                            ));
+                        }
+                    } else {
+                        self.show_notification(&Notification::warn(
+                            "Checkpoint store not available",
+                            3000,
+                        ));
+                    }
+                    None
+                }
+                Msg::CheckpointSelected(message_id, target) => {
+                    // Hide picker
+                    let _ = self.app.attr(
+                        &Id::CheckpointPicker,
+                        Attribute::Custom(attr::DIALOG_HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    self.set_focus(&Id::InputBox);
+
+                    // Convert msg::RewindTarget to kernel::checkpoint::RewindTarget
+                    let kernel_target = match target {
+                        crate::msg::RewindTarget::Conversation => {
+                            kernel::checkpoint::RewindTarget::Conversation
+                        }
+                        crate::msg::RewindTarget::Files => kernel::checkpoint::RewindTarget::Files,
+                        crate::msg::RewindTarget::Both => kernel::checkpoint::RewindTarget::Both,
+                    };
+
+                    // Send rewind command to coordinator
+                    let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
+                        message_id: kernel::types::MessageId::from_string(message_id),
+                        target: kernel_target,
+                    });
+
+                    self.show_notification(&Notification::info(
+                        format!("Rewinding to checkpoint (target: {target:?})..."),
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::CloseCheckpointPicker => {
+                    // Hide checkpoint picker and return focus to input box
+                    let _ = self.app.attr(
+                        &Id::CheckpointPicker,
+                        Attribute::Custom(attr::DIALOG_HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    self.set_focus(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
                 Msg::CloseHelpDialog => {
                     // Hide help dialog and return focus to input box
                     if let Err(e) = self.app.attr(

@@ -31,6 +31,11 @@ pub enum ControlCommand {
     StartGoal(crate::goal::GoalState),
     /// Stop autonomous goal-mode execution
     StopGoal,
+    /// Rewind to a specific checkpoint
+    Rewind {
+        message_id: crate::types::MessageId,
+        target: crate::checkpoint::RewindTarget,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,5 +228,11 @@ pub enum SystemEvent {
         session_id: SessionId,
         /// Error message if session exited with an error
         error: Option<String>,
+    },
+    /// Session rewound to a checkpoint
+    Rewound {
+        session_id: SessionId,
+        /// Updated messages after rewind (truncated history)
+        messages: Vec<std::sync::Arc<crate::types::Message>>,
     },
 }
