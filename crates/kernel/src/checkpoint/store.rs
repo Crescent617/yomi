@@ -25,7 +25,6 @@ pub struct CheckpointInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub session_id: String,
-    pub max_checkpoints: usize,
     pub checkpoints: Vec<CheckpointInfo>,
     #[serde(skip)]
     next_sequence: u32,
@@ -35,7 +34,6 @@ impl Manifest {
     pub fn new(session_id: String) -> Self {
         Self {
             session_id,
-            max_checkpoints: 5,
             checkpoints: Vec::new(),
             next_sequence: 1,
         }
@@ -87,13 +85,23 @@ pub struct CheckpointMeta {
 /// Filesystem-based checkpoint store
 pub struct FilesystemCheckpointStore {
     base_dir: PathBuf,
+    max_checkpoints: usize,
 }
 
 impl FilesystemCheckpointStore {
-    /// Create new store with the given data directory
+    /// Create new store with the given data directory and default `max_checkpoints` (5)
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: data_dir.into().join("checkpoints"),
+            max_checkpoints: 5,
+        }
+    }
+
+    /// Create new store with specified `max_checkpoints`
+    pub fn with_max_checkpoints(data_dir: impl Into<PathBuf>, max: usize) -> Self {
+        Self {
+            base_dir: data_dir.into().join("checkpoints"),
+            max_checkpoints: max,
         }
     }
 
@@ -160,7 +168,7 @@ impl FilesystemCheckpointStore {
 
     /// Enforce retention policy - remove oldest checkpoints if over limit
     async fn enforce_retention(&self, manifest: &mut Manifest) -> Result<()> {
-        while manifest.checkpoints.len() > manifest.max_checkpoints {
+        while manifest.checkpoints.len() > self.max_checkpoints {
             let oldest = manifest.checkpoints.first().cloned();
             if let Some(cp) = oldest {
                 let session_id = manifest.session_id.clone();
@@ -643,15 +651,6 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         info!("Deleted {} checkpoints for session {}", count, session_id);
         Ok(count)
     }
-
-    async fn set_max_checkpoints(&self, session_id: &str, max: usize) -> Result<()> {
-        let mut manifest = self.load_manifest(session_id).await?;
-        manifest.max_checkpoints = max;
-        self.save_manifest(&manifest).await?;
-        self.enforce_retention(&mut manifest).await?;
-        self.save_manifest(&manifest).await?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -688,34 +687,6 @@ mod tests {
         assert_eq!(checkpoints.len(), 2);
         assert_eq!(checkpoints[0].sequence, 1);
         assert_eq!(checkpoints[1].sequence, 2);
-    }
-
-    #[tokio::test]
-    async fn test_retention_policy() {
-        let (store, _temp) = create_test_store();
-
-        // Set low retention
-        store.set_max_checkpoints("session-1", 2).await.unwrap();
-
-        // Create 3 checkpoints
-        let _cp1 = store
-            .create_checkpoint("session-1", "msg-1", "First", vec![])
-            .await
-            .unwrap();
-        let _cp2 = store
-            .create_checkpoint("session-1", "msg-2", "Second", vec![])
-            .await
-            .unwrap();
-        let _cp3 = store
-            .create_checkpoint("session-1", "msg-3", "Third", vec![])
-            .await
-            .unwrap();
-
-        // Should only have 2 (newest)
-        let checkpoints = store.get_session_checkpoints("session-1").await.unwrap();
-        assert_eq!(checkpoints.len(), 2);
-        assert_eq!(checkpoints[0].sequence, 2); // Oldest kept
-        assert_eq!(checkpoints[1].sequence, 3); // Newest
     }
 
     #[tokio::test]

@@ -67,6 +67,24 @@ impl StorageSet {
     /// # }
     /// ```
     pub async fn open(data_dir: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with_config_inner(data_dir, None).await
+    }
+
+    /// Open all storage backends with configuration
+    ///
+    /// Similar to `open`, but uses the provided configuration for store initialization.
+    pub async fn open_with_config(
+        data_dir: impl Into<PathBuf>,
+        config: &crate::Config,
+    ) -> Result<Self> {
+        Self::open_with_config_inner(data_dir, Some(config)).await
+    }
+
+    /// Internal helper to open storage with optional config
+    async fn open_with_config_inner(
+        data_dir: impl Into<PathBuf>,
+        config: Option<&crate::Config>,
+    ) -> Result<Self> {
         let data_dir = data_dir.into();
         let db_path = data_dir.join("yomi.db");
         let sessions_dir = data_dir.join("sessions");
@@ -99,8 +117,19 @@ impl StorageSet {
         let usage_store: Arc<dyn super::UsageStore> =
             Arc::new(super::SqliteUsageStore::new(pool.clone()));
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));
+
+        // Create checkpoint store with optional config
         let checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore> =
-            Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(&data_dir));
+            if let Some(cfg) = config {
+                Arc::new(
+                    crate::checkpoint::FilesystemCheckpointStore::with_max_checkpoints(
+                        &data_dir,
+                        cfg.max_checkpoints,
+                    ),
+                )
+            } else {
+                Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(&data_dir))
+            };
 
         Ok(Self {
             pool,

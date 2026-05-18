@@ -28,8 +28,6 @@ enum Commands {
     Tui(tui::TuiArgs),
     /// Manage sessions
     Session(SessionArgs),
-    /// Manage checkpoints
-    Checkpoint(CheckpointArgs),
     /// Manage skills
     Skill(SkillArgs),
     /// Manage configuration
@@ -66,6 +64,8 @@ enum SessionsCommands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Manage checkpoints for a session
+    Checkpoint(SessionCheckpointArgs),
 }
 
 #[derive(Parser)]
@@ -84,29 +84,21 @@ enum SkillsCommands {
 }
 
 #[derive(Parser)]
-struct CheckpointArgs {
+struct SessionCheckpointArgs {
     #[command(flatten)]
     global: GlobalArgs,
 
     #[command(subcommand)]
-    command: CheckpointCommands,
+    command: SessionCheckpointCommands,
 }
 
 #[derive(Subcommand)]
-enum CheckpointCommands {
+enum SessionCheckpointCommands {
     /// List checkpoints for a session
     List {
         /// Session ID (defaults to current directory's session)
         #[arg(short, long)]
         session: Option<String>,
-    },
-    /// Show checkpoint details
-    Show {
-        /// Session ID (defaults to current directory's session)
-        #[arg(short, long)]
-        session: Option<String>,
-        /// Message ID of the checkpoint
-        message_id: String,
     },
     /// Rewind to a checkpoint (shows what would happen, use TUI for actual rewind)
     Rewind {
@@ -182,7 +174,6 @@ async fn main() -> Result<()> {
     match args.command {
         Some(Commands::Tui(tui_args)) => tui::run(tui_args).await,
         Some(Commands::Session(args)) => run_session(args).await,
-        Some(Commands::Checkpoint(args)) => run_checkpoint(args).await,
         Some(Commands::Skill(args)) => run_skill(args).await,
         Some(Commands::Config(args)) => run_config(args).await,
         Some(Commands::Usage(args)) => run_usage(args).await,
@@ -199,6 +190,35 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         SessionsCommands::List { all } => commands::session::list(&args.global, all).await,
         SessionsCommands::Cleanup { days, yes } => {
             commands::session::cleanup::run(args.global, days, yes).await
+        }
+        SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
+    }
+}
+
+async fn run_session_checkpoint(args: SessionCheckpointArgs) -> Result<()> {
+    use kernel::checkpoint::RewindTarget;
+
+    match args.command {
+        SessionCheckpointCommands::List { session } => {
+            commands::checkpoint::list(&args.global, session).await
+        }
+        SessionCheckpointCommands::Rewind {
+            message_id,
+            conversation,
+            files,
+            dry_run,
+        } => {
+            let target = if conversation {
+                RewindTarget::Conversation
+            } else if files {
+                RewindTarget::Files
+            } else {
+                RewindTarget::Both
+            };
+            commands::checkpoint::rewind(&args.global, message_id, target, dry_run).await
+        }
+        SessionCheckpointCommands::Cleanup { yes } => {
+            commands::checkpoint::cleanup(&args.global, !yes).await
         }
     }
 }
@@ -230,34 +250,4 @@ async fn run_usage(args: UsageArgs) -> Result<()> {
     commands::usage::show(args.global, args.days, filter).await
 }
 
-async fn run_checkpoint(args: CheckpointArgs) -> Result<()> {
-    use kernel::checkpoint::RewindTarget;
 
-    match args.command {
-        CheckpointCommands::List { session } => {
-            commands::checkpoint::list(&args.global, session).await
-        }
-        CheckpointCommands::Show {
-            session,
-            message_id,
-        } => commands::checkpoint::show(&args.global, session, message_id).await,
-        CheckpointCommands::Rewind {
-            message_id,
-            conversation,
-            files,
-            dry_run,
-        } => {
-            let target = if conversation {
-                RewindTarget::Conversation
-            } else if files {
-                RewindTarget::Files
-            } else {
-                RewindTarget::Both
-            };
-            commands::checkpoint::rewind(&args.global, message_id, target, dry_run).await
-        }
-        CheckpointCommands::Cleanup { yes } => {
-            commands::checkpoint::cleanup(&args.global, !yes).await
-        }
-    }
-}

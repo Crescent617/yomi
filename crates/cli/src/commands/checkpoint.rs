@@ -2,6 +2,7 @@
 
 use crate::args::GlobalArgs;
 use anyhow::{Context, Result};
+use comfy_table::{ContentArrangement, Table};
 use kernel::checkpoint::RewindTarget;
 use kernel::storage::StorageSet;
 
@@ -33,8 +34,7 @@ async fn resolve_session_id(storage: &StorageSet, session_id: Option<String>) ->
 
 /// List checkpoints for a session
 pub async fn list(global: &GlobalArgs, session_id: Option<String>) -> Result<()> {
-    let data_dir = crate::utils::data_dir(global)?;
-    let storage = StorageSet::open(&data_dir).await?;
+    let storage = crate::utils::open_storage(global).await?;
 
     let session_id = resolve_session_id(&storage, session_id).await?;
 
@@ -49,50 +49,36 @@ pub async fn list(global: &GlobalArgs, session_id: Option<String>) -> Result<()>
     }
 
     println!("Checkpoints for session {session_id}:");
-    println!("{:<36} {:<10} Files Changed", "Message ID", "Seq");
-    println!("{}", "-".repeat(80));
 
-    for cp in checkpoints {
-        println!(
-            "{:<36} {:<10} {}",
-            cp.message_id, cp.sequence, cp.files_changed
-        );
+    // Build table (no borders)
+    let mut table = Table::new();
+    table
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec!["SEQ", "SUMMARY", "FILES", "MESSAGE ID"]);
+    table.load_preset(comfy_table::presets::NOTHING);
+    // Remove left padding from first column only
+    if let Some(col) = table.column_mut(0) {
+        col.set_padding((0, 1));
     }
 
-    Ok(())
-}
+    for cp in &checkpoints {
+        let summary = if cp.summary.is_empty() {
+            "(no summary)".to_string()
+        } else if cp.summary.chars().count() > 40 {
+            format!("{}...", cp.summary.chars().take(40).collect::<String>())
+        } else {
+            cp.summary.clone()
+        };
 
-/// Show details of a specific checkpoint
-pub async fn show(
-    global: &GlobalArgs,
-    session_id: Option<String>,
-    message_id: String,
-) -> Result<()> {
-    let data_dir = crate::utils::data_dir(global)?;
-    let storage = StorageSet::open(&data_dir).await?;
-
-    let session_id = resolve_session_id(&storage, session_id).await?;
-
-    // Get all checkpoints for session and filter locally (avoids global scan)
-    let checkpoints = storage
-        .checkpoint_store()
-        .get_session_checkpoints(&session_id)
-        .await?;
-
-    let checkpoint = checkpoints.into_iter().find(|c| c.message_id == message_id);
-
-    match checkpoint {
-        Some(cp) => {
-            println!("Checkpoint Details:");
-            println!("  Message ID:    {}", cp.message_id);
-            println!("  Session ID:    {}", cp.session_id);
-            println!("  Sequence:      {}", cp.sequence);
-            println!("  Files Changed: {}", cp.files_changed);
-        }
-        None => {
-            println!("Checkpoint not found: {message_id}");
-        }
+        table.add_row(vec![
+            cp.sequence.to_string(),
+            summary,
+            cp.files_changed.to_string(),
+            cp.message_id.clone(),
+        ]);
     }
+
+    println!("{table}");
 
     Ok(())
 }

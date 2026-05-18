@@ -1,12 +1,12 @@
 use crate::args::GlobalArgs;
 use anyhow::Result;
-use kernel::{ListArgs, StorageSet};
+use kernel::ListArgs;
 use tokio::fs;
 
 /// Cleanup old session data
 pub async fn run(global: GlobalArgs, days: i64, yes: bool) -> Result<()> {
     let data_dir = crate::utils::data_dir(&global)?;
-    let storage = StorageSet::open(&data_dir).await?;
+    let storage = crate::utils::open_storage(&global).await?;
 
     if !yes {
         // Dry-run: only query and show what would be deleted

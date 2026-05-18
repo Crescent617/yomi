@@ -149,7 +149,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let skills = load_skills(&config, &working_dir).await;
 
     // Initialize all storage backends
-    let storage = kernel::StorageSet::open(&config.data_dir).await?;
+    let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
     let provider = create_provider(&config)?;
     let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
 

@@ -84,6 +84,15 @@ pub fn data_dir(global: &GlobalArgs) -> Result<PathBuf> {
     Ok(config.data_dir)
 }
 
+/// Open storage with configuration from global args
+pub async fn open_storage(global: &GlobalArgs) -> Result<kernel::StorageSet> {
+    let working_dir = resolve_working_dir(global)?;
+    let config = load_config(global.config.as_ref(), &working_dir)?;
+    kernel::StorageSet::open_with_config(&config.data_dir, &config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open storage: {e}"))
+}
+
 /// Resolve working directory from global args
 /// Uses the provided dir or falls back to current directory
 pub fn resolve_working_dir(global: &GlobalArgs) -> Result<PathBuf> {
