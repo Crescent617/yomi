@@ -13,6 +13,7 @@
 //! ```no_run
 //! use std::path::PathBuf;
 //! use kernel::storage::StorageSet;
+//! use kernel::types::SessionId;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let storage = StorageSet::open(PathBuf::from("~/.yomi")).await?;

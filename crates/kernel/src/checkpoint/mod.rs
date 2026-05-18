@@ -114,7 +114,4 @@ pub trait CheckpointStore: Send + Sync {
 
     /// Delete all checkpoints for a session
     async fn delete_session_checkpoints(&self, session_id: &str) -> Result<u64>;
-
-    /// Set maximum number of checkpoints to retain (default: 5)
-    async fn set_max_checkpoints(&self, session_id: &str, max: usize) -> Result<()>;
 }

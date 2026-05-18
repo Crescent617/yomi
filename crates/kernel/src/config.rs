@@ -61,6 +61,8 @@ pub mod env_names {
 
     /// Context window size for the model (e.g., 131072, 200000, 128k, 200k)
     pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
+    /// Maximum number of checkpoints to retain per session (default: 5)
+    pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
 }
 
 /// Provider type
@@ -161,6 +163,8 @@ pub struct Config {
     pub hooks: Vec<crate::hooks::HookEntry>,
     /// Experimental feature flags
     pub features: FeaturesConfig,
+    /// Maximum number of checkpoints to retain per session (default: 5)
+    pub max_checkpoints: usize,
 }
 
 impl Config {
@@ -221,6 +225,7 @@ impl Default for Config {
             load_claude_plugins: false,
             hooks: Vec::new(),
             features: FeaturesConfig::default(),
+            max_checkpoints: 5,
         }
     }
 }
@@ -346,6 +351,11 @@ impl Config {
                 // Also update compact_threshold to 80% of context window
                 self.agent.compactor.compact_threshold = tokens * 8 / 10;
             }
+        }
+
+        // Maximum checkpoints per session
+        if let Some(max) = env_parse::<usize>(env_names::MAX_CHECKPOINTS) {
+            self.max_checkpoints = max;
         }
     }
 

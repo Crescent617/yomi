@@ -1,12 +1,12 @@
 use crate::args::GlobalArgs;
 use anyhow::Result;
 use comfy_table::{ContentArrangement, Table};
-use kernel::{ListArgs, StorageSet};
+use kernel::ListArgs;
 
 pub mod cleanup;
 
 pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
-    let storage = StorageSet::open(&crate::utils::data_dir(global)?).await?;
+    let storage = crate::utils::open_storage(global).await?;
 
     // Get current working directory
     let current_dir = std::env::current_dir()?;

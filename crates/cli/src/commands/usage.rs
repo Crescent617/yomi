@@ -6,7 +6,6 @@ use comfy_table::{
     Table,
 };
 use kernel::storage::usage::UsageFilter;
-use kernel::StorageSet;
 
 /// Format a number with compact notation (K, M, B)
 #[allow(clippy::cast_precision_loss)] // Precision loss acceptable for display
@@ -71,7 +70,7 @@ fn color_by_percentile(value: u64, sorted_values: &[u64]) -> Color {
 
 /// Show token usage for a time range (default: last 7 days)
 pub async fn show(global: GlobalArgs, days: i64, filter: Option<UsageFilter>) -> Result<()> {
-    let storage = StorageSet::open(&crate::utils::data_dir(&global)?).await?;
+    let storage = crate::utils::open_storage(&global).await?;
 
     // Calculate date range by whole days in local timezone
     let now_local = Local::now();
