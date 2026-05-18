@@ -13,9 +13,10 @@ pub mod input_edit;
 pub mod status_bar;
 pub mod tips;
 pub mod todo_list;
+pub mod wrap_info;
 pub mod wrap_paragraph;
 
-pub use banner::BannerData;
+pub use banner::{BannerComponent, BannerData};
 pub use chat_view::ChatViewComponent;
 pub use completion_list::CompletionList;
 pub use dialog::{SelectDialog, SelectDialogComponent};

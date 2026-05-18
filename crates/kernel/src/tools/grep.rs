@@ -69,7 +69,7 @@ impl GrepTool {
 
         // Output mode flags
         match output_mode {
-            "files_with_matches" => {
+            "filename" => {
                 args.push("-l".to_string());
             }
             "count" => {
@@ -221,7 +221,7 @@ impl GrepTool {
     }
 
     /// Get file modification time in milliseconds since epoch
-    /// Format `files_with_matches` output with sorting by mtime
+    /// Format `filename` output with sorting by mtime
     async fn format_files_output(
         &self,
         stdout: &str,
@@ -367,8 +367,8 @@ impl Tool for GrepTool {
                 },
                 "output_mode": {
                     "type": "string",
-                    "enum": ["content", "files_with_matches", "count"],
-                    "description": "Output mode: 'content' shows matching lines, 'files_with_matches' shows file paths, 'count' shows match counts. Defaults to 'files_with_matches'."
+                    "enum": ["content", "filename", "count"],
+                    "description": "Output mode: 'content' shows matching lines, 'filename' shows file paths, 'count' shows match counts. Defaults to 'filename'."
                 },
                 "-B": {
                     "type": "integer",
@@ -422,7 +422,7 @@ impl Tool for GrepTool {
         let path = args["path"].as_str();
         let glob_pattern = args["glob"].as_str();
         let file_type = args["type"].as_str();
-        let output_mode = args["output_mode"].as_str().unwrap_or("files_with_matches");
+        let output_mode = args["output_mode"].as_str().unwrap_or("filename");
         let context_before = args["-B"].as_u64().map_or(0, |n| n as usize);
         let context_after = args["-A"].as_u64().map_or(0, |n| n as usize);
         let context = args["-C"]
@@ -480,7 +480,7 @@ impl Tool for GrepTool {
         let response = if code == 0 || code == 1 {
             // code 0 = matches found, code 1 = no matches (not an error)
             match output_mode {
-                "files_with_matches" => {
+                "filename" => {
                     self.format_files_output(
                         &stdout,
                         limit.unwrap_or(DEFAULT_HEAD_LIMIT),
@@ -537,7 +537,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn test_grep_tool_files_with_matches() {
+    async fn test_grep_tool_filename() {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
@@ -560,7 +560,7 @@ mod tests {
         let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "println!",
-            "output_mode": "files_with_matches"
+            "output_mode": "filename"
         });
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
@@ -654,7 +654,7 @@ mod tests {
         let tool = GrepTool::default();
         let args = serde_json::json!({
             "pattern": "nonexistent",
-            "output_mode": "files_with_matches"
+            "output_mode": "filename"
         });
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
@@ -766,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_grep_tool_files_with_matches_does_not_record() {
+    async fn test_grep_tool_filename_does_not_record() {
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path();
 
@@ -783,14 +783,14 @@ mod tests {
 
         let args = serde_json::json!({
             "pattern": "println!",
-            "output_mode": "files_with_matches"
+            "output_mode": "filename"
         });
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
         assert!(result.success());
 
-        // Verify file was NOT recorded (files_with_matches doesn't record)
+        // Verify file was NOT recorded (filename doesn't record)
         let file_path = base_path.join("test.rs").canonicalize().unwrap();
         assert!(!store.has_recorded(&file_path));
     }

@@ -41,7 +41,7 @@ impl Model {
         _data_dir: std::path::PathBuf,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
-        let app = Self::init_app()?;
+        let app = Self::init_app(&working_dir)?;
 
         Ok(Self {
             app,

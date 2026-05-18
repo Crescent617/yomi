@@ -249,5 +249,3 @@ async fn run_usage(args: UsageArgs) -> Result<()> {
     };
     commands::usage::show(args.global, args.days, filter).await
 }
-
-

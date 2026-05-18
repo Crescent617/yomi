@@ -1,9 +1,46 @@
 //! Text preprocessing utilities for TUI rendering
 
+use tuirealm::ratatui::text::{Line, Span};
+
 /// Preprocess text for display by:
 /// - Converting tabs to 2 spaces for consistent width
 pub fn preprocess(text: impl AsRef<str>) -> String {
     text.as_ref().replace('\t', "  ")
+}
+
+/// Extract a segment of a line as a new Line with owned data, preserving styles.
+/// Extracts text from `start_byte` (inclusive) to `end_byte` (exclusive).
+pub fn extract_line_segment(line: &Line<'_>, start_byte: usize, end_byte: usize) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut current_byte = 0;
+
+    for span in &line.spans {
+        let span_text = span.content.as_ref();
+        let span_len = span_text.len();
+        let span_start = current_byte;
+        let span_end = current_byte + span_len;
+
+        // Check if this span overlaps with the target range
+        if span_end <= start_byte || span_start >= end_byte {
+            current_byte = span_end;
+            continue;
+        }
+
+        // Calculate overlap
+        let overlap_start = start_byte.saturating_sub(span_start);
+        let overlap_end = end_byte.saturating_sub(span_start).min(span_len);
+
+        if overlap_start < overlap_end {
+            debug_assert!(span_text.is_char_boundary(overlap_start));
+            debug_assert!(span_text.is_char_boundary(overlap_end));
+            let extracted = &span_text[overlap_start..overlap_end];
+            spans.push(Span::styled(extracted.to_string(), span.style));
+        }
+
+        current_byte = span_end;
+    }
+
+    Line::from(spans).style(line.style)
 }
 
 /// Get byte index from character index (Unicode-safe)

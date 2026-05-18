@@ -103,6 +103,8 @@ pub const TOGGLE_THINKING: &str = "toggle_thinking";
 pub const SET_BANNER: &str = "set_banner";
 /// Attribute for initializing chat history.
 pub const INIT_HISTORY: &str = "init_history";
+/// Attribute for querying whether `ChatView` is empty.
+pub const IS_EMPTY: &str = "is_empty";
 
 // =============================================================================
 // Status Bar
@@ -120,6 +122,8 @@ pub const SHOW_TIP: &str = "show_tip";
 pub const CLEAR_TIP: &str = "clear_tip";
 /// Attribute for setting context usage.
 pub const SET_CTX_USAGE: &str = "set_ctx_usage";
+/// Attribute for setting model name display.
+pub const SET_MODEL_NAME: &str = "set_model_name";
 /// Attribute for clearing the status message.
 pub const CLEAR_MESSAGE: &str = "clear_message";
 

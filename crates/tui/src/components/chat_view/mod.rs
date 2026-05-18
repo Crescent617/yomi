@@ -3,8 +3,8 @@
 //! Displays chat history + streaming message in a single scrollable view.
 
 mod core;
+mod message_renderer;
 mod overlay;
-mod wrap_cache;
 
 // Re-export from core
 pub use core::{ChatView, ChatViewComponent, HistoryMessage, MouseAction, Selection, ToolStatus};
