@@ -99,11 +99,20 @@ impl ReadTool {
                 .await;
         }
 
-        Ok(ToolOutput::text(maybe_truncate_output(
-            output,
-            MAX_TOOL_OUTPUT_LENGTH,
-            offset,
-        )))
+        let output = if !line_numbers && end < total_lines {
+            let notice = format!(
+                "\n\n[Stopped at line {end} of {total_lines}. Use offset/limit to read more.]"
+            );
+            if output.len() + notice.len() <= MAX_TOOL_OUTPUT_LENGTH {
+                output + &notice
+            } else {
+                maybe_truncate_output(output, MAX_TOOL_OUTPUT_LENGTH, offset)
+            }
+        } else {
+            maybe_truncate_output(output, MAX_TOOL_OUTPUT_LENGTH, offset)
+        };
+
+        Ok(ToolOutput::text(output))
     }
 }
 
@@ -259,7 +268,8 @@ mod tests {
             .unwrap();
 
         let tool = ReadTool::default();
-        let args = serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2});
+        let args =
+            serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2, "line_numbers": true});
 
         let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
         let result = tool.exec(args, ctx).await.unwrap();
@@ -348,6 +358,34 @@ mod tests {
 
         assert!(result.is_error);
         assert!(result.error_text().contains("out of range"));
+    }
+
+    #[tokio::test]
+    async fn test_read_without_line_numbers_stopped_hint() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path();
+
+        tokio::fs::write(base_path.join("test.txt"), "a\nb\nc\nd\ne")
+            .await
+            .unwrap();
+
+        let tool = ReadTool::default();
+        let args = serde_json::json!({"path": "test.txt", "limit": 3, "line_numbers": false});
+
+        let ctx = ToolExecCtx::new("test_tool_call", base_path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+
+        assert!(result.success());
+        let content = result.text_content();
+        // File content is a\nb\nc — check actual lines, not single chars
+        // (prompt text contains letters like 'd' in "read")
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "a");
+        assert_eq!(lines[1], "b");
+        assert_eq!(lines[2], "c");
+        // Should tell the model where it stopped when line_numbers is false
+        assert!(content.contains("Stopped at line 3 of 5"));
+        assert!(content.contains("Use offset/limit to read more"));
     }
 
     #[tokio::test]

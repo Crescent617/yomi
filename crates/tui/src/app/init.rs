@@ -12,7 +12,7 @@ use tuirealm::{
 use crate::{
     attr,
     components::{
-        tips::get_random_tip, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
+        tips::get_random_tip, BannerComponent, ChatViewComponent, FuzzyPickerComponent, HelpDialog,
         InfoBarComponent, InputComponent, PickerConfig, SelectDialogComponent, StatusBarComponent,
         TodoListComponent,
     },
@@ -80,12 +80,7 @@ impl Model {
         Ok(())
     }
 
-    /// Initialize banner (data comes from global config and `working_dir`)
-    pub fn init_banner(&mut self) -> Result<()> {
-        self.update_banner()
-    }
-
-    /// Initialize status bar with permission level for YOLO mode display
+    /// Initialize status bar with permission level and model name
     pub fn init_status_bar(&mut self) -> Result<()> {
         use kernel::permissions::Level;
 
@@ -98,6 +93,14 @@ impl Model {
             &Id::StatusBar,
             Attribute::Custom(attr::SET_PERMISSION_LEVEL),
             AttrValue::Number(level_val),
+        )?;
+
+        // Set model name
+        let model_name = crate::config().agent.model.model_id.clone();
+        self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom(attr::SET_MODEL_NAME),
+            AttrValue::String(model_name),
         )?;
 
         // Inject a random tip on startup
@@ -136,26 +139,17 @@ impl Model {
         Ok(())
     }
 
-    /// Update banner in `ChatView` (data comes from global config and `working_dir`)
-    pub fn update_banner(&mut self) -> Result<()> {
-        let working_dir = self.working_dir.to_string_lossy().to_string();
-        self.app.attr(
-            &Id::ChatView,
-            Attribute::Custom(attr::SET_BANNER),
-            AttrValue::String(working_dir),
-        )?;
-        Ok(())
-    }
-
     /// Initialize the tuirealm Application with all components
-    pub(crate) fn init_app() -> Result<Application<Id, Msg, UserEvent>> {
+    pub(crate) fn init_app(
+        working_dir: &std::path::Path,
+    ) -> Result<Application<Id, Msg, UserEvent>> {
         let mut app = Application::init(
             EventListenerCfg::default()
                 .crossterm_input_listener(Duration::from_millis(10), 10)
                 .tick_interval(Duration::from_millis(100)),
         );
 
-        // Mount unified chat view component (includes scrollable banner)
+        // Mount unified chat view component
         app.mount(
             Id::ChatView,
             Box::new(ChatViewComponent::new()),
@@ -163,6 +157,15 @@ impl Model {
                 Sub::new(EventClause::Tick, SubClause::Always),
                 Sub::new(EventClause::Any, SubClause::Always),
             ],
+        )?;
+
+        // Mount banner component (shown when chat is empty)
+        let mut banner = BannerComponent::new();
+        banner.set_working_dir(working_dir.to_string_lossy().into_owned());
+        app.mount(
+            Id::Banner,
+            Box::new(banner),
+            vec![Sub::new(EventClause::Tick, SubClause::Always)],
         )?;
 
         // Mount info bar component (token/streaming status)

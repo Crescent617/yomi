@@ -57,7 +57,7 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center: tip] [scroll progress (optional)] [ctx usage]
+/// Layout: [mode] [center: tip] [scroll progress (optional)] [model] [ctx usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
@@ -71,6 +71,8 @@ pub struct StatusBar {
     /// Scroll progress (`current_line`, `total_lines`)
     /// Displayed in browse mode always, or in normal mode when user scrolled up
     scroll_progress: Option<(usize, usize)>,
+    /// Model name (shown at right, next to context usage)
+    model_name: Option<String>,
 }
 
 impl StatusBar {
@@ -122,6 +124,11 @@ impl StatusBar {
     /// Clear scroll progress (when exiting browse mode)
     pub const fn clear_scroll_progress(&mut self) {
         self.scroll_progress = None;
+    }
+
+    /// Set model name for display in the right section
+    pub fn set_model_name(&mut self, name: impl Into<String>) {
+        self.model_name = Some(name.into());
     }
 
     fn render_mode_section(&self) -> Span<'static> {
@@ -179,6 +186,24 @@ impl StatusBar {
         }
     }
 
+    fn render_model_name_section(&self) -> Span<'static> {
+        if let Some(ref name) = self.model_name {
+            let text = if name.len() > 20 {
+                truncate_by_width(name, 20, "...")
+            } else {
+                name.clone()
+            };
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            )
+        } else {
+            Span::styled("", Style::default())
+        }
+    }
+
     fn render_context_usage_section(&self) -> Span<'static> {
         // Display context window usage: "0.5% (128K)"
         #[allow(clippy::cast_precision_loss)]
@@ -230,16 +255,17 @@ impl Component for StatusBar {
         let center_para = self.render_center_section(center_width);
         frame.render_widget(center_para, chunks[1]);
 
-        // Right side content: scroll (optional) + context (right-aligned)
-        let right_spans = if has_scroll {
-            vec![
-                self.render_scroll_progress_section(),
-                Span::raw(" "),
-                self.render_context_usage_section(),
-            ]
-        } else {
-            vec![self.render_context_usage_section()]
-        };
+        // Right side content: scroll (optional) + model + context (right-aligned)
+        let mut right_spans = Vec::new();
+        if has_scroll {
+            right_spans.push(self.render_scroll_progress_section());
+            right_spans.push(Span::raw(" "));
+        }
+        if self.model_name.is_some() {
+            right_spans.push(self.render_model_name_section());
+            right_spans.push(Span::raw(" · "));
+        }
+        right_spans.push(self.render_context_usage_section());
         frame.render_widget(
             Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
             chunks[2],
@@ -317,6 +343,11 @@ impl Component for StatusBar {
             }
             Attribute::Custom(attr::CLEAR_SCROLL_PROGRESS) => {
                 self.clear_scroll_progress();
+            }
+            Attribute::Custom(attr::SET_MODEL_NAME) => {
+                if let AttrValue::String(name) = value {
+                    self.set_model_name(name);
+                }
             }
             _ => {
                 self.props.set(attr, value);

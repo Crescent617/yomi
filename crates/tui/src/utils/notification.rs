@@ -2,15 +2,28 @@
 //!
 //! Supports OSC 9 (iTerm2, `WezTerm`, Windows Terminal) and OSC 777 (kitty, foot).
 //! Works inside tmux with passthrough sequences.
+//!
+//! # Limitations
+//! - tmux >= 3.3 requires `allow-passthrough on`.
+//! - nvim `:terminal` intercepts all OSC/DCS sequences; notifications silently
+//!   fail there and fall back to TUI info-bar.
 
 use std::io::{self, Write};
 
-/// Check if running inside tmux
+/// Check if running inside tmux.
 fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
 }
 
-/// Wrap a sequence for tmux passthrough
+/// Check if running inside neovim (terminal, job, or child process).
+///
+/// nvim's `:terminal` (libvterm) swallows OSC/DCS sequences and never forwards
+/// them to the outer terminal, so OSC-based desktop notifications are impossible.
+fn in_nvim() -> bool {
+    std::env::var("NVIM").is_ok() || std::env::var("NVIM_LISTEN_ADDRESS").is_ok()
+}
+
+/// Wrap a sequence for tmux DCS passthrough.
 ///
 /// tmux intercepts OSC sequences, so we need to wrap them in DCS passthrough:
 /// `ESC P tmux ; <sequence> ESC \`
@@ -18,7 +31,7 @@ fn tmux_wrap(seq: &str) -> String {
     format!("\x1bPtmux;\x1b{seq}\x1b\\")
 }
 
-/// Send raw sequence to stdout
+/// Send raw sequence to stdout.
 fn send_raw(seq: &str) -> io::Result<()> {
     let mut stdout = io::stdout();
     stdout.write_all(seq.as_bytes())?;
@@ -29,6 +42,14 @@ fn send_raw(seq: &str) -> io::Result<()> {
 ///
 /// Format: `ESC ] 9 ; <message> BEL`
 fn notify_osc9_raw(message: &str) -> io::Result<()> {
+    if in_nvim() {
+        // nvim :terminal swallows OSC sequences; rely on TUI info-bar instead.
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "OSC notifications blocked by nvim terminal",
+        ));
+    }
+
     let osc_seq = format!("\x1b]9;{message}\x07");
 
     if in_tmux() {
@@ -42,6 +63,14 @@ fn notify_osc9_raw(message: &str) -> io::Result<()> {
 ///
 /// Format: `ESC ] 777 ; notify ; <title> ; <message> BEL`
 fn notify_osc777_raw(title: &str, message: &str) -> io::Result<()> {
+    if in_nvim() {
+        // nvim :terminal swallows OSC sequences; rely on TUI info-bar instead.
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "OSC notifications blocked by nvim terminal",
+        ));
+    }
+
     let osc_seq = format!("\x1b]777;notify;{title};{message}\x07");
 
     if in_tmux() {

@@ -149,9 +149,7 @@ pub async fn run_tui(
         checkpoint_store,
         _data_dir,
     )?;
-    model.init_banner()?;
     model.init_status_bar()?;
-    // Set input history after banner init
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)
     model.init_session_messages()?;

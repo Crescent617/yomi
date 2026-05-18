@@ -1,15 +1,27 @@
-//! Banner component for chat header
+//! Banner component for empty chat state
 //!
-//! Shows mascot and system info. The mascot blinks by default, but animation
-//! can be disabled via the `{ENV_PREFIX}DISABLE_ANIMATION` environment variable.
+//! Shows mascot and system info centered in the terminal.
+//! The mascot blinks by default, but animation can be disabled via the
+//! `{ENV_PREFIX}DISABLE_ANIMATION` environment variable.
 
 use kernel::ENV_PREFIX;
-use tuirealm::ratatui::{
-    style::{Modifier, Style},
-    text::{Line, Span},
+use std::ops::{Deref, DerefMut};
+use tuirealm::{
+    command::{Cmd, CmdResult},
+    component::{AppComponent, Component},
+    event::Event,
+    props::{AttrValue, Attribute, Props, QueryResult},
+    ratatui::{
+        layout::{Alignment, Rect},
+        style::{Modifier, Style},
+        text::{Line, Span},
+        widgets::Paragraph,
+        Frame,
+    },
+    state::State,
 };
 
-use crate::{theme::colors, utils::text::truncate_by_width};
+use crate::{attr, msg::Msg, theme::colors, utils::text::truncate_by_width};
 
 /// Yomi version constant
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -146,5 +158,177 @@ impl BannerData {
                 colors::text_secondary(),
             )),
         ]
+    }
+}
+
+/// Banner component: renders mascot + system info centered in the area.
+/// Shown when `ChatView` has no messages.
+#[derive(Debug, Default)]
+pub struct Banner {
+    props: Props,
+    data: BannerData,
+    mascot: MascotAnimator,
+}
+
+impl Banner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set working directory for display.
+    pub fn set_working_dir(&mut self, dir: impl Into<String>) {
+        self.data.working_dir = dir.into();
+    }
+}
+
+impl Component for Banner {
+    fn view(&mut self, frame: &mut Frame, area: Rect) {
+        let mascot_lines = self.mascot.current_lines();
+        let info_lines = self.data.info_lines();
+
+        let total_lines = mascot_lines.len() + 1 + info_lines.len();
+        let start_y = area
+            .y
+            .saturating_add((area.height.saturating_sub(total_lines as u16)) / 2);
+
+        let mut y = start_y;
+
+        // Render mascot (centered, using terminal system/default color)
+        for line in mascot_lines {
+            if y >= area.y + area.height {
+                break;
+            }
+            let para = Paragraph::new(line)
+                .alignment(Alignment::Center)
+                .style(colors::accent_system());
+            frame.render_widget(
+                para,
+                Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: 1,
+                },
+            );
+            y += 1;
+        }
+
+        // Spacer
+        y += 1;
+
+        // Render info lines (centered)
+        for line in info_lines {
+            if y >= area.y + area.height {
+                break;
+            }
+            let para = Paragraph::new(line).alignment(Alignment::Center);
+            frame.render_widget(
+                para,
+                Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: 1,
+                },
+            );
+            y += 1;
+        }
+    }
+
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.props
+            .get(attr)
+            .map(|v| QueryResult::Borrowed(v.into()))
+    }
+
+    fn attr(&mut self, attr: Attribute, value: AttrValue) {
+        match attr {
+            Attribute::Custom(attr::WORKING_DIR) => {
+                if let AttrValue::String(dir) = value {
+                    self.set_working_dir(dir);
+                }
+            }
+            _ => {
+                self.props.set(attr, value);
+            }
+        }
+    }
+
+    fn state(&self) -> State {
+        State::None
+    }
+
+    fn perform(&mut self, _cmd: Cmd) -> CmdResult {
+        CmdResult::NoChange
+    }
+}
+
+/// Component wrapper for `Banner`.
+pub struct BannerComponent {
+    component: Banner,
+}
+
+impl Default for BannerComponent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BannerComponent {
+    pub fn new() -> Self {
+        Self {
+            component: Banner::new(),
+        }
+    }
+}
+
+impl Deref for BannerComponent {
+    type Target = Banner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.component
+    }
+}
+
+impl DerefMut for BannerComponent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.component
+    }
+}
+
+impl Component for BannerComponent {
+    fn view(&mut self, frame: &mut Frame, area: Rect) {
+        self.component.view(frame, area);
+    }
+
+    fn query(&self, attr: Attribute) -> Option<QueryResult<'_>> {
+        self.component.query(attr)
+    }
+
+    fn attr(&mut self, attr: Attribute, value: AttrValue) {
+        self.component.attr(attr, value);
+    }
+
+    fn state(&self) -> State {
+        self.component.state()
+    }
+
+    fn perform(&mut self, cmd: Cmd) -> CmdResult {
+        self.component.perform(cmd)
+    }
+}
+
+impl AppComponent<Msg, crate::msg::UserEvent> for BannerComponent {
+    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
+        match *ev {
+            Event::Tick => {
+                if self.component.mascot.tick() {
+                    Some(Msg::Redraw)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 }

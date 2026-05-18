@@ -249,11 +249,10 @@ impl Component for HelpDialog {
 /// Create default help sections for the TUI application
 pub fn default_help_sections() -> Vec<HelpSection> {
     // Build slash commands section from SLASH_COMMANDS constant
-    let slash_commands_section = crate::components::input::SLASH_COMMANDS
-        .iter()
-        .fold(HelpSection::new("Slash Commands"), |section, (cmd, desc)| {
-            section.add_binding(*cmd, *desc)
-        });
+    let slash_commands_section = crate::components::input::SLASH_COMMANDS.iter().fold(
+        HelpSection::new("Slash Commands"),
+        |section, (cmd, desc)| section.add_binding(*cmd, *desc),
+    );
 
     vec![
         HelpSection::new("Normal Mode")

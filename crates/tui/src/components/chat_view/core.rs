@@ -9,45 +9,27 @@ use tuirealm::{
     component::{AppComponent, Component},
     event::{Event, Key, KeyEvent, KeyModifiers},
     props::{AttrValue, Attribute, Props, QueryResult},
-    ratatui::{
-        layout::Rect,
-        style::{Modifier, Style},
-        text::{Line, Span, Text},
-        Frame,
-    },
-    state::{State, StateValue},
+    ratatui::{layout::Rect, style::Style, text::Line, Frame},
+    state::State,
 };
 
-use crate::components::chat_view::{
-    line_display_width, scan_code_blocks, wrap_cache::WrapCache, CodeBlockOverlay,
-    CodeBlockOverlayManager, ContextMenu, ContextMenuAction,
+use crate::components::chat_view::message_renderer::{
+    get_message_pretty_json, get_message_raw_content, render_message, render_queued_message,
+    render_thinking_lines,
 };
+use crate::components::chat_view::{
+    line_display_width, scan_code_blocks, CodeBlockOverlay, CodeBlockOverlayManager, ContextMenu,
+    ContextMenuAction,
+};
+use crate::components::wrap_info::WrapInfo;
 use crate::components::wrap_paragraph::WrapParagraph;
 
 use crate::{
-    attr,
-    components::info_bar::Notification,
-    markdown_stream::StreamingMarkdownRenderer,
-    msg::Msg,
-    theme::{chars, colors},
-    utils::text::{
-        calc_wrap_boundaries, char_idx_to_byte_idx, preprocess, substring_by_chars,
-        truncate_by_chars, truncate_by_width,
-    },
+    attr, components::info_bar::Notification, markdown_stream::StreamingMarkdownRenderer, msg::Msg,
+    theme::colors, utils::text::substring_by_chars,
 };
 
-use kernel::task::{
-    TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME,
-};
-use kernel::tools::{
-    EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
-    SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_TOOL_NAME,
-    WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
-};
 use kernel::types::{ContentBlock, ToolOutputBlock};
-use kernel::utils::tokens;
-
-use crate::components::banner::MascotAnimator;
 
 /// Tool execution status
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +73,8 @@ pub enum HistoryMessage {
         error: Option<String>,
         folded: bool,
         arguments: Option<String>,
+        /// Pre-parsed JSON arguments to avoid re-parsing on every render.
+        parsed_args: Option<serde_json::Value>,
         elapsed_ms: Option<u64>,
         tokens: Option<u32>,
         progress: Option<String>,
@@ -148,31 +132,21 @@ pub struct ChatView {
     tick_frame: usize,
     md_renderer: StreamingMarkdownRenderer,
 
-    // Track active tool executions
-    active_tools: std::collections::HashMap<String, (String, ToolStatus)>, // tool_id -> (tool_name, status)
     // Expand all mode (ctrl-o): show all thinking and tool details
     expand_all: bool,
-    // Banner data (rendered as first content, scrolls with messages)
-    banner: Option<crate::components::BannerData>,
     // Queued message waiting to be sent (displayed at bottom during streaming)
     queued_message: Option<Vec<ContentBlock>>,
-    // Mascot animator for blinking animation
-    mascot_animator: MascotAnimator,
     // Track visible height for scroll calculations
     last_visible_height: usize,
-    // Message-level cache: None means dirty (needs re-render), Some means cached (Arc for sharing)
-    msg_cache: Vec<Option<Vec<Arc<Line<'static>>>>>,
-    // Banner cache (separate because mascot animates)
-    banner_cache: Vec<Arc<Line<'static>>>,
-    banner_dirty: bool,
-    // Message lines cache (excluding banner and streaming)
-    msg_lines: Vec<Arc<Line<'static>>>,
+    // Per-message rendered lines. Replaced on invalidate, pushed on new msg.
+    msg_cache: Vec<Vec<Arc<Line<'static>>>>,
+    // Flattened msg_cache + separators. Rebuilt when msg_cache_dirty.
+    flat_lines: Vec<Arc<Line<'static>>>,
+    // flat_lines + streaming + queued. Rebuilt every frame (clear+extend).
+    all_lines: Vec<Arc<Line<'static>>>,
+    // Width used for last render. If changed, msg_cache must be rebuilt.
+    last_render_width: usize,
     msg_cache_dirty: bool,
-    // Viewport cache: only the currently visible lines (cloned from Arc)
-    viewport_lines: Vec<Line<'static>>,
-    last_viewport: (usize, usize), // (start_line, end_line)
-    // First visible row within the first viewport line (for accurate mouse coord conversion)
-    viewport_first_row_offset: usize,
     // Text selection state
     selection: Option<Selection>,
     is_selecting: bool,
@@ -183,12 +157,8 @@ pub struct ChatView {
     current_area: Option<Rect>,
     // Scroll-to-bottom button area for click detection
     scroll_button_area: Option<Rect>,
-    // Cached total visual line count (updated in view)
-    total_visual_lines: usize,
-    // Wrap height cache with prefix sum
-    wrap_cache: WrapCache,
-    // Reusable buffer for all lines (avoids per-frame allocation)
-    all_lines_buf: Vec<Arc<Line<'static>>>,
+    // Wrap info cache with prefix sum and boundaries
+    wrap_info: WrapInfo,
     // Copy button overlays for visible code blocks
     code_block_overlay_manager: CodeBlockOverlayManager,
     // Context menu for message actions (right-click)
@@ -207,29 +177,21 @@ impl Default for ChatView {
             tick_frame: 0,
             md_renderer: StreamingMarkdownRenderer::new(),
 
-            active_tools: std::collections::HashMap::new(),
             expand_all: false,
-            banner: Some(crate::components::BannerData::default()),
             queued_message: None,
-            mascot_animator: MascotAnimator::default(),
             last_visible_height: 0,
             msg_cache: Vec::new(),
-            banner_cache: Vec::new(),
-            banner_dirty: true,
-            msg_lines: Vec::new(),
+            flat_lines: Vec::new(),
+            all_lines: Vec::new(),
+            last_render_width: 0,
             msg_cache_dirty: true,
-            viewport_lines: Vec::new(),
-            last_viewport: (0, 0),
-            viewport_first_row_offset: 0,
             selection: None,
             is_selecting: false,
             last_click_time: None,
             last_click_pos: None,
             current_area: None,
             scroll_button_area: None,
-            total_visual_lines: 0,
-            wrap_cache: WrapCache::new(),
-            all_lines_buf: Vec::new(),
+            wrap_info: WrapInfo::new(),
             code_block_overlay_manager: CodeBlockOverlayManager::new(),
             context_menu: None,
         }
@@ -249,40 +211,39 @@ impl ChatView {
     /// Invalidate cache for a specific message by index.
     fn invalidate_msg_cache(&mut self, idx: usize) {
         if idx < self.msg_cache.len() {
-            self.msg_cache[idx] = None;
+            let width = self.current_area.map_or(80, |a| a.width as usize);
+            self.msg_cache[idx] = render_message(&self.messages[idx], width);
             self.msg_cache_dirty = true;
         }
     }
 
     /// Add a new empty cache entry for a new message.
     fn push_new_msg_cache(&mut self) {
-        self.msg_cache.push(None);
-        self.msg_cache_dirty = true;
-    }
-
-    /// Invalidate all message caches.
-    fn invalidate_all_caches(&mut self) {
-        for cache in &mut self.msg_cache {
-            *cache = None;
-        }
-        self.msg_lines.clear();
+        let width = self.current_area.map_or(80, |a| a.width as usize);
+        let idx = self.messages.len() - 1;
+        self.msg_cache
+            .push(render_message(&self.messages[idx], width));
         self.msg_cache_dirty = true;
     }
 
     /// Clear all caches and messages.
     fn clear_all_caches(&mut self) {
         self.msg_cache.clear();
-        self.msg_lines.clear();
-        self.viewport_lines.clear();
-        self.banner_cache.clear();
-        self.last_viewport = (0, 0);
-        self.viewport_first_row_offset = 0;
-        self.msg_cache_dirty = true;
-        self.banner_dirty = true;
-        self.wrap_cache.clear();
-        self.all_lines_buf.clear();
+        self.flat_lines.clear();
+        self.all_lines.clear();
+        self.wrap_info.clear();
         self.selection = None;
         self.is_selecting = false;
+    }
+
+    /// Rebuild `msg_cache` for all messages (e.g. after width change or expand/collapse).
+    fn rebuild_msg_cache(&mut self) {
+        let width = self.current_area.map_or(80, |a| a.width as usize);
+        self.msg_cache.clear();
+        for msg in &self.messages {
+            self.msg_cache.push(render_message(msg, width));
+        }
+        self.msg_cache_dirty = true;
     }
 
     /// Start text selection at the given position.
@@ -315,22 +276,14 @@ impl ChatView {
         self.is_selecting = false;
     }
 
-    /// Set banner data to display at the top
-    pub fn set_banner(&mut self, banner: crate::components::BannerData) {
-        self.banner = Some(banner);
-        self.banner_dirty = true;
-    }
-
     /// Set queued message to display during streaming
     pub fn set_queued_message(&mut self, blocks: Vec<ContentBlock>) {
         self.queued_message = Some(blocks);
-        self.msg_cache_dirty = true;
     }
 
     /// Clear the queued message
     pub fn clear_queued_message(&mut self) {
         self.queued_message = None;
-        self.msg_cache_dirty = true;
     }
 
     pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
@@ -362,8 +315,9 @@ impl ChatView {
         // Flush any pending streaming content before starting tool
         self.flush_streaming();
 
-        self.active_tools
-            .insert(tool_id.clone(), (tool_name.clone(), ToolStatus::Running));
+        let parsed_args = arguments
+            .as_deref()
+            .and_then(|a| serde_json::from_str(a).ok());
         self.messages.push(HistoryMessage::Tool {
             tool_name,
             tool_id,
@@ -372,6 +326,7 @@ impl ChatView {
             error: None,
             folded: !self.expand_all,
             arguments,
+            parsed_args,
             elapsed_ms: None,
             tokens: None,
             progress: None,
@@ -382,7 +337,7 @@ impl ChatView {
 
     pub fn complete_tool(
         &mut self,
-        tool_id: String,
+        tool_id: &str,
         output: String,
         elapsed_ms: u64,
         content_blocks: Vec<ToolOutputBlock>,
@@ -398,7 +353,7 @@ impl ChatView {
                 ..
             } = msg
             {
-                if id == &tool_id {
+                if id == tool_id {
                     *status = ToolStatus::Completed;
                     *out = Some(output);
                     *elapsed = Some(elapsed_ms);
@@ -408,14 +363,9 @@ impl ChatView {
                 }
             }
         }
-        // Update active tools tracking
-        if let Some((name, _)) = self.active_tools.remove(&tool_id) {
-            self.active_tools
-                .insert(tool_id, (name, ToolStatus::Completed));
-        }
     }
 
-    pub fn fail_tool(&mut self, tool_id: String, error: String, elapsed_ms: u64) {
+    pub fn fail_tool(&mut self, tool_id: &str, error: String, elapsed_ms: u64) {
         // Update the tool message in history and invalidate cache
         for (i, msg) in self.messages.iter_mut().enumerate().rev() {
             if let HistoryMessage::Tool {
@@ -426,7 +376,7 @@ impl ChatView {
                 ..
             } = msg
             {
-                if id == &tool_id {
+                if id == tool_id {
                     *status = ToolStatus::Failed;
                     *err = Some(error);
                     *elapsed = Some(elapsed_ms);
@@ -434,11 +384,6 @@ impl ChatView {
                     break;
                 }
             }
-        }
-        // Update active tools tracking
-        if let Some((name, _)) = self.active_tools.remove(&tool_id) {
-            self.active_tools
-                .insert(tool_id, (name, ToolStatus::Failed));
         }
     }
 
@@ -500,8 +445,6 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
-        // Streaming content affects rendered output
-        self.msg_cache_dirty = true;
     }
 
     /// Cancel streaming - flush partial content and mark running tools as cancelled
@@ -512,23 +455,23 @@ impl ChatView {
         self.streaming_thinking.clear();
         self.md_renderer = StreamingMarkdownRenderer::new();
         self.is_streaming = false;
-        // Mark any running tools as cancelled and invalidate their caches
-        let mut indices_to_invalidate = Vec::new();
-        for (tool_id, (_, status)) in &mut self.active_tools {
-            if *status == ToolStatus::Running {
-                *status = ToolStatus::Cancelled;
-                for (i, msg) in self.messages.iter().enumerate().rev() {
-                    if let HistoryMessage::Tool { tool_id: id, .. } = msg {
-                        if id == tool_id {
-                            indices_to_invalidate.push(i);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        // Update message statuses and invalidate caches
-        for idx in indices_to_invalidate {
+
+        // Mark any running tools as cancelled and invalidate their caches.
+        // Collect indices first (immutable borrow), then mutate.
+        let running_indices: Vec<usize> = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, msg)| match msg {
+                HistoryMessage::Tool {
+                    status: ToolStatus::Running,
+                    ..
+                } => Some(i),
+                _ => None,
+            })
+            .collect();
+
+        for idx in running_indices {
             if let Some(HistoryMessage::Tool { status, .. }) = self.messages.get_mut(idx) {
                 *status = ToolStatus::Cancelled;
             }
@@ -548,21 +491,6 @@ impl ChatView {
         // Note: streaming content is rendered separately, don't mark history cache dirty
     }
 
-    /// Check if banner is (or will be) visible in the current viewport.
-    fn banner_in_viewport(&self) -> bool {
-        if self.banner.is_none() {
-            return false;
-        }
-        if self.banner_cache.is_empty() {
-            return true; // need at least one build
-        }
-        let viewport_top = self
-            .total_visual_lines
-            .saturating_sub(self.last_visible_height)
-            .saturating_sub(self.scroll_offset);
-        viewport_top < self.banner_cache.len()
-    }
-
     /// Tick handler for animation. Returns true if visual state changed and needs redraw.
     pub fn tick(&mut self) -> bool {
         let mut needs_redraw = false;
@@ -575,13 +503,6 @@ impl ChatView {
             if old_spinner_idx != new_spinner_idx {
                 needs_redraw = true;
             }
-        }
-
-        // Update mascot blink animation
-        let mascot_changed = self.mascot_animator.tick();
-        if mascot_changed && self.banner_in_viewport() {
-            self.banner_dirty = true;
-            needs_redraw = true;
         }
 
         needs_redraw
@@ -603,7 +524,8 @@ impl ChatView {
         // scroll_offset is now visual lines from bottom
         // To scroll to top, we need to set offset to total_visual_lines - visible_height
         let visible = self.last_visible_height.max(1);
-        self.scroll_offset = self.total_visual_lines.saturating_sub(visible);
+        let total_visual = self.wrap_info.total_lines();
+        self.scroll_offset = total_visual.saturating_sub(visible);
     }
 
     pub fn toggle_last_thinking(&mut self) {
@@ -625,11 +547,20 @@ impl ChatView {
         self.scroll_offset > 0
     }
 
+    /// Calculate the global visual line index at the top of the viewport.
+    fn visual_scroll_top(&self) -> usize {
+        self.wrap_info
+            .total_lines()
+            .saturating_sub(self.last_visible_height)
+            .saturating_sub(self.scroll_offset)
+    }
+
     /// Get scroll progress for browse mode (`current_line`, `total_lines`)
     /// Returns the 1-based current visible start position and total lines
     /// Note: now uses visual lines (post-wrap) instead of logical lines
     pub fn get_scroll_progress(&self) -> (usize, usize) {
-        if self.total_visual_lines == 0 {
+        let total_visual = self.wrap_info.total_lines();
+        if total_visual == 0 {
             return (0, 0);
         }
 
@@ -638,489 +569,61 @@ impl ChatView {
         // scroll_offset > 0 means scrolled up by that many visual lines from bottom
         let start_visual_line = if self.scroll_offset == 0 {
             // At bottom: show the last visible_height lines
-            self.total_visual_lines
+            total_visual
                 .saturating_sub(self.last_visible_height.saturating_sub(1))
                 .max(1)
         } else {
             // Scrolled up: start_line is scroll_offset lines from bottom
-            self.total_visual_lines
-                .saturating_sub(self.scroll_offset)
-                .max(1)
+            total_visual.saturating_sub(self.scroll_offset).max(1)
         };
 
-        (
-            start_visual_line.min(self.total_visual_lines),
-            self.total_visual_lines,
-        )
+        (start_visual_line.min(total_visual), total_visual)
     }
 
-    pub fn toggle_expand_all(&mut self) {
-        self.expand_all = !self.expand_all;
-        // Update all messages to reflect expand_all state
+    /// Apply expand/collapse state to all messages and rebuild cache.
+    fn apply_expand_all(&mut self, expand: bool) {
+        self.expand_all = expand;
         for msg in &mut self.messages {
             match msg {
                 HistoryMessage::Assistant {
                     thinking_folded, ..
                 } => {
-                    *thinking_folded = !self.expand_all;
+                    *thinking_folded = !expand;
                 }
                 HistoryMessage::Tool { folded, .. } => {
-                    *folded = !self.expand_all;
+                    *folded = !expand;
                 }
                 _ => {}
             }
         }
-        self.invalidate_all_caches();
+        self.rebuild_msg_cache();
+    }
+
+    pub fn toggle_expand_all(&mut self) {
+        self.apply_expand_all(!self.expand_all);
     }
 
     pub fn expand_all(&mut self) {
         if !self.expand_all {
-            self.expand_all = true;
-            for msg in &mut self.messages {
-                match msg {
-                    HistoryMessage::Assistant {
-                        thinking_folded, ..
-                    } => {
-                        *thinking_folded = false;
-                    }
-                    HistoryMessage::Tool { folded, .. } => {
-                        *folded = false;
-                    }
-                    _ => {}
-                }
-            }
-            self.invalidate_all_caches();
+            self.apply_expand_all(true);
         }
     }
 
     pub fn collapse_all(&mut self) {
         if self.expand_all {
-            self.expand_all = false;
-            for msg in &mut self.messages {
-                match msg {
-                    HistoryMessage::Assistant {
-                        thinking_folded, ..
-                    } => {
-                        *thinking_folded = true;
-                    }
-                    HistoryMessage::Tool { folded, .. } => {
-                        *folded = true;
-                    }
-                    _ => {}
-                }
-            }
-            self.invalidate_all_caches();
+            self.apply_expand_all(false);
         }
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
-        let mut lines = Vec::new();
-
-        match msg {
-            HistoryMessage::User(content_blocks) => {
-                let user_bg = colors::user_msg_bg();
-                let mut line_idx = 0;
-                for block in content_blocks {
-                    match block {
-                        ContentBlock::Text { text } => {
-                            for line in text.lines() {
-                                let prefix = if line_idx == 0 {
-                                    chars::INPUT_PROMPT
-                                } else {
-                                    chars::INPUT_PROMPT_MULTI
-                                };
-                                lines.push(Arc::new(Line::from(vec![
-                                    Span::styled(
-                                        prefix,
-                                        Style::default()
-                                            .fg(colors::accent_user())
-                                            .bg(user_bg)
-                                            .add_modifier(Modifier::BOLD),
-                                    ),
-                                    Span::styled(
-                                        preprocess(line),
-                                        Style::default().fg(colors::text_primary()).bg(user_bg),
-                                    ),
-                                ])));
-                                line_idx += 1;
-                            }
-                        }
-                        ContentBlock::ImageUrl { .. } => {
-                            let prefix = if line_idx == 0 {
-                                chars::INPUT_PROMPT
-                            } else {
-                                chars::INPUT_PROMPT_MULTI
-                            };
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    prefix,
-                                    Style::default()
-                                        .fg(colors::accent_user())
-                                        .bg(user_bg)
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                                Span::styled(
-                                    "[Image]",
-                                    Style::default().fg(colors::text_secondary()).bg(user_bg),
-                                ),
-                            ])));
-                            line_idx += 1;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            HistoryMessage::Assistant {
-                content,
-                thinking,
-                thinking_folded,
-                thinking_elapsed_ms,
-            } => {
-                // Render thinking summary (folded) or detail (expanded)
-                let thinking_rendered = thinking.as_ref().is_some_and(|t| {
-                    Self::render_thinking_lines(
-                        &mut lines,
-                        t,
-                        *thinking_folded,
-                        *thinking_elapsed_ms,
-                    )
-                });
-
-                // Add separator between thinking and content if both exist
-                if thinking_rendered && !content.is_empty() {
-                    lines.push(Arc::new(Line::from("")));
-                }
-
-                // Render content with markdown (no indicator)
-                // Note: no empty line here, thinking already adds one if present
-                if !content.is_empty() {
-                    let mut md_renderer = StreamingMarkdownRenderer::new();
-                    md_renderer.set_content(content.clone());
-                    let md_lines = md_renderer.lines();
-
-                    for line in md_lines {
-                        lines.push(Arc::new(line.clone()));
-                    }
-                }
-            }
-            HistoryMessage::Tool {
-                tool_name,
-                tool_id: _,
-                status,
-                output,
-                error,
-                folded,
-                arguments,
-                elapsed_ms,
-                ref tokens,
-                ref progress,
-                content_blocks,
-            } => {
-                let color = match status {
-                    ToolStatus::Running => colors::accent_warning(),
-                    ToolStatus::Completed => colors::accent_success(),
-                    ToolStatus::Failed => colors::accent_error(),
-                    ToolStatus::Cancelled => colors::text_secondary(),
-                };
-                let icon = tool_icon(tool_name);
-
-                // Build header with execution time (only show if >= 1s)
-                let time_str = elapsed_ms
-                    .filter(|ms| *ms >= 1000)
-                    .map(|ms| format!(" {:.1}s", ms as f64 / 1000.0))
-                    .unwrap_or_default();
-
-                // Peek args in folded mode (max 150 chars, compact whitespace)
-                let peek_args = if *folded {
-                    arguments.as_ref().and_then(|args| {
-                        let compact = sanitize_single_line(args);
-                        if compact.is_empty() {
-                            None
-                        } else {
-                            let peek = truncate_by_chars(&compact, 150);
-                            Some(peek)
-                        }
-                    })
-                } else {
-                    None
-                };
-
-                // Build header line with tool name and target (e.g. "Read src/main.rs")
-                let tool_name_display = to_camel_case(tool_name);
-                let target = extract_tool_target(tool_name, arguments.as_deref());
-
-                // Tool name with status color
-                let tool_part = format!("{icon}{tool_name_display}{time_str}");
-                let mut header_spans = vec![Span::styled(
-                    tool_part,
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )];
-
-                // Target/args with text_primary color (no bold)
-                if let Some(t) = target {
-                    header_spans.push(Span::styled(
-                        format!(" {t}"),
-                        Style::default().fg(colors::text_primary()),
-                    ));
-                } else if let Some(peek) = peek_args {
-                    // Fallback to peek_args if we couldn't extract a target
-                    header_spans.push(Span::styled(
-                        format!(" {peek}"),
-                        Style::default().fg(colors::text_primary()),
-                    ));
-                }
-
-                // For bash commands, add timeout/async info with text_secondary style
-                if tool_name == SHELL_TOOL_NAME {
-                    if let Some(ref args) = arguments {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
-                            let timeout_secs = value["timeout"].as_u64();
-                            let background = value["background"].as_bool().unwrap_or(false);
-
-                            // Show async badge when background mode is enabled
-                            if background {
-                                header_spans.push(Span::styled(
-                                    " async".to_string(),
-                                    Style::default().fg(colors::text_secondary()),
-                                ));
-                            }
-
-                            // Show timeout if explicitly set (or non-default for sync mode)
-                            if let Some(t) = timeout_secs {
-                                if background || t != 60 {
-                                    header_spans.push(Span::styled(
-                                        format!(" timeout {t}s"),
-                                        Style::default().fg(colors::text_secondary()),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // For grep, show output mode with text_secondary style
-                if tool_name == GREP_TOOL_NAME {
-                    if let Some(ref args) = arguments {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(args) {
-                            let mode = value["output_mode"]
-                                .as_str()
-                                .unwrap_or("files_with_matches");
-                            header_spans.push(Span::styled(
-                                format!(" {mode}"),
-                                Style::default().fg(colors::text_secondary()),
-                            ));
-                        }
-                    }
-                }
-
-                lines.push(Arc::new(Line::from(header_spans)));
-
-                // Output peek in folded mode (max 50 chars, indented)
-                if *folded {
-                    // Show progress for running tools
-                    if *status == ToolStatus::Running {
-                        if let Some(ref prog) = progress {
-                            let prog_text = sanitize_single_line(prog);
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                                Span::styled(
-                                    prog_text,
-                                    Style::default().fg(colors::text_secondary()),
-                                ),
-                            ])));
-                        }
-                    }
-
-                    // Show tokens if available
-                    if let Some(total) = tokens {
-                        let token_text =
-                            format!(" ⎿ {} tokens", tokens::format_actual_tokens(*total));
-                        lines.push(Arc::new(Line::from(vec![Span::styled(
-                            token_text,
-                            Style::default().fg(colors::text_secondary()),
-                        )])));
-                    }
-
-                    // Show output peek in folded mode (max 2 lines based on width)
-                    if let Some(out) = error.as_ref().or(output.as_ref()) {
-                        let trimmed = out.trim();
-                        if !trimmed.is_empty() {
-                            // Compact whitespace first, then truncate to 2 lines width
-                            let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
-                            // Total width for 2 lines, minus the " ⎿ " prefix
-                            let max_width = width * 2 - 3;
-                            let peek = truncate_by_width(&compact, max_width, "...");
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                                Span::styled(peek, Style::default().fg(colors::text_secondary())),
-                            ])));
-                        }
-                    }
-                }
-
-                if !*folded {
-                    // Show tool arguments if available
-                    if let Some(args) = arguments {
-                        if !args.is_empty() {
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    chars::MSG_INDENT_GUIDE,
-                                    Style::default().fg(colors::text_secondary()),
-                                ),
-                                Span::styled(
-                                    "Arguments:",
-                                    Style::default()
-                                        .fg(colors::text_secondary())
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                            ])));
-                            for line in args.lines() {
-                                lines.push(Arc::new(Line::from(vec![
-                                    Span::styled(
-                                        chars::MSG_INDENT2_GUIDE,
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(
-                                        preprocess(line),
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                ])));
-                            }
-                        }
-                    }
-
-                    if let Some(err) = error {
-                        for line in err.lines() {
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    chars::MSG_INDENT_GUIDE,
-                                    Style::default().fg(colors::accent_error()),
-                                ),
-                                Span::styled(
-                                    preprocess(line),
-                                    Style::default().fg(colors::accent_error()),
-                                ),
-                            ])));
-                        }
-                    } else if let Some(out) = output {
-                        lines.push(Arc::new(Line::from(vec![
-                            Span::styled(
-                                chars::MSG_INDENT_GUIDE,
-                                Style::default().fg(colors::text_secondary()),
-                            ),
-                            Span::styled(
-                                "Output:",
-                                Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        ])));
-                        for line in out.lines() {
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    chars::MSG_INDENT_GUIDE,
-                                    Style::default().fg(colors::accent_system()),
-                                ),
-                                Span::styled(
-                                    preprocess(line),
-                                    Style::default().fg(colors::text_primary()),
-                                ),
-                            ])));
-                        }
-                    } else if *status == ToolStatus::Running {
-                        let running_text = progress.as_ref().map_or_else(
-                            || "Running...".to_string(),
-                            |p| format!("Running: {}", sanitize_single_line(p)),
-                        );
-                        lines.push(Arc::new(Line::from(vec![
-                            Span::styled(
-                                chars::MSG_INDENT_GUIDE,
-                                Style::default().fg(colors::text_secondary()),
-                            ),
-                            Span::styled(
-                                running_text,
-                                Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::ITALIC),
-                            ),
-                        ])));
-                    } else if *status == ToolStatus::Cancelled {
-                        lines.push(Arc::new(Line::from(vec![
-                            Span::styled(
-                                chars::MSG_INDENT_GUIDE,
-                                Style::default().fg(colors::text_secondary()),
-                            ),
-                            Span::styled(
-                                "Cancelled",
-                                Style::default()
-                                    .fg(colors::text_secondary())
-                                    .add_modifier(Modifier::ITALIC),
-                            ),
-                        ])));
-                    }
-
-                    // Show image details in unfolded mode
-                    for block in content_blocks {
-                        if let ToolOutputBlock::Image { url, mime_type, .. } = block {
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    chars::MSG_INDENT_GUIDE,
-                                    Style::default().fg(colors::text_secondary()),
-                                ),
-                                Span::styled(
-                                    "Image:",
-                                    Style::default()
-                                        .fg(colors::text_secondary())
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                            ])));
-                            let url_display = truncate_by_chars(url, 100);
-                            lines.push(Arc::new(Line::from(vec![
-                                Span::styled(
-                                    chars::MSG_INDENT2_GUIDE,
-                                    Style::default().fg(colors::text_secondary()),
-                                ),
-                                Span::styled(
-                                    url_display,
-                                    Style::default().fg(colors::text_primary()),
-                                ),
-                            ])));
-                            if let Some(mime) = mime_type {
-                                lines.push(Arc::new(Line::from(vec![
-                                    Span::styled(
-                                        chars::MSG_INDENT2_GUIDE,
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                    Span::styled(
-                                        format!("Type: {mime}"),
-                                        Style::default().fg(colors::text_secondary()),
-                                    ),
-                                ])));
-                            }
-                        }
-                    }
-                }
-            }
-            HistoryMessage::Error(error) => {
-                // Render error message with red color
-                for line in error.lines() {
-                    lines.push(Arc::new(Line::from(vec![Span::styled(
-                        preprocess(line),
-                        Style::default().fg(colors::accent_error()),
-                    )])));
-                }
-            }
-        }
-
-        lines
     }
 
     fn render_streaming(&mut self) -> Vec<Arc<Line<'static>>> {
         let mut lines = Vec::new();
 
         // Render thinking if present (collapsed by default, expanded in expand_all mode)
-        Self::render_thinking_lines(&mut lines, &self.streaming_thinking, !self.expand_all, None);
+        lines.extend(render_thinking_lines(
+            &self.streaming_thinking,
+            !self.expand_all,
+            None,
+        ));
 
         // Render content (no indicator, status shown in status bar)
         // Add separator between thinking and content
@@ -1133,249 +636,34 @@ impl ChatView {
             lines.push(Arc::new(line.clone()));
         }
 
+        // Trailing separator to leave breathing room before queued message / next content
         lines.push(Arc::new(Line::from("")));
         lines
-    }
-
-    /// Extract text content from content blocks.
-    fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
-        blocks
-            .iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text { text } => {
-                    if text.is_empty() {
-                        None
-                    } else {
-                        Some(text.as_str())
-                    }
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Render queued message to be displayed at the bottom during streaming
-    fn render_queued_message(blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
-        const MAX_LINES: usize = 3;
-        let mut lines = Vec::new();
-
-        let text_content = Self::extract_text_from_blocks(blocks);
-
-        // Render header with indicator
-        lines.push(Arc::new(Line::from(vec![Span::styled(
-            "󰔟 Queued (will send when streaming ends)",
-            Style::default()
-                .fg(colors::text_secondary())
-                .add_modifier(Modifier::ITALIC),
-        )])));
-
-        // Render content with dimmed style (max 3 lines, show ... if more)
-        for (i, line) in text_content.lines().take(MAX_LINES + 1).enumerate() {
-            if i >= MAX_LINES {
-                lines.push(Arc::new(Line::from(vec![
-                    Span::styled(
-                        chars::MSG_INDENT_GUIDE,
-                        Style::default().fg(colors::text_secondary()),
-                    ),
-                    Span::styled("...", Style::default().fg(colors::text_secondary())),
-                ])));
-                break;
-            }
-            lines.push(Arc::new(Line::from(vec![
-                Span::styled(
-                    chars::MSG_INDENT_GUIDE,
-                    Style::default().fg(colors::text_secondary()),
-                ),
-                Span::styled(
-                    preprocess(line),
-                    Style::default().fg(colors::text_secondary()),
-                ),
-            ])));
-        }
-
-        lines
-    }
-
-    /// Render thinking content with optional elapsed time
-    ///
-    /// Returns true if thinking was rendered (i.e., thinking was non-empty)
-    #[allow(clippy::cast_precision_loss)]
-    fn render_thinking_lines(
-        lines: &mut Vec<Arc<Line<'static>>>,
-        thinking: &str,
-        is_folded: bool,
-        elapsed_ms: Option<u64>,
-    ) -> bool {
-        if thinking.is_empty() {
-            return false;
-        }
-
-        let tokens = tokens::estimate_tokens(thinking);
-        let elapsed_str = elapsed_ms
-            .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
-            .unwrap_or_default();
-
-        lines.push(Arc::new(Line::from(vec![Span::styled(
-            format!(" Thinking ({tokens} tokens){elapsed_str}"),
-            Style::default()
-                .fg(colors::text_secondary())
-                .add_modifier(Modifier::ITALIC),
-        )])));
-
-        if !is_folded {
-            for line in thinking.lines() {
-                lines.push(Arc::new(Line::from(vec![
-                    Span::styled(
-                        chars::MSG_INDENT_GUIDE,
-                        Style::default().fg(colors::text_secondary()),
-                    ),
-                    Span::styled(
-                        preprocess(line),
-                        Style::default().fg(colors::text_secondary()),
-                    ),
-                ])));
-            }
-        }
-
-        true
     }
 }
 
 impl ChatView {
-    const MASCOT_COL_WIDTH: usize = 8;
     const MOUSE_SCROLL_LINES: usize = 2;
 
-    /// Rebuild banner cache (separate because mascot animates).
-    /// Returns `true` if the cache was actually rebuilt.
-    fn rebuild_banner_cache(&mut self) -> bool {
-        if !self.banner_dirty {
-            return false;
-        }
-        self.banner_cache.clear();
-
-        if let Some(ref banner) = self.banner {
-            let mascot_lines: Vec<&str> = self.mascot_animator.current_lines();
-            let info_lines = banner.info_lines();
-            let max_rows = mascot_lines.len().max(info_lines.len());
-
-            for i in 0..max_rows {
-                let mascot_part = mascot_lines.get(i).unwrap_or(&"");
-                let mascot_padded = format!("{mascot_part:width$}", width = Self::MASCOT_COL_WIDTH);
-                let mascot_span = Span::styled(mascot_padded, colors::accent_system());
-
-                // info_lines[i] is already a Line with styled spans
-                // Clone spans to create 'static lifetime line for cache
-                let mut combined_spans: Vec<Span<'static>> = vec![mascot_span];
-                if let Some(info_line) = info_lines.get(i) {
-                    for span in &info_line.spans {
-                        let cloned_span = Span::styled(span.content.to_string(), span.style);
-                        combined_spans.push(cloned_span);
-                    }
-                }
-
-                self.banner_cache.push(Arc::new(Line::from(combined_spans)));
-            }
-            self.banner_cache.push(Arc::new(Line::from("")));
-        }
-        self.banner_dirty = false;
-        true
-    }
-
-    /// Rebuild `msg_lines` from `msg_cache` if dirty.
+    /// Rebuild `flat_lines` from `msg_cache` if dirty.
     ///
-    /// Only re-renders messages starting from the first dirty one;
-    /// earlier cached messages are reused.
+    /// Flattens all `msg_cache` entries + separators into a single Vec.
     /// Returns `true` if the cache was actually rebuilt.
-    fn rebuild_msg_cache(&mut self) -> bool {
+    fn rebuild_flat_lines(&mut self) -> bool {
         if !self.msg_cache_dirty {
             return false;
         }
-
-        let width = self.current_area.map_or(80, |a| a.width as usize);
-        let first_dirty = self.msg_cache.iter().position(|c| c.is_none()).unwrap_or(0);
-
-        if first_dirty == 0 || self.msg_lines.is_empty() {
-            self.msg_lines.clear();
-        } else {
-            let mut truncate_to = 0;
-            for i in 0..first_dirty {
-                truncate_to += self.msg_cache[i].as_ref().map_or(0, |c| c.len()) + 1;
-                // +sep
-            }
-            self.msg_lines.truncate(truncate_to);
+        self.flat_lines.clear();
+        for lines in &self.msg_cache {
+            self.flat_lines.extend(lines.iter().cloned());
+            self.flat_lines.push(Arc::new(Line::from("")));
         }
-
-        for i in first_dirty..self.messages.len() {
-            let rendered = match &self.msg_cache[i] {
-                Some(lines) => lines,
-                None => {
-                    let lines = Self::render_message(&self.messages[i], width);
-                    self.msg_cache[i] = Some(lines);
-                    self.msg_cache[i].as_ref().unwrap()
-                }
-            };
-            self.msg_lines.extend(rendered.iter().cloned());
-            self.msg_lines.push(Arc::new(Line::from("")));
-        }
-
         self.msg_cache_dirty = false;
         true
     }
 
-    /// Convert display column to character index within a visual row.
-    /// `row_start` and `row_end` are byte indices.
-    /// Returns character index (0-based).
-    fn display_col_to_char_idx(
-        text: &str,
-        row_start_byte: usize,
-        row_end_byte: usize,
-        target_col: usize,
-    ) -> usize {
-        let mut display_col = 0;
-        let mut char_idx = 0;
-
-        // Convert byte indices to char positions (handle cases where byte indices
-        // might not be at char boundaries by finding the nearest valid positions)
-        let safe_start_byte = row_start_byte.min(text.len());
-        let safe_end_byte = row_end_byte.min(text.len());
-
-        // Use byte-based slicing carefully to avoid panics
-        let start_char_idx = text.get(..safe_start_byte).map_or(0, |s| s.chars().count());
-        let end_char_idx = text
-            .get(..safe_end_byte)
-            .map_or_else(|| text.chars().count(), |s| s.chars().count());
-
-        for (i, ch) in text.chars().enumerate() {
-            if i < start_char_idx {
-                continue;
-            }
-            if i >= end_char_idx {
-                break;
-            }
-
-            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-
-            // Check if target column is within this character's display range
-            if display_col + ch_width > target_col {
-                return i;
-            }
-
-            display_col += ch_width;
-            char_idx = i + 1;
-        }
-
-        // Target column is past all characters, return end
-        char_idx.min(end_char_idx)
-    }
     /// Convert screen coordinates to line/column in visible content.
-    /// Uses textwrap to accurately map visual coordinates to character positions.
-    fn screen_to_position(
-        &self,
-        mouse_x: u16,
-        mouse_y: u16,
-        width: usize,
-    ) -> Option<(usize, usize)> {
+    fn screen_to_position(&self, mouse_x: u16, mouse_y: u16) -> Option<(usize, usize)> {
         let area = self.current_area?;
 
         // Check if click is within our area
@@ -1390,47 +678,26 @@ impl ChatView {
         let terminal_col = (mouse_x - area.x) as usize;
         let terminal_row = (mouse_y - area.y) as usize;
 
-        // Calculate which logical line and visual row within that line
-        let viewport_start = self.last_viewport.0;
-        // Adjust terminal_row by the first line's offset (since first line may be partially scrolled)
-        let adjusted_terminal_row = terminal_row + self.viewport_first_row_offset;
-        let mut current_row = 0;
+        let visual_scroll = self.visual_scroll_top();
+        let target_visual_row = visual_scroll + terminal_row;
 
-        for (i, line) in self.viewport_lines.iter().enumerate() {
-            let global_line = viewport_start + i;
-            let wrapped_height = self.wrap_cache.height(global_line);
+        let (logical_line, row_in_line) = self.wrap_info.visual_to_logical(target_visual_row);
+        let line = self.all_lines.get(logical_line)?;
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let boundaries = self.wrap_info.get_boundaries(logical_line)?;
 
-            if current_row + wrapped_height > adjusted_terminal_row {
-                let line_idx = global_line;
-                let visual_row_in_line = adjusted_terminal_row - current_row;
+        let start_byte = boundaries.get(row_in_line).copied().unwrap_or(0);
+        let end_byte = boundaries
+            .get(row_in_line + 1)
+            .copied()
+            .unwrap_or(text.len());
 
-                let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                let boundaries = calc_wrap_boundaries(&line_text, width);
-                let row_start_byte = boundaries.get(visual_row_in_line).copied().unwrap_or(0);
-                let row_end_byte = boundaries
-                    .get(visual_row_in_line + 1)
-                    .copied()
-                    .unwrap_or(line_text.len());
-
-                let char_col = Self::display_col_to_char_idx(
-                    &line_text,
-                    row_start_byte,
-                    row_end_byte,
-                    terminal_col,
-                );
-
-                return Some((line_idx, char_col));
-            }
-
-            current_row += wrapped_height;
-        }
-
-        // Click is past all visible lines - use the last line
-        let last_idx = viewport_start + self.viewport_lines.len().saturating_sub(1);
-        self.viewport_lines.last().map(|line| {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            (last_idx, text.chars().count())
-        })
+        // display_col_to_char_idx returns a segment-local char index.
+        // Add the prefix char count to get the global line index.
+        let prefix_chars = text[..start_byte].chars().count();
+        let segment_col = display_col_to_char_idx(&text, start_byte, end_byte, terminal_col);
+        let char_col = prefix_chars + segment_col;
+        Some((logical_line, char_col))
     }
 
     /// Extract selected text from all lines.
@@ -1446,7 +713,7 @@ impl ChatView {
             return None;
         }
 
-        let all_lines = &self.all_lines_buf;
+        let all_lines = &self.all_lines;
         tracing::debug!("get_selected_text: all_lines len={}", all_lines.len());
         let mut result = String::new();
 
@@ -1456,19 +723,17 @@ impl ChatView {
             }
 
             let line_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let char_count = self.wrap_info.char_count(line_idx);
 
             if line_idx == norm.start_line && line_idx == norm.end_line {
-                let char_count = line_text.chars().count();
                 let start = norm.start_col.min(char_count);
                 let end = norm.end_col.min(char_count);
                 result.push_str(&substring_by_chars(&line_text, start, end));
             } else if line_idx == norm.start_line {
-                let char_count = line_text.chars().count();
                 let start = norm.start_col.min(char_count);
                 result.push_str(&substring_by_chars(&line_text, start, char_count));
                 result.push('\n');
             } else if line_idx == norm.end_line {
-                let char_count = line_text.chars().count();
                 let end = norm.end_col.min(char_count);
                 result.push_str(&substring_by_chars(&line_text, 0, end));
             } else {
@@ -1522,7 +787,7 @@ impl ChatView {
 
     /// Select a word at the given position (double-click).
     fn select_word_at(&mut self, line: usize, col: usize) {
-        let all_lines = &self.all_lines_buf;
+        let all_lines = &self.all_lines;
         if line >= all_lines.len() {
             return;
         }
@@ -1538,34 +803,21 @@ impl ChatView {
             return;
         }
 
-        // Convert character position to char indices for iteration
-        let char_indices: Vec<(usize, char)> = line_text.char_indices().collect();
-
-        // Map character column to byte position
-        let byte_pos = char_idx_to_byte_idx(&line_text, col);
-
-        // Find start of word (in characters)
-        let mut start_char_idx = col;
-        for (idx, (byte_idx, c)) in char_indices.iter().enumerate() {
-            if *byte_idx > byte_pos {
-                break;
-            }
-            if !c.is_alphanumeric() && *c != '_' {
-                start_char_idx = idx + 1;
+        // Find start of word: scan backwards from col to first non-word char
+        let mut start_char_idx = 0;
+        for (i, c) in line_text.chars().enumerate().take(col) {
+            if !(c.is_alphanumeric() || c == '_') {
+                start_char_idx = i + 1;
             }
         }
 
-        // Find end of word (in characters)
-        let mut end_char_idx = col;
-        for (idx, (byte_idx, c)) in char_indices.iter().enumerate() {
-            if *byte_idx < byte_pos {
-                continue;
-            }
-            if !c.is_alphanumeric() && *c != '_' {
-                end_char_idx = idx;
+        // Find end of word: scan forwards from col to first non-word char
+        let mut end_char_idx = char_count;
+        for (i, c) in line_text.chars().enumerate().skip(col) {
+            if !(c.is_alphanumeric() || c == '_') {
+                end_char_idx = i;
                 break;
             }
-            end_char_idx = idx + 1;
         }
 
         self.selection = Some(Selection {
@@ -1574,7 +826,6 @@ impl ChatView {
             end_line: line,
             end_col: end_char_idx,
         });
-        // Mark as selecting so copy will trigger on mouse up
         self.is_selecting = true;
     }
 
@@ -1665,12 +916,12 @@ impl ChatView {
         }
 
         // Get width from current area for coordinate conversion
-        let width = self.current_area.map_or(80, |a| a.width as usize);
+        let _width = self.current_area.map_or(80, |a| a.width as usize);
 
         match kind {
             MouseEventKind::Down(MouseButton::Right) => {
                 // Open context menu for message at position
-                if let Some(msg_idx) = self.screen_to_message_index(x, y, width) {
+                if let Some(msg_idx) = self.screen_to_message_index(x, y) {
                     if let Some(area) = self.current_area {
                         self.context_menu = ContextMenu::new(x, y, msg_idx, area);
                     }
@@ -1678,10 +929,10 @@ impl ChatView {
                 MouseAction::None
             }
             MouseEventKind::Down(_) => {
-                if let Some((line, col)) = self.screen_to_position(x, y, width) {
+                if let Some((line, col)) = self.screen_to_position(x, y) {
                     if self.is_double_click(line, col) {
                         // Rebuild caches before selecting word
-                        self.rebuild_msg_cache();
+                        self.rebuild_flat_lines();
                         self.select_word_at(line, col);
                     } else {
                         self.start_selection(line, col);
@@ -1694,7 +945,7 @@ impl ChatView {
             }
             MouseEventKind::Drag(_) => {
                 if self.is_selecting {
-                    if let Some((line, col)) = self.screen_to_position(x, y, width) {
+                    if let Some((line, col)) = self.screen_to_position(x, y) {
                         self.update_selection(line, col);
                     }
                 }
@@ -1704,7 +955,7 @@ impl ChatView {
                 if self.is_selecting {
                     self.end_selection();
                     // Rebuild caches before copying to ensure we have all lines
-                    self.rebuild_msg_cache();
+                    self.rebuild_flat_lines();
                     // Auto-copy selection to clipboard when mouse is released
                     match self.copy_selection() {
                         Some(text) => MouseAction::Copied(text),
@@ -1727,7 +978,7 @@ impl ChatView {
 
         match action {
             ContextMenuAction::CopyContent => {
-                let content = Self::get_message_raw_content(msg);
+                let content = get_message_raw_content(msg);
                 if let Err(e) = crate::utils::clipboard::copy_text(&content) {
                     tracing::debug!("Failed to copy message content: {}", e);
                     MouseAction::None
@@ -1736,7 +987,7 @@ impl ChatView {
                 }
             }
             ContextMenuAction::CopyPrettyJson => {
-                let json = Self::get_message_pretty_json(msg);
+                let json = get_message_pretty_json(msg);
                 if let Err(e) = crate::utils::clipboard::copy_text(&json) {
                     tracing::debug!("Failed to copy message JSON: {}", e);
                     MouseAction::None
@@ -1748,7 +999,7 @@ impl ChatView {
     }
 
     /// Convert screen coordinates to message index
-    fn screen_to_message_index(&self, x: u16, y: u16, _width: usize) -> Option<usize> {
+    fn screen_to_message_index(&self, x: u16, y: u16) -> Option<usize> {
         let area = self.current_area?;
 
         // Check if click is within our area
@@ -1757,163 +1008,32 @@ impl ChatView {
         }
 
         let terminal_row = (y - area.y) as usize;
+        let visual_scroll = self.visual_scroll_top();
+        let target_visual_row = visual_scroll + terminal_row;
 
-        // Calculate which logical line is at this position
-        let viewport_start = self.last_viewport.0;
-        let adjusted_terminal_row = terminal_row + self.viewport_first_row_offset;
-        let mut current_row = 0;
-
-        for (i, _line) in self.viewport_lines.iter().enumerate() {
-            let global_line = viewport_start + i;
-            let wrapped_height = self.wrap_cache.height(global_line);
-
-            if current_row + wrapped_height > adjusted_terminal_row {
-                return self.line_to_message_index(global_line);
-            }
-
-            current_row += wrapped_height;
-        }
-
-        None
+        let (logical_line, _) = self.wrap_info.visual_to_logical(target_visual_row);
+        self.line_to_message_index(logical_line)
     }
 
-    /// Convert a global line index to message index
+    /// Convert a global line index to message index.
+    /// Every message in `msg_cache` has a trailing separator line, including the last one.
     fn line_to_message_index(&self, line_idx: usize) -> Option<usize> {
-        // Account for banner lines
-        let banner_len = self.banner_cache.len();
-        if line_idx < banner_len {
-            return None; // Clicked on banner
-        }
-
-        let mut current_line = banner_len;
+        let mut current_line = 0;
 
         for (msg_idx, cache) in self.msg_cache.iter().enumerate() {
-            let msg_lines = cache.as_ref()?.len();
-            // Add separator line between messages (except for last message)
-            let separator = usize::from(msg_idx < self.messages.len() - 1);
+            let end = current_line + cache.len() + 1; // +1 trailing separator
 
-            if line_idx >= current_line && line_idx < current_line + msg_lines + separator {
+            if line_idx >= current_line && line_idx < end {
                 return Some(msg_idx);
             }
 
-            current_line += msg_lines + separator;
+            current_line = end;
         }
 
         None
     }
 
     /// Extract raw text content from a `HistoryMessage`
-    fn get_message_raw_content(msg: &HistoryMessage) -> String {
-        match msg {
-            HistoryMessage::User(blocks) => Self::extract_text_from_blocks(blocks),
-            HistoryMessage::Assistant {
-                content, thinking, ..
-            } => {
-                let mut result = String::new();
-                if let Some(thinking) = thinking {
-                    result.push_str("<thinking>\n");
-                    result.push_str(thinking);
-                    result.push_str("\n</thinking>\n\n");
-                }
-                result.push_str(content);
-                result
-            }
-            HistoryMessage::Tool {
-                tool_name,
-                arguments,
-                output,
-                error,
-                ..
-            } => {
-                let mut result = format!("Tool: {tool_name}\n");
-                if let Some(args) = arguments {
-                    result.push_str("Arguments: ");
-                    result.push_str(args);
-                    result.push('\n');
-                }
-                if let Some(err) = error {
-                    result.push_str("Error: ");
-                    result.push_str(err);
-                } else if let Some(out) = output {
-                    result.push_str("Output: ");
-                    result.push_str(out);
-                }
-                result
-            }
-            HistoryMessage::Error(error) => error.clone(),
-        }
-    }
-
-    /// Convert a message to pretty JSON
-    fn get_message_pretty_json(msg: &HistoryMessage) -> String {
-        // Create a serializable representation
-        #[derive(serde::Serialize)]
-        struct SerializableMessage {
-            role: String,
-            content: Option<String>,
-            thinking: Option<String>,
-            tool_name: Option<String>,
-            tool_arguments: Option<String>,
-            tool_output: Option<String>,
-            tool_error: Option<String>,
-            error: Option<String>,
-        }
-
-        let serializable = match msg {
-            HistoryMessage::User(blocks) => SerializableMessage {
-                role: "user".to_string(),
-                content: Some(Self::extract_text_from_blocks(blocks)),
-                thinking: None,
-                tool_name: None,
-                tool_arguments: None,
-                tool_output: None,
-                tool_error: None,
-                error: None,
-            },
-            HistoryMessage::Assistant {
-                content, thinking, ..
-            } => SerializableMessage {
-                role: "assistant".to_string(),
-                content: Some(content.clone()),
-                thinking: thinking.clone(),
-                tool_name: None,
-                tool_arguments: None,
-                tool_output: None,
-                tool_error: None,
-                error: None,
-            },
-            HistoryMessage::Tool {
-                tool_name,
-                arguments,
-                output,
-                error,
-                ..
-            } => SerializableMessage {
-                role: "tool".to_string(),
-                content: None,
-                thinking: None,
-                tool_name: Some(tool_name.clone()),
-                tool_arguments: arguments.clone(),
-                tool_output: output.clone(),
-                tool_error: error.clone(),
-                error: None,
-            },
-            HistoryMessage::Error(error) => SerializableMessage {
-                role: "error".to_string(),
-                content: None,
-                thinking: None,
-                tool_name: None,
-                tool_arguments: None,
-                tool_output: None,
-                tool_error: None,
-                error: Some(error.clone()),
-            },
-        };
-
-        serde_json::to_string_pretty(&serializable)
-            .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize: {e}\"}}"))
-    }
-
     /// Draw scroll-to-bottom button at the bottom center
     fn draw_scroll_button(&mut self, frame: &mut Frame, area: Rect) {
         use tuirealm::ratatui::{
@@ -1963,17 +1083,6 @@ impl ChatView {
 }
 
 impl ChatView {
-    /// Get selection as optional tuple for `WrapParagraph` rendering.
-    fn get_selection_for_render(&self) -> Option<((usize, usize), (usize, usize))> {
-        self.selection.map(|s| {
-            let norm = s.normalized();
-            (
-                (norm.start_line, norm.start_col),
-                (norm.end_line, norm.end_col),
-            )
-        })
-    }
-
     /// Calculate and render copy buttons for code blocks
     fn render_code_block_buttons(&mut self, frame: &mut Frame, area: Rect, visual_scroll: usize) {
         self.code_block_overlay_manager.clear();
@@ -1987,7 +1096,7 @@ impl ChatView {
         let blocks = self.collect_code_blocks();
 
         for (logical_line, content) in blocks {
-            let visual_line = self.wrap_cache.logical_to_visual(logical_line);
+            let visual_line = self.wrap_info.logical_to_visual(logical_line);
 
             // Check visibility
             if visual_line < visual_scroll || visual_line >= visual_scroll + area.height as usize {
@@ -1996,7 +1105,7 @@ impl ChatView {
             let relative_line = visual_line - visual_scroll;
 
             let header_width = self
-                .all_lines_buf
+                .all_lines
                 .get(logical_line)
                 .map_or(0, line_display_width);
 
@@ -2012,26 +1121,21 @@ impl ChatView {
     fn collect_code_blocks(&self) -> Vec<(usize, String)> {
         let mut blocks = Vec::new();
 
-        // Pre-calculate message offsets to avoid O(n²) computation
+        // Pre-calculate message offsets to avoid O(n²) computation.
+        // Matches rebuild_flat_lines: every message has a trailing separator line.
         let mut msg_offsets: Vec<usize> = Vec::with_capacity(self.messages.len() + 1);
-        msg_offsets.push(self.banner_cache.len());
+        msg_offsets.push(0);
         for i in 0..self.messages.len() {
             let prev_offset = msg_offsets[i];
-            let cache_len = self
-                .msg_cache
-                .get(i)
-                .and_then(|c| c.as_ref())
-                .map_or(0, |c| c.len());
-            let separator = usize::from(i < self.messages.len() - 1);
-            msg_offsets.push(prev_offset + cache_len + separator);
+            let cache_len = self.msg_cache.get(i).map_or(0, |c| c.len());
+            msg_offsets.push(prev_offset + cache_len + 1); // +1 trailing separator
         }
 
         // Check streaming content (offset at messages.len())
         if !self.streaming_content.is_empty() {
             let offset = msg_offsets[self.messages.len()];
-            let separator = usize::from(!self.messages.is_empty());
             for block in self.md_renderer.code_blocks() {
-                blocks.push((offset + separator + block.start_line, block.content.clone()));
+                blocks.push((offset + block.start_line, block.content.clone()));
             }
         }
 
@@ -2039,11 +1143,10 @@ impl ChatView {
         for (i, msg) in self.messages.iter().enumerate() {
             if let HistoryMessage::Assistant { content, .. } = msg {
                 if !content.is_empty() {
-                    if let Some(cache) = &self.msg_cache[i] {
-                        let offset = msg_offsets[i];
-                        for (j, content) in scan_code_blocks(cache) {
-                            blocks.push((offset + j, content));
-                        }
+                    let cache = &self.msg_cache[i];
+                    let offset = msg_offsets[i];
+                    for (j, content) in scan_code_blocks(cache) {
+                        blocks.push((offset + j, content));
                     }
                 }
             }
@@ -2061,109 +1164,90 @@ impl Component for ChatView {
         self.current_area = Some(area);
         self.scroll_button_area = None;
 
-        let prev_total_lines = self.total_visual_lines;
+        // Detect width change and rebuild msg_cache if needed
+        if width != self.last_render_width {
+            self.last_render_width = width;
+            self.rebuild_msg_cache();
+        }
 
-        // Ensure banner and message caches are up-to-date.
-        // Skip banner rebuild only when it's both filled and scrolled out of view.
-        let banner_changed = if self.banner_in_viewport() {
-            self.rebuild_banner_cache()
+        // Snapshot prev total for scroll-stability when streaming while scrolled up
+        let prev_total_lines = self.wrap_info.total_lines();
+
+        // Check if historical messages changed BEFORE clearing the flag
+        let msg_changed = self.msg_cache_dirty;
+
+        // 1. Rebuild flat_lines if any historical message changed
+        if msg_changed {
+            self.rebuild_flat_lines();
+        }
+
+        // 2. Rebuild all_lines
+        //    - msg changed: flat_lines prefix may differ in content, rebuild from scratch
+        //    - only streaming changed: suffix-only update
+        if msg_changed {
+            self.all_lines.clear();
+            self.all_lines.extend(self.flat_lines.iter().cloned());
         } else {
-            false
-        };
-        let msg_changed = self.rebuild_msg_cache();
-        let history_changed = banner_changed || msg_changed;
-
+            let flat_len = self.flat_lines.len();
+            if self.all_lines.len() > flat_len {
+                self.all_lines.truncate(flat_len);
+            }
+            if self.all_lines.len() < flat_len {
+                self.all_lines
+                    .extend(self.flat_lines[self.all_lines.len()..].iter().cloned());
+            }
+        }
         let has_streaming = self.is_streaming
             || !self.streaming_content.is_empty()
             || !self.streaming_thinking.is_empty();
-        let suffix_changed = has_streaming || self.queued_message.is_some();
-
-        // Only rebuild all_lines_buf when content actually changed.
-        // Scroll without streaming → skip entirely (O(1)).
-        if history_changed || suffix_changed || self.all_lines_buf.is_empty() {
-            self.all_lines_buf.truncate(0);
-            self.all_lines_buf.extend(self.banner_cache.iter().cloned());
-            self.all_lines_buf.extend(self.msg_lines.iter().cloned());
-            if has_streaming {
-                let streaming_lines = self.render_streaming();
-                self.all_lines_buf.extend(streaming_lines);
-            }
-            if let Some(ref queued) = self.queued_message {
-                self.all_lines_buf
-                    .extend(Self::render_queued_message(queued));
-            }
+        if has_streaming {
+            let streaming_lines = self.render_streaming();
+            self.all_lines.extend(streaming_lines);
+        }
+        if let Some(ref queued) = self.queued_message {
+            self.all_lines.extend(render_queued_message(queued));
         }
 
-        // Prefix = banner + messages (both have stable line count; wrap heights unchanged).
-        let prefix_len = self.banner_cache.len() + self.msg_lines.len();
+        // 3. Rebuild wrap cache
+        //    - msg changed: full rebuild (prefix_len = 0)
+        //    - only streaming changed: reuse flat_lines as prefix
+        let prefix_len = if msg_changed {
+            0
+        } else {
+            self.flat_lines.len()
+        };
+        self.wrap_info.rebuild(&self.all_lines, width, prefix_len);
 
-        // Rebuild wrap cache: prefix reused, suffix recomputed.
-        self.wrap_cache
-            .rebuild(&self.all_lines_buf, width, prefix_len);
+        // 4. Scroll calculation
+        let total_visual = self.wrap_info.total_lines();
 
-        // Total visual lines - O(1)
-        self.total_visual_lines = self.wrap_cache.total_lines();
-
-        // If user has scrolled up, adjust scroll_offset to keep view stable
+        // If user has scrolled up, adjust scroll_offset to keep absolute view stable
+        // when streaming adds new visual lines below.
         if self.is_scrolled_up() && prev_total_lines > 0 {
-            let lines_delta = self.total_visual_lines as i64 - prev_total_lines as i64;
+            let lines_delta = total_visual as i64 - prev_total_lines as i64;
             self.scroll_offset = (self.scroll_offset as i64 + lines_delta).max(0) as usize;
         }
 
-        let max_scroll = self.total_visual_lines.saturating_sub(visible_height);
+        let max_scroll = total_visual.saturating_sub(visible_height);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
+        let visual_scroll = self.visual_scroll_top();
 
-        let visual_scroll = self
-            .total_visual_lines
-            .saturating_sub(visible_height)
-            .saturating_sub(self.scroll_offset);
-
-        // Find viewport start using prefix sum - O(log n)
-        let (viewport_start, first_row_offset) = self.wrap_cache.viewport_start(visual_scroll);
-        self.viewport_first_row_offset = first_row_offset;
-
-        // Collect visible lines
-        self.viewport_lines.clear();
-        let mut visible_rows_needed = visible_height;
-        for (i, line) in self.all_lines_buf.iter().enumerate().skip(viewport_start) {
-            if visible_rows_needed == 0 {
-                break;
-            }
-            let wrapped_height = self.wrap_cache.height(i);
-            self.viewport_lines.push((**line).clone());
-
-            let rows_in_this_line = if i == viewport_start {
-                wrapped_height.saturating_sub(self.viewport_first_row_offset)
-            } else {
-                wrapped_height
-            };
-            visible_rows_needed = visible_rows_needed.saturating_sub(rows_in_this_line);
-        }
-        self.last_viewport = (viewport_start, viewport_start + self.viewport_lines.len());
-
-        // Build visible text and local selection
-        let visible_text = Text::from(self.viewport_lines.clone());
-        let selection = self
-            .get_selection_for_render()
-            .and_then(|((sl, sc), (el, ec))| {
-                let v_end = viewport_start + self.viewport_lines.len();
-                if el < viewport_start || sl >= v_end || self.viewport_lines.is_empty() {
-                    return None;
-                }
-                let local_sl = sl.saturating_sub(viewport_start);
-                let local_el = (el - viewport_start).min(self.viewport_lines.len() - 1);
-                Some((
-                    (local_sl, if sl < viewport_start { 0 } else { sc }),
-                    (local_el, if el >= v_end { usize::MAX } else { ec }),
-                ))
-            });
+        // 5. Render: zero-copy borrow of all_lines + wrap_info
         let highlight_style = Style::default()
             .fg(colors::text_primary())
             .bg(colors::selected_bg());
 
-        let paragraph = WrapParagraph::new(visible_text)
-            .scroll((self.viewport_first_row_offset as u16, 0))
-            .selection(selection)
+        let global_sel = self.selection.map(|s| {
+            let norm = s.normalized();
+            (
+                (norm.start_line, norm.start_col),
+                (norm.end_line, norm.end_col),
+            )
+        });
+
+        let paragraph = WrapParagraph::new(&self.all_lines, &self.wrap_info)
+            .scroll_y(visual_scroll)
+            .selection(global_sel)
             .highlight_style(highlight_style);
 
         frame.render_widget(paragraph, area);
@@ -2191,6 +1275,11 @@ impl Component for ChatView {
                 Some(QueryResult::Owned(AttrValue::String(format!(
                     "{current}\x00{total}\x00{is_scrolled}"
                 ))))
+            }
+            Attribute::Custom(attr::IS_EMPTY) => {
+                let empty =
+                    self.messages.is_empty() && !self.is_streaming && self.queued_message.is_none();
+                Some(QueryResult::Owned(AttrValue::Flag(empty)))
             }
             _ => self
                 .props
@@ -2237,11 +1326,6 @@ impl Component for ChatView {
                     self.add_assistant_message(content, thinking, elapsed_ms);
                 }
             }
-            attr::SET_BANNER => {
-                if let AttrValue::String(working_dir) = value {
-                    self.set_banner(crate::components::BannerData::new(working_dir));
-                }
-            }
             attr::START_STREAMING => self.start_streaming(),
             attr::STOP_STREAMING => self.stop_streaming(),
             attr::CANCEL_STREAMING => self.cancel_streaming(),
@@ -2285,7 +1369,7 @@ impl Component for ChatView {
                         .get(3)
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or_default();
-                    self.complete_tool(tool_id, output, elapsed_ms, content_blocks);
+                    self.complete_tool(&tool_id, output, elapsed_ms, content_blocks);
                 }
             }
             attr::FAIL_TOOL => {
@@ -2294,7 +1378,7 @@ impl Component for ChatView {
                     let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
                     let error = parts.get(1).map_or(String::new(), |s| (*s).to_string());
                     let elapsed_ms = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    self.fail_tool(tool_id, error, elapsed_ms);
+                    self.fail_tool(&tool_id, error, elapsed_ms);
                 }
             }
             attr::UPDATE_TOOL_PROGRESS => {
@@ -2319,7 +1403,6 @@ impl Component for ChatView {
                 self.clear_all_caches();
                 self.messages.clear();
                 self.scroll_offset = 0;
-                self.banner = None;
                 self.queued_message = None;
             }
             attr::SET_QUEUED_MESSAGE => {
@@ -2339,11 +1422,7 @@ impl Component for ChatView {
     }
 
     fn state(&self) -> State {
-        // Return banner working_dir
-        self.banner.as_ref().map_or_else(
-            || State::None,
-            |banner| State::Single(StateValue::String(banner.working_dir.clone())),
-        )
+        State::None
     }
 
     fn perform(&mut self, cmd: Cmd) -> CmdResult {
@@ -2423,7 +1502,7 @@ impl ChatViewComponent {
                     // and mark it as completed. Since we don't have elapsed_ms, use 0.
                     // Content blocks are not available during history init, pass empty vec.
                     self.component
-                        .complete_tool(tool_call_id.clone(), output, 0, Vec::new());
+                        .complete_tool(tool_call_id, output, 0, Vec::new());
                 }
             }
             kernel::types::Role::System => {}
@@ -2551,89 +1630,21 @@ impl AppComponent<Msg, crate::msg::UserEvent> for ChatViewComponent {
     }
 }
 
-/// Convert tool name to CamelCase for display
-/// e.g., "subagent" -> "Subagent", "read" -> "Read", "`TaskCreate`" -> "`TaskCreate`"
-fn to_camel_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
+/// Convert a terminal column position to a character index within a text segment.
+/// Used for mouse click coordinate conversion.
+fn display_col_to_char_idx(text: &str, start_byte: usize, end_byte: usize, col: usize) -> usize {
+    let segment = &text[start_byte..end_byte];
+    let mut current_width = 0;
+    let mut char_count = 0;
 
-    // If already starts with uppercase, assume it's already CamelCase
-    if s.chars().next().unwrap().is_uppercase() {
-        return s.to_string();
-    }
-
-    // Convert first char to uppercase, keep rest as-is
-    let mut chars = s.chars();
-    chars
-        .next()
-        .map(|c| c.to_uppercase().to_string() + chars.as_str())
-        .unwrap_or_default()
-}
-
-fn tool_icon(tool_name: &str) -> &'static str {
-    match tool_name {
-        SUBAGENT_TOOL_NAME => "󰚩 ",
-        READ_TOOL_NAME => " ",
-        WRITE_TOOL_NAME | EDIT_TOOL_NAME => " ",
-        SHELL_TOOL_NAME => " ",
-        GLOB_TOOL_NAME => "󰱼 ",
-        GREP_TOOL_NAME => "󰑑 ",
-        SKILL_TOOL_NAME => "⚡",
-        WEBFETCH_TOOL_NAME => "󰖟 ",
-        WEBSEARCH_TOOL_NAME => " ",
-        REMINDER_TOOL_NAME => "󰀠 ",
-        // Task tools
-        TASK_CREATE_TOOL_NAME
-        | TASK_GET_TOOL_NAME
-        | TASK_LIST_TOOL_NAME
-        | TASK_UPDATE_TOOL_NAME
-        | TODO_TOOL_NAME => " ",
-        _ => " ",
-    }
-}
-
-/// Sanitize text for single-line display by replacing newlines/tabs with spaces.
-fn sanitize_single_line(s: &str) -> String {
-    s.replace(['\n', '\r', '\t'], " ")
-}
-
-/// Extract a concise description from tool arguments for the title
-/// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"
-/// Results are truncated to 100 characters (Unicode-safe).
-fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
-    const MAX_LEN: usize = 100;
-    let args = args?;
-    let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
-
-    let f = |s: &str| truncate_by_chars(&sanitize_single_line(s), MAX_LEN);
-
-    let target = match tool_name {
-        READ_TOOL_NAME | EDIT_TOOL_NAME => {
-            value["path"].as_str().map(|path| {
-                // For skill files, show the parent directory name
-                if path.ends_with(SKILL_FILENAME) {
-                    std::path::Path::new(path)
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        .map_or_else(|| f(path), |s| format!("{s}/{SKILL_FILENAME}"))
-                } else {
-                    f(path)
-                }
-            })
+    for (idx, ch) in segment.chars().enumerate() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width + ch_width > col {
+            return char_count;
         }
-        WRITE_TOOL_NAME => value["file_path"].as_str().map(f),
-        SHELL_TOOL_NAME => value["command"].as_str().map(f),
-        GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(f),
-        WEBFETCH_TOOL_NAME => value["url"].as_str().map(f),
-        SKILL_TOOL_NAME => value["name"]
-            .as_str()
-            .map(f)
-            .or_else(|| value["path"].as_str().map(f)),
-        SUBAGENT_TOOL_NAME => value["description"].as_str().map(f),
-        _ => None,
-    };
+        current_width += ch_width;
+        char_count = idx + 1;
+    }
 
-    target.map(|t| truncate_by_chars(&sanitize_single_line(&t), MAX_LEN))
+    char_count
 }

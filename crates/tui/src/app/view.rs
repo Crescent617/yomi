@@ -1,12 +1,13 @@
 //! View/rendering methods
 
 use tuirealm::{
+    props::{AttrValue, Attribute},
     ratatui::layout::{Constraint, Direction, Layout},
     state::{State, StateValue},
     terminal::TerminalAdapter,
 };
 
-use crate::id::Id;
+use crate::{attr, id::Id};
 
 use super::types::{AppMode, Model};
 
@@ -45,20 +46,33 @@ impl Model {
             let input_height =
                 Self::calculate_input_height_for_content(&input_content, f.area().width);
 
+            // Check if ChatView is empty to decide whether to show banner
+            let is_empty = match self
+                .app
+                .query(&Id::ChatView, Attribute::Custom(attr::IS_EMPTY))
+            {
+                Ok(Some(qr)) => matches!(qr.into_attr(), AttrValue::Flag(true)),
+                _ => false,
+            };
+
             if self.mode == AppMode::Browse {
                 // Browse mode: full screen chat view with status bar
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),    // Main content area (includes banner)
+                            Constraint::Min(3),    // Main content area
                             Constraint::Length(1), // Status bar
                         ]
                         .as_ref(),
                     )
                     .split(f.area());
 
-                self.app.view(&Id::ChatView, f, chunks[0]);
+                if is_empty {
+                    self.app.view(&Id::Banner, f, chunks[0]);
+                } else {
+                    self.app.view(&Id::ChatView, f, chunks[0]);
+                }
                 // Status bar shows current mode (vim-style)
                 self.app.view(&Id::StatusBar, f, chunks[1]);
             } else {
@@ -67,7 +81,7 @@ impl Model {
                     .direction(Direction::Vertical)
                     .constraints(
                         [
-                            Constraint::Min(3),               // Main content area (chat with banner)
+                            Constraint::Min(3),               // Main content area
                             Constraint::Length(1),            // Info bar (tokens/streaming)
                             Constraint::Length(input_height), // Input area
                             Constraint::Length(1),            // Status bar
@@ -76,8 +90,11 @@ impl Model {
                     )
                     .split(f.area());
 
-                // ChatView includes banner at top (scrolls with content)
-                self.app.view(&Id::ChatView, f, chunks[0]);
+                if is_empty {
+                    self.app.view(&Id::Banner, f, chunks[0]);
+                } else {
+                    self.app.view(&Id::ChatView, f, chunks[0]);
+                }
                 // Info bar shows streaming progress
                 self.app.view(&Id::InfoBar, f, chunks[1]);
                 // InputBox renders last and sets cursor position
