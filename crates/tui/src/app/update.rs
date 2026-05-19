@@ -120,6 +120,11 @@ impl Model {
                                 Attribute::Custom(attr::MODE),
                                 AttrValue::Number(1),
                             );
+                            // Show browse mode shortcuts in info bar
+                            self.show_notification(&Notification::info(
+                                "Browse: C-o toggle, C-e expand, j/k/g/G scroll, q exit",
+                                0,
+                            ));
                             // Scroll progress will be updated in view() on next redraw
                         }
                         AppMode::Browse => {
@@ -147,6 +152,12 @@ impl Model {
                             let _ = self.app.attr(
                                 &Id::StatusBar,
                                 Attribute::Custom(attr::CLEAR_SCROLL_PROGRESS),
+                                AttrValue::Flag(true),
+                            );
+                            // Clear browse mode notification
+                            let _ = self.app.attr(
+                                &Id::InfoBar,
+                                Attribute::Custom(attr::CLEAR_NOTIFICATION),
                                 AttrValue::Flag(true),
                             );
                         }

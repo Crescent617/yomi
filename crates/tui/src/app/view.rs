@@ -56,12 +56,13 @@ impl Model {
             };
 
             if self.mode == AppMode::Browse {
-                // Browse mode: full screen chat view with status bar
+                // Browse mode: full screen chat view with info bar + status bar
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(
                         [
                             Constraint::Min(3),    // Main content area
+                            Constraint::Length(1), // Info bar (notifications)
                             Constraint::Length(1), // Status bar
                         ]
                         .as_ref(),
@@ -73,8 +74,10 @@ impl Model {
                 } else {
                     self.app.view(&Id::ChatView, f, chunks[0]);
                 }
+                // Info bar shows browse mode tips / notifications
+                self.app.view(&Id::InfoBar, f, chunks[1]);
                 // Status bar shows current mode (vim-style)
-                self.app.view(&Id::StatusBar, f, chunks[1]);
+                self.app.view(&Id::StatusBar, f, chunks[2]);
             } else {
                 // Normal mode: show all components
                 let chunks = Layout::default()
