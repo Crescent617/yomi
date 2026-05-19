@@ -7,7 +7,7 @@ use tuirealm::{
 
 use crate::{
     attr,
-    components::{default_help_sections, info_bar::Notification, status_bar::Tip, PickerItem},
+    components::{default_help_sections, info_bar::Notification, PickerItem},
     id::Id,
     msg::Msg,
 };
@@ -120,13 +120,6 @@ impl Model {
                                 Attribute::Custom(attr::MODE),
                                 AttrValue::Number(1),
                             );
-                            // Show help message for browse mode shortcuts
-                            let _ = self.app.attr(
-                                &Id::StatusBar,
-                                Attribute::Custom(attr::SHOW_TIP),
-                                Tip::new("C-o toggle, C-e expand, j/k/g/G scroll, q exit", 0)
-                                    .to_attr_value(),
-                            );
                             // Scroll progress will be updated in view() on next redraw
                         }
                         AppMode::Browse => {
@@ -149,12 +142,6 @@ impl Model {
                                 &Id::InputBox,
                                 Attribute::Custom(attr::MODE),
                                 AttrValue::Number(0),
-                            );
-                            // Clear tip
-                            let _ = self.app.attr(
-                                &Id::StatusBar,
-                                Attribute::Custom(attr::CLEAR_TIP),
-                                AttrValue::Flag(true),
                             );
                             // Clear scroll progress (restore context usage display)
                             let _ = self.app.attr(

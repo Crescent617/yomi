@@ -17,11 +17,10 @@ use tuirealm::{
     },
     state::State,
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::utils::text::truncate_by_width;
 
-use crate::{attr, msg::Msg, theme::colors, utils::TimedMessage};
+use crate::{attr, msg::Msg, theme::colors};
 use kernel::permissions::Level;
 use std::ops::{Deref, DerefMut};
 
@@ -57,13 +56,11 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center: tip] [scroll progress (optional)] [model] [ctx usage]
+/// Layout: [mode] [center: empty] [scroll progress (optional)] [model] [ctx usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
     mode: AppMode,
-    /// Current tip (center section) with timeout
-    tip: TimedMessage<Tip>,
     /// Current token usage and context window size (tokens, `context_window`)
     ctx_usage: Option<(u32, u32)>,
     /// Permission level for displaying YOLO mode
@@ -82,28 +79,6 @@ impl StatusBar {
 
     pub const fn set_mode(&mut self, mode: AppMode) {
         self.mode = mode;
-    }
-
-    /// Show a tip with timeout
-    pub fn show_tip(&mut self, tip: Tip) {
-        let duration_ms = tip.duration_ms;
-        if duration_ms == 0 {
-            // No timeout - persistent tip
-            self.tip.set(tip);
-        } else {
-            self.tip
-                .set_with_timeout(tip, std::time::Duration::from_millis(duration_ms));
-        }
-    }
-
-    /// Check timeout and clear expired tip
-    pub fn check_timeout(&mut self) {
-        self.tip.check_timeout();
-    }
-
-    /// Tick handler for timeout checking
-    pub fn tick(&mut self) {
-        self.check_timeout();
     }
 
     /// Update context window usage (current tokens, max tokens)
@@ -151,24 +126,8 @@ impl StatusBar {
         )
     }
 
-    fn render_center_section(&self, width: usize) -> Paragraph<'static> {
-        let text = self.tip.content().map_or("", |t| t.content.as_str());
-
-        // Truncate if too long (using display width for CJK)
-        let text_width = text.width_cjk();
-        let display = if text_width > width {
-            truncate_by_width(text, width, "...")
-        } else {
-            text.to_string()
-        };
-
-        Paragraph::new(display)
-            .style(
-                Style::default()
-                    .fg(colors::text_secondary())
-                    .add_modifier(Modifier::ITALIC),
-            )
-            .alignment(Alignment::Center)
+    fn render_center_section() -> Paragraph<'static> {
+        Paragraph::new("")
     }
 
     fn render_scroll_progress_section(&self) -> Span<'static> {
@@ -230,15 +189,13 @@ impl StatusBar {
 
 impl Component for StatusBar {
     fn view(&mut self, frame: &mut Frame, area: Rect) {
-        self.check_timeout();
-
         let has_scroll = self.scroll_progress.is_some();
 
         // Layout: [mode] [center] [right content]
         // Right content contains scroll (optional) + context
         let constraints = vec![
             Constraint::Min(0),  // Mode (auto width)
-            Constraint::Fill(1), // Center tip (fills space)
+            Constraint::Fill(1), // Center (empty)
             Constraint::Min(0),  // Right side: scroll? + context
         ];
 
@@ -250,10 +207,8 @@ impl Component for StatusBar {
             chunks[0],
         );
 
-        // Center tip
-        let center_width = chunks[1].width as usize;
-        let center_para = self.render_center_section(center_width);
-        frame.render_widget(center_para, chunks[1]);
+        // Center (empty)
+        frame.render_widget(Self::render_center_section(), chunks[1]);
 
         // Right side content: scroll (optional) + model + context (right-aligned)
         let mut right_spans = Vec::new();
@@ -287,22 +242,6 @@ impl Component for StatusBar {
                         _ => AppMode::Normal,
                     };
                 }
-            }
-            Attribute::Custom(attr::TICK) => {
-                self.check_timeout();
-            }
-            Attribute::Custom(attr::SHOW_TIP) => {
-                // Use downcast from PropPayload::Any
-                use tuirealm::props::PropPayload;
-                if let AttrValue::Payload(PropPayload::Any(payload)) = value {
-                    let any = payload.as_any();
-                    if let Some(tip) = any.downcast_ref::<Tip>() {
-                        self.show_tip(tip.clone());
-                    }
-                }
-            }
-            Attribute::Custom(attr::CLEAR_TIP) => {
-                self.tip.clear();
             }
             Attribute::Custom(attr::SET_CTX_USAGE) => {
                 // Parse "tokens\x00context_window" format
@@ -420,17 +359,7 @@ impl Component for StatusBarComponent {
 }
 
 impl AppComponent<Msg, crate::msg::UserEvent> for StatusBarComponent {
-    fn on(&mut self, ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
-        match *ev {
-            Event::Tick => {
-                // Only redraw if tip expired (was cleared)
-                if self.component.tip.check_timeout() {
-                    Some(Msg::Redraw)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+    fn on(&mut self, _ev: &Event<crate::msg::UserEvent>) -> Option<Msg> {
+        None
     }
 }
