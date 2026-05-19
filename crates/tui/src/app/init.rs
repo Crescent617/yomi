@@ -103,14 +103,6 @@ impl Model {
             AttrValue::String(model_name),
         )?;
 
-        // Inject a random tip on startup
-        let tip = get_random_tip();
-        self.app.attr(
-            &Id::StatusBar,
-            Attribute::Custom(attr::SHOW_TIP),
-            crate::components::status_bar::Tip::new(format!("💡 {tip}"), 10000).to_attr_value(),
-        )?;
-
         Ok(())
     }
 
@@ -162,6 +154,7 @@ impl Model {
         // Mount banner component (shown when chat is empty)
         let mut banner = BannerComponent::new();
         banner.set_working_dir(working_dir.to_string_lossy().into_owned());
+        banner.set_tip(format!("💡 {}", get_random_tip()));
         app.mount(
             Id::Banner,
             Box::new(banner),

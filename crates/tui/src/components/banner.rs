@@ -103,14 +103,18 @@ impl MascotAnimator {
 #[derive(Debug, Clone, Default)]
 pub struct BannerData {
     pub working_dir: String,
+    pub tip: String,
 }
 
 impl BannerData {
     pub fn new(working_dir: String) -> Self {
-        Self { working_dir }
+        Self {
+            working_dir,
+            tip: String::new(),
+        }
     }
 
-    /// Returns styled lines: title, model/permissions, cwd, skills
+    /// Returns styled lines: title, model/permissions, cwd, tip
     pub fn info_lines(&self) -> Vec<Line<'_>> {
         let config = crate::config();
 
@@ -146,8 +150,7 @@ impl BannerData {
             ),
         ]);
 
-        // Info lines (secondary color)
-        vec![
+        let mut lines = vec![
             title_line,
             Line::from(Span::styled(
                 format!("{model_str} · auto-approve {auto_approve}"),
@@ -157,7 +160,20 @@ impl BannerData {
                 format!(" {working_dir}"),
                 colors::text_secondary(),
             )),
-        ]
+        ];
+
+        // Tip at the bottom
+        if !self.tip.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                self.tip.clone(),
+                Style::default()
+                    .fg(colors::text_secondary())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+
+        lines
     }
 }
 
@@ -178,6 +194,11 @@ impl Banner {
     /// Set working directory for display.
     pub fn set_working_dir(&mut self, dir: impl Into<String>) {
         self.data.working_dir = dir.into();
+    }
+
+    /// Set tip text for display.
+    pub fn set_tip(&mut self, tip: impl Into<String>) {
+        self.data.tip = tip.into();
     }
 }
 
