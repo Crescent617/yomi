@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 /// Session metadata for listing and display
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionInfo {
     pub id: SessionId,
     pub created_at: DateTime<Utc>,
@@ -36,7 +36,7 @@ impl SessionInfo {
 const DEFAULT_LIST_LIMIT: usize = 1000;
 
 /// Arguments for listing sessions with various filters
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ListArgs {
     /// Filter: sessions with `updated_at` < before
     pub before: Option<chrono::DateTime<chrono::Utc>>,

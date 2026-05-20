@@ -9,10 +9,11 @@ use tuirealm::{
 };
 
 use crate::{attr, components::info_bar::Notification, id::Id};
+use kernel::client::CoordinatorApi;
 use kernel::event::{ControlCommand, Event};
-use kernel::types::{ContentBlock, Message};
+use kernel::types::ContentBlock;
 
-use super::types::{AppMode, AppState, Model, OnInputHook, StreamingStatus};
+use super::types::{AppMode, AppState, Model, StreamingStatus};
 
 impl Model {
     /// Set focus to a component and re-enable mouse capture on Windows.
@@ -30,15 +31,11 @@ impl Model {
         event_rx: broadcast::Receiver<Event>,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
         ctrl_tx: mpsc::Sender<ControlCommand>,
-        session_store: Arc<dyn kernel::storage::SessionStore>,
+        coordinator: Arc<dyn CoordinatorApi>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
-        session_messages: Vec<Message>,
         initial_message: Option<String>,
         session_id: String,
-        on_input_hook: Option<OnInputHook>,
-        checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
-        _data_dir: std::path::PathBuf,
     ) -> Result<Self> {
         let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app(&working_dir)?;
@@ -57,9 +54,7 @@ impl Model {
             event_rx,
             input_tx,
             ctrl_tx,
-            session_store,
-            checkpoint_store,
-            _data_dir,
+            coordinator,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -68,11 +63,9 @@ impl Model {
             initial_history_len: input_history.len(),
             input_history,
             working_dir,
-            session_messages,
             session_id,
             permission_level: crate::config().auto_approve,
             queued_message: None,
-            on_input_hook,
             last_terminal_size: (0, 0),
         })
     }

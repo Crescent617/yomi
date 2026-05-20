@@ -427,12 +427,14 @@ mod content_serde {
         if let Some(arr) = value.as_array() {
             let blocks: Vec<ContentBlock> = arr
                 .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect();
+                .map(|v| serde_json::from_value(v.clone()).map_err(serde::de::Error::custom))
+                .collect::<Result<Vec<_>, _>>()?;
             return Ok(blocks);
         }
 
-        Ok(vec![])
+        Err(serde::de::Error::custom(
+            "expected string or array of content blocks",
+        ))
     }
 }
 

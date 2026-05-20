@@ -6,7 +6,9 @@ use crate::providers::{ModelConfig, Provider};
 use crate::storage::{MessageStore, SessionStore, StorageSet};
 use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc, RwLock};
 
 pub struct Coordinator {
@@ -14,6 +16,9 @@ pub struct Coordinator {
     sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
     /// Broadcast channels for session events (for forwarding and cleanup)
     session_event_senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
+    /// Epoch seconds of the last event received from any session.
+    /// Updated by `forward_session_events` on every event.
+    last_activity_at: Arc<AtomicU64>,
 }
 
 impl Coordinator {
@@ -90,7 +95,31 @@ impl Coordinator {
             agent_shared,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             session_event_senders: Arc::new(RwLock::new(HashMap::new())),
+            last_activity_at: Arc::new(AtomicU64::new(Self::now_epoch())),
         }
+    }
+
+    fn now_epoch() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Gracefully shut down a running session (cancel agent + remove from memory).
+    pub async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session(session_id).await?;
+        session.read().await.cancel();
+        // Note: forward_session_events will detect the channel close
+        // and remove the session from sessions / session_event_senders.
+        tracing::info!("Session {} shutdown requested", session_id.0);
+        Ok(())
+    }
+
+    /// Seconds since the last activity across all sessions.
+    pub fn idle_seconds(&self) -> u64 {
+        let last = self.last_activity_at.load(Ordering::Relaxed);
+        Self::now_epoch().saturating_sub(last)
     }
 
     /// Create a new session with the given configuration
@@ -103,27 +132,29 @@ impl Coordinator {
         Ok(id)
     }
 
-    /// Initialize a session in memory
+    /// Initialize a session in memory.
+    /// Uses a single write-lock to avoid the race window of double-checked locking.
     async fn init_session(&self, session_id: SessionId, config: SessionConfig) -> Result<()> {
-        // Check if session already exists in memory
-        if self.get_session(&session_id).await.is_some() {
+        // Hold write lock for the entire critical section.
+        let mut sessions = self.sessions.write().await;
+        if sessions.contains_key(&session_id) {
             return Err(KernelError::session(format!(
                 "Session {} already initialized",
                 session_id.0
             )));
         }
 
-        // Initialize session and get the event receiver directly
+        // Create session (this may await, but we hold the lock).
         let (session, event_rx) =
             Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared)).await?;
 
-        // Get the main agent ID for monitoring
         let main_agent_id = session.main_agent_id().cloned();
-
-        // Create broadcast channel for external consumers
+        let session_arc = Arc::new(RwLock::new(session));
         let (broadcast_tx, _) = broadcast::channel::<Event>(256);
 
-        // Store the broadcast sender
+        sessions.insert(session_id.clone(), Arc::clone(&session_arc));
+        drop(sessions);
+
         self.session_event_senders
             .write()
             .await
@@ -132,6 +163,7 @@ impl Coordinator {
         // Spawn event forwarding task
         let sessions_clone = Arc::clone(&self.sessions);
         let senders_clone = Arc::clone(&self.session_event_senders);
+        let activity_clone = Arc::clone(&self.last_activity_at);
         let sid_clone = session_id.clone();
         tokio::spawn(async move {
             Self::forward_session_events(
@@ -141,14 +173,10 @@ impl Coordinator {
                 main_agent_id,
                 sessions_clone,
                 senders_clone,
+                activity_clone,
             )
             .await;
         });
-
-        self.sessions
-            .write()
-            .await
-            .insert(session_id, Arc::new(RwLock::new(session)));
 
         Ok(())
     }
@@ -161,12 +189,14 @@ impl Coordinator {
         _main_agent_id: Option<crate::types::AgentId>,
         sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
         senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
+        last_activity_at: Arc<AtomicU64>,
     ) {
         let sid_str = session_id.0.clone();
         tracing::info!("Event forwarding started for session {}", sid_str);
 
         // Forward events until the channel closes (agent ended)
         while let Some(event) = agent_rx.recv().await {
+            last_activity_at.store(Self::now_epoch(), Ordering::Relaxed);
             if broadcast_tx.send(event).is_err() {
                 // No active subscribers (this is ok, receivers can come and go)
                 tracing::trace!("No active subscribers for session {} events", sid_str);
@@ -189,12 +219,23 @@ impl Coordinator {
         tracing::info!("Session {} removed from coordinator", sid_str);
     }
 
-    /// Restore a session from storage by its ID
+    /// Restore a session from storage by its ID.
+    /// If the session is already in memory (e.g., a previous client left it
+    /// running in the daemon), return its ID without re-initialising.
     pub async fn restore_session(
         &self,
         session_id: &SessionId,
         config: SessionConfig,
     ) -> Result<SessionId> {
+        let live = self.get_session(session_id).await.is_some();
+        tracing::info!("restore_session: {} live={}", session_id.0, live);
+
+        // Already live in the daemon – just re-attach.
+        if live {
+            tracing::info!("Session {} already live, re-attaching", session_id.0);
+            return Ok(session_id.clone());
+        }
+
         // Verify session exists in storage
         let session_info = self.session_store().get(session_id).await?.ok_or_else(|| {
             KernelError::session(format!("Session not found in storage: {}", session_id.0))
@@ -362,5 +403,31 @@ impl Coordinator {
         session_id: &SessionId,
     ) -> Result<Vec<crate::types::Message>> {
         self.message_store().get(&session_id.0).await
+    }
+
+    /// List sessions from storage with filters.
+    pub async fn list_sessions_filtered(
+        &self,
+        args: crate::storage::session::ListArgs,
+    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
+        self.session_store().list(args).await
+    }
+
+    /// Get checkpoints for a session.
+    pub async fn get_checkpoints(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<crate::checkpoint::Checkpoint>> {
+        self.checkpoint_store()
+            .get_session_checkpoints(&session_id.0)
+            .await
+    }
+
+    /// Get todo JSON for a session.
+    pub async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
+        match &self.agent_shared.todo_storage {
+            Some(store) => store.load(&session_id.0).await,
+            None => Ok(None),
+        }
     }
 }

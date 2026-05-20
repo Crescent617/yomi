@@ -272,7 +272,7 @@ pub fn default_help_sections() -> Vec<HelpSection> {
             .add_binding("u / PageUp", "Page up")
             .add_binding("g", "Go to top")
             .add_binding("G", "Go to bottom")
-            .add_binding("e", "Toggle expand all")
+            .add_binding("Ctrl+E", "Toggle expand all")
             .add_binding("q / Esc", "Exit browse mode"),
         HelpSection::new("Input Navigation")
             .add_binding("Ctrl+A / Home", "Start of line")

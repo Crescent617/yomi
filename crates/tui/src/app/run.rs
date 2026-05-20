@@ -5,10 +5,11 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tuirealm::{application::PollStrategy, terminal::TerminalAdapter};
 
+use kernel::client::CoordinatorApi;
 use kernel::event::{ControlCommand, Event};
-use kernel::types::{ContentBlock, Message};
+use kernel::types::ContentBlock;
 
-use super::types::{Model, OnInputHook, TuiResult};
+use super::types::{Model, TuiResult};
 
 impl Model {
     /// Run the main loop
@@ -76,7 +77,7 @@ impl Model {
                     for msg in messages {
                         let mut msg = Some(msg);
                         while msg.is_some() {
-                            msg = self.update(msg);
+                            msg = self.update(msg).await;
                         }
                     }
                 }
@@ -97,9 +98,6 @@ impl Model {
                 self.view();
                 self.state.should_redraw = false;
             }
-
-            // Small yield to allow tokio to process other tasks
-            tokio::task::yield_now().await;
         }
 
         // Disable mouse capture before exit
@@ -119,40 +117,32 @@ impl Model {
 }
 
 /// Run the TUI application
-#[allow(clippy::too_many_arguments, clippy::future_not_send)]
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn run_tui(
     event_rx: broadcast::Receiver<Event>,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
-    session_store: Arc<dyn kernel::storage::SessionStore>,
+    coordinator: Arc<dyn CoordinatorApi>,
     working_dir: String,
     input_history: Vec<String>,
-    session_messages: Vec<Message>,
     initial_message: Option<String>,
     session_id: String,
-    on_input_hook: Option<OnInputHook>,
-    checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
-    _data_dir: std::path::PathBuf,
 ) -> anyhow::Result<TuiResult> {
     let working_dir_path = std::path::PathBuf::from(&working_dir);
     let mut model = Model::new(
         event_rx,
         input_tx,
         ctrl_tx,
-        session_store,
+        coordinator,
         input_history,
         working_dir_path,
-        session_messages,
         initial_message,
         session_id,
-        on_input_hook,
-        checkpoint_store,
-        _data_dir,
     )?;
     model.init_status_bar()?;
     model.init_input_history()?;
     // Display session messages and init ctx usage (for resumed sessions)
-    model.init_session_messages()?;
+    model.init_session_messages().await?;
     // Initialize todo list from file
     model.init_todo_list().await?;
     // run() consumes model and returns the new history entries

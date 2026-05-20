@@ -1,5 +1,6 @@
 //! Application types and state definitions
 
+use kernel::client::CoordinatorApi;
 use kernel::permissions::Level;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc};
@@ -9,7 +10,7 @@ use crate::{
     msg::{Msg, UserEvent},
 };
 use kernel::event::{ControlCommand, Event};
-use kernel::types::{ContentBlock, Message};
+use kernel::types::ContentBlock;
 use std::sync::Arc;
 use tuirealm::{application::Application, terminal::CrosstermTerminalAdapter};
 
@@ -22,9 +23,6 @@ pub struct TuiResult {
     /// Session ID to switch to (for /sessions command)
     pub switch_to_session: Option<String>,
 }
-
-/// Callback type for input hook - called when user submits input
-pub type OnInputHook = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Feature gates for optional functionality
 #[derive(Debug, Clone, Copy, Default)]
@@ -93,12 +91,8 @@ pub struct Model {
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
     pub ctrl_tx: mpsc::Sender<ControlCommand>,
-    /// Storage for loading sessions list
-    pub(crate) session_store: Arc<dyn kernel::storage::SessionStore>,
-    /// Storage for checkpoints
-    pub(crate) checkpoint_store: Option<Arc<dyn kernel::checkpoint::CheckpointStore>>,
-    /// Data directory for checkpoint operations (unused but kept for API compatibility)
-    pub(crate) _data_dir: std::path::PathBuf,
+    /// Coordinator API for storage operations (sessions, checkpoints, todos)
+    pub(crate) coordinator: Arc<dyn CoordinatorApi>,
     /// Current assistant response content (for adding to history when complete)
     pub(crate) current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -115,16 +109,12 @@ pub struct Model {
     pub(crate) initial_history_len: usize,
     /// Working directory (for file completion and session listing)
     pub(crate) working_dir: std::path::PathBuf,
-    /// Session messages to display on startup (for resumed sessions)
-    pub(crate) session_messages: Vec<Message>,
     /// Current session ID
     pub(crate) session_id: String,
     /// Current permission level (can be changed at runtime via YOLO mode)
     pub(crate) permission_level: Level,
     /// Queued message waiting to be sent when streaming ends (only one allowed)
     pub(crate) queued_message: Option<Vec<ContentBlock>>,
-    /// Hook called when user submits input (for saving session, etc.)
-    pub(crate) on_input_hook: Option<OnInputHook>,
     /// Last known terminal size to detect resize events
     pub(crate) last_terminal_size: (u16, u16),
 }

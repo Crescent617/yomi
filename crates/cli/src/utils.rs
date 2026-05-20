@@ -96,9 +96,9 @@ pub async fn open_storage(global: &GlobalArgs) -> Result<kernel::StorageSet> {
 /// Resolve working directory from global args
 /// Uses the provided dir or falls back to current directory
 pub fn resolve_working_dir(global: &GlobalArgs) -> Result<PathBuf> {
-    let dir = global
-        .dir
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let dir = match global.dir.clone() {
+        Some(d) => d,
+        None => std::env::current_dir()?,
+    };
     Ok(dir.canonicalize()?)
 }

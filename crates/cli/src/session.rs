@@ -3,13 +3,14 @@
 use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
+    client::CoordinatorApi,
     event::ControlCommand,
     types::{ContentBlock, SessionId},
-    Coordinator, SessionConfig,
+    SessionConfig,
 };
 use std::path::Path;
 use std::sync::Arc;
-use tui::{run_tui, OnInputHook};
+use tui::run_tui;
 
 /// Context needed to run a session
 #[derive(Clone)]
@@ -43,7 +44,7 @@ pub enum SessionArg {
 pub async fn resolve_session(
     session_arg: &SessionArg,
     is_launch: bool,
-    coordinator: &Coordinator,
+    coordinator: &dyn CoordinatorApi,
     app_storage: &AppStorage,
     working_dir: &Path,
     mk_config: impl Fn() -> SessionConfig,
@@ -114,12 +115,11 @@ pub async fn resolve_session(
 /// Run a single session lifecycle
 #[allow(clippy::too_many_arguments)]
 pub async fn run_session_loop(
-    coordinator: Arc<Coordinator>,
+    coordinator: Arc<dyn CoordinatorApi>,
     session_id: SessionId,
     ctx: SessionContext,
     app_storage: Arc<AppStorage>,
     input_history: Vec<String>,
-    session_messages: Vec<kernel::types::Message>,
     is_launch: bool,
     initial_message: Option<String>,
 ) -> Result<SessionResult> {
@@ -141,13 +141,37 @@ pub async fn run_session_loop(
     // Spawn input forwarding task
     let coord_for_input = coordinator.clone();
     let session_id_for_input = session_id.clone();
-    tokio::spawn(async move {
+    let app_storage_for_save = app_storage.clone();
+    let working_dir_for_save = ctx.working_dir.clone();
+    let input_handle = tokio::spawn(async move {
+        let mut has_saved = false;
+        let mut consecutive_errors = 0;
         while let Some(blocks) = input_rx.recv().await {
-            if let Err(e) = coord_for_input
+            if !has_saved {
+                // Save last session on first input (crash safety)
+                app_storage_for_save
+                    .update_last_session(&working_dir_for_save, &session_id_for_input.0)
+                    .await
+                    .ok();
+                has_saved = true;
+            }
+            match coord_for_input
                 .send_message(&session_id_for_input, blocks)
                 .await
             {
-                tracing::error!("Failed to send message: {}", e);
+                Ok(()) => consecutive_errors = 0,
+                Err(e) => {
+                    consecutive_errors += 1;
+                    tracing::error!(
+                        "Failed to send message (attempt {}): {}",
+                        consecutive_errors,
+                        e
+                    );
+                    if consecutive_errors >= 3 {
+                        tracing::error!("Input forwarding failed 3 times, disconnecting");
+                        break;
+                    }
+                }
             }
         }
     });
@@ -214,67 +238,56 @@ pub async fn run_session_loop(
     });
 
     // Subscribe to session events (broadcast channel - TUI can lag but won't block)
-    let event_rx = coordinator
-        .subscribe_session_events(&session_id)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("Failed to get event receiver for session"))?;
-
-    // On input: update "last session" for current directory
-    let on_input_hook: OnInputHook = Box::new({
-        let storage = app_storage.clone();
-        let dir = ctx.working_dir.clone();
-        move |sid: &str| {
-            let s = storage.clone();
-            let d = dir.clone();
-            let id = sid.to_string();
-            tokio::spawn(async move {
-                s.update_last_session(&d, &id).await.ok();
-            });
-        }
-    });
-
-    // Get checkpoint store for TUI
-    let checkpoint_store = Some(coordinator.checkpoint_store().clone());
-    tracing::info!(
-        "Initializing TUI with checkpoint_store: {:?}",
-        checkpoint_store.is_some()
-    );
+    let event_rx = coordinator.subscribe_session_events(&session_id).await?;
 
     let tui_result = run_tui(
         event_rx,
-        input_tx,
+        input_tx.clone(),
         ctrl_tx,
-        coordinator.session_store().clone(),
+        coordinator.clone(),
         ctx.working_dir.to_string_lossy().to_string(),
         input_history,
-        session_messages,
         initial_message,
         session_id.0.clone(),
-        Some(on_input_hook),
-        checkpoint_store,
-        coordinator.data_dir().clone(),
     )
     .await?;
 
-    // Only record session if the session has actual messages in storage
-    let session_messages = coordinator
-        .get_session_messages(&session_id)
+    // Close input channel so the forwarding task exits
+    drop(input_tx);
+    // Wait for the input forwarding task to drain pending messages.
+    // In daemon mode send_message is async over IPC; allow up to 5s.
+    if tokio::time::timeout(std::time::Duration::from_secs(5), input_handle)
         .await
-        .unwrap_or_default();
-    let has_conversation = !session_messages.is_empty();
-    if has_conversation {
-        // Save last session for this directory
-        app_storage
-            .save_session(&ctx.working_dir, &session_id.0)
-            .await?;
-        println!("Goodbye~ You can resume this session later with:");
-        println!("yomi --resume {}", session_id.0);
-    } else {
-        // Delete empty session (no conversation)
-        if let Err(e) = coordinator.delete_session(&session_id).await {
-            tracing::warn!("Failed to delete empty session: {}", e);
+        .is_err()
+    {
+        tracing::warn!("Input forwarding task did not exit in time");
+    }
+
+    // Only record session if the session has actual messages in storage.
+    // If we can't reach storage (e.g. daemon disconnected), conservatively
+    // keep the session rather than risk deleting data.
+    match coordinator.get_session_messages(&session_id).await {
+        Ok(msgs) if msgs.is_empty() => {
+            if let Err(e) = coordinator.delete_session(&session_id).await {
+                tracing::warn!("Failed to delete empty session: {}", e);
+            }
+            println!("Goodbye~");
         }
-        println!("Goodbye~");
+        Ok(_) => {
+            app_storage
+                .save_session(&ctx.working_dir, &session_id.0)
+                .await?;
+            println!("Goodbye~ You can resume this session later with:");
+            println!("yomi --resume {}", session_id.0);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to check session messages, keeping session: {}", e);
+            app_storage
+                .save_session(&ctx.working_dir, &session_id.0)
+                .await?;
+            println!("Goodbye~ You can resume this session later with:");
+            println!("yomi --resume {}", session_id.0);
+        }
     }
 
     Ok(SessionResult {

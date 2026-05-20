@@ -13,4 +13,4 @@ mod update;
 mod view;
 
 pub use run::run_tui;
-pub use types::{format_short_id, AppMode, FeatureGates, Model, OnInputHook, TuiResult};
+pub use types::{format_short_id, AppMode, FeatureGates, Model, TuiResult};

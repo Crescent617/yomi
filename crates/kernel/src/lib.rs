@@ -1,10 +1,12 @@
 //! yomi-core - Core library for the yomi AI coding assistant
 
-/// Environment variable prefix - change this to rebrand the entire CLI
-/// Default: "YOMI_" (produces env vars like `YOMI_API_KEY`)
+/// Environment variable prefix - change this to rebrand the entire CLI.
+/// **IMPORTANT**: When changing this, also update the `env_name!` macro below
+/// (Rust `concat!` only accepts string literals, so they cannot be derived
+/// from a `const` automatically).
 pub const ENV_PREFIX: &str = "YOMI_";
 
-/// Compile-time string concatenation for env var names
+/// Compile-time string concatenation for env var names.
 /// Usage: `env_name!("API_KEY")` expands to `"YOMI_API_KEY"`
 #[macro_export]
 macro_rules! env_name {
@@ -16,6 +18,7 @@ macro_rules! env_name {
 pub mod agent;
 pub mod app;
 pub mod checkpoint;
+pub mod client;
 pub mod compactor;
 pub mod config;
 pub mod event;
@@ -27,12 +30,15 @@ pub mod misc;
 pub mod permissions;
 pub mod prompt;
 pub mod providers;
+pub mod server;
 pub mod skill;
 pub mod storage;
 pub mod task;
 pub mod tools;
+pub mod transport;
 pub mod types;
 pub mod utils;
+pub mod wire;
 
 // Re-export permissions types
 pub use permissions::{Checker, Level, ToolLevelResolver};

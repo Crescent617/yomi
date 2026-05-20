@@ -1,9 +1,28 @@
 use crate::args::GlobalArgs;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use comfy_table::{ContentArrangement, Table};
 use kernel::ListArgs;
 
+pub mod cancel;
 pub mod cleanup;
+pub mod stop;
+
+/// Resolve a session ID from CLI arg or the current directory's last session.
+pub async fn resolve_session_id(global: &GlobalArgs, session: Option<String>) -> Result<String> {
+    match session {
+        Some(id) => Ok(id),
+        None => {
+            let data_dir = crate::utils::data_dir(global)?;
+            let app_storage = crate::storage::AppStorage::new(&data_dir)?;
+            let working_dir = std::env::current_dir()?;
+            let entry = app_storage
+                .load_session(&working_dir)
+                .await?
+                .context("No session found for current directory. Use --session <id> or run from a directory with an active session.")?;
+            Ok(entry.session_id)
+        }
+    }
+}
 
 pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
     let storage = crate::utils::open_storage(global).await?;
