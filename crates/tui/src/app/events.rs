@@ -13,8 +13,11 @@ use kernel::types::FinishReason;
 use super::types::{Model, StreamingStatus};
 
 impl Model {
-    /// Process events from kernel
+    /// Process events from kernel.
+    /// Caps processing time to ~8ms per frame to avoid UI stalls when
+    /// a large batch of events arrives over IPC.
     pub async fn process_kernel_event(&mut self) -> Result<()> {
+        let start = std::time::Instant::now();
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 // User message from kernel (render after kernel accepts it)
@@ -382,8 +385,22 @@ impl Model {
                         req_id,
                         tool_name
                     );
-                    // Store the pending permission request
-                    self.pending_permission = Some(req_id.clone());
+                    // If a previous permission request is still pending, auto-deny it
+                    // so the server doesn't hang waiting for a response.
+                    if let Some(old_id) = self.pending_permission.replace(req_id.clone()) {
+                        tracing::warn!(
+                            "Auto-denying stale permission request {} (new: {})",
+                            old_id,
+                            req_id
+                        );
+                        let _ = self
+                            .ctrl_tx
+                            .try_send(kernel::event::ControlCommand::Response {
+                                req_id: old_id,
+                                approved: false,
+                                remember: false,
+                            });
+                    }
 
                     // Show confirmation dialog with "Always approve" and "YOLO" options
                     let message =
@@ -403,6 +420,10 @@ impl Model {
                     self.state.should_redraw = true;
                 }
                 _ => {}
+            }
+            // Cap event processing time to keep UI responsive (~60fps budget)
+            if start.elapsed() > std::time::Duration::from_millis(8) {
+                break;
             }
         }
         Ok(())

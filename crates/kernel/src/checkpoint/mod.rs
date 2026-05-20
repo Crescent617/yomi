@@ -35,7 +35,7 @@ pub struct TrackedFileInfo {
 }
 
 /// Checkpoint information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint {
     /// Checkpoint ID: `{message_id}`
     pub id: String,
@@ -54,7 +54,8 @@ pub struct Checkpoint {
 }
 
 /// What to restore during rewind (for backwards compatibility in APIs)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RewindTarget {
     /// Only restore conversation messages
     Conversation,

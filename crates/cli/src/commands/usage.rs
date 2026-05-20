@@ -75,15 +75,21 @@ pub async fn show(global: GlobalArgs, days: i64, filter: Option<UsageFilter>) ->
     // Calculate date range by whole days in local timezone
     let now_local = Local::now();
     let today_local = now_local.date_naive();
-    let today_start_local = today_local.and_hms_opt(0, 0, 0).unwrap();
+    let today_start_local = chrono::NaiveDateTime::new(today_local, chrono::NaiveTime::MIN);
     let tomorrow_start_local = today_start_local + Duration::days(1);
 
-    // Calculate range in local time, then convert to UTC for database query
+    // Calculate range in local time, then convert to UTC for database query.
+    // Use `earliest()` to handle DST ambiguities safely (never panics).
     let start_local = today_start_local - Duration::days(days - 1);
-    let start_utc = Local.from_local_datetime(&start_local).unwrap().to_utc();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .earliest()
+        .unwrap_or_else(Local::now)
+        .to_utc();
     let end_utc = Local
         .from_local_datetime(&tomorrow_start_local)
-        .unwrap()
+        .earliest()
+        .unwrap_or_else(Local::now)
         .to_utc();
 
     let daily = storage

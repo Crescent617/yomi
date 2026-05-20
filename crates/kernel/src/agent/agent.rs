@@ -500,6 +500,67 @@ impl Agent {
         }
     }
 
+    /// Shared rewind handler used by both normal input loop and goal idle.
+    async fn process_rewind(
+        &mut self,
+        message_id: MessageId,
+        target: crate::checkpoint::RewindTarget,
+        result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+        clear_goal: bool,
+    ) -> Result<(), AgentError> {
+        if clear_goal {
+            self.goal_ctx = None;
+        }
+        if let Some(turn) = self.current_turn.take() {
+            let _ = turn.cancel().await;
+        }
+
+        let truncated = self.truncate_at(&message_id);
+        if !truncated {
+            let _ = result_tx.send(Err(format!("Message {} not found", message_id.as_str())));
+            return Ok(());
+        }
+
+        let result = super::turn::Turn::rewind_to_checkpoint(
+            &self.session_id,
+            &message_id,
+            target,
+            &self.checkpoint_store,
+        )
+        .await;
+
+        if let Err(e) = &result {
+            let _ = result_tx.send(Err(e.to_string()));
+            return Ok(());
+        }
+
+        let remaining_messages: Vec<Message> = self
+            .message_buffer
+            .messages()
+            .iter()
+            .map(|m| (**m).clone())
+            .collect();
+        if let Some(msg_store) = &self.shared.message_store {
+            if let Err(e) = msg_store
+                .replace(&self.session_id, &remaining_messages)
+                .await
+            {
+                tracing::warn!("Failed to update message store after rewind: {}", e);
+            }
+        }
+
+        let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
+        let _ = self
+            .event_tx
+            .try_send(Event::System(crate::event::SystemEvent::Rewound {
+                session_id: crate::types::SessionId(self.session_id.clone()),
+                messages: updated_messages,
+            }));
+
+        let _ = result_tx.send(Ok(()));
+        Ok(())
+    }
+
     async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
         match self.input_rx.recv().await {
             Some(AgentInput::User {
@@ -575,59 +636,8 @@ impl Agent {
                     self.id,
                     message_id.as_str()
                 );
-                if let Some(turn) = self.current_turn.take() {
-                    let _ = turn.cancel().await;
-                }
-
-                // Truncate messages in memory
-                let truncated = self.truncate_at(&message_id);
-                if !truncated {
-                    let _ =
-                        result_tx.send(Err(format!("Message {} not found", message_id.as_str())));
-                    return Ok(());
-                }
-
-                // Rewind files and delete checkpoints
-                let result = super::turn::Turn::rewind_to_checkpoint(
-                    &self.session_id,
-                    &message_id,
-                    target,
-                    &self.checkpoint_store,
-                )
-                .await;
-
-                if let Err(e) = &result {
-                    let _ = result_tx.send(Err(e.to_string()));
-                    return Ok(());
-                }
-
-                // Update SQLite storage with truncated messages
-                let remaining_messages: Vec<Message> = self
-                    .message_buffer
-                    .messages()
-                    .iter()
-                    .map(|m| (**m).clone())
-                    .collect();
-                if let Some(msg_store) = &self.shared.message_store {
-                    if let Err(e) = msg_store
-                        .replace(&self.session_id, &remaining_messages)
-                        .await
-                    {
-                        tracing::warn!("Failed to update message store after rewind: {}", e);
-                    }
-                }
-
-                // Send rewound event to TUI
-                let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
-                let _ = self
-                    .event_tx
-                    .try_send(Event::System(crate::event::SystemEvent::Rewound {
-                        session_id: crate::types::SessionId(self.session_id.clone()),
-                        messages: updated_messages,
-                    }));
-
-                let _ = result_tx.send(Ok(()));
-                Ok(())
+                self.process_rewind(message_id, target, result_tx, false)
+                    .await
             }
             None => {
                 self.context.transition_to(AgentState::Closed);
@@ -683,61 +693,8 @@ impl Agent {
                         self.id,
                         message_id.as_str()
                     );
-                    // Exit goal mode when rewinding
-                    self.goal_ctx = None;
-                    if let Some(turn) = self.current_turn.take() {
-                        let _ = turn.cancel().await;
-                    }
-
-                    // Truncate messages in memory
-                    let truncated = self.truncate_at(&message_id);
-                    if !truncated {
-                        let _ = result_tx
-                            .send(Err(format!("Message {} not found", message_id.as_str())));
-                        return Ok(());
-                    }
-
-                    // Rewind files and delete checkpoints
-                    let result = super::turn::Turn::rewind_to_checkpoint(
-                        &self.session_id,
-                        &message_id,
-                        target,
-                        &self.checkpoint_store,
-                    )
-                    .await;
-
-                    if let Err(e) = &result {
-                        let _ = result_tx.send(Err(e.to_string()));
-                        return Ok(());
-                    }
-
-                    // Update SQLite storage with truncated messages
-                    let remaining_messages: Vec<Message> = self
-                        .message_buffer
-                        .messages()
-                        .iter()
-                        .map(|m| (**m).clone())
-                        .collect();
-                    if let Some(msg_store) = &self.shared.message_store {
-                        if let Err(e) = msg_store
-                            .replace(&self.session_id, &remaining_messages)
-                            .await
-                        {
-                            tracing::warn!("Failed to update message store after rewind: {}", e);
-                        }
-                    }
-
-                    // Send rewound event to TUI
-                    let updated_messages: Vec<Arc<Message>> =
-                        self.message_buffer.messages().to_vec();
-                    let _ =
-                        self.event_tx
-                            .try_send(Event::System(crate::event::SystemEvent::Rewound {
-                                session_id: crate::types::SessionId(self.session_id.clone()),
-                                messages: updated_messages,
-                            }));
-
-                    let _ = result_tx.send(Ok(()));
+                    self.process_rewind(message_id, target, result_tx, true)
+                        .await?;
                     return Ok(());
                 }
                 other => {
@@ -1294,10 +1251,8 @@ impl Agent {
                 .message_buffer
                 .messages()
                 .last()
-                .unwrap()
-                .tool_calls
-                .as_ref()
-                .map_or(0, std::vec::Vec::len);
+                .and_then(|m| m.tool_calls.as_ref())
+                .map_or(0, |v| v.len());
             tracing::debug!(
                 "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
                 self.id,

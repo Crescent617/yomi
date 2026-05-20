@@ -30,6 +30,11 @@ md5 = { workspace = true }
 sqlx = { workspace = true }
 comfy-table = { workspace = true }
 
+tokio-util = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["process"] }
+
 [lints]
 workspace = true
 

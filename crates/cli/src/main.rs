@@ -1,8 +1,11 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
+use std::time::Duration;
 
 mod args;
 mod commands;
+mod daemon;
 mod misc;
 mod session;
 mod storage;
@@ -36,6 +39,24 @@ enum Commands {
     Usage(UsageArgs),
     /// Show version
     Version,
+    /// Manage daemon (internal use)
+    #[command(subcommand)]
+    Daemon(DaemonCommands),
+}
+
+#[derive(Subcommand)]
+enum DaemonCommands {
+    /// Start daemon server (internal)
+    Start {
+        #[arg(long)]
+        auto_exit: bool,
+    },
+    /// Stop daemon gracefully
+    Stop,
+    /// Restart daemon
+    Restart,
+    /// Check daemon status
+    Status,
 }
 
 #[derive(Parser)]
@@ -54,6 +75,18 @@ enum SessionsCommands {
         /// List all sessions, not just current directory
         #[arg(short, long)]
         all: bool,
+    },
+    /// Cancel an active session (stops the agent loop)
+    Cancel {
+        /// Session ID to cancel (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+    /// Shutdown a running session (remove from daemon memory)
+    Stop {
+        /// Session ID to stop (defaults to current directory's last session)
+        #[arg(short, long)]
+        session: Option<String>,
     },
     /// Cleanup old sessions and their data
     Cleanup {
@@ -181,13 +214,139 @@ async fn main() -> Result<()> {
             println!("v{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        Some(Commands::Daemon(cmd)) => run_daemon(cmd).await,
         None => tui::run(args.tui).await,
     }
+}
+
+async fn run_daemon(cmd: DaemonCommands) -> Result<()> {
+    match cmd {
+        DaemonCommands::Start { auto_exit } => {
+            let working_dir = std::env::current_dir()?;
+            let config = crate::utils::load_config(None, &working_dir)?;
+            tokio::fs::create_dir_all(&config.data_dir).await?;
+            let _log_guard = crate::commands::tui::init_logging(&config)?;
+
+            let sock = crate::daemon::socket_path();
+
+            // Bind socket FIRST so clients can connect while we initialize.
+            let listener = kernel::transport::unix::bind_socket(&sock).await?;
+            tracing::info!("Daemon socket bound at {}", sock.display());
+
+            let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
+            let provider = crate::commands::tui::create_provider(&config)?;
+            let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
+            let skill_folders = crate::commands::tui::resolve_skill_folders(&config, &working_dir);
+
+            let coordinator = Arc::new(kernel::Coordinator::new(
+                &storage,
+                provider,
+                config.agent.model.clone(),
+                Some(task_store),
+                Some(config.agent.compactor.clone()),
+                skill_folders,
+                config
+                    .features
+                    .hooks
+                    .then(|| kernel::hooks::build_registry(&config.hooks)),
+            ));
+
+            let agent_config = kernel::agent::AgentConfig {
+                skills: crate::commands::tui::load_skills(&config, &working_dir).await,
+                ..config.agent.clone()
+            };
+
+            let server = kernel::server::KernelServer::new(
+                Arc::clone(&coordinator),
+                agent_config,
+                config.data_dir.clone(),
+            );
+            let shutdown = tokio_util::sync::CancellationToken::new();
+
+            #[cfg(unix)]
+            {
+                let shutdown_sig = shutdown.clone();
+                tokio::spawn(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut sigterm = signal(SignalKind::terminate())
+                        .expect("Failed to register SIGTERM handler");
+                    let mut sigint =
+                        signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
+                    tokio::select! {
+                        _ = sigterm.recv() => {
+                            tracing::info!("Received SIGTERM, initiating graceful shutdown");
+                        }
+                        _ = sigint.recv() => {
+                            tracing::info!("Received SIGINT, initiating graceful shutdown");
+                        }
+                    }
+                    shutdown_sig.cancel();
+                });
+            }
+
+            // Auto-exit task: cancel shutdown token after idle timeout,
+            // no active clients, and no in-memory sessions.
+            const IDLE_CHECK_INTERVAL: Duration = Duration::from_mins(1);
+            const DAEMON_IDLE_TIMEOUT_SECS: u64 = 300;
+            const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+            const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+            if auto_exit {
+                let server_for_exit = server.clone();
+                let coord_for_exit = Arc::clone(&coordinator);
+                let shutdown_clone = shutdown.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
+                    loop {
+                        interval.tick().await;
+                        let idle = coord_for_exit.idle_seconds();
+                        let clients = server_for_exit.connection_count();
+                        let sessions = coord_for_exit.list_sessions().await;
+                        if idle >= DAEMON_IDLE_TIMEOUT_SECS && clients == 0 && sessions.is_empty() {
+                            tracing::info!(
+                                "Auto-exiting daemon after {idle}s idle with no clients or sessions"
+                            );
+                            shutdown_clone.cancel();
+                            break;
+                        }
+                    }
+                });
+            }
+
+            server.serve_listener(listener, shutdown).await?;
+            // Cancel all active connections so the process can actually exit.
+            server.shutdown().await;
+            let start = tokio::time::Instant::now();
+            while server.connection_count() > 0 && start.elapsed() < SHUTDOWN_WAIT_TIMEOUT {
+                tokio::time::sleep(SHUTDOWN_POLL_INTERVAL).await;
+            }
+            tracing::info!("Daemon shutting down gracefully");
+        }
+        DaemonCommands::Stop => {
+            crate::daemon::graceful_shutdown().await?;
+            println!("Daemon stopped");
+        }
+        DaemonCommands::Restart => {
+            crate::daemon::restart_daemon().await?;
+            println!("Daemon restarted");
+        }
+        DaemonCommands::Status => {
+            let status = crate::daemon::daemon_status().await?;
+            println!("{status}");
+        }
+    }
+    Ok(())
 }
 
 async fn run_session(args: SessionArgs) -> Result<()> {
     match args.command {
         SessionsCommands::List { all } => commands::session::list(&args.global, all).await,
+        SessionsCommands::Cancel { session } => {
+            commands::session::cancel::run(&args.global, session).await
+        }
+        SessionsCommands::Stop { session } => {
+            commands::session::stop::run(&args.global, session).await
+        }
         SessionsCommands::Cleanup { days, yes } => {
             commands::session::cleanup::run(args.global, days, yes).await
         }

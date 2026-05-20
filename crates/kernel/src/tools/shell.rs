@@ -184,10 +184,20 @@ impl ShellTool {
             );
         }
 
-        if exit_code == 0 {
-            Ok(ToolOutput::text(stdout))
+        let output_text = if stderr.is_empty() {
+            stdout
+        } else if stdout.is_empty() {
+            format!("[stderr]\n{stderr}")
         } else {
-            Ok(ToolOutput::error(format!("{stdout}\n{stderr}")))
+            format!("[stdout]\n{stdout}\n\n[stderr]\n{stderr}")
+        };
+
+        if exit_code == 0 {
+            Ok(ToolOutput::text(output_text))
+        } else {
+            Ok(ToolOutput::text(format!(
+                "[exit code: {exit_code}]\n{output_text}"
+            )))
         }
     }
 

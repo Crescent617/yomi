@@ -17,7 +17,7 @@ use kernel::permissions::Level;
 use super::types::{AppMode, Model};
 
 impl Model {
-    pub fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
+    pub async fn update(&mut self, msg: Option<Msg>) -> Option<Msg> {
         if let Some(msg) = msg {
             self.state.should_redraw = true;
 
@@ -30,7 +30,7 @@ impl Model {
                         self.input_history.push(raw);
                         let _ = self.init_input_history();
                     }
-                    self.update(Some(*inner))
+                    Box::pin(self.update(Some(*inner))).await
                 }
                 Msg::Quit => {
                     self.state.quit = true;
@@ -42,19 +42,16 @@ impl Model {
                         return None;
                     }
 
-                    // Call input hook if provided (e.g., for saving session)
-                    if let Some(ref hook) = self.on_input_hook {
-                        hook(&self.session_id);
-                    }
-
                     // Check if we're currently streaming
                     if self.state.is_streaming {
                         // Queue the message to be sent when streaming ends (only one allowed)
                         self.set_queued_message(blocks);
-                    } else {
-                        // Send to kernel (supports multi-modal content)
-                        // User message will be rendered when kernel sends back UserEvent::Message
-                        let _ = self.input_tx.try_send(blocks);
+                    } else if let Err(e) = self.input_tx.try_send(blocks) {
+                        tracing::warn!("Failed to send input: {}", e);
+                        self.show_notification(&Notification::error(
+                            "Failed to send message. Session may be disconnected.",
+                            5000,
+                        ));
                     }
                     None
                 }
@@ -122,7 +119,7 @@ impl Model {
                             );
                             // Show browse mode shortcuts in info bar
                             self.show_notification(&Notification::info(
-                                "Browse: C-o toggle, C-e expand, j/k/g/G scroll, q exit",
+                                "Browse: j/k scroll · u/d page · g/G top/bottom · C-e expand · q/C-o exit",
                                 0,
                             ));
                             // Scroll progress will be updated in view() on next redraw
@@ -301,7 +298,7 @@ impl Model {
                 }
                 Msg::CommandYolo => {
                     // Toggle YOLO mode via command
-                    self.update(Some(Msg::ToggleYoloMode))
+                    Box::pin(self.update(Some(Msg::ToggleYoloMode))).await
                 }
                 Msg::ToggleYoloMode => {
                     // Toggle between Safe and Dangerous permission levels
@@ -339,7 +336,7 @@ impl Model {
                 }
                 Msg::CommandBrowse => {
                     // Toggle browse mode
-                    self.update(Some(Msg::ToggleBrowseMode))
+                    Box::pin(self.update(Some(Msg::ToggleBrowseMode))).await
                 }
                 Msg::CommandCompact => {
                     // Send compact request
@@ -416,15 +413,16 @@ impl Model {
                 Msg::CommandSessions => {
                     // Load sessions for current working dir and show picker
                     let working_dir = self.working_dir.to_string_lossy().to_string();
-                    let args = kernel::ListArgs {
+                    let args = kernel::storage::session::ListArgs {
                         working_dir: Some(working_dir),
                         limit: Some(50),
                         ..Default::default()
                     };
-                    let sessions = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(self.session_store.list(args))
-                    })
-                    .unwrap_or_default();
+                    let sessions = self
+                        .coordinator
+                        .list_sessions_filtered(args)
+                        .await
+                        .unwrap_or_default();
 
                     let items: Vec<PickerItem> = sessions
                         .into_iter()
@@ -485,96 +483,82 @@ impl Model {
                 }
                 Msg::CommandRewind => {
                     // Load checkpoints for current session and show picker
-                    if let Some(ref checkpoint_store) = self.checkpoint_store {
-                        let session_id = self.session_id.clone();
-                        let checkpoints = tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current()
-                                .block_on(checkpoint_store.get_session_checkpoints(&session_id))
-                        })
+                    let session_id = self.session_id.clone();
+                    let checkpoints = self
+                        .coordinator
+                        .get_checkpoints(&kernel::types::SessionId(session_id))
+                        .await
                         .unwrap_or_default();
 
-                        if checkpoints.is_empty() {
-                            self.show_notification(&Notification::info(
-                                "No checkpoints found for this session",
-                                3000,
-                            ));
-                            return None;
-                        }
-
-                        let items: Vec<PickerItem> = checkpoints
-                            .into_iter()
-                            .map(|cp| {
-                                let time_str =
-                                    chrono::DateTime::from_timestamp(cp.created_at as i64, 0)
-                                        .map_or_else(
-                                            || "?".to_string(),
-                                            |dt| dt.format("%H:%M:%S").to_string(),
-                                        );
-                                let label = format!(
-                                    "[{}] {} - {} files",
-                                    time_str, cp.summary, cp.files_changed
-                                );
-                                PickerItem::new(cp.message_id, label)
-                            })
-                            .collect();
-
-                        // Show the checkpoint picker (like CommandSessions does)
-                        let _ = self.app.attr(
-                            &Id::CheckpointPicker,
-                            Attribute::Custom(attr::PICKER_ITEMS),
-                            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
-                        );
-                        let _ = self.app.attr(
-                            &Id::CheckpointPicker,
-                            Attribute::Custom(attr::DIALOG_SHOW),
-                            AttrValue::Flag(true),
-                        );
-                        // Give focus to checkpoint picker
-                        self.set_focus(&Id::CheckpointPicker);
-                        self.state.should_redraw = true;
-                    } else {
-                        self.show_notification(&Notification::warn(
-                            "Checkpoint store not available",
+                    if checkpoints.is_empty() {
+                        self.show_notification(&Notification::info(
+                            "No checkpoints found for this session",
                             3000,
                         ));
+                        return None;
                     }
+
+                    let items: Vec<PickerItem> = checkpoints
+                        .into_iter()
+                        .map(|cp| {
+                            let time_str =
+                                chrono::DateTime::from_timestamp(cp.created_at as i64, 0)
+                                    .map_or_else(
+                                        || "?".to_string(),
+                                        |dt| dt.format("%H:%M:%S").to_string(),
+                                    );
+                            let label = format!(
+                                "[{}] {} - {} files",
+                                time_str, cp.summary, cp.files_changed
+                            );
+                            PickerItem::new(cp.message_id, label)
+                        })
+                        .collect();
+
+                    // Show the checkpoint picker (like CommandSessions does)
+                    let _ = self.app.attr(
+                        &Id::CheckpointPicker,
+                        Attribute::Custom(attr::PICKER_ITEMS),
+                        AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
+                    );
+                    let _ = self.app.attr(
+                        &Id::CheckpointPicker,
+                        Attribute::Custom(attr::DIALOG_SHOW),
+                        AttrValue::Flag(true),
+                    );
+                    // Give focus to checkpoint picker
+                    self.set_focus(&Id::CheckpointPicker);
+                    self.state.should_redraw = true;
                     None
                 }
                 Msg::CommandUndo => {
                     // Undo last turn: rewind to the latest checkpoint
-                    if let Some(ref checkpoint_store) = self.checkpoint_store {
-                        let session_id = self.session_id.clone();
-                        let checkpoints = tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current()
-                                .block_on(checkpoint_store.get_session_checkpoints(&session_id))
-                        })
+                    let session_id = self.session_id.clone();
+                    let checkpoints = self
+                        .coordinator
+                        .get_checkpoints(&kernel::types::SessionId(session_id))
+                        .await
                         .unwrap_or_default();
 
-                        if checkpoints.is_empty() {
-                            self.show_notification(&Notification::error(
-                                "No checkpoints to undo",
-                                3000,
-                            ));
-                            return None;
-                        }
+                    if checkpoints.is_empty() {
+                        self.show_notification(&Notification::error(
+                            "No checkpoints to undo",
+                            3000,
+                        ));
+                        return None;
+                    }
 
-                        // Find the latest checkpoint (highest sequence)
-                        let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
+                    // Find the latest checkpoint (highest sequence)
+                    let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
 
-                        if let Some(cp) = latest {
-                            // Send rewind command to coordinator (Both = conversation + files)
-                            let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
-                                message_id: kernel::types::MessageId::from_string(cp.message_id),
-                                target: kernel::checkpoint::RewindTarget::Both,
-                            });
-                            self.show_notification(&Notification::info(
-                                format!("Undoing: {}", cp.summary),
-                                3000,
-                            ));
-                        }
-                    } else {
-                        self.show_notification(&Notification::warn(
-                            "Checkpoint store not available",
+                    if let Some(cp) = latest {
+                        // Send rewind command to coordinator (Both = conversation + files)
+                        let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
+                            message_id: kernel::types::MessageId::from_string(cp.message_id),
+                            target: kernel::checkpoint::RewindTarget::Both,
+                        });
+                        self.show_notification(&Notification::info(
+                            format!("Undoing: {}", cp.summary),
                             3000,
                         ));
                     }

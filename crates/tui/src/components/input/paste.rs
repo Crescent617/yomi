@@ -159,16 +159,13 @@ impl InputComponent {
         use kernel::types::{ContentBlock, ImageUrl};
 
         let mut blocks = Vec::new();
+        let mut current_text = String::new();
         let mut remaining = text;
 
         // Find all placeholders (both image and paste) and split text
         while let Some(start) = remaining.find('[') {
-            // Add text before placeholder
-            if start > 0 {
-                blocks.push(ContentBlock::Text {
-                    text: remaining[..start].to_string(),
-                });
-            }
+            // Accumulate text before '[' into current_text
+            current_text.push_str(&remaining[..start]);
 
             // Find placeholder end
             if let Some(end) = remaining[start..].find(']') {
@@ -177,7 +174,13 @@ impl InputComponent {
 
                 // Check if it's a known placeholder
                 if let Some(path) = self.image_paths.get(potential_placeholder) {
-                    // Image placeholder
+                    // Image placeholder: flush accumulated text first
+                    if !current_text.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: current_text.clone(),
+                        });
+                        current_text.clear();
+                    }
                     match Self::image_to_base64_url(path) {
                         Some(base64_url) => blocks.push(ContentBlock::ImageUrl {
                             image_url: ImageUrl {
@@ -191,30 +194,36 @@ impl InputComponent {
                     }
                     remaining = &remaining[end_idx + 1..];
                 } else if let Some(pasted_text) = self.pasted_contents.get(potential_placeholder) {
-                    // Text placeholder
+                    // Text placeholder: flush accumulated text first
+                    if !current_text.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: current_text.clone(),
+                        });
+                        current_text.clear();
+                    }
                     blocks.push(ContentBlock::Text {
                         text: pasted_text.clone(),
                     });
                     remaining = &remaining[end_idx + 1..];
                 }
-                // Not a recognized placeholder, treat the whole bracketed text as regular text
+                // Not a recognized placeholder: treat '[' as regular text
+                // and continue scanning from after it
                 else {
-                    blocks.push(ContentBlock::Text {
-                        text: potential_placeholder.to_string(),
-                    });
-                    remaining = &remaining[end_idx + 1..];
+                    current_text.push('[');
+                    remaining = &remaining[start + 1..];
                 }
             } else {
-                // No closing ']', treat as regular text
+                // No closing ']', treat rest as regular text
+                current_text.push_str(&remaining[start..]);
+                remaining = "";
                 break;
             }
         }
 
-        // Add remaining text
-        if !remaining.is_empty() {
-            blocks.push(ContentBlock::Text {
-                text: remaining.to_string(),
-            });
+        // Add any remaining text
+        current_text.push_str(remaining);
+        if !current_text.is_empty() {
+            blocks.push(ContentBlock::Text { text: current_text });
         }
 
         if blocks.is_empty() {
@@ -287,5 +296,80 @@ impl InputComponent {
             });
             Err(format!("Unsupported image format (magic bytes: {magic})"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_component() -> InputComponent {
+        InputComponent::new()
+    }
+
+    #[test]
+    fn test_unknown_bracket_not_split() {
+        let comp = make_component();
+        let blocks = comp.convert_to_content_blocks("hello [world] test");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].as_text(), Some("hello [world] test"));
+    }
+
+    #[test]
+    fn test_multiple_unknown_brackets_not_split() {
+        let comp = make_component();
+        let blocks = comp.convert_to_content_blocks("a [b] c [d] e");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].as_text(), Some("a [b] c [d] e"));
+    }
+
+    #[test]
+    fn test_unclosed_bracket_not_split() {
+        let comp = make_component();
+        let blocks = comp.convert_to_content_blocks("hello [world");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].as_text(), Some("hello [world"));
+    }
+
+    #[test]
+    fn test_standalone_brackets_not_split() {
+        let comp = make_component();
+        let blocks = comp.convert_to_content_blocks("[world]");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].as_text(), Some("[world]"));
+    }
+
+    #[test]
+    fn test_pasted_text_placeholder_still_works() {
+        let mut comp = make_component();
+        comp.pasted_contents.insert(
+            "[Pasted #1 text]".to_string(),
+            "large pasted content".to_string(),
+        );
+        let blocks = comp.convert_to_content_blocks("hello [Pasted #1 text] world");
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].as_text(), Some("hello "));
+        assert_eq!(blocks[1].as_text(), Some("large pasted content"));
+        assert_eq!(blocks[2].as_text(), Some(" world"));
+    }
+
+    #[test]
+    fn test_mixed_known_and_unknown_brackets() {
+        let mut comp = make_component();
+        comp.pasted_contents
+            .insert("[Pasted #1 text]".to_string(), "REPLACED".to_string());
+        let blocks = comp.convert_to_content_blocks("a [x] [Pasted #1 text] b");
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].as_text(), Some("a [x] "));
+        assert_eq!(blocks[1].as_text(), Some("REPLACED"));
+        assert_eq!(blocks[2].as_text(), Some(" b"));
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let comp = make_component();
+        let blocks = comp.convert_to_content_blocks("");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].as_text(), Some(""));
     }
 }

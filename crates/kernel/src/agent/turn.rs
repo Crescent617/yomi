@@ -24,6 +24,9 @@ struct TrackedFile {
 /// `{data_dir}/checkpoints/{session_id}/{msg_id}/`
 ///
 /// File backups are stored directly in the checkpoint's objects/ subdirectory.
+///
+/// Note: `tracked_files` uses `std::sync::Mutex` because all critical sections
+/// are brief and never cross an `.await` point (and `Drop` needs sync access).
 pub struct Turn {
     /// ID of the user message that started this turn
     pub user_msg_id: MessageId,

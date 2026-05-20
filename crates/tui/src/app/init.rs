@@ -43,25 +43,37 @@ impl Model {
     }
 
     /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
-    pub fn init_session_messages(&mut self) -> Result<()> {
+    pub async fn init_session_messages(&mut self) -> Result<()> {
+        use kernel::types::SessionId;
         let context_window = crate::config().agent.compactor.context_window;
 
-        if self.session_messages.is_empty() {
+        let messages = match self
+            .coordinator
+            .get_session_messages(&SessionId(self.session_id.clone()))
+            .await
+        {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                tracing::warn!("Failed to load session messages: {}", e);
+                Vec::new()
+            }
+        };
+
+        if messages.is_empty() {
             // Still initialize StatusBar with 0 tokens
             self.init_ctx_usage(0, context_window)?;
             return Ok(());
         }
 
         // Calculate initial token usage from messages
-        let initial_tokens: u32 = self
-            .session_messages
+        let initial_tokens: u32 = messages
             .iter()
             .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
             .next_back()
             .unwrap_or_else(|| {
                 // Estimate tokens from all messages if no usage data
                 use kernel::utils::tokens;
-                self.session_messages
+                messages
                     .iter()
                     .map(|m| tokens::estimate_tokens(&m.text_content()))
                     .sum::<usize>() as u32
@@ -71,7 +83,6 @@ impl Model {
         self.init_ctx_usage(initial_tokens, context_window)?;
 
         // Pass messages via Payload to avoid serialization
-        let messages: Vec<kernel::types::Message> = std::mem::take(&mut self.session_messages);
         self.app.attr(
             &Id::ChatView,
             Attribute::Custom(attr::INIT_HISTORY),
@@ -117,16 +128,25 @@ impl Model {
         Ok(())
     }
 
-    /// Initialize todo list from file storage
+    /// Initialize todo list from coordinator
     pub async fn init_todo_list(&mut self) -> Result<()> {
-        use kernel::storage::{JsonTodoStore, TodoStore};
-        let todo_storage = JsonTodoStore::new(&crate::config().data_dir);
-        if let Some(todo_json) = todo_storage.load(&self.session_id).await? {
-            self.app.attr(
-                &Id::TodoList,
-                Attribute::Custom(attr::SET_TODOS),
-                AttrValue::String(todo_json),
-            )?;
+        use kernel::types::SessionId;
+        match self
+            .coordinator
+            .get_todos(&SessionId(self.session_id.clone()))
+            .await
+        {
+            Ok(Some(todo_json)) => {
+                self.app.attr(
+                    &Id::TodoList,
+                    Attribute::Custom(attr::SET_TODOS),
+                    AttrValue::String(todo_json),
+                )?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("Failed to load todos: {}", e);
+            }
         }
         Ok(())
     }

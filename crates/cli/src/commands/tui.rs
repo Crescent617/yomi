@@ -1,5 +1,6 @@
 use crate::{
     args::GlobalArgs,
+    daemon,
     misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
     storage::AppStorage,
@@ -7,14 +8,14 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use kernel::{
-    agent::AgentConfig,
+    client::{CoordinatorApi, RemoteCoordinator},
     config::{Config, ModelProvider},
     deduplicate_skills, expand_tilde,
     misc::plugin::PluginLoader,
     permissions::Level,
     skill::SkillLoader,
     utils::strs,
-    AnthropicProvider, Coordinator, OpenAIProvider, SessionConfig, TaskStore,
+    AnthropicProvider, OpenAIProvider, SessionConfig,
 };
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -57,6 +58,10 @@ pub struct TuiArgs {
     #[arg(short, long, value_name = "SESSION_ID")]
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
+
+    /// Run in-process without daemon (local coordinator)
+    #[arg(long, visible_alias = "fg")]
+    pub no_daemon: bool,
 }
 
 impl TuiArgs {
@@ -144,41 +149,42 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
-    init_logging(&config)?;
+    let _log_guard = init_logging(&config)?;
 
-    let skills = load_skills(&config, &working_dir).await;
+    let coordinator: Arc<dyn CoordinatorApi> = if args.no_daemon {
+        let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
+        let provider = create_provider(&config)?;
+        let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
+        let skill_folders = resolve_skill_folders(&config, &working_dir);
 
-    // Initialize all storage backends
-    let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
-    let provider = create_provider(&config)?;
-    let task_store = Arc::new(TaskStore::new(&config.data_dir).await?);
+        let coord = kernel::Coordinator::new(
+            &storage,
+            provider,
+            config.agent.model.clone(),
+            Some(task_store),
+            Some(config.agent.compactor.clone()),
+            skill_folders,
+            config
+                .features
+                .hooks
+                .then(|| kernel::hooks::build_registry(&config.hooks)),
+        );
 
-    let coordinator_skill_folders = resolve_skill_folders(&config, &working_dir);
-
-    let coordinator = Arc::new(Coordinator::new(
-        &storage,
-        provider,
-        config.agent.model.clone(),
-        Some(task_store),
-        Some(config.agent.compactor.clone()),
-        coordinator_skill_folders,
-        config
-            .features
-            .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks)),
-    ));
-
-    let mk_agent_config = || AgentConfig {
-        skills: skills.clone(),
-        ..config.agent.clone()
+        Arc::new(coord) as Arc<dyn CoordinatorApi>
+    } else {
+        daemon::spawn_daemon().await?;
+        Arc::new(RemoteCoordinator::new(daemon::socket_path()))
     };
 
-    let data_dir = config.data_dir.clone();
+    let skills = load_skills(&config, &working_dir).await;
     let mk_config = || SessionConfig {
-        agent: mk_agent_config(),
+        agent: kernel::agent::AgentConfig {
+            skills: skills.clone(),
+            ..config.agent.clone()
+        },
         project_path: working_dir.clone(),
         auto_approve_level: config.auto_approve,
-        data_dir: data_dir.clone(),
+        data_dir: config.data_dir.clone(),
     };
 
     print_startup_info(&config);
@@ -210,29 +216,20 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         }
     };
 
+    // Build initial message once; consumed by .take() so it is only sent
+    // on the very first session, never on switch or /new.
+    let mut initial_message = args.build_initial_message().await?;
+
     loop {
         let session_id = resolve_session(
             &session_arg,
             is_launch,
-            &coordinator,
+            coordinator.as_ref(),
             &app_storage,
             &working_dir,
             mk_config,
         )
         .await?;
-
-        let session_messages = storage
-            .message_store()
-            .get(&session_id.0)
-            .await
-            .unwrap_or_default();
-
-        // Build initial message only on first launch (combines -p prompt and stdin)
-        let initial_message = if is_launch {
-            args.build_initial_message().await?
-        } else {
-            None
-        };
 
         let result = run_session_loop(
             coordinator.clone(),
@@ -240,9 +237,8 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             session_ctx.clone(),
             app_storage.clone(),
             input_history.clone(),
-            session_messages,
             is_launch,
-            initial_message,
+            initial_message.take(),
         )
         .await?;
 
@@ -292,7 +288,10 @@ pub fn resolve_skill_folders(config: &Config, working_dir: &Path) -> Vec<PathBuf
         .collect()
 }
 
-async fn load_skills(config: &Config, working_dir: &Path) -> Vec<Arc<kernel::skill::Skill>> {
+pub(crate) async fn load_skills(
+    config: &Config,
+    working_dir: &Path,
+) -> Vec<Arc<kernel::skill::Skill>> {
     let skill_folders = resolve_skill_folders(config, working_dir);
     tracing::debug!("Loading skills from folders: {:?}", skill_folders);
 
@@ -359,7 +358,7 @@ async fn load_plugin_skills(config: &Config, skills: &mut Vec<Arc<kernel::skill:
     }
 }
 
-fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
+pub(crate) fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
     if !config.has_api_key() {
         eprintln!("Error: API key not configured.");
         std::process::exit(1);
@@ -388,7 +387,9 @@ fn print_startup_info(config: &Config) {
     }
 }
 
-fn init_logging(config: &Config) -> Result<()> {
+pub(crate) fn init_logging(
+    config: &Config,
+) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let log_dir = config.log_dir();
 
     std::fs::create_dir_all(&log_dir)
@@ -402,8 +403,7 @@ fn init_logging(config: &Config) -> Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {e}"))?;
 
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    Box::leak(Box::new(_guard));
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
@@ -423,7 +423,9 @@ fn init_logging(config: &Config) -> Result<()> {
         .is_ok()
     {
         tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
+        Ok(Some(guard))
+    } else {
+        drop(guard);
+        Ok(None)
     }
-
-    Ok(())
 }

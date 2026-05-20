@@ -264,9 +264,7 @@ fn render_tool(
     // For grep, show output mode with text_secondary style
     if tool_name == GREP_TOOL_NAME {
         if let Some(value) = parsed_args {
-            let mode = value["output_mode"]
-                .as_str()
-                .unwrap_or("files_with_matches");
+            let mode = value["output_mode"].as_str().unwrap_or("filename");
             header_spans.push(Span::styled(
                 format!(" {mode}"),
                 Style::default().fg(colors::text_secondary()),
