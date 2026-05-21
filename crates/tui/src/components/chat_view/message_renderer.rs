@@ -69,6 +69,7 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             width,
         ),
         HistoryMessage::Error(error) => render_error(error),
+        HistoryMessage::Notice(text) => render_notice(text),
     }
 }
 
@@ -466,6 +467,21 @@ fn render_error(error: &str) -> Vec<Arc<Line<'static>>> {
     lines
 }
 
+fn render_notice(text: &str) -> Vec<Arc<Line<'static>>> {
+    let mut lines = Vec::new();
+
+    // Render notice with success green + italic
+    for line in text.lines() {
+        lines.push(Arc::new(Line::from(vec![Span::styled(
+            preprocess(line),
+            Style::default()
+                .fg(colors::accent_success())
+                .add_modifier(Modifier::ITALIC),
+        )])));
+    }
+    lines
+}
+
 /// Extract text content from content blocks.
 pub fn extract_text_from_blocks(blocks: &[ContentBlock]) -> String {
     blocks
@@ -607,13 +623,14 @@ pub fn get_message_raw_content(msg: &HistoryMessage) -> String {
             result
         }
         HistoryMessage::Error(error) => error.clone(),
+        HistoryMessage::Notice(text) => text.clone(),
     }
 }
 
 /// Convert a message to pretty JSON
 pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
     // Create a serializable representation
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, Default)]
     struct SerializableMessage {
         role: String,
         content: Option<String>,
@@ -629,12 +646,7 @@ pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
         HistoryMessage::User(blocks) => SerializableMessage {
             role: "user".to_string(),
             content: Some(extract_text_from_blocks(blocks)),
-            thinking: None,
-            tool_name: None,
-            tool_arguments: None,
-            tool_output: None,
-            tool_error: None,
-            error: None,
+            ..Default::default()
         },
         HistoryMessage::Assistant {
             content, thinking, ..
@@ -642,11 +654,7 @@ pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
             role: "assistant".to_string(),
             content: Some(content.clone()),
             thinking: thinking.clone(),
-            tool_name: None,
-            tool_arguments: None,
-            tool_output: None,
-            tool_error: None,
-            error: None,
+            ..Default::default()
         },
         HistoryMessage::Tool {
             tool_name,
@@ -656,23 +664,21 @@ pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
             ..
         } => SerializableMessage {
             role: "tool".to_string(),
-            content: None,
-            thinking: None,
             tool_name: Some(tool_name.clone()),
             tool_arguments: arguments.clone(),
             tool_output: output.clone(),
             tool_error: error.clone(),
-            error: None,
+            ..Default::default()
         },
         HistoryMessage::Error(error) => SerializableMessage {
             role: "error".to_string(),
-            content: None,
-            thinking: None,
-            tool_name: None,
-            tool_arguments: None,
-            tool_output: None,
-            tool_error: None,
             error: Some(error.clone()),
+            ..Default::default()
+        },
+        HistoryMessage::Notice(text) => SerializableMessage {
+            role: "notice".to_string(),
+            content: Some(text.clone()),
+            ..Default::default()
         },
     };
 

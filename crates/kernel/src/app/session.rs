@@ -11,17 +11,10 @@ use tokio::sync::mpsc;
 
 pub struct Session {
     id: SessionId,
-    #[allow(dead_code)]
-    config: SessionConfig,
-    /// Shared agent resources (contains `session_store`, `message_store`, etc.)
-    #[allow(dead_code)]
     agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
-    /// File state store for tracking file modification times
-    #[allow(dead_code)]
-    file_state_store: Arc<crate::tools::helper::FileStateStore>,
     /// Goal store for persisting active goal state
     goal_store: Arc<dyn crate::goal::GoalStore>,
 }
@@ -61,11 +54,9 @@ impl Session {
 
         let session = Self {
             id,
-            config,
             agent_shared,
             main_agent: Some(main_agent),
             permission_state,
-            file_state_store,
             goal_store,
         };
         Ok((session, event_rx))

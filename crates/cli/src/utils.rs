@@ -1,6 +1,6 @@
 use crate::args::GlobalArgs;
 use anyhow::Result;
-use kernel::{config::Config, expand_tilde, DEFAULT_DATA_DIR};
+use kernel::config::Config;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -9,20 +9,21 @@ pub static DEBUG_MODE: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("DEBUG").is_ok_and(|v| v == "1" || v.to_lowercase().contains('t'))
 });
 
-/// Load configuration from the specified path or search default locations
+/// Load configuration from the specified path or discover default locations.
+///
+/// Resolution order:
+/// 1. Explicit `config_path` (from `--config` / `-c` CLI arg)
+/// 2. `YOMI_CONFIG` environment variable
+/// 3. `~/.yomi/config.toml`
+/// 4. Environment variables only
 pub fn load_config(config_path: Option<&PathBuf>, working_dir: &Path) -> Result<Config> {
     let mut config = if let Some(path) = config_path {
         Config::from_file(path)?
     } else {
-        let default_paths = [expand_tilde(DEFAULT_DATA_DIR).join("config.toml")];
-        let mut loaded = None;
-        for path in &default_paths {
-            if path.exists() {
-                loaded = Some(Config::from_file(path)?);
-                break;
-            }
-        }
-        loaded.unwrap_or_else(Config::from_env)
+        Config::discover_file()
+            .map(|path| Config::from_file(&path))
+            .transpose()?
+            .unwrap_or_default()
     };
 
     config.apply_env_overrides();

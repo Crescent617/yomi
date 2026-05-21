@@ -27,7 +27,22 @@ impl Model {
                 Msg::InputEntry(raw, inner) => {
                     if !raw.trim().is_empty() {
                         self.input_history.retain(|h| h != &raw);
-                        self.input_history.push(raw);
+                        self.input_history.push(raw.clone());
+                        self.new_history_entries.retain(|h| h != &raw);
+                        self.new_history_entries.push(raw);
+
+                        let limit = crate::INPUT_HISTORY_LIMIT;
+                        if self.input_history.len() > limit {
+                            self.input_history = self
+                                .input_history
+                                .split_off(self.input_history.len() - limit / 2);
+                        }
+                        if self.new_history_entries.len() > limit {
+                            self.new_history_entries = self
+                                .new_history_entries
+                                .split_off(self.new_history_entries.len() - limit / 2);
+                        }
+
                         let _ = self.init_input_history();
                     }
                     Box::pin(self.update(Some(*inner))).await

@@ -639,10 +639,6 @@ pub enum KernelError {
     #[error("Skill error: {0}")]
     Skill(String),
 
-    /// Plugin error
-    #[error("Plugin error: {0}")]
-    Plugin(String),
-
     /// Cancellation error
     #[error("Cancelled: {0}")]
     Cancelled(String),
@@ -702,11 +698,6 @@ impl KernelError {
         Self::Skill(msg.into())
     }
 
-    /// Create a new plugin error
-    pub fn plugin(msg: impl Into<String>) -> Self {
-        Self::Plugin(msg.into())
-    }
-
     /// Create a new cancellation error
     pub fn cancelled(msg: impl Into<String>) -> Self {
         Self::Cancelled(msg.into())
@@ -715,6 +706,11 @@ impl KernelError {
     /// Create a new checkpoint error
     pub fn checkpoint(msg: impl Into<String>) -> Self {
         Self::Checkpoint(msg.into())
+    }
+
+    /// Check if this is a "session not found" error.
+    pub fn is_session_not_found(&self) -> bool {
+        matches!(self, Self::Session(msg) if msg.starts_with("session_not_found"))
     }
 
     /// Check if this is a cancellation error

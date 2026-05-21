@@ -105,8 +105,8 @@ pub struct Model {
     pub(crate) pending_permission: Option<String>,
     /// Input history for the current working directory (loaded + new)
     pub(crate) input_history: Vec<String>,
-    /// Initial history length (to identify new entries on exit)
-    pub(crate) initial_history_len: usize,
+    /// New entries collected during this session (not yet persisted)
+    pub(crate) new_history_entries: Vec<String>,
     /// Working directory (for file completion and session listing)
     pub(crate) working_dir: std::path::PathBuf,
     /// Current session ID
@@ -117,6 +117,11 @@ pub struct Model {
     pub(crate) queued_message: Option<Vec<ContentBlock>>,
     /// Last known terminal size to detect resize events
     pub(crate) last_terminal_size: (u16, u16),
+    /// Background reconnect task for the event channel.
+    /// When the event channel dies (daemon restart), a task is spawned
+    /// to retry subscribe until success.  The run loop polls this
+    /// handle every tick and swaps in the new receiver when ready.
+    pub(crate) reconnect_task: Option<tokio::task::JoinHandle<Option<broadcast::Receiver<Event>>>>,
 }
 
 /// Format a session ID for display, truncating long IDs with ellipsis.

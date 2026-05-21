@@ -6,8 +6,8 @@ use kernel::types::SessionId;
 pub async fn run(global: &GlobalArgs, session: Option<String>) -> Result<()> {
     let session_id = super::resolve_session_id(global, session).await?;
 
-    let socket = crate::daemon::socket_path();
-    let coordinator = RemoteCoordinator::connect(&socket)
+    let addr = crate::daemon::socket_addr();
+    let coordinator = RemoteCoordinator::connect(&addr)
         .await
         .context("Failed to connect to daemon. Is it running?")?;
 

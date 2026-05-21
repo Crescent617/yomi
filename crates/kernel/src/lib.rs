@@ -26,7 +26,6 @@ pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
 pub mod memory;
-pub mod misc;
 pub mod permissions;
 pub mod prompt;
 pub mod providers;
@@ -50,7 +49,7 @@ pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedF
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
-pub use misc::plugin::{Plugin, PluginLoader};
+
 pub use prompt::SystemPromptBuilder;
 pub use providers::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,

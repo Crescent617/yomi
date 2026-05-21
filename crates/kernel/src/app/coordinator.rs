@@ -1,8 +1,8 @@
-use crate::agent::AgentShared;
+use crate::agent::{AgentConfig, AgentShared};
 use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
-use crate::providers::{ModelConfig, Provider};
+use crate::providers::Provider;
 use crate::storage::{MessageStore, SessionStore, StorageSet};
 use crate::types::{KernelError, Result, SessionId};
 use std::collections::HashMap;
@@ -19,6 +19,9 @@ pub struct Coordinator {
     /// Epoch seconds of the last event received from any session.
     /// Updated by `forward_session_events` on every event.
     last_activity_at: Arc<AtomicU64>,
+    /// Default agent configuration for new sessions.
+    /// Wrapped in `RwLock` so it can be hot-reloaded in daemon mode.
+    agent_config: Arc<RwLock<AgentConfig>>,
 }
 
 impl Coordinator {
@@ -55,7 +58,7 @@ impl Coordinator {
     pub fn new(
         storage: &StorageSet,
         provider: Arc<dyn Provider>,
-        model_config: ModelConfig,
+        agent_config: AgentConfig,
         task_store: Option<Arc<crate::task::TaskStore>>,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
@@ -71,7 +74,7 @@ impl Coordinator {
         let data_dir = storage.data_dir().to_path_buf();
         let agent_shared = AgentShared::with_data_dir(
             provider,
-            Arc::new(model_config),
+            Arc::new(agent_config.model.clone()),
             task_store,
             Some(todo_storage),
             compactor,
@@ -96,6 +99,7 @@ impl Coordinator {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             session_event_senders: Arc::new(RwLock::new(HashMap::new())),
             last_activity_at: Arc::new(AtomicU64::new(Self::now_epoch())),
+            agent_config: Arc::new(RwLock::new(agent_config)),
         }
     }
 
@@ -122,12 +126,26 @@ impl Coordinator {
         Self::now_epoch().saturating_sub(last)
     }
 
-    /// Create a new session with the given configuration
-    pub async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
-        let working_dir = config.project_path.to_string_lossy().to_string();
+    /// Create a new session with the given project path and auto-approve level.
+    pub async fn create_session(
+        &self,
+        project_path: std::path::PathBuf,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
+        let working_dir = project_path.to_string_lossy().to_string();
         let id = SessionId::new();
         self.session_store().create(&id, Some(&working_dir)).await?;
-        self.init_session(id.clone(), config).await?;
+        let config = SessionConfig {
+            agent: self.agent_config.read().await.clone(),
+            project_path,
+            auto_approve_level,
+            data_dir: self.data_dir().clone(),
+        };
+        if let Err(e) = self.init_session(id.clone(), config).await {
+            // Rollback: remove the orphaned storage record
+            let _ = self.session_store().delete(&id).await;
+            return Err(e);
+        }
         tracing::info!("Session {} created", id.0);
         Ok(id)
     }
@@ -225,7 +243,7 @@ impl Coordinator {
     pub async fn restore_session(
         &self,
         session_id: &SessionId,
-        config: SessionConfig,
+        auto_approve_level: Level,
     ) -> Result<SessionId> {
         let live = self.get_session(session_id).await.is_some();
         tracing::info!("restore_session: {} live={}", session_id.0, live);
@@ -241,8 +259,36 @@ impl Coordinator {
             KernelError::session(format!("Session not found in storage: {}", session_id.0))
         })?;
 
+        let project_path = session_info.working_dir.map_or_else(
+            || {
+                tracing::warn!(
+                    "Session {} has no working_dir, falling back to current_dir",
+                    session_id.0
+                );
+                std::env::current_dir().unwrap_or_default()
+            },
+            std::path::PathBuf::from,
+        );
+        let config = SessionConfig {
+            agent: self.agent_config.read().await.clone(),
+            project_path,
+            auto_approve_level,
+            data_dir: self.data_dir().clone(),
+        };
         tracing::info!("Restoring session {} from storage", session_id.0);
-        self.init_session(session_info.id.clone(), config).await?;
+        if let Err(e) = self.init_session(session_info.id.clone(), config).await {
+            // If the session was raced into memory by another client
+            // (e.g. TUI reconnect_task + CLI input_handle), treat it as
+            // success instead of failing the caller's retry loop.
+            if e.to_string().contains("already initialized") {
+                tracing::debug!(
+                    "Session {} already initialized — treating as restored",
+                    session_id.0
+                );
+                return Ok(session_info.id);
+            }
+            return Err(e);
+        }
         tracing::info!("Session {} restored", session_info.id.0);
         Ok(session_info.id)
     }
@@ -251,13 +297,41 @@ impl Coordinator {
     pub async fn fork_session(
         &self,
         parent_id: &SessionId,
-        config: SessionConfig,
+        auto_approve_level: Level,
     ) -> Result<SessionId> {
         // Create new session with copied history in storage
         let new_id = self.session_store().fork(parent_id).await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
 
-        self.init_session(new_id.clone(), config).await?;
+        // Read working_dir from parent session info
+        let parent_info = self.session_store().get(parent_id).await?.ok_or_else(|| {
+            KernelError::session(format!(
+                "Parent session not found in storage: {}",
+                parent_id.0
+            ))
+        })?;
+        let project_path = parent_info.working_dir.map_or_else(
+            || {
+                tracing::warn!(
+                    "Parent session {} has no working_dir, falling back to current_dir",
+                    parent_id.0
+                );
+                std::env::current_dir().unwrap_or_default()
+            },
+            std::path::PathBuf::from,
+        );
+
+        let config = SessionConfig {
+            agent: self.agent_config.read().await.clone(),
+            project_path,
+            auto_approve_level,
+            data_dir: self.data_dir().clone(),
+        };
+        if let Err(e) = self.init_session(new_id.clone(), config).await {
+            // Rollback: remove the orphaned forked storage record
+            let _ = self.session_store().delete(&new_id).await;
+            return Err(e);
+        }
         tracing::info!("Forked session {} initialized", new_id.0);
         Ok(new_id)
     }
@@ -270,7 +344,7 @@ impl Coordinator {
     async fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
         self.get_session(session_id)
             .await
-            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))
+            .ok_or_else(|| KernelError::session(format!("session_not_found: {}", session_id.0)))
     }
 
     pub async fn list_sessions(&self) -> Vec<SessionId> {
@@ -429,5 +503,17 @@ impl Coordinator {
             Some(store) => store.load(&session_id.0).await,
             None => Ok(None),
         }
+    }
+
+    /// Update the agent configuration for new sessions.
+    ///
+    /// NOTE: This only updates `AgentConfig` (skills, `system_prompt`, `max_iterations`,
+    /// etc.). `AgentShared` fields like `model_config` and `skill_folders` are
+    /// fixed at startup and cannot be hot-reloaded without restarting the daemon.
+    pub async fn update_agent_config(&self, agent_config: AgentConfig) {
+        let model_id = agent_config.model.model_id.clone();
+        let skill_count = agent_config.skills.len();
+        *self.agent_config.write().await = agent_config;
+        tracing::info!("Updated agent config (model={model_id}, {skill_count} skill(s))");
     }
 }

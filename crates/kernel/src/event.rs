@@ -58,24 +58,24 @@ pub enum AgentEvent {
     /// Permission request for tool execution approval
     PermissionRequest {
         agent_id: AgentId,
-        req_id: String, // 独立请求ID（非tool_call_id，保证唯一）
+        req_id: String, // independent request ID (not tool_call_id, guarantees uniqueness)
         tool_id: String,
         tool_name: String,
-        tool_args: String, // 工具参数（用于显示，如 Bash 命令）
+        tool_args: String, // tool arguments (for display, e.g. Bash command)
         tool_level: String,
         reason: String,
     },
-    /// 操作错误（可恢复或不可恢复）
+    /// Recoverable or non-recoverable operation error
     Error {
         agent_id: AgentId,
-        /// 错误发生的阶段
+        /// Phase where the error occurred
         phase: ErrorPhase,
-        /// 错误详情
+        /// Error details
         error: String,
-        /// 是否可恢复（会重试）
+        /// Whether the error is recoverable (will be retried)
         is_recoverable: bool,
     },
-    /// 正在重试
+    /// Currently retrying
     Retrying {
         agent_id: AgentId,
         attempt: u32,
@@ -84,40 +84,40 @@ pub enum AgentEvent {
     },
 }
 
-/// Agent 生命周期状态（业务层面，区别于内部执行状态 `AgentState`）
+/// Agent lifecycle state change (business-level, distinct from internal `AgentState`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentStatus {
-    /// Agent 开始运行
+    /// Agent started running
     Running,
-    /// 任务自然结束（原 `ReActLoopEnd`）
+    /// Task completed naturally (was `ReActLoopEnd`)
     TurnCompleted {
         total_iterations: usize,
-        /// API 返回的 finish reason（如 `MaxTokens`, `ContentFilter`）
+        /// Finish reason from the API (e.g. `MaxTokens`, `ContentFilter`)
         finish_reason: Option<crate::types::FinishReason>,
-        /// 最后一条 assistant 消息的 ID
+        /// ID of the last assistant message
         last_message_id: Option<MessageId>,
     },
-    /// Agent 停止（包含各种结束原因）
+    /// Agent stopped (includes various end reasons)
     Stopped { reason: StopReason },
 }
 
-/// Agent 停止原因
+/// Reasons why the Agent stopped
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
-    /// 正常完成
+    /// Normal completion
     Completed,
-    /// 用户取消
+    /// User cancelled
     Cancelled {
-        /// 被取消的操作名称（如 "streaming", "compaction"）
+        /// Name of the cancelled operation (e.g. "streaming", "compaction")
         operation: Option<String>,
     },
-    /// 执行失败
+    /// Execution failed
     Failed { error: String },
-    /// 达到最大迭代次数
+    /// Reached maximum iterations
     MaxIterations { reached: usize },
 }
 
-/// Agent 执行阶段，用于错误报告
+/// Agent execution phase, used for error reporting
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ErrorPhase {
     Streaming,

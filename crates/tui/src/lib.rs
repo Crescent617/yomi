@@ -15,6 +15,9 @@ pub mod table;
 pub mod theme;
 pub mod utils;
 
+/// Maximum number of input history entries kept in memory and on disk.
+pub const INPUT_HISTORY_LIMIT: usize = 2000;
+
 // Re-export main entry point
 pub use app::{run_tui, FeatureGates, TuiResult};
 

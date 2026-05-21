@@ -1,7 +1,6 @@
 use crate::{
     args::GlobalArgs,
     daemon,
-    misc::claude_settings::ClaudeSettings,
     session::{resolve_session, run_session_loop, SessionArg, SessionContext},
     storage::AppStorage,
     utils::DEBUG_MODE,
@@ -10,12 +9,9 @@ use anyhow::{Context, Result};
 use kernel::{
     client::{CoordinatorApi, RemoteCoordinator},
     config::{Config, ModelProvider},
-    deduplicate_skills, expand_tilde,
-    misc::plugin::PluginLoader,
     permissions::Level,
-    skill::SkillLoader,
     utils::strs,
-    AnthropicProvider, OpenAIProvider, SessionConfig,
+    AnthropicProvider, OpenAIProvider,
 };
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -152,39 +148,10 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let _log_guard = init_logging(&config)?;
 
     let coordinator: Arc<dyn CoordinatorApi> = if args.no_daemon {
-        let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
-        let provider = create_provider(&config)?;
-        let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
-        let skill_folders = resolve_skill_folders(&config, &working_dir);
-
-        let coord = kernel::Coordinator::new(
-            &storage,
-            provider,
-            config.agent.model.clone(),
-            Some(task_store),
-            Some(config.agent.compactor.clone()),
-            skill_folders,
-            config
-                .features
-                .hooks
-                .then(|| kernel::hooks::build_registry(&config.hooks)),
-        );
-
-        Arc::new(coord) as Arc<dyn CoordinatorApi>
+        Arc::new(create_local_coordinator(&config, &working_dir).await?)
     } else {
         daemon::spawn_daemon().await?;
-        Arc::new(RemoteCoordinator::new(daemon::socket_path()))
-    };
-
-    let skills = load_skills(&config, &working_dir).await;
-    let mk_config = || SessionConfig {
-        agent: kernel::agent::AgentConfig {
-            skills: skills.clone(),
-            ..config.agent.clone()
-        },
-        project_path: working_dir.clone(),
-        auto_approve_level: config.auto_approve,
-        data_dir: config.data_dir.clone(),
+        Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
     };
 
     print_startup_info(&config);
@@ -227,7 +194,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             coordinator.as_ref(),
             &app_storage,
             &working_dir,
-            mk_config,
+            config.auto_approve,
         )
         .await?;
 
@@ -239,13 +206,22 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             input_history.clone(),
             is_launch,
             initial_message.take(),
+            config.auto_approve,
         )
         .await?;
 
-        for entry in &result.new_history_entries {
-            app_storage.add_input_entry(&working_dir, entry).await?;
+        // Save all new history entries at once (merge + dedup + trim in one shot)
+        if let Err(e) = app_storage
+            .save_input_history(&working_dir, &result.new_history_entries)
+            .await
+        {
+            tracing::warn!("Failed to save input history: {}", e);
         }
         input_history.extend(result.new_history_entries);
+        let limit = tui::INPUT_HISTORY_LIMIT;
+        if input_history.len() > limit {
+            input_history = input_history.split_off(input_history.len() - limit / 2);
+        }
 
         // Handle session switching (/sessions command)
         if let Some(switch_to_id) = result.switch_to_session {
@@ -260,17 +236,44 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             continue;
         }
 
-        // Dedup input history on clean exit
-        if let Err(e) = app_storage.dedup_input_history(&working_dir).await {
-            tracing::warn!("Failed to dedup input history: {}", e);
-        }
-
         break;
     }
 
     Ok(())
 }
 
+async fn create_local_coordinator(
+    config: &Config,
+    working_dir: &Path,
+) -> Result<kernel::Coordinator> {
+    let storage = kernel::StorageSet::open_with_config(&config.data_dir, config).await?;
+    let provider = create_provider(config)?;
+    let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
+    let skill_folders = resolve_skill_folders(config, working_dir);
+
+    let agent_config = tokio::task::spawn_blocking({
+        let config = config.clone();
+        let working_dir = working_dir.to_path_buf();
+        move || kernel::server::build_agent_config(&config, &working_dir)
+    })
+    .await?;
+
+    Ok(kernel::Coordinator::new(
+        &storage,
+        provider,
+        agent_config,
+        Some(task_store),
+        Some(config.agent.compactor.clone()),
+        skill_folders,
+        config
+            .features
+            .hooks
+            .then(|| kernel::hooks::build_registry(&config.hooks)),
+    ))
+}
+
+/// Resolve skill folders against working directory.
+/// Relative paths are joined with `working_dir`, absolute paths are kept as-is.
 /// Resolve skill folders against working directory.
 /// Relative paths are joined with `working_dir`, absolute paths are kept as-is.
 pub fn resolve_skill_folders(config: &Config, working_dir: &Path) -> Vec<PathBuf> {
@@ -286,76 +289,6 @@ pub fn resolve_skill_folders(config: &Config, working_dir: &Path) -> Vec<PathBuf
             }
         })
         .collect()
-}
-
-pub(crate) async fn load_skills(
-    config: &Config,
-    working_dir: &Path,
-) -> Vec<Arc<kernel::skill::Skill>> {
-    let skill_folders = resolve_skill_folders(config, working_dir);
-    tracing::debug!("Loading skills from folders: {:?}", skill_folders);
-
-    let mut skills = {
-        let loader = SkillLoader::new(skill_folders.clone());
-        loader.load_all().unwrap_or_else(|e| {
-            eprintln!("Warning: Failed to load skills: {e}");
-            Vec::new()
-        })
-    };
-
-    if config.load_claude_plugins {
-        load_plugin_skills(config, &mut skills).await;
-    }
-
-    deduplicate_skills(&mut skills);
-
-    if !skills.is_empty() {
-        tracing::info!("Loaded {} skill(s)", skills.len());
-        for skill in &skills {
-            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
-        }
-    }
-
-    skills
-}
-
-async fn load_plugin_skills(config: &Config, skills: &mut Vec<Arc<kernel::skill::Skill>>) {
-    let plugin_dirs = if config.claude_plugin_dirs.is_empty() {
-        vec![expand_tilde("~/.claude/plugins/cache")]
-    } else {
-        config.claude_plugin_dirs.clone()
-    };
-
-    tracing::debug!("Loading plugins from directories: {:?}", plugin_dirs);
-
-    let claude_settings = ClaudeSettings::load();
-    let has_enabled_filter = !claude_settings.enabled_plugins.is_empty();
-
-    let plugins = {
-        let loader =
-            PluginLoader::new(plugin_dirs).with_enabled_plugins(claude_settings.enabled_plugins);
-        loader.load_all().unwrap_or_else(|e| {
-            tracing::warn!("Failed to load plugins: {e}");
-            Vec::new()
-        })
-    };
-
-    if has_enabled_filter {
-        tracing::debug!("Applied enabledPlugins filter from ~/.claude/settings.json");
-    }
-
-    if !plugins.is_empty() {
-        tracing::debug!("Loaded {} plugin(s)", plugins.len());
-        for plugin in &plugins {
-            tracing::debug!("  - {} (from {})", plugin.name, plugin.path.display());
-            if let Ok(plugin_skills) = SkillLoader::load_from_plugin(plugin) {
-                for skill in plugin_skills {
-                    tracing::debug!("    - skill: {}", skill.name);
-                    skills.push(skill);
-                }
-            }
-        }
-    }
 }
 
 pub(crate) fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {

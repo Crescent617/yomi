@@ -1,89 +1,87 @@
 //! Daemon lifecycle management for yomi.
 
 use anyhow::{Context, Result};
+use kernel::transport::SocketAddr;
 use std::path::PathBuf;
-use tokio::net::UnixStream;
 use tokio::time::{sleep, Duration};
 
 /// How long to wait for graceful shutdown before falling back to kill.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Polling interval while waiting for graceful shutdown.
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// Max retries when waiting for socket disappearance during restart.
-const RESTART_MAX_RETRIES: usize = 30;
-/// Polling interval while waiting for socket disappearance during restart.
-const RESTART_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Get the Unix socket path for the daemon.
+/// Resolve daemon address from environment or platform default.
 ///
-/// Resolution order:
-/// 1. `YOMI_SOCKET` env var (highest priority)
-/// 2. `XDG_RUNTIME_DIR` env var
-/// 3. Platform-specific data dir
-/// 4. `/tmp` fallback
-pub fn socket_path() -> PathBuf {
+/// `YOMI_SOCKET` accepts `unix://<path>`, `tcp://<host:port>`, bare paths, or bare `host:port`.
+pub fn socket_addr() -> SocketAddr {
     let socket_env = format!("{}SOCKET", kernel::ENV_PREFIX);
-    if let Some(path) = std::env::var_os(&socket_env) {
-        return PathBuf::from(path);
+    if let Ok(val) = std::env::var(&socket_env) {
+        return val.parse().expect("Invalid YOMI_SOCKET format");
     }
-    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
-        || {
-            directories::BaseDirs::new().map_or_else(
-                || PathBuf::from("/tmp/yomi-daemon.sock"),
-                |b| b.data_dir().join("yomi/daemon.sock"),
-            )
-        },
-        |p| PathBuf::from(p).join("yomi/daemon.sock"),
-    )
+    if cfg!(unix) {
+        SocketAddr::Unix(std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+            || {
+                directories::BaseDirs::new().map_or_else(
+                    || std::path::PathBuf::from("/tmp/yomi-daemon.sock"),
+                    |b| b.data_dir().join("yomi/daemon.sock"),
+                )
+            },
+            |p| std::path::PathBuf::from(p).join("yomi/daemon.sock"),
+        ))
+    } else {
+        SocketAddr::Tcp("127.0.0.1:57231".to_string())
+    }
 }
 
-/// Returns the PID file path used for daemon process tracking.
-///
-/// Defaults to `<socket_path>.pid`.
-fn pid_file_path() -> PathBuf {
-    let mut p = socket_path();
-    p.set_extension("pid");
-    p
+/// PID file used for daemon process tracking.
+/// Derived from the socket address so lifecycle commands always
+/// target the correct daemon instance.
+pub fn pid_file_path() -> PathBuf {
+    match socket_addr() {
+        SocketAddr::Unix(path) => {
+            let mut p = path;
+            p.set_extension("pid");
+            p
+        }
+        SocketAddr::Tcp(ref addr_str) => {
+            let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
+            directories::BaseDirs::new().map_or_else(
+                || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
+                |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
+            )
+        }
+    }
 }
 
 /// Check whether a process with the given PID exists.
-///
-/// Uses `kill(pid, 0)` which works on all POSIX systems (Linux, macOS, *BSD).
-/// No signal is actually sent; the syscall only checks permissions / process existence.
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(pid as i32),
-        None, // kill(pid, 0)
-    )
-    .is_ok()
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
 }
 
 #[cfg(not(unix))]
 fn process_exists(_pid: u32) -> bool {
-    // Conservative: assume the process exists on non-Unix platforms so we
-    // never delete a socket that might belong to a running daemon.
-    true
+    // We cannot reliably detect process liveness on Windows without
+    // adding heavy dependencies (OpenProcess / GetExitCodeProcess).
+    // Callers should use `try_connect()` as the ground-truth signal.
+    false
 }
 
-/// Try connecting to the daemon socket.
-pub async fn try_connect() -> Option<UnixStream> {
-    let sock = socket_path();
-    if !sock.exists() {
-        return None;
-    }
-    match UnixStream::connect(&sock).await {
+/// Try connecting to the daemon.
+pub async fn try_connect() -> Option<kernel::transport::Stream> {
+    let addr = socket_addr();
+    match kernel::transport::connect(&addr).await {
         Ok(stream) => Some(stream),
         Err(_) => {
-            // Be conservative: only delete the socket if we can prove the
-            // owner is dead (PID file exists but PID is gone).  If the PID
-            // file is missing we assume the daemon is still starting up.
             let pid_file = pid_file_path();
             if pid_file.exists() {
                 if let Ok(s) = tokio::fs::read_to_string(&pid_file).await {
-                    if let Ok(pid) = s.trim().parse::<u32>() {
-                        if !process_exists(pid) {
-                            let _ = tokio::fs::remove_file(&sock).await;
+                    match s.trim().parse::<u32>() {
+                        Ok(pid) if !process_exists(pid) => {
+                            let _ = tokio::fs::remove_file(&pid_file).await;
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
                             let _ = tokio::fs::remove_file(&pid_file).await;
                         }
                     }
@@ -95,27 +93,20 @@ pub async fn try_connect() -> Option<UnixStream> {
 }
 
 /// Spawn the daemon as a fully detached background process.
-/// Returns Ok(()) immediately if a daemon is already running.
+/// If a daemon is already accepting connections, returns Ok immediately.
+/// Otherwise spawns a new process and polls until the socket is ready
+/// (up to 10 s) so callers never race with daemon initialisation.
 pub async fn spawn_daemon() -> Result<()> {
-    let sock = socket_path();
-    let pid_file = pid_file_path();
+    const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
+    const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
-    // Check if a daemon is already running before spawning.
     if try_connect().await.is_some() {
         tracing::info!("Daemon already running, skipping spawn");
         return Ok(());
     }
 
-    if let Some(parent) = sock.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    let _ = tokio::fs::remove_file(&sock).await;
-    let _ = tokio::fs::remove_file(&pid_file).await;
-
     let current_exe = std::env::current_exe().context("Failed to get current executable")?;
 
-    // Use std::process::Command for better control over process spawning.
     let mut cmd = std::process::Command::new(&current_exe);
     cmd.arg("daemon")
         .arg("start")
@@ -127,9 +118,6 @@ pub async fn spawn_daemon() -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // Create new session: daemon becomes session & process group leader,
-        // fully detaching from the controlling terminal so SIGHUP on terminal
-        // close does not reach it.
         unsafe {
             cmd.pre_exec(|| {
                 nix::unistd::setsid().map_err(std::io::Error::other)?;
@@ -138,56 +126,87 @@ pub async fn spawn_daemon() -> Result<()> {
         }
     }
 
-    let child = cmd.spawn().context("Failed to spawn daemon process")?;
-
+    let mut child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
-    tokio::fs::write(&pid_file, pid.to_string()).await?;
+    tokio::fs::write(pid_file_path(), pid.to_string()).await?;
 
-    tracing::info!("Spawned daemon with PID {pid}");
-    Ok(())
+    // Poll until the daemon socket is actually accepting connections.
+    // Daemon initialisation (storage, provider, skills) can take a few
+    // seconds, so we allow up to 10 s.
+    let start = tokio::time::Instant::now();
+    while start.elapsed() < SPAWN_READY_TIMEOUT {
+        if try_connect().await.is_some() {
+            tracing::info!("Daemon ready after {:?}", start.elapsed());
+            return Ok(());
+        }
+        sleep(SPAWN_READY_INTERVAL).await;
+    }
+
+    // Daemon failed to become ready — clean up the orphan process and PID file
+    // so external tools don't think it's still alive.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        }),
+    )
+    .await;
+    let _ = tokio::fs::remove_file(pid_file_path()).await;
+    tracing::warn!(
+        "Daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
+    );
+    Err(anyhow::anyhow!(
+        "Daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
+    ))
 }
 
-/// Force-stop the daemon by sending SIGKILL and removing socket/pid files.
-/// This is a **last-resort fallback** when graceful shutdown fails.
+/// Force-stop the daemon and wait for the process to actually exit.
 pub async fn stop_daemon() -> Result<()> {
-    let sock = socket_path();
     let pid_file = pid_file_path();
-
+    let mut pid = None;
     if let Ok(pid_str) = tokio::fs::read_to_string(&pid_file).await {
-        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+        if let Ok(p) = pid_str.trim().parse::<u32>() {
+            pid = Some(p);
             #[cfg(unix)]
             {
                 let _ = std::process::Command::new("kill")
-                    .args(["-9", &pid.to_string()])
+                    .args(["-9", &p.to_string()])
                     .output();
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
                 let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/F"])
+                    .args(["/PID", &p.to_string(), "/F"])
                     .output();
             }
         }
     }
-
-    let _ = tokio::fs::remove_file(&sock).await;
     let _ = tokio::fs::remove_file(&pid_file).await;
+
+    // Wait for the process to actually exit so a subsequent spawn
+    // doesn't race with the old process holding the socket.
+    if let Some(pid) = pid {
+        let start = tokio::time::Instant::now();
+        while process_exists(pid) && start.elapsed() < Duration::from_secs(2) {
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     Ok(())
 }
 
-/// Gracefully shut down the daemon by sending SIGTERM.
-/// Falls back to `stop_daemon` (SIGKILL) if the daemon does not exit.
+/// Gracefully shut down the daemon.
+/// Falls back to `stop_daemon` if the daemon does not exit.
 pub async fn graceful_shutdown() -> Result<()> {
-    let sock = socket_path();
     let pid_file = pid_file_path();
-
-    if !sock.exists() && !pid_file.exists() {
+    if !pid_file.exists() {
         tracing::info!("No daemon found, nothing to stop");
         return Ok(());
     }
 
     let pid = match tokio::fs::read_to_string(&pid_file).await {
-        Ok(s) => s.trim().parse::<i32>().ok(),
+        Ok(s) => s.trim().parse::<u32>().ok(),
         Err(_) => None,
     };
 
@@ -195,20 +214,27 @@ pub async fn graceful_shutdown() -> Result<()> {
     if let Some(pid) = pid {
         tracing::info!("Sending SIGTERM to daemon (PID {pid})...");
         let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid),
+            nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGTERM,
         );
-
-        // Wait up to a bounded timeout for the socket to disappear.
-        let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, async {
-            while sock.exists() {
-                sleep(GRACEFUL_SHUTDOWN_POLL_INTERVAL).await;
-            }
-        })
-        .await;
     }
 
-    if sock.exists() || pid_file.exists() {
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        tracing::info!("Sending graceful shutdown to daemon (PID {pid})...");
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .output();
+    }
+
+    let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, async {
+        while pid_file.exists() {
+            sleep(GRACEFUL_SHUTDOWN_POLL_INTERVAL).await;
+        }
+    })
+    .await;
+
+    if pid_file.exists() {
         tracing::warn!("Daemon did not exit gracefully, falling back to kill");
         stop_daemon().await?;
     } else {
@@ -222,49 +248,23 @@ pub async fn graceful_shutdown() -> Result<()> {
 pub async fn restart_daemon() -> Result<()> {
     graceful_shutdown().await?;
 
-    // Wait for both socket and PID to disappear before spawning.
-    // This prevents a double-daemon scenario when the old process
-    // takes longer than the graceful-shutdown timeout to exit.
-    let sock = socket_path();
-    let pid_file = pid_file_path();
-    for _ in 0..RESTART_MAX_RETRIES {
-        let socket_gone = !sock.exists();
-        let pid_gone = if pid_file.exists() {
-            match tokio::fs::read_to_string(&pid_file).await {
-                Ok(s) => s
-                    .trim()
-                    .parse::<u32>()
-                    .ok()
-                    .is_none_or(|pid| !process_exists(pid)),
-                Err(_) => true,
-            }
-        } else {
-            true
-        };
-        if socket_gone && pid_gone {
-            break;
-        }
-        sleep(RESTART_POLL_INTERVAL).await;
-    }
+    // graceful_shutdown already waits up to 3s for the PID file to disappear.
+    // Give a short extra grace period in case the old process is slow to exit.
+    sleep(Duration::from_millis(200)).await;
 
     spawn_daemon().await
 }
 
 /// Check daemon status.
 pub async fn daemon_status() -> Result<String> {
-    let sock = socket_path();
+    let addr = socket_addr();
     let pid_file = pid_file_path();
 
-    if !sock.exists() {
-        return Ok("Daemon is not running".to_string());
-    }
-
-    // If we can connect, it's alive.
-    if UnixStream::connect(&sock).await.is_ok() {
+    if let Ok(stream) = kernel::transport::connect(&addr).await {
+        drop(stream);
         return Ok("Daemon is running".to_string());
     }
 
-    // Can't connect — check PID file to decide if socket is stale.
     let stale = if pid_file.exists() {
         match tokio::fs::read_to_string(&pid_file).await {
             Ok(s) => s
@@ -275,16 +275,15 @@ pub async fn daemon_status() -> Result<String> {
             Err(_) => true,
         }
     } else {
-        // PID file missing but socket exists: conservative — don't delete,
-        // the daemon may just be starting up.
         false
     };
 
     if stale {
-        let _ = tokio::fs::remove_file(&sock).await;
         let _ = tokio::fs::remove_file(&pid_file).await;
-        Ok("Daemon is not running (stale socket cleaned)".to_string())
+        Ok("Daemon is not running (stale PID cleaned)".to_string())
+    } else if pid_file.exists() {
+        Ok("Daemon may be starting up".to_string())
     } else {
-        Ok("Socket exists but daemon may be starting up".to_string())
+        Ok("Daemon is not running".to_string())
     }
 }

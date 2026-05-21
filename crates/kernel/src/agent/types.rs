@@ -197,9 +197,8 @@ impl AgentState {
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
-            Self::Idle => &[Self::Streaming, Self::Closed],
+            Self::Idle | Self::ExecutingTool => &[Self::Streaming, Self::Closed],
             Self::Streaming => &[Self::ExecutingTool, Self::Idle],
-            Self::ExecutingTool => &[Self::Streaming],
             Self::Closed => &[],
         }
     }
@@ -486,7 +485,7 @@ mod tests {
     #[test]
     fn test_executing_tool_transitions() {
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
-        assert!(!AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
+        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Kernel event processing
 
-use anyhow::Result;
+use std::sync::Arc;
+use std::time::Duration;
 use tuirealm::props::{AttrValue, Attribute};
 #[cfg(windows)]
 use tuirealm::terminal::TerminalAdapter;
@@ -8,17 +9,104 @@ use tuirealm::terminal::TerminalAdapter;
 use crate::{attr, id::Id};
 use kernel::event::{AgentStatus, Event, StopReason};
 use kernel::tools::TODO_TOOL_NAME;
-use kernel::types::FinishReason;
+use kernel::types::{FinishReason, SessionId};
 
 use super::types::{Model, StreamingStatus};
 
 impl Model {
-    /// Process events from kernel.
+    /// Spawn a background task that retries subscribe until the daemon
+    /// is back and the session forwarding is re-established.
+    /// The task also handles `session_not_found` (daemon lost its
+    /// in-memory state after restart) by auto-restoring the session.
+    fn spawn_reconnect_task(
+        &self,
+    ) -> tokio::task::JoinHandle<Option<tokio::sync::broadcast::Receiver<Event>>> {
+        let coord = Arc::clone(&self.coordinator);
+        let sid = self.session_id.clone();
+        let auto_approve = self.permission_level;
+        tokio::spawn(async move {
+            let session_id = SessionId(sid);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            while tokio::time::Instant::now() < deadline {
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    coord.subscribe_session_events(&session_id),
+                )
+                .await
+                {
+                    Ok(Ok(rx)) => return Some(rx),
+                    Ok(Err(e)) => {
+                        if e.is_session_not_found() {
+                            tracing::info!(
+                                "Session {} missing on daemon, attempting restore...",
+                                session_id.0
+                            );
+                            match coord.restore_session(&session_id, auto_approve).await {
+                                Ok(_) => {}
+                                Err(_) => {
+                                    tokio::time::sleep(Duration::from_secs(1)).await;
+                                }
+                            }
+                        } else {
+                            tracing::debug!("Subscribe failed: {e}, retrying in 1s");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    }
+                    Err(_) => {
+                        tracing::debug!("Subscribe timed out (5s), retrying in 1s");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+            tracing::warn!("Event channel reconnect gave up after 30s");
+            None
+        })
+    }
+
+    /// Finish a successful reconnect: swap in the new receiver and
+    /// notify the user in both the info bar and chat view.
+    pub(crate) fn finish_reconnect(&mut self, new_rx: tokio::sync::broadcast::Receiver<Event>) {
+        self.event_rx = new_rx;
+        tracing::info!("Event channel re-subscribed");
+        self.show_notification(&crate::components::info_bar::Notification::info(
+            "Reconnected to daemon",
+            3000,
+        ));
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom(attr::ADD_NOTICE),
+            AttrValue::String("⚡Reconnected to daemon — session resumed".to_string()),
+        );
+        self.scroll_chat_to_bottom();
+    }
+
     /// Caps processing time to ~8ms per frame to avoid UI stalls when
     /// a large batch of events arrives over IPC.
-    pub async fn process_kernel_event(&mut self) -> Result<()> {
+    pub async fn process_kernel_event(&mut self) {
+        use tokio::sync::broadcast::error::TryRecvError;
+
         let start = std::time::Instant::now();
-        while let Ok(event) = self.event_rx.try_recv() {
+        loop {
+            let event = match self.event_rx.try_recv() {
+                Ok(ev) => ev,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Closed) => {
+                    // The broadcast sender was dropped (daemon restart).
+                    // Spawn a background reconnect task so the UI never
+                    // blocks on the RPC.
+                    if self.reconnect_task.is_none() {
+                        self.reconnect_task = Some(self.spawn_reconnect_task());
+                    }
+                    break;
+                }
+                Err(TryRecvError::Lagged(n)) => {
+                    tracing::warn!("Event channel lagged by {n} events");
+                    continue;
+                }
+            };
+
+            tracing::debug!("Processing event: {:?}", std::mem::discriminant(&event));
+
             match event {
                 // User message from kernel (render after kernel accepts it)
                 Event::User(kernel::event::UserEvent::Message { content, .. }) => {
@@ -53,7 +141,9 @@ impl Model {
                     // Update status bar to show tool call in progress
                     let attr = Attribute::Custom(attr::APPEND_TOOL_CALL_DELTA);
                     let value = AttrValue::String(format!("{tool_name}\x00{arguments_delta}"));
-                    self.app.attr(&Id::InfoBar, attr, value)?;
+                    if let Err(e) = self.app.attr(&Id::InfoBar, attr, value) {
+                        tracing::warn!("Failed to append tool call delta: {e}");
+                    }
                     self.state.should_redraw = true;
                 }
                 Event::Model(kernel::event::ModelEvent::Error { error, .. }) => {
@@ -73,7 +163,9 @@ impl Model {
                     } else {
                         Attribute::Custom(attr::STOP_COMPACTING)
                     };
-                    self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active))?;
+                    if let Err(e) = self.app.attr(&Id::InfoBar, attr, AttrValue::Flag(active)) {
+                        tracing::warn!("Failed to update compacting status: {e}");
+                    }
                     self.state.should_redraw = true;
                 }
                 Event::Model(kernel::event::ModelEvent::TokenUsage {
@@ -83,11 +175,13 @@ impl Model {
                 }) => {
                     // Update context window usage in status bar
                     let usage_str = format!("{total_tokens}\x00{context_window}");
-                    self.app.attr(
+                    if let Err(e) = self.app.attr(
                         &Id::StatusBar,
                         Attribute::Custom(attr::SET_CTX_USAGE),
                         AttrValue::String(usage_str),
-                    )?;
+                    ) {
+                        tracing::warn!("Failed to update token usage: {e}");
+                    }
                     self.state.should_redraw = true;
                 }
                 Event::Tool(kernel::event::ToolEvent::Start {
@@ -99,11 +193,13 @@ impl Model {
                     // Show tool execution start in chat view
                     let args_str = arguments.clone().unwrap_or_default();
                     let combined = format!("{tool_id}\x00{tool_name}\x00{args_str}");
-                    self.app.attr(
+                    if let Err(e) = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom(attr::START_TOOL),
                         AttrValue::String(combined),
-                    )?;
+                    ) {
+                        tracing::warn!("Failed to show tool start: {e}");
+                    }
                     self.state.should_redraw = true;
                 }
                 Event::Tool(kernel::event::ToolEvent::End {
@@ -130,11 +226,13 @@ impl Model {
                     if is_error {
                         // Show tool error in chat view
                         let combined = format!("{tool_id}\x00{output}\x00{elapsed_ms}");
-                        self.app.attr(
+                        if let Err(e) = self.app.attr(
                             &Id::ChatView,
                             Attribute::Custom(attr::FAIL_TOOL),
                             AttrValue::String(combined),
-                        )?;
+                        ) {
+                            tracing::warn!("Failed to show tool error: {e}");
+                        }
                     } else {
                         // Show tool output in chat view
                         // Format: tool_id\x00output\x00elapsed_ms\x00content_blocks_json
@@ -142,11 +240,13 @@ impl Model {
                             serde_json::to_string(&content_blocks).unwrap_or_default();
                         let combined =
                             format!("{tool_id}\x00{output}\x00{elapsed_ms}\x00{blocks_json}");
-                        self.app.attr(
+                        if let Err(e) = self.app.attr(
                             &Id::ChatView,
                             Attribute::Custom(attr::COMPLETE_TOOL),
                             AttrValue::String(combined),
-                        )?;
+                        ) {
+                            tracing::warn!("Failed to show tool output: {e}");
+                        }
 
                         if tool_name == TODO_TOOL_NAME {
                             // If the tool is a todo tool, refresh the todo list after completion
@@ -178,11 +278,13 @@ impl Model {
                     // Format: tool_id\x00message\x00tokens (tokens is optional)
                     let tokens_str = tokens.map(|t| t.to_string()).unwrap_or_default();
                     let combined = format!("{tool_id}\x00{message}\x00{tokens_str}");
-                    self.app.attr(
+                    if let Err(e) = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom(attr::UPDATE_TOOL_PROGRESS),
                         AttrValue::String(combined),
-                    )?;
+                    ) {
+                        tracing::warn!("Failed to update tool progress: {e}");
+                    }
                     self.state.should_redraw = true;
                 }
                 // Agent lifecycle state changes
@@ -316,10 +418,22 @@ impl Model {
                 Event::System(kernel::event::SystemEvent::Shutdown {
                     error: Some(err), ..
                 }) => {
-                    self.handle_streaming_error(
-                        StreamingStatus::Failed,
-                        format!("Session closed with error: {err}"),
-                    );
+                    // If the error indicates a daemon restart, spawn a
+                    // background reconnect task.  The run loop will poll
+                    // the handle and swap in the new receiver when ready.
+                    if err.contains("Daemon may have restarted")
+                        || err.contains("Connection to kernel daemon closed")
+                    {
+                        tracing::info!("Connection lost — spawning background reconnect task");
+                        if self.reconnect_task.is_none() {
+                            self.reconnect_task = Some(self.spawn_reconnect_task());
+                        }
+                    } else {
+                        self.handle_streaming_error(
+                            StreamingStatus::Failed,
+                            format!("Session closed with error: {err}"),
+                        );
+                    }
                     self.state.should_redraw = true;
                 }
                 // Rewind completed - refresh messages from the event
@@ -426,6 +540,5 @@ impl Model {
                 break;
             }
         }
-        Ok(())
     }
 }

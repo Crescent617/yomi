@@ -81,6 +81,8 @@ pub enum HistoryMessage {
         content_blocks: Vec<ToolOutputBlock>,
     },
     Error(String),
+    /// UI notice (e.g. reconnected to daemon). Not an LLM message role.
+    Notice(String),
 }
 
 /// Text selection state
@@ -293,6 +295,11 @@ impl ChatView {
 
     pub fn add_error_message(&mut self, error: String) {
         self.messages.push(HistoryMessage::Error(error));
+        self.push_new_msg_cache();
+    }
+
+    pub fn add_notice(&mut self, text: String) {
+        self.messages.push(HistoryMessage::Notice(text));
         self.push_new_msg_cache();
     }
 
@@ -1312,6 +1319,11 @@ impl Component for ChatView {
             attr::ADD_ERROR_MESSAGE => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
+                }
+            }
+            attr::ADD_NOTICE => {
+                if let AttrValue::String(text) = value {
+                    self.add_notice(text);
                 }
             }
             attr::ADD_ASSISTANT_MSG => {
