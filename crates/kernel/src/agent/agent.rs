@@ -255,8 +255,8 @@ impl Agent {
     /// This bridges the Agent layer (with reset support) to the Runtime layer
     /// (using tokio native `CancellationToken`).
     fn create_runtime_token(&self) -> tokio_util::sync::CancellationToken {
-        // 直接获取父 Agent 的 tokio CancellationToken
-        // 不需要 spawn 桥接任务，因为 CancelToken 内部就是 CancellationToken
+        // Obtain the parent agent's tokio CancellationToken directly
+        // No bridge task needed since CancelToken internally wraps a CancellationToken
         self.cancel_token.runtime_token()
     }
 
@@ -369,7 +369,7 @@ impl Agent {
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("Agent {} {} cancelled", self.id, context);
-        // 发送带 operation 的取消事件
+        // Emit cancellation event with operation name
         self.emit_operation_cancelled(context).await;
         self.context.transition_to(AgentState::Idle);
         Ok(())
@@ -593,8 +593,8 @@ impl Agent {
                 req_id,
                 approved: _,
             }) => {
-                // PermissionResponse 现在通过 PermissionResponder 处理
-                // 保留此方法以防需要特殊处理
+                // PermissionResponse is now handled via PermissionResponder
+                // Kept here for backwards compatibility
                 tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
                 Ok(())
             }
@@ -1481,10 +1481,10 @@ impl Agent {
                 }
                 Err(e) => {
                     attempt += 1;
-                    // 发送重试事件
+                    // Emit retry event
                     self.emit_retrying(attempt, max_retries, &e.to_string())
                         .await;
-                    // 发送可恢复错误事件
+                    // Emit recoverable error event
                     self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true)
                         .await;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);

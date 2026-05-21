@@ -13,12 +13,10 @@ pub enum RequestMethod {
     },
     RestoreSession {
         session_id: String,
-        project_path: String,
         auto_approve_level: Level,
     },
     ForkSession {
         parent_id: String,
-        project_path: String,
         auto_approve_level: Level,
     },
     SendMessage {
@@ -52,6 +50,7 @@ pub enum RequestMethod {
     DeleteSession {
         session_id: String,
     },
+    ReloadAgentConfig,
 }
 
 /// Response body — tagged union, no serde magic.

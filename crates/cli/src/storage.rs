@@ -15,7 +15,6 @@ use tokio::io::AsyncWriteExt;
 
 const APP_DATA_DIR: &str = "app_data";
 const PROJ_INDEX_DIR: &str = "projects";
-const DEFAULT_MAX_HISTORY: usize = 2000;
 
 /// Session metadata for a working directory
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,48 +144,29 @@ impl AppStorage {
         Ok(entries)
     }
 
-    /// Add an entry to input history (append-only for performance)
+    /// Merge new entries into existing history, deduplicate, and trim.
     ///
-    /// Empty inputs are ignored. Call `dedup_input_history` on exit to remove duplicates.
-    /// History is trimmed to `DEFAULT_MAX_HISTORY` entries with hysteresis.
-    pub async fn add_input_entry(&self, working_dir: &Path, input: &str) -> Result<()> {
-        if input.trim().is_empty() {
+    /// - Appends all `new_entries` to existing history
+    /// - Removes duplicates, keeping the latest occurrence of each
+    /// - Trims to [`tui::INPUT_HISTORY_LIMIT`] entries with hysteresis (keeps last 50%)
+    ///
+    /// Call once on session exit with all `new_history_entries`.
+    pub async fn save_input_history(
+        &self,
+        working_dir: &Path,
+        new_entries: &[String],
+    ) -> Result<()> {
+        if new_entries.is_empty() {
             return Ok(());
         }
 
         let path = self.input_hist_path(working_dir);
-        let needs_trim = Self::count_entries(&path).await? >= DEFAULT_MAX_HISTORY;
-
-        if needs_trim {
-            let mut entries = self.load_input_history(working_dir).await?;
-            let keep_count = DEFAULT_MAX_HISTORY / 2;
-            if entries.len() > keep_count {
-                entries = entries.split_off(entries.len() - keep_count);
-            }
-            entries.push(input.to_string());
-            self.write_history(&path, &entries).await?;
-        } else {
-            Self::append_entry(&path, input).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Remove duplicate entries, keeping only the latest occurrence of each
-    pub async fn dedup_input_history(&self, working_dir: &Path) -> Result<()> {
-        let path = self.input_hist_path(working_dir);
-        if !path.exists() {
-            return Ok(());
-        }
-
-        let entries = self.load_input_history(working_dir).await?;
-        if entries.len() < 2 {
-            return Ok(());
-        }
+        let mut entries = self.load_input_history(working_dir).await?;
+        entries.extend(new_entries.iter().cloned());
 
         // Dedup: process from end to keep latest occurrence, then reverse back
         let mut seen = std::collections::HashSet::new();
-        let deduped: Vec<String> = entries
+        let mut deduped: Vec<String> = entries
             .into_iter()
             .rev()
             .filter(|e| seen.insert(e.clone()))
@@ -195,29 +175,15 @@ impl AppStorage {
             .rev()
             .collect();
 
-        self.write_history(&path, &deduped).await?;
-        Ok(())
-    }
+        // Trim with hysteresis: if over limit, keep the last half
+        let limit = tui::INPUT_HISTORY_LIMIT;
+        let entries = if deduped.len() > limit {
+            deduped.split_off(deduped.len() - limit / 2)
+        } else {
+            deduped
+        };
 
-    async fn count_entries(path: &Path) -> Result<usize> {
-        if !path.exists() {
-            return Ok(0);
-        }
-        let content = fs::read_to_string(path).await?;
-        Ok(content.lines().filter(|l| !l.trim().is_empty()).count())
-    }
-
-    async fn append_entry(path: &Path, input: &str) -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await?;
-        let line = serde_json::to_string(input)?;
-        file.write_all(line.as_bytes()).await?;
-        file.write_all(b"\n").await?;
-        file.flush().await?;
-        Ok(())
+        self.write_history(&path, &entries).await
     }
 
     async fn write_history(&self, path: &Path, entries: &[String]) -> Result<()> {
@@ -268,15 +234,66 @@ mod tests {
         assert!(history.is_empty());
 
         storage
-            .add_input_entry(&working_dir, "hello")
-            .await
-            .unwrap();
-        storage
-            .add_input_entry(&working_dir, "world")
+            .save_input_history(&working_dir, &["hello".to_string(), "world".to_string()])
             .await
             .unwrap();
 
         let history = storage.load_input_history(&working_dir).await.unwrap();
         assert_eq!(history, vec!["hello", "world"]);
+    }
+
+    #[tokio::test]
+    async fn test_input_history_dedup() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
+
+        let working_dir = PathBuf::from("/path/to/project");
+
+        storage
+            .save_input_history(&working_dir, &["a".to_string(), "b".to_string()])
+            .await
+            .unwrap();
+
+        // Re-add "a" — should keep the latest occurrence
+        storage
+            .save_input_history(&working_dir, &["a".to_string()])
+            .await
+            .unwrap();
+
+        let history = storage.load_input_history(&working_dir).await.unwrap();
+        assert_eq!(history, vec!["b", "a"]);
+    }
+
+    #[tokio::test]
+    async fn test_input_history_empty_noop() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
+
+        let working_dir = PathBuf::from("/path/to/project");
+
+        // Empty entries should not create a file
+        storage.save_input_history(&working_dir, &[]).await.unwrap();
+
+        assert!(!storage.input_hist_path(&working_dir).exists());
+    }
+
+    #[tokio::test]
+    async fn test_input_history_trim() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = AppStorage::new(temp_dir.path()).unwrap();
+
+        let working_dir = PathBuf::from("/path/to/project");
+        let limit = tui::INPUT_HISTORY_LIMIT;
+
+        // Seed with limit + 1 entries → triggers trim to limit / 2
+        let existing: Vec<String> = (0..=limit).map(|i| format!("old_{i}")).collect();
+        storage
+            .save_input_history(&working_dir, &existing)
+            .await
+            .unwrap();
+
+        let history = storage.load_input_history(&working_dir).await.unwrap();
+        assert_eq!(history.len(), limit / 2);
+        assert_eq!(history.last().unwrap(), "old_2000");
     }
 }

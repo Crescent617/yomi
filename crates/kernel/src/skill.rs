@@ -1,19 +1,16 @@
-use crate::misc::plugin::Plugin;
 use crate::types::{KernelError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// A loaded skill with metadata and content
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
     /// Raw hooks value from frontmatter (parsed later into `HookRegistry`)
-    #[serde(skip)]
     pub hooks: Option<serde_yaml::Value>,
-    #[serde(skip)]
     pub source_path: PathBuf,
 }
 
@@ -61,21 +58,6 @@ impl SkillLoader {
                 tracing::warn!("Skill folder does not exist: {}", folder.display());
             }
         }
-        // if name conflicts, keep the first one found and log a warning
-        let mut seen_names = std::collections::HashSet::new();
-        skills.retain(|skill| {
-            if seen_names.contains(&skill.name) {
-                tracing::warn!(
-                    "Duplicate skill name '{}' found in {}. Ignoring this instance.",
-                    skill.name,
-                    skill.source_path.display()
-                );
-                false
-            } else {
-                seen_names.insert(skill.name.clone());
-                true
-            }
-        });
         Ok(skills)
     }
 
@@ -230,12 +212,28 @@ impl SkillLoader {
     /// e.g., "superpowers:writing" -> folder/superpowers/writing/SKILL.md
     async fn resolve_skill_path(folder: &Path, name: &str) -> Option<PathBuf> {
         let parts: Vec<&str> = name.split(':').collect();
+        // Reject path traversal, empty components, and platform separators
+        if parts
+            .iter()
+            .any(|p| p.is_empty() || *p == "." || *p == ".." || p.contains('/') || p.contains('\\'))
+        {
+            return None;
+        }
         let skill_path = folder
             .join(parts.iter().collect::<std::path::PathBuf>())
             .join("SKILL.md");
 
+        // Ensure the constructed path stays under the skill folder
+        if !skill_path.starts_with(folder) {
+            return None;
+        }
+
         if tokio::fs::try_exists(&skill_path).await.unwrap_or(false) {
-            skill_path.canonicalize().ok().or(Some(skill_path))
+            let canonical = tokio::fs::canonicalize(&skill_path).await.ok()?;
+            let canonical_folder = tokio::fs::canonicalize(folder).await.ok()?;
+            canonical
+                .starts_with(&canonical_folder)
+                .then_some(canonical)
         } else {
             None
         }
@@ -249,86 +247,6 @@ impl SkillLoader {
                 path.display()
             ))
         })
-    }
-
-    /// Load skills from a plugin
-    pub fn load_from_plugin(plugin: &Plugin) -> Result<Vec<Arc<Skill>>> {
-        let mut skills = Vec::new();
-
-        // Load from default skills path
-        if let Some(ref skills_path) = plugin.skills_path {
-            Self::load_plugin_skills_dir(skills_path, &plugin.name, &mut skills)?;
-        }
-
-        // Load from additional skills paths
-        for skills_path in &plugin.skills_paths {
-            Self::load_plugin_skills_dir(skills_path, &plugin.name, &mut skills)?;
-        }
-
-        Ok(skills)
-    }
-
-    fn load_plugin_skills_dir(
-        skills_path: &Path,
-        plugin_name: &str,
-        skills: &mut Vec<Arc<Skill>>,
-    ) -> Result<()> {
-        if !skills_path.exists() {
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(skills_path)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                let skill_file = path.join("SKILL.md");
-                if skill_file.exists() {
-                    match Self::load_plugin_skill(&skill_file, plugin_name) {
-                        Ok(skill) => {
-                            tracing::debug!(
-                                "Loaded plugin skill '{}' from {}",
-                                skill.name,
-                                skill_file.display()
-                            );
-                            skills.push(Arc::new(skill));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to load plugin skill from {}: {}",
-                                skill_file.display(),
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn load_plugin_skill(path: &Path, plugin_name: &str) -> Result<Skill> {
-        let skill_name = Self::derive_plugin_skill_name(path, plugin_name)?;
-        let frontmatter = Self::parse_skill_frontmatter(path)?;
-
-        Ok(Skill {
-            name: skill_name,
-            description: frontmatter.description,
-            triggers: frontmatter.triggers,
-            hooks: frontmatter.hooks,
-            source_path: path.to_path_buf(),
-        })
-    }
-
-    fn derive_plugin_skill_name(path: &Path, plugin_name: &str) -> Result<String> {
-        let skill_dir = path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| KernelError::skill(format!("Invalid skill path: {}", path.display())))?;
-
-        Ok(format!("{plugin_name}:{skill_dir}"))
     }
 }
 
@@ -401,90 +319,5 @@ mod tests {
         let root = Path::new("/root/skills");
         let path = Path::new("/root/skills/a/b/c/SKILL.md");
         assert_eq!(SkillLoader::derive_skill_name(path, root), "a:b:c");
-    }
-
-    #[test]
-    fn test_derive_plugin_skill_name() {
-        let _loader = SkillLoader::new(vec![]);
-        let path = Path::new("/plugins/my-plugin/skills/debugging/SKILL.md");
-        let name = SkillLoader::derive_plugin_skill_name(path, "my-plugin").unwrap();
-        assert_eq!(name, "my-plugin:debugging");
-    }
-
-    #[test]
-    fn test_load_plugin_skill() {
-        use std::io::Write;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let skill_dir = temp.path().join("debugging");
-        std::fs::create_dir(&skill_dir).unwrap();
-
-        let skill_content = r"---
-description: A debugging skill
-triggers:
-  - debug
----
-
-# Debugging Skill
-
-Content here.";
-
-        let mut file = std::fs::File::create(skill_dir.join("SKILL.md")).unwrap();
-        file.write_all(skill_content.as_bytes()).unwrap();
-
-        let skill =
-            SkillLoader::load_plugin_skill(&skill_dir.join("SKILL.md"), "my-plugin").unwrap();
-
-        assert_eq!(skill.name, "my-plugin:debugging");
-        assert_eq!(skill.description, "A debugging skill");
-        assert_eq!(skill.triggers, vec!["debug"]);
-    }
-
-    #[test]
-    fn test_load_from_plugin() {
-        use std::io::Write;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let plugin_dir = temp.path().join("test-plugin");
-        let skills_dir = plugin_dir.join("skills");
-        let skill_a_dir = skills_dir.join("skill-a");
-        let skill_b_dir = skills_dir.join("skill-b");
-
-        std::fs::create_dir_all(&skill_a_dir).unwrap();
-        std::fs::create_dir_all(&skill_b_dir).unwrap();
-
-        // Create skill A
-        let skill_a_content = r"---
-description: Skill A
----
-";
-        let mut file_a = std::fs::File::create(skill_a_dir.join("SKILL.md")).unwrap();
-        file_a.write_all(skill_a_content.as_bytes()).unwrap();
-
-        // Create skill B
-        let skill_b_content = r"---
-description: Skill B
----
-";
-        let mut file_b = std::fs::File::create(skill_b_dir.join("SKILL.md")).unwrap();
-        file_b.write_all(skill_b_content.as_bytes()).unwrap();
-
-        let plugin = Plugin {
-            name: "test-plugin".to_string(),
-            path: plugin_dir,
-            skills_path: Some(skills_dir),
-            skills_paths: vec![],
-        };
-
-        let _loader = SkillLoader::new(vec![]);
-        let skills = SkillLoader::load_from_plugin(&plugin).unwrap();
-
-        assert_eq!(skills.len(), 2);
-
-        let names: Vec<_> = skills.iter().map(|s| s.name.clone()).collect();
-        assert!(names.contains(&"test-plugin:skill-a".to_string()));
-        assert!(names.contains(&"test-plugin:skill-b".to_string()));
     }
 }

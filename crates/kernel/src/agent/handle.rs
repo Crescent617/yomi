@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// 外部控制运行中 Agent 的句柄
+/// Handle for controlling a running Agent from the outside
 #[derive(Clone)]
 pub struct AgentHandle {
     pub id: AgentId,
@@ -25,7 +25,7 @@ impl std::fmt::Debug for AgentHandle {
             .field("permission_responder", &self.permission_responder.is_some())
             .field(
                 "input_generation",
-                &self.input_stale_since.load(Ordering::Relaxed),
+                &self.input_stale_since.load(Ordering::Acquire),
             )
             .finish_non_exhaustive()
     }
@@ -50,9 +50,9 @@ impl AgentHandle {
         }
     }
 
-    /// 发送用户消息给 Agent（支持多模态内容）
+    /// Send a user message to the Agent (supports multi-modal content)
     pub async fn send_message(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
-        let generation = self.input_stale_since.load(Ordering::Relaxed);
+        let generation = self.input_stale_since.load(Ordering::Acquire);
         let input = AgentInput::User {
             content,
             generation,
@@ -63,12 +63,12 @@ impl AgentHandle {
             .map_err(|_| AgentError::ChannelClosed)
     }
 
-    /// 发送用户文本消息给 Agent（便捷方法）
+    /// Send a user text message to the Agent (convenience method)
     pub async fn send_text(&self, text: String) -> Result<(), AgentError> {
         self.send_message(vec![ContentBlock::Text { text }]).await
     }
 
-    /// 发送权限响应给 Agent
+    /// Send a permission response to the Agent
     pub async fn send_permission_response(
         &self,
         req_id: &str,
@@ -83,24 +83,25 @@ impl AgentHandle {
         }
     }
 
-    /// 获取当前状态
+    /// Get the current state
     pub fn state(&self) -> AgentState {
         *self.state_rx.borrow()
     }
 
-    /// 等待状态变化
+    /// Wait for a state change
     pub async fn wait_for_state_change(&mut self) -> AgentState {
         let _ = self.state_rx.changed().await;
         *self.state_rx.borrow()
     }
 
-    /// 请求取消，同时递增 generation 使此前发送的输入变为 stale
+    /// Request cancellation, also incrementing the generation so that
+    /// any input sent before this cancellation becomes stale.
     pub fn cancel(&self) {
         self.input_stale_since.fetch_add(1, Ordering::SeqCst);
         self.cancel_token.cancel();
     }
 
-    /// 优雅地关闭 Agent（发送 Close 信号，区别于 Cancel）
+    /// Gracefully shut down the Agent (sends Close signal, distinct from Cancel)
     pub async fn close(&self) -> Result<(), AgentError> {
         self.input_tx
             .send(super::AgentInput::Shutdown)
@@ -108,7 +109,7 @@ impl AgentHandle {
             .map_err(|_| AgentError::ChannelClosed)
     }
 
-    /// 请求强制压缩消息缓冲区
+    /// Request forced compaction of the message buffer
     pub async fn force_compact(&self) -> Result<(), AgentError> {
         self.input_tx
             .send(AgentInput::Compact)

@@ -13,6 +13,8 @@ pub const ADD_USER_MESSAGE: &str = "add_user_message";
 pub const ADD_ASSISTANT_MSG: &str = "add_assistant_message";
 /// Attribute for adding an error message.
 pub const ADD_ERROR_MESSAGE: &str = "add_error_message";
+/// Attribute for adding a system/notice message (e.g. reconnected).
+pub const ADD_NOTICE: &str = "add_notice";
 /// Attribute for clearing chat history.
 pub const CLEAR_HISTORY: &str = "clear_history";
 

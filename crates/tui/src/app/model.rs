@@ -60,19 +60,20 @@ impl Model {
             thinking_start_time: None,
             mode: AppMode::Normal,
             pending_permission: None,
-            initial_history_len: input_history.len(),
             input_history,
+            new_history_entries: Vec::new(),
             working_dir,
             session_id,
             permission_level: crate::config().auto_approve,
             queued_message: None,
             last_terminal_size: (0, 0),
+            reconnect_task: None,
         })
     }
 
     /// Get new history entries collected during this session
     pub fn get_new_history_entries(&self) -> Vec<String> {
-        self.input_history[self.initial_history_len..].to_vec()
+        self.new_history_entries.clone()
     }
 
     /// Suspend process to background (Ctrl-Z)
@@ -310,6 +311,7 @@ impl Model {
             Attribute::Custom(attr::SHOW_NOTIFICATION),
             notification.to_attr_value(),
         );
+        self.state.should_redraw = true;
     }
 
     /// Send desktop notification via OSC

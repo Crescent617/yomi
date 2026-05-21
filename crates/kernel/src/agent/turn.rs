@@ -314,5 +314,10 @@ impl Drop for Turn {
                 self.user_msg_id.as_str()
             );
         }
+        // NOTE: We intentionally do NOT delete the checkpoint directory here.
+        // The directory holds file backups (in objects/) that are referenced by
+        // the CheckpointStore. Those backups must survive until the user
+        // explicitly rewinds / deletes the checkpoint or the session is
+        // cleaned up. Deleting on Drop would break the undo feature.
     }
 }

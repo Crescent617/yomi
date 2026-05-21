@@ -1,24 +1,28 @@
-use crate::app::{Coordinator, SessionConfig};
+use crate::app::Coordinator;
 use crate::checkpoint::RewindTarget;
 use crate::event::{ControlCommand, Event};
 use crate::goal::GoalState;
 use crate::permissions::Level;
-use crate::transport::{recv_frame, send_frame};
+use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
 use crate::types::{ContentBlock, KernelError, Message, MessageId, Result, SessionId};
 use crate::wire::{RequestIdGenerator, RequestMethod, ResponseBody, RpcError, WireMsg};
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::{unix::OwnedWriteHalf, UnixStream};
 use tokio::sync::{broadcast, Mutex};
 
 /// How long to retry connecting to the daemon on first use.
-const CONNECT_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+/// Daemon initialisation (storage, provider, skills) can take several
+/// seconds, so we allow a generous timeout.
+const CONNECT_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
 /// Interval between connection retries.
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 /// RPC request timeout.
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+/// Heartbeat interval in seconds.
+const HEARTBEAT_INTERVAL_SECS: u64 = 2;
+/// Heartbeat timeout in seconds (3 missed heartbeats).
+const HEARTBEAT_TIMEOUT_SECS: u64 = 6;
 
 type PendingMap = dashmap::DashMap<
     u64,
@@ -29,9 +33,18 @@ type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Event>>;
 /// Unified API for both local (in-process) and remote (IPC) coordinators.
 #[async_trait]
 pub trait CoordinatorApi: Send + Sync {
-    async fn create_session(&self, config: SessionConfig) -> Result<SessionId>;
-    async fn restore_session(&self, id: &SessionId, config: SessionConfig) -> Result<SessionId>;
-    async fn fork_session(&self, parent: &SessionId, config: SessionConfig) -> Result<SessionId>;
+    async fn create_session(
+        &self,
+        project_path: std::path::PathBuf,
+        auto_approve_level: Level,
+    ) -> Result<SessionId>;
+    async fn restore_session(&self, id: &SessionId, auto_approve_level: Level)
+        -> Result<SessionId>;
+    async fn fork_session(
+        &self,
+        parent: &SessionId,
+        auto_approve_level: Level,
+    ) -> Result<SessionId>;
     async fn send_message(&self, session_id: &SessionId, blocks: Vec<ContentBlock>) -> Result<()>;
     async fn cancel(&self, session_id: &SessionId) -> Result<()>;
     async fn send_permission_response(
@@ -68,22 +81,35 @@ pub trait CoordinatorApi: Send + Sync {
     ) -> Result<Vec<crate::checkpoint::Checkpoint>>;
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
+    async fn reload_agent_config(&self) -> Result<()>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
 
 #[async_trait]
 impl CoordinatorApi for Coordinator {
-    async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
-        self.create_session(config).await
+    async fn create_session(
+        &self,
+        project_path: std::path::PathBuf,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
+        self.create_session(project_path, auto_approve_level).await
     }
 
-    async fn restore_session(&self, id: &SessionId, config: SessionConfig) -> Result<SessionId> {
-        self.restore_session(id, config).await
+    async fn restore_session(
+        &self,
+        id: &SessionId,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
+        self.restore_session(id, auto_approve_level).await
     }
 
-    async fn fork_session(&self, parent: &SessionId, config: SessionConfig) -> Result<SessionId> {
-        self.fork_session(parent, config).await
+    async fn fork_session(
+        &self,
+        parent: &SessionId,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
+        self.fork_session(parent, auto_approve_level).await
     }
 
     async fn send_message(&self, session_id: &SessionId, blocks: Vec<ContentBlock>) -> Result<()> {
@@ -172,20 +198,31 @@ impl CoordinatorApi for Coordinator {
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
         self.shutdown_session(session_id).await
     }
+
+    async fn reload_agent_config(&self) -> Result<()> {
+        // Local coordinator runs in-process; skills are already fresh.
+        Ok(())
+    }
 }
 
 // ── RemoteCoordinator (IPC client with lazy connect) ─────────────────────
 
 struct Connection {
-    write_half: Arc<Mutex<OwnedWriteHalf>>,
+    write_half: Arc<Mutex<WriteHalf>>,
     pending: Arc<PendingMap>,
     _reader: tokio::task::JoinHandle<()>,
+    _heartbeat: tokio::task::JoinHandle<()>,
+    /// Cancelled when the connection is dead (reader or heartbeat
+    /// detected an error, or the caller explicitly killed the old
+    /// connection).  `ensure_connected()` checks this to decide
+    /// whether a reconnect is needed.
+    cancel: tokio_util::sync::CancellationToken,
 }
 
-/// Client-side coordinator proxy that talks to a kernel daemon over a Unix socket.
-/// Uses lazy connect: the socket connection is established on the first API call.
+/// Client-side coordinator proxy that talks to a kernel daemon over IPC.
+/// Uses lazy connect: the connection is established on the first API call.
 pub struct RemoteCoordinator {
-    socket_path: PathBuf,
+    addr: SocketAddr,
     req_id: RequestIdGenerator,
     connection: Arc<Mutex<Option<Connection>>>,
     /// Persistent local event routers: `session_id` -> broadcast sender.
@@ -196,9 +233,9 @@ pub struct RemoteCoordinator {
 
 impl RemoteCoordinator {
     /// Create a lazy coordinator that connects on first use.
-    pub fn new(socket_path: PathBuf) -> Self {
+    pub fn new(addr: SocketAddr) -> Self {
         Self {
-            socket_path,
+            addr,
             req_id: RequestIdGenerator::new(),
             connection: Arc::new(Mutex::new(None)),
             event_routers: Arc::new(EventRouterMap::new()),
@@ -206,27 +243,32 @@ impl RemoteCoordinator {
     }
 
     /// Connect immediately and return a ready coordinator.
-    pub async fn connect(path: &std::path::Path) -> Result<Self> {
-        let stream = UnixStream::connect(path).await?;
-        Self::from_stream(stream, path).await
+    pub async fn connect(addr: &SocketAddr) -> Result<Self> {
+        let stream = crate::transport::connect(addr).await?;
+        Self::from_stream(stream, addr).await
     }
 
     /// Wrap an already-connected stream.
-    pub async fn from_stream(stream: UnixStream, socket_path: &std::path::Path) -> Result<Self> {
+    pub async fn from_stream(stream: Stream, addr: &SocketAddr) -> Result<Self> {
         let (read_half, write_half) = stream.into_split();
         let write_half = Arc::new(Mutex::new(write_half));
         let pending: Arc<PendingMap> = Arc::new(PendingMap::new());
         let event_routers: Arc<EventRouterMap> = Arc::new(EventRouterMap::new());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let last_pong = Arc::new(std::sync::Mutex::new(tokio::time::Instant::now()));
 
         let reader = Self::spawn_reader(
             read_half,
             Arc::clone(&write_half),
             Arc::clone(&pending),
             Arc::clone(&event_routers),
+            Arc::clone(&last_pong),
+            cancel.clone(),
         );
+        let heartbeat = Self::spawn_heartbeat(Arc::clone(&write_half), last_pong, cancel.clone());
 
         let this = Self {
-            socket_path: socket_path.to_path_buf(),
+            addr: addr.clone(),
             req_id: RequestIdGenerator::new(),
             connection: Arc::new(Mutex::new(None)),
             event_routers,
@@ -235,54 +277,69 @@ impl RemoteCoordinator {
             write_half,
             pending,
             _reader: reader,
+            _heartbeat: heartbeat,
+            cancel,
         });
         Ok(this)
     }
 
     fn spawn_reader(
-        mut read_half: tokio::net::unix::OwnedReadHalf,
-        write_half: Arc<Mutex<OwnedWriteHalf>>,
+        mut read_half: ReadHalf,
+        write_half: Arc<Mutex<WriteHalf>>,
         pending: Arc<PendingMap>,
         event_routers: Arc<EventRouterMap>,
+        last_pong: Arc<std::sync::Mutex<tokio::time::Instant>>,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                let msg = match recv_frame(&mut read_half).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::debug!("Remote reader error: {e}");
-                        break;
-                    }
-                };
-
-                match msg {
-                    WireMsg::Response { id, body } => {
-                        let result = match body {
-                            ResponseBody::Ok { result } => Ok(result),
-                            ResponseBody::Err { error } => Err(error),
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    result = recv_frame(&mut read_half) => {
+                        let msg = match result {
+                            Ok(m) => m,
+                            Err(e) => {
+                                tracing::debug!("Remote reader error: {e}");
+                                break;
+                            }
                         };
-                        if let Some((_, tx)) = pending.remove(&id) {
-                            let _ = tx.send(result);
+
+                        match msg {
+                            WireMsg::Response { id, body } => {
+                                let result = match body {
+                                    ResponseBody::Ok { result } => Ok(result),
+                                    ResponseBody::Err { error } => Err(error),
+                                };
+                                if let Some((_, tx)) = pending.remove(&id) {
+                                    let _ = tx.send(result);
+                                }
+                            }
+                            WireMsg::Event { session_id, event } => {
+                                if let Some(entry) = event_routers.get(&session_id) {
+                                    let _ = entry.value().send(event);
+                                }
+                            }
+                            WireMsg::Ping => {
+                                let mut guard = write_half.lock().await;
+                                let _ = send_frame(&mut *guard, &WireMsg::Pong).await;
+                            }
+                            WireMsg::Pong => {
+                                let mut guard = last_pong
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                *guard = tokio::time::Instant::now();
+                            }
+                            WireMsg::Request { .. } => {
+                                tracing::warn!("Unexpected message from server: {:?}", msg);
+                            }
                         }
-                    }
-                    WireMsg::Event { session_id, event } => {
-                        if let Some(entry) = event_routers.get(&session_id) {
-                            let _ = entry.value().send(event);
-                        }
-                    }
-                    WireMsg::Ping => {
-                        let mut guard = write_half.lock().await;
-                        let _ = send_frame(&mut *guard, &WireMsg::Pong).await;
-                    }
-                    WireMsg::Pong => {
-                        // No-op.
-                    }
-                    WireMsg::Request { .. } => {
-                        tracing::warn!("Unexpected message from server: {:?}", msg);
                     }
                 }
             }
 
+            cancel.cancel();
+            // Notify pending RPCs.
             let keys: Vec<u64> = pending.iter().map(|e| *e.key()).collect();
             for key in keys {
                 if let Some((_, tx)) = pending.remove(&key) {
@@ -292,26 +349,97 @@ impl RemoteCoordinator {
                     }));
                 }
             }
+            // Notify all local event subscribers that the connection is
+            // dead, then drop the senders so receivers become Closed.
+            // This forces the UI to re-subscribe (and re-establish the
+            // server-side forwarding task) instead of hanging forever
+            // on an empty channel.
+            let keys: Vec<String> = event_routers.iter().map(|e| e.key().clone()).collect();
+            for key in &keys {
+                if let Some((_, tx)) = event_routers.remove(key) {
+                    let _ = tx.send(Event::System(crate::event::SystemEvent::Shutdown {
+                        session_id: SessionId(key.clone()),
+                        error: Some(
+                            "Connection to kernel daemon closed. \
+                                 Daemon may have restarted."
+                                .to_string(),
+                        ),
+                    }));
+                }
+            }
+        })
+    }
+
+    fn spawn_heartbeat(
+        write_half: Arc<Mutex<WriteHalf>>,
+        last_pong: Arc<std::sync::Mutex<tokio::time::Instant>>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if cancel.is_cancelled() {
+                    break;
+                }
+                let elapsed = last_pong
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .elapsed();
+                if elapsed > Duration::from_secs(HEARTBEAT_TIMEOUT_SECS) {
+                    tracing::warn!(
+                        "Heartbeat timeout (no pong for {:?}), disconnecting",
+                        elapsed
+                    );
+                    cancel.cancel();
+                    break;
+                }
+                let mut w = write_half.lock().await;
+                match tokio::time::timeout(
+                    Duration::from_secs(3),
+                    send_frame(&mut *w, &WireMsg::Ping),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::debug!("Heartbeat send_frame failed: {e}");
+                        cancel.cancel();
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::warn!("Heartbeat send_frame timed out (3s)");
+                        cancel.cancel();
+                        break;
+                    }
+                }
+            }
         })
     }
 
     /// Ensure the connection is established (lazy on first call).
-    /// Retries for up to 2s to allow the daemon to finish spawning.
+    /// Retries for up to 10 s to allow the daemon to finish spawning.
     /// On reconnect, re-subscribes all sessions in the persistent router.
     async fn ensure_connected(&self) -> Result<()> {
         let mut guard = self.connection.lock().await;
         if let Some(ref conn) = *guard {
-            if !conn._reader.is_finished() {
+            if !conn.cancel.is_cancelled() {
                 return Ok(());
             }
         }
         if let Some(old) = guard.take() {
-            old._reader.abort();
+            // Cancel the old connection so tasks exit naturally and run
+            // cleanup (notify pending RPCs, send Shutdown events, drop
+            // local event router senders so receivers become Closed).
+            old.cancel.cancel();
+            // We do NOT abort here: abort() skips the cleanup code at
+            // the end of the reader task, which means TUI receivers
+            // never learn the connection is dead.
         }
-        let sock = &self.socket_path;
         let start = tokio::time::Instant::now();
         let stream = loop {
-            match UnixStream::connect(sock).await {
+            match crate::transport::connect(&self.addr).await {
                 Ok(s) => break s,
                 Err(_) if start.elapsed() < CONNECT_RETRY_TIMEOUT => {
                     tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
@@ -326,45 +454,60 @@ impl RemoteCoordinator {
         let (read_half, write_half) = stream.into_split();
         let write_half = Arc::new(Mutex::new(write_half));
         let pending: Arc<PendingMap> = Arc::new(PendingMap::new());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let last_pong = Arc::new(std::sync::Mutex::new(tokio::time::Instant::now()));
+
         let reader = Self::spawn_reader(
             read_half,
             Arc::clone(&write_half),
             Arc::clone(&pending),
             Arc::clone(&self.event_routers),
+            Arc::clone(&last_pong),
+            cancel.clone(),
         );
+        let heartbeat = Self::spawn_heartbeat(Arc::clone(&write_half), last_pong, cancel.clone());
 
         *guard = Some(Connection {
             write_half: Arc::clone(&write_half),
             pending,
             _reader: reader,
+            _heartbeat: heartbeat,
+            cancel,
         });
 
-        // Re-subscribe sessions that still have active local receivers.
-        // We re-check receiver_count inside the loop because a concurrent
-        // unsubscribe may have dropped the count to zero between collection
-        // and sending.
+        // Collect sessions that still have active local receivers.
+        // We drop the lock here so that `call()` (which also calls
+        // `ensure_connected`) can acquire it.
         let sessions_to_resub: Vec<String> = self
             .event_routers
             .iter()
             .filter(|e| e.value().receiver_count() > 0)
             .map(|e| e.key().clone())
             .collect();
-        if !sessions_to_resub.is_empty() {
-            let mut w = write_half.lock().await;
-            for sid in sessions_to_resub {
-                if let Some(entry) = self.event_routers.get(&sid) {
-                    if entry.value().receiver_count() > 0 {
-                        let req = WireMsg::Request {
-                            id: self.req_id.next(),
-                            method: RequestMethod::Subscribe { session_id: sid },
-                        };
-                        let _ = send_frame(&mut *w, &req).await;
-                    }
-                }
+        drop(guard);
+
+        // Re-subscribe sessions that still have active local receivers.
+        // We do NOT remove stale routers here: doing so would drop the
+        // `broadcast::Sender`, causing the UI's `event_rx` to become
+        // `Closed` and the TUI to exit immediately.  Instead we leave
+        // the router in place; the UI will learn that the session is
+        // gone when subsequent `send_message` calls return
+        // `session_not_found`.
+        for sid in sessions_to_resub {
+            if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe { session_id: sid })).await
+            {
+                tracing::warn!("Re-subscribe failed: {e}");
             }
         }
 
         Ok(())
+    }
+
+    async fn invalidate_connection(&self) {
+        let mut guard = self.connection.lock().await;
+        if let Some(ref conn) = guard.take() {
+            conn.cancel.cancel();
+        }
     }
 
     async fn call(&self, method: RequestMethod) -> Result<serde_json::Value> {
@@ -386,24 +529,46 @@ impl RemoteCoordinator {
         let msg = WireMsg::Request { id, method };
         {
             let mut w = write_half.lock().await;
-            send_frame(&mut *w, &msg).await?;
+            match tokio::time::timeout(Duration::from_secs(5), send_frame(&mut *w, &msg)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    drop(w);
+                    self.invalidate_connection().await;
+                    return Err(KernelError::session(format!("Failed to send request: {e}")));
+                }
+                Err(_) => {
+                    drop(w);
+                    self.invalidate_connection().await;
+                    return Err(KernelError::session(
+                        "Failed to send request: write timeout (5s)".to_string(),
+                    ));
+                }
+            }
         }
 
         match tokio::time::timeout(RPC_TIMEOUT, rx).await {
             Ok(Ok(Ok(val))) => Ok(val),
-            Ok(Ok(Err(e))) => Err(KernelError::session(format!(
-                "RPC error [{}]: {}",
-                e.code, e.message
-            ))),
+            Ok(Ok(Err(e))) => {
+                // The server flattened our structured error into an
+                // RpcError string.  If it contains the known
+                // session-not-found marker, strip the outer wrapper and
+                // reconstruct the original KernelError so downstream can
+                // detect it structurally via is_session_not_found().
+                if let Some(pos) = e.message.find("session_not_found:") {
+                    let inner = e.message[pos..].trim().to_string();
+                    return Err(KernelError::session(inner));
+                }
+                Err(KernelError::session(format!(
+                    "RPC error [{}]: {}",
+                    e.code, e.message
+                )))
+            }
             Ok(Err(_)) => Err(KernelError::session("Request cancelled".to_string())),
             Err(_) => {
-                // Clean up the stale pending entry so it doesn't leak
-                // memory for the lifetime of the connection.
-                if let Ok(guard) = self.connection.try_lock() {
-                    if let Some(ref conn) = *guard {
-                        conn.pending.remove(&id);
-                    }
-                }
+                // RPC timeout usually means the reader task is stuck or
+                // the server is dead.  Force a reconnect on the next
+                // call by dropping the connection.
+                self.invalidate_connection().await;
                 Err(KernelError::session(
                     "RPC request timed out (30s)".to_string(),
                 ))
@@ -444,9 +609,15 @@ impl RemoteCoordinator {
                 session_id: session_id.0.clone(),
             })
             .await;
-        if let Err(e) = result {
-            self.event_routers.remove(&session_id.0);
-            return Err(e);
+        if let Err(ref e) = result {
+            // Only remove the local router when the server explicitly
+            // says the session is gone.  Transient errors (timeout, write
+            // failure) should leave the router in place so that a later
+            // re-subscribe can reuse the same sender.
+            if e.is_session_not_found() {
+                self.event_routers.remove(&session_id.0);
+            }
+            return Err(result.unwrap_err());
         }
         Ok(tx.subscribe())
     }
@@ -454,35 +625,45 @@ impl RemoteCoordinator {
 
 #[async_trait]
 impl CoordinatorApi for RemoteCoordinator {
-    async fn create_session(&self, config: SessionConfig) -> Result<SessionId> {
+    async fn create_session(
+        &self,
+        project_path: std::path::PathBuf,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::CreateSession {
-                project_path: config.project_path.to_string_lossy().to_string(),
-                auto_approve_level: config.auto_approve_level,
+                project_path: project_path.to_string_lossy().to_string(),
+                auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
         Ok(SessionId(sid))
     }
 
-    async fn restore_session(&self, id: &SessionId, config: SessionConfig) -> Result<SessionId> {
+    async fn restore_session(
+        &self,
+        id: &SessionId,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::RestoreSession {
                 session_id: id.0.clone(),
-                project_path: config.project_path.to_string_lossy().to_string(),
-                auto_approve_level: config.auto_approve_level,
+                auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
         Ok(SessionId(sid))
     }
 
-    async fn fork_session(&self, parent: &SessionId, config: SessionConfig) -> Result<SessionId> {
+    async fn fork_session(
+        &self,
+        parent: &SessionId,
+        auto_approve_level: Level,
+    ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::ForkSession {
                 parent_id: parent.0.clone(),
-                project_path: config.project_path.to_string_lossy().to_string(),
-                auto_approve_level: config.auto_approve_level,
+                auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -644,6 +825,11 @@ impl CoordinatorApi for RemoteCoordinator {
             session_id: session_id.0.clone(),
         })
         .await?;
+        Ok(())
+    }
+
+    async fn reload_agent_config(&self) -> Result<()> {
+        self.call(RequestMethod::ReloadAgentConfig).await?;
         Ok(())
     }
 }

@@ -1,5 +1,6 @@
 use crate::types::{Result, ToolDefinition, ToolOutput};
 use async_trait::async_trait;
+use futures::future::Either;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -138,8 +139,6 @@ impl<'a> ToolExecCtx<'a> {
         }
     }
 }
-
-use futures::future::Either;
 
 /// Core trait for tools
 #[async_trait]

@@ -22,11 +22,13 @@ impl Model {
         // Hide cursor by default (will be shown by InputComponent when needed)
         crossterm::execute!(std::io::stdout(), crossterm::cursor::Hide)?;
 
-        let _result = self.run_loop().await;
+        let result = self.run_loop().await;
 
         // Cleanup
         self.terminal.leave_alternate_screen()?;
         self.terminal.disable_raw_mode()?;
+
+        result?;
 
         // Return result with new history entries and session flag
         Ok(TuiResult {
@@ -65,9 +67,21 @@ impl Model {
         }
 
         while !self.state.quit {
-            // Process kernel events
-            if let Err(e) = self.process_kernel_event().await {
-                tracing::error!("Error processing kernel event: {}", e);
+            // Process kernel events (fast, non-blocking)
+            self.process_kernel_event().await;
+
+            // If a background reconnect task finished, swap in the new
+            // receiver and notify the user.
+            if let Some(task) = self.reconnect_task.take() {
+                if task.is_finished() {
+                    match task.await {
+                        Ok(Some(new_rx)) => self.finish_reconnect(new_rx),
+                        Ok(None) => tracing::warn!("Event channel reconnect timed out"),
+                        Err(e) => tracing::error!("Reconnect task panicked: {e}"),
+                    }
+                } else {
+                    self.reconnect_task = Some(task);
+                }
             }
 
             // Tick the application

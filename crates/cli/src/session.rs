@@ -5,12 +5,64 @@ use anyhow::Result;
 use kernel::{
     client::CoordinatorApi,
     event::ControlCommand,
+    permissions::Level,
     types::{ContentBlock, SessionId},
-    SessionConfig,
 };
 use std::path::Path;
 use std::sync::Arc;
 use tui::run_tui;
+
+/// Send a message to the daemon with automatic retry and session restore.
+/// On `session_not_found` (daemon restart), attempts `restore_session` once.
+/// Exponential backoff capped at 2s. Returns `Err` after `max_retries` failures.
+async fn send_with_retry(
+    coordinator: &dyn CoordinatorApi,
+    session_id: &SessionId,
+    blocks: Vec<ContentBlock>,
+    auto_approve: Level,
+    max_retries: u32,
+) -> Result<()> {
+    let mut retries = 0;
+    let mut restored = false;
+    loop {
+        match coordinator.send_message(session_id, blocks.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(ref e) if !restored && e.is_session_not_found() => {
+                tracing::info!(
+                    "Session {} missing on daemon, attempting restore...",
+                    session_id.0
+                );
+                match coordinator.restore_session(session_id, auto_approve).await {
+                    Ok(_) => {
+                        tracing::info!("Session restored successfully");
+                        restored = true;
+                    }
+                    Err(restore_err) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to restore session {}: {}",
+                            session_id.0,
+                            restore_err
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                retries += 1;
+                if retries > max_retries {
+                    return Err(anyhow::anyhow!(
+                        "send_message failed {} times for session {}: {}",
+                        max_retries,
+                        session_id.0,
+                        e
+                    ));
+                }
+                tracing::warn!("send_message failed (retry {}): {}", retries, e);
+                let delay = std::cmp::min(100 * (1_u64 << retries), 2000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+        }
+    }
+}
 
 /// Context needed to run a session
 #[derive(Clone)]
@@ -40,18 +92,22 @@ pub enum SessionArg {
     ForkSpecific(String),
 }
 
-/// Resolve session from command line arguments
+/// Resolve session from command line arguments.
+/// `auto_approve_level` is passed directly to the coordinator,
+/// which holds the agent configuration internally.
 pub async fn resolve_session(
     session_arg: &SessionArg,
     is_launch: bool,
     coordinator: &dyn CoordinatorApi,
     app_storage: &AppStorage,
     working_dir: &Path,
-    mk_config: impl Fn() -> SessionConfig,
+    auto_approve_level: Level,
 ) -> Result<SessionId> {
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
     if !is_launch {
-        return Ok(coordinator.create_session(mk_config()).await?);
+        return Ok(coordinator
+            .create_session(working_dir.to_path_buf(), auto_approve_level)
+            .await?);
     }
 
     match session_arg {
@@ -60,12 +116,17 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator.restore_session(&session_id, mk_config()).await {
+            match coordinator
+                .restore_session(&session_id, auto_approve_level)
+                .await
+            {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    Ok(coordinator.create_session(mk_config()).await?)
+                    Ok(coordinator
+                        .create_session(working_dir.to_path_buf(), auto_approve_level)
+                        .await?)
                 }
             }
         }
@@ -75,39 +136,54 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator.restore_session(&session_id, mk_config()).await {
+                match coordinator
+                    .restore_session(&session_id, auto_approve_level)
+                    .await
+                {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        Ok(coordinator.create_session(mk_config()).await?)
+                        Ok(coordinator
+                            .create_session(working_dir.to_path_buf(), auto_approve_level)
+                            .await?)
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                Ok(coordinator.create_session(mk_config()).await?)
+                Ok(coordinator
+                    .create_session(working_dir.to_path_buf(), auto_approve_level)
+                    .await?)
             }
         },
         // No --session: create new session
-        SessionArg::New => Ok(coordinator.create_session(mk_config()).await?),
+        SessionArg::New => Ok(coordinator
+            .create_session(working_dir.to_path_buf(), auto_approve_level)
+            .await?),
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let source_id = SessionId(entry.session_id);
                 println!("Forking last session: {}", source_id.0);
-                Ok(coordinator.fork_session(&source_id, mk_config()).await?)
+                Ok(coordinator
+                    .fork_session(&source_id, auto_approve_level)
+                    .await?)
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                Ok(coordinator.create_session(mk_config()).await?)
+                Ok(coordinator
+                    .create_session(working_dir.to_path_buf(), auto_approve_level)
+                    .await?)
             }
         },
         // --fork <id>: fork specific session
         SessionArg::ForkSpecific(id) => {
             let source_id = SessionId(id.clone());
             println!("Forking session: {}", source_id.0);
-            Ok(coordinator.fork_session(&source_id, mk_config()).await?)
+            Ok(coordinator
+                .fork_session(&source_id, auto_approve_level)
+                .await?)
         }
     }
 }
@@ -122,7 +198,10 @@ pub async fn run_session_loop(
     input_history: Vec<String>,
     is_launch: bool,
     initial_message: Option<String>,
+    auto_approve: Level,
 ) -> Result<SessionResult> {
+    const MAX_RETRIES: u32 = 10;
+
     // Print startup info only in debug mode (DEBUG=1)
     if *DEBUG_MODE {
         if is_launch {
@@ -138,40 +217,41 @@ pub async fn run_session_loop(
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<ContentBlock>>(100);
     let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::channel::<ControlCommand>(10);
 
-    // Spawn input forwarding task
+    // Spawn input forwarding task.
+    // Keeps retrying transient errors (connection lost, daemon restarting).
+    // On `session_not_found` (daemon was restarted and lost in-memory state)
+    // we automatically call `restore_session` so the TUI can continue
+    // seamlessly.
     let coord_for_input = coordinator.clone();
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
+    let auto_approve_for_restore = auto_approve;
     let input_handle = tokio::spawn(async move {
         let mut has_saved = false;
-        let mut consecutive_errors = 0;
         while let Some(blocks) = input_rx.recv().await {
             if !has_saved {
-                // Save last session on first input (crash safety)
                 app_storage_for_save
                     .update_last_session(&working_dir_for_save, &session_id_for_input.0)
                     .await
                     .ok();
                 has_saved = true;
             }
-            match coord_for_input
-                .send_message(&session_id_for_input, blocks)
-                .await
+            if let Err(e) = send_with_retry(
+                &*coord_for_input,
+                &session_id_for_input,
+                blocks,
+                auto_approve_for_restore,
+                MAX_RETRIES,
+            )
+            .await
             {
-                Ok(()) => consecutive_errors = 0,
-                Err(e) => {
-                    consecutive_errors += 1;
-                    tracing::error!(
-                        "Failed to send message (attempt {}): {}",
-                        consecutive_errors,
-                        e
-                    );
-                    if consecutive_errors >= 3 {
-                        tracing::error!("Input forwarding failed 3 times, disconnecting");
-                        break;
-                    }
-                }
+                tracing::error!(
+                    "Input forwarding stopped for session {}: {}",
+                    session_id_for_input.0,
+                    e
+                );
+                return;
             }
         }
     });

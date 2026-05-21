@@ -50,12 +50,6 @@ pub mod env_names {
     /// Skill folders (comma-separated paths)
     pub const SKILL_FOLDERS: &str = env_name!("SKILL_FOLDERS");
 
-    /// Plugin directories to load skills from (colon-separated paths)
-    pub const PLUGIN_DIRS: &str = env_name!("PLUGIN_DIRS");
-
-    /// Load skills from claude plugins cache (true/false)
-    pub const LOAD_CLAUDE_PLUGINS: &str = env_name!("LOAD_CLAUDE_PLUGINS");
-
     /// Auto-approve level for tool permissions (safe | caution | dangerous)
     pub const AUTO_APPROVE: &str = env_name!("AUTO_APPROVE");
 
@@ -63,6 +57,8 @@ pub mod env_names {
     pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
+    /// Path to a configuration file to use instead of the default
+    pub const CONFIG: &str = env_name!("CONFIG");
 }
 
 /// Provider type
@@ -154,10 +150,6 @@ pub struct Config {
     pub log_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_folders: Option<Vec<String>>,
-    /// Claude plugin directories to load skills from
-    pub claude_plugin_dirs: Vec<PathBuf>,
-    /// Load skills from claude plugins cache (default: true)
-    pub load_claude_plugins: bool,
     /// Global user-level hooks
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub hooks: Vec<crate::hooks::HookEntry>,
@@ -221,8 +213,6 @@ impl Default for Config {
             data_dir,
             log_dir: None,
             skill_folders: None,
-            claude_plugin_dirs: vec![expand_tilde("~/.claude/plugins/cache")],
-            load_claude_plugins: false,
             hooks: Vec::new(),
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
@@ -238,13 +228,31 @@ impl Config {
         config
     }
 
-    /// Load configuration from file, then apply environment variable overrides
+    /// Load configuration from file (without env overrides).
+    /// Call `apply_env_overrides()` after this if needed.
     pub fn from_file(path: &PathBuf) -> std::result::Result<Self, KernelError> {
         let content = std::fs::read_to_string(path)?;
-        let mut config: Self = toml::from_str(&content)?;
-        // Env vars always override file config
-        config.load_from_env();
+        let config: Self = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Discover the first existing config file in standard locations.
+    ///
+    /// Search order:
+    /// 1. `YOMI_CONFIG` environment variable
+    /// 2. `~/.yomi/config.toml`
+    pub fn discover_file() -> Option<PathBuf> {
+        if let Some(path) = env_var(env_names::CONFIG) {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        let default = expand_tilde(DEFAULT_DATA_DIR).join("config.toml");
+        if default.exists() {
+            return Some(default);
+        }
+        None
     }
 
     /// Apply environment variable overrides to this config
@@ -324,13 +332,6 @@ impl Config {
         if let Some(folders) = env_var(env_names::SKILL_FOLDERS) {
             self.skill_folders = Some(folders.split(',').map(String::from).collect());
         }
-
-        // Plugin directories (colon-separated, like PATH)
-        if let Some(dirs) = env_var(env_names::PLUGIN_DIRS) {
-            self.claude_plugin_dirs = dirs.split(':').map(expand_tilde).collect();
-        }
-
-        self.load_claude_plugins = env_bool(env_names::LOAD_CLAUDE_PLUGINS);
 
         // Auto-approve level (safe | caution | dangerous)
         if let Some(level) = env_var(env_names::AUTO_APPROVE) {
