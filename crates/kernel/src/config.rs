@@ -55,6 +55,8 @@ pub mod env_names {
 
     /// Context window size for the model (e.g., 131072, 200000, 128k, 200k)
     pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
+    /// Compaction threshold as a ratio of the context window (0.0–1.0, default: 0.8)
+    pub const COMPACTOR_RATIO: &str = env_name!("COMPACTOR_RATIO");
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
     /// Path to a configuration file to use instead of the default
@@ -349,9 +351,12 @@ impl Config {
         if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
             if let Some(tokens) = parse_number_with_unit(&context_window) {
                 self.agent.compactor.context_window = tokens;
-                // Also update compact_threshold to 80% of context window
-                self.agent.compactor.compact_threshold = tokens * 8 / 10;
             }
+        }
+
+        // Compactor threshold ratio (0.0–1.0, default 0.8)
+        if let Some(ratio) = env_parse::<f32>(env_names::COMPACTOR_RATIO) {
+            self.agent.compactor.threshold_ratio = ratio.clamp(0.0, 1.0);
         }
 
         // Maximum checkpoints per session

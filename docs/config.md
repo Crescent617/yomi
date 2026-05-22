@@ -25,7 +25,7 @@ max_iterations = 100
 enable_subagent = true
 
 [agent.compactor]
-context_window = 128000
+threshold_ratio = 0.8
 
 yolo = false
 auto_approve = "safe"  # safe | caution | dangerous
@@ -70,6 +70,7 @@ load_claude_plugins = true
 | `YOMI_MAX_ITERATIONS` | 最大迭代次数 | `100` |
 | `YOMI_ENABLE_SUB_AGENTS` | 启用子 agent | `true` |
 | `YOMI_CONTEXT_WINDOW` | 上下文窗口 (支持 `128k`/`1m`) | `128k` |
+| `YOMI_COMPACTOR_RATIO` | 触发压缩的上下文比例 (0.0–1.0) | `0.8` |
 
 ### 技能与插件
 

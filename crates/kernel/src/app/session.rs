@@ -203,9 +203,7 @@ impl Session {
             Some(handle) => handle
                 .send_permission_response(req_id, approved, remember)
                 .await
-                .map_err(|e| {
-                    SessionError::SendFailed(format!("permission response: {e}")).into()
-                }),
+                .map_err(|e| SessionError::SendFailed(format!("permission response: {e}")).into()),
             None => Err(SessionError::NotInitialized.into()),
         }
     }

@@ -238,7 +238,8 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         };
 
         // Create SimpleAgent for execution
-        let mut simple_agent = self.create_simple_agent(&subagent_session_id, &ctx.working_dir, ctx.skills.clone());
+        let mut simple_agent =
+            self.create_simple_agent(&subagent_session_id, &ctx.working_dir, ctx.skills.clone());
         let sub_agent_id = AgentId::new();
 
         // Prepare history if inherit_context is enabled

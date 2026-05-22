@@ -50,14 +50,18 @@ impl EventPump {
             'outer: loop {
                 // When broadcast is closed, resubscribe (infinite retry).
                 if current_rx.is_none() {
-                    match Self::resubscribe(&coordinator, &sid, auto_approve, &cancel_for_task).await {
+                    match Self::resubscribe(&coordinator, &sid, auto_approve, &cancel_for_task)
+                        .await
+                    {
                         Some(new_rx) => {
                             tracing::info!("EventPump re-subscribed to {}", sid.0);
                             // Notify TUI that connection is back.
                             if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
                                 session_id: sid.clone(),
                             })) {
-                                tracing::warn!("EventPump failed to send connected notification: {e}");
+                                tracing::warn!(
+                                    "EventPump failed to send connected notification: {e}"
+                                );
                             }
                             current_rx = Some(new_rx);
                         }
@@ -65,7 +69,9 @@ impl EventPump {
                     }
                 }
 
-                let Some(ref mut r) = current_rx else { continue };
+                let Some(ref mut r) = current_rx else {
+                    continue;
+                };
 
                 tokio::select! {
                     biased;

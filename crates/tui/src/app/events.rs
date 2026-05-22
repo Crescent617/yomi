@@ -339,11 +339,10 @@ impl Model {
                 }
                 // Connection lost - pump will auto-reconnect
                 Event::System(kernel::event::SystemEvent::ConnectionLost { .. }) => {
-                    self.show_notification(
-                        &crate::components::info_bar::Notification::warn(
-                            "Connection lost, reconnecting…", 0,
-                        ),
-                    );
+                    self.show_notification(&crate::components::info_bar::Notification::warn(
+                        "Connection lost, reconnecting…",
+                        0,
+                    ));
                     self.state.should_redraw = true;
                 }
                 Event::System(kernel::event::SystemEvent::Shutdown {
@@ -356,11 +355,10 @@ impl Model {
                     self.state.should_redraw = true;
                 }
                 Event::System(kernel::event::SystemEvent::Connected { .. }) => {
-                    self.show_notification(
-                        &crate::components::info_bar::Notification::info(
-                            "Connected to daemon", 3000,
-                        ),
-                    );
+                    self.show_notification(&crate::components::info_bar::Notification::info(
+                        "Connected to daemon",
+                        3000,
+                    ));
                     self.state.should_redraw = true;
                 }
                 // Rewind completed - refresh messages from the event

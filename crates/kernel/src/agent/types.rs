@@ -397,7 +397,10 @@ impl AgentShared {
 
     /// Set the hook registry (wrapped for hot-reload)
     #[must_use]
-    pub fn with_hook_registry(mut self, registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>) -> Self {
+    pub fn with_hook_registry(
+        mut self,
+        registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>,
+    ) -> Self {
         self.hook_registry = Some(registry);
         self
     }
