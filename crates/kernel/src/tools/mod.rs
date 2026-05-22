@@ -16,6 +16,7 @@ pub mod reminder;
 pub mod shell;
 pub mod skill_load;
 pub mod subagent;
+pub mod subagent_presets;
 pub mod todo;
 pub mod webfetch;
 pub mod websearch;
@@ -36,6 +37,7 @@ pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
+pub use subagent_presets::SubagentPreset;
 pub use todo::{TodoTool, TODO_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
@@ -223,6 +225,16 @@ impl ToolRegistry {
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
+    }
+
+    /// Remove a tool by name, returning it if it existed.
+    /// Invalidates the cached definitions.
+    pub fn remove(&mut self, name: &str) -> Option<Arc<dyn Tool>> {
+        let removed = self.tools.remove(name);
+        if removed.is_some() {
+            self.cached_definitions = None;
+        }
+        removed
     }
 
     /// Returns tool definitions wrapped in Arc for cheap cloning.

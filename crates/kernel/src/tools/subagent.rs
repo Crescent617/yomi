@@ -2,7 +2,7 @@ use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
 use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
 use crate::storage::SessionStore;
-use crate::tools::{Tool, ToolExecCtx, ToolRegistry};
+use crate::tools::{SubagentPreset, Tool, ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
 use crate::utils::tokens::format_actual_tokens;
 use async_trait::async_trait;
@@ -48,19 +48,27 @@ impl SubagentTool {
     }
 
     /// Build the system prompt for the sub-agent
-    fn build_system_prompt(&self, inherit_context: bool) -> String {
+    fn build_system_prompt(&self, inherit_context: bool, preset: Option<SubagentPreset>) -> String {
         let context_note = if inherit_context {
             "Given the conversation context provided, use the tools available to complete the task."
         } else {
             "Given the user's message, use the tools available to complete the task."
         };
 
-        format!(
+        let mut prompt = format!(
             r"You are a sub-agent of {parent_id}. {context_note}
 
 Complete the task fully — don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.",
             parent_id = self.parent_id,
-        )
+        );
+
+        if let Some(p) = preset {
+            if let Some(text) = p.prompt() {
+                prompt.push_str(text);
+            }
+        }
+
+        prompt
     }
 
     /// Create a `SimpleAgent` with the same configuration as this subagent tool
@@ -69,9 +77,18 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
         session_id: &str,
         working_dir: &std::path::Path,
         skills: Vec<Arc<Skill>>,
+        preset: Option<SubagentPreset>,
     ) -> SimpleAgent {
         use crate::permissions::Checker;
-        let tool_registry = self.create_tool_registry(session_id);
+        let mut tool_registry = self.create_tool_registry(session_id);
+
+        // Remove tools disallowed by the preset
+        if let Some(p) = preset {
+            for tool_name in p.disallowed_tools() {
+                tool_registry.remove(tool_name);
+            }
+        }
+
         let agent_id = crate::types::AgentId::new();
 
         // Create permission checker if permission state is available
@@ -128,26 +145,23 @@ impl Tool for SubagentTool {
         r#"Launch a new agent to handle complex, multi-step tasks autonomously.
 
 ## When to Use
-- Research tasks requiring multiple file reads or searches
-- Implementation work that requires changes across multiple files
-- Complex analysis that would clutter the main context with intermediate results
-- Tasks that can be parallelized for better performance
+- Research requiring multiple file reads or searches
+- Implementation across multiple files
+- Complex analysis that would clutter context
+- Tasks that can be parallelized (launch multiple agents in one message)
 
 ## When NOT to Use
-- If you want to read a specific file path, use the read tool directly
-- If you are searching for code, use the grep tool instead
-- Other simple tasks requiring only 1-2 quick edits
+- Read a specific file → use read tool
+- Search code → use grep tool
+- 1-2 quick edits → do them directly
 
-## Parallel Execution
-When you have multiple independent tasks, launch multiple agents concurrently by sending a **single message with multiple agent tool calls**. For example, if you need to audit dependencies AND refactor the auth module, send both agent calls in the same message.
-
-## Writing the Prompt
-Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation and doesn't know what you've tried.
-- Explain what you're trying to accomplish and why
-- Describe what you've already learned or ruled out
-- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction
-- If you need a short response, say so ("report in under 200 words")
-- Lookups: hand over the exact command. Investigations: hand over the question."#
+## Prompt Tips
+Brief the agent like a smart colleague who just walked in — it has no context.
+- Explain what to do and why
+- State what you've already ruled out
+- Give exact commands for lookups, open-ended questions for investigations
+- Set inherit_context to true when the agent needs this conversation history
+- Request short responses explicitly when needed ("report in under 200 words")"#
     }
 
     fn schema(&self) -> Value {
@@ -172,6 +186,15 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
                     "type": "boolean",
                     "description": "Give the agent access to this conversation history. Use when agent needs full context.",
                     "default": false
+                },
+                "preset": {
+                    "type": "string",
+                    "enum": ["general-purpose", "explorer", "reviewer"],
+                    // Intentionally only exposing 3 presets in the schema to
+                    // keep the surface area small. planner and tester work but
+                    // are reserved for advanced/internal use.
+                    "description": "Agent preset that configures role and available tools. 'general-purpose' (default) is the standard sub-agent. 'explorer' is read-only search specialist. 'reviewer' performs code review without editing.",
+                    "default": "general-purpose"
                 }
             },
             "required": ["description", "prompt"]
@@ -196,17 +219,28 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         };
 
         let inherit_context = args["inherit_context"].as_bool().unwrap_or(false);
+        let preset = args["preset"]
+            .as_str()
+            .and_then(|s| s.parse::<SubagentPreset>().ok());
+
+        if args["preset"].as_str().is_some() && preset.is_none() {
+            tracing::warn!(
+                "Unknown subagent preset '{}', falling back to general-purpose",
+                args["preset"].as_str().unwrap_or(""),
+            );
+        }
 
         tracing::info!(
-            "Spawning sub-agent {} for parent {}: {} (inherit_context: {})",
+            "Spawning sub-agent {} for parent {}: {} (inherit_context: {}, preset: {:?})",
             ctx.tool_call_id,
             self.parent_id,
             description,
-            inherit_context
+            inherit_context,
+            preset
         );
 
         // Build system prompt (role definition only, no task specifics)
-        let system_prompt = self.build_system_prompt(inherit_context);
+        let system_prompt = self.build_system_prompt(inherit_context, preset);
 
         // Create session for transcript recording if storage is available.
         // Reuse the pre-generated tool-call message_id as the session id so
@@ -238,8 +272,12 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         };
 
         // Create SimpleAgent for execution
-        let mut simple_agent =
-            self.create_simple_agent(&subagent_session_id, &ctx.working_dir, ctx.skills.clone());
+        let mut simple_agent = self.create_simple_agent(
+            &subagent_session_id,
+            &ctx.working_dir,
+            ctx.skills.clone(),
+            preset,
+        );
         let sub_agent_id = AgentId::new();
 
         // Prepare history if inherit_context is enabled

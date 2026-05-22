@@ -136,7 +136,7 @@ impl WebFetchTool {
         let response = get_client()
             .get(url)
             .header("Accept", "text/html, text/plain, application/json, */*")
-            .header("User-Agent", "Mozilla/5.0 (compatible; Yomi/1.0)")
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
             .send()
             .await
             .map_err(|e| format!("Request failed: {e}"))?;

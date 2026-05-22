@@ -1,12 +1,14 @@
-//! `WebSearch` tool - searches the web using `DuckDuckGo` (no API key required)
+//! `WebSearch` tool - searches the web using `Bing` and `DuckDuckGo`
 //!
-//! Uses `DuckDuckGo`'s HTML interface for free web search.
+//! Uses both search engines' HTML interfaces for free web search, merging
+//! and deduplicating results by URL.
 
 use crate::tools::webfetch::get_client;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::strs::truncate_with_suffix;
 use async_trait::async_trait;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -57,31 +59,49 @@ impl WebSearchTool {
         Ok(query.to_string())
     }
 
-    /// Perform web search using `DuckDuckGo` HTML interface
+    /// Perform web search using both `Bing` and `DuckDuckGo` in parallel,
+    /// interleaving results by rank and deduplicating by URL.
     async fn search(
         &self,
         query: &str,
         num_results: usize,
     ) -> std::result::Result<Vec<SearchResult>, String> {
-        // Try the original query first
-        match self.search_raw(query, num_results).await {
-            Ok(results) => Ok(results),
-            Err(err) => {
-                // Fallback: strip quotes and retry. DuckDuckGo's HTML interface
-                // does not handle `"phrase1" OR "phrase2"` well, but works fine
-                // with plain keywords.
-                let cleaned = query.replace('"', "");
-                if cleaned != query && !cleaned.trim().is_empty() {
-                    self.search_raw(&cleaned, num_results).await
-                } else {
-                    Err(err)
+        let (bing, ddg) = futures::future::join(
+            self.search_bing(query, num_results),
+            self.search_ddg(query, num_results),
+        )
+        .await;
+
+        let bing = bing.unwrap_or_default();
+        let ddg = ddg.unwrap_or_default();
+
+        if bing.is_empty() && ddg.is_empty() {
+            return Err("No search results found".to_string());
+        }
+
+        // Interleave by rank: Bing #1, DDG #1, Bing #2, DDG #2, ...
+        let mut merged = Vec::with_capacity(num_results);
+        let mut seen = std::collections::HashSet::with_capacity(num_results);
+        let max_len = bing.len().max(ddg.len());
+
+        for i in 0..max_len {
+            for source in [&bing, &ddg] {
+                if let Some(r) = source.get(i) {
+                    if seen.insert(r.url.clone()) {
+                        merged.push(r.clone());
+                        if merged.len() >= num_results {
+                            return Ok(merged);
+                        }
+                    }
                 }
             }
         }
+
+        Ok(merged)
     }
 
-    /// Raw search request to `DuckDuckGo` (no fallback)
-    async fn search_raw(
+    /// Search request to `DuckDuckGo` HTML interface
+    async fn search_ddg(
         &self,
         query: &str,
         num_results: usize,
@@ -89,6 +109,7 @@ impl WebSearchTool {
         let client = get_client();
 
         // Use DuckDuckGo HTML interface
+        // Use DuckDuckGo HTML interface — keep %3A encoded for form bodies.
         let form_body = format!("q={}&kl=us-en", urlencoding::encode(query));
 
         let response = client
@@ -96,9 +117,13 @@ impl WebSearchTool {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             )
-            .header("Accept", "text/html,application/xhtml+xml")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.5")
+            .header("Referer", "https://html.duckduckgo.com/")
+            .header("Origin", "https://html.duckduckgo.com")
+            .header("DNT", "1")
             .body(form_body)
             .send()
             .await
@@ -113,21 +138,21 @@ impl WebSearchTool {
             .await
             .map_err(|e| format!("Failed to read response: {e}"))?;
 
-        Self::parse_duckduckgo_results(&html, num_results)
+        Self::parse_ddg_results(&html, num_results)
     }
 
     /// Parse `DuckDuckGo` HTML results
-    fn parse_duckduckgo_results(
+    fn parse_ddg_results(
         html: &str,
         limit: usize,
     ) -> std::result::Result<Vec<SearchResult>, String> {
         let document = scraper::Html::parse_document(html);
 
         // DuckDuckGo result selector
-        let result_selector = scraper::Selector::parse(".result").unwrap();
-        let title_selector = scraper::Selector::parse(".result__title a").unwrap();
-        let snippet_selector = scraper::Selector::parse(".result__snippet").unwrap();
-        let url_selector = scraper::Selector::parse(".result__url").unwrap();
+        let result_selector = scraper::Selector::parse(".result").expect("static CSS selector");
+        let title_selector = scraper::Selector::parse(".result__title a").expect("static CSS selector");
+        let snippet_selector = scraper::Selector::parse(".result__snippet").expect("static CSS selector");
+        let url_selector = scraper::Selector::parse(".result__url").expect("static CSS selector");
 
         let mut results = Vec::new();
 
@@ -144,7 +169,7 @@ impl WebSearchTool {
                 .select(&title_selector)
                 .next()
                 .and_then(|el| el.value().attr("href"))
-                .map(Self::clean_duckduckgo_url)
+                .map(Self::decode_ddg_url)
                 .unwrap_or_default();
 
             // Extract snippet
@@ -176,8 +201,8 @@ impl WebSearchTool {
         Ok(results)
     }
 
-    /// Clean `DuckDuckGo` redirect URLs to get the actual URL
-    fn clean_duckduckgo_url(url: &str) -> String {
+    /// Decode `DuckDuckGo` redirect URLs to get the actual URL
+    fn decode_ddg_url(url: &str) -> String {
         // DuckDuckGo sometimes uses redirect URLs like:
         // //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com&...
         if let Some(pos) = url.find("uddg=") {
@@ -197,11 +222,142 @@ impl WebSearchTool {
         url.to_string()
     }
 
-    /// Extract main content from HTML by filtering noise and converting to text
-    ///
-    /// Delegates to the shared `html` utility module
-    fn extract_content(html: &str, _url: &str) -> String {
-        crate::utils::html::extract_content(html)
+    /// Encode a query string for use in search URLs (Bing prefers bare colons).
+    fn encode_query_for_url(query: &str) -> String {
+        urlencoding::encode(query).replace("%3A", ":")
+    }
+
+    /// Perform web search using Bing HTML interface
+    async fn search_bing(
+        &self,
+        query: &str,
+        num_results: usize,
+    ) -> std::result::Result<Vec<SearchResult>, String> {
+        let client = get_client();
+
+        let url = format!(
+            "https://www.bing.com/search?q={}&setmkt=en-us&setlang=en&count={}",
+            Self::encode_query_for_url(query),
+            num_results
+        );
+
+        let response = client
+            .get(&url)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            )
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.5")
+            .header("Referer", "https://www.bing.com/")
+            .version(reqwest::Version::HTTP_11)
+            .send()
+            .await
+            .map_err(|e| format!("Bing search request failed: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Bing search failed: HTTP {}", response.status()));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Bing response: {e}"))?;
+
+        let html = String::from_utf8_lossy(&bytes).to_string();
+
+        Self::parse_bing_results(&html, num_results)
+    }
+
+    /// Parse Bing HTML results
+    fn parse_bing_results(
+        html: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<SearchResult>, String> {
+        let document = scraper::Html::parse_document(html);
+
+        let result_selector = scraper::Selector::parse(".b_algo").expect("static CSS selector");
+        let title_selector = scraper::Selector::parse(".b_algo h2 a").expect("static CSS selector");
+        let snippet_selector = scraper::Selector::parse(".b_algo .b_caption p").expect("static CSS selector");
+
+        let mut results = Vec::new();
+
+        for result in document.select(&result_selector).take(limit) {
+            // Extract title
+            let title = result
+                .select(&title_selector)
+                .next()
+                .map(|el| el.text().collect::<String>().trim().to_string())
+                .unwrap_or_default();
+
+            // Extract URL
+            let url = result
+                .select(&title_selector)
+                .next()
+                .and_then(|el| el.value().attr("href"))
+                .map(Self::decode_bing_url)
+                .unwrap_or_default();
+
+            // Extract snippet
+            let snippet = result
+                .select(&snippet_selector)
+                .next()
+                .map(|el| el.text().collect::<String>().trim().to_string())
+                .unwrap_or_default();
+
+            if !title.is_empty() && !url.is_empty() {
+                results.push(SearchResult {
+                    title,
+                    url,
+                    snippet,
+                });
+            }
+        }
+
+        if results.is_empty() {
+            return Err("No search results found".to_string());
+        }
+
+        Ok(results)
+    }
+
+    /// Decode Bing redirect URL to get the actual URL
+    fn decode_bing_url(url: &str) -> String {
+        // Bing uses redirect URLs like:
+        // https://www.bing.com/ck/a?...&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbQ...
+        if let Some(pos) = url.find("u=") {
+            let encoded = &url[pos + 2..];
+            let end_pos = encoded.find('&').unwrap_or(encoded.len());
+            let encoded_url = &encoded[..end_pos];
+
+            // Bing URLs start with "a1" prefix before base64
+            let b64_part = if let Some(stripped) = encoded_url.strip_prefix("a1") {
+                stripped
+            } else {
+                encoded_url
+            };
+
+            // Pad base64 if needed
+            let mut padded = b64_part.to_string();
+            while padded.len() % 4 != 0 {
+                padded.push('=');
+            }
+
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&padded) {
+                if let Ok(decoded_str) = String::from_utf8(decoded) {
+                    // Handle protocol-relative URLs
+                    if decoded_str.starts_with("//") {
+                        return format!("https:{decoded_str}");
+                    }
+                    if !decoded_str.is_empty() {
+                        return decoded_str;
+                    }
+                }
+            }
+        }
+
+        // Fallback: return original URL (Bing redirect works too)
+        url.to_string()
     }
 
     /// Fetch content from a URL
@@ -213,7 +369,7 @@ impl WebSearchTool {
             .header("Accept", "text/html, text/plain, */*")
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             )
             .timeout(Duration::from_secs(15))
             .send()
@@ -233,7 +389,7 @@ impl WebSearchTool {
 
         // Extract main content and convert to markdown
         let text = if content.trim().starts_with('<') {
-            Self::extract_content(&content, url)
+            crate::utils::html::extract_content(&content)
         } else {
             content.to_string()
         };
@@ -253,6 +409,12 @@ impl WebSearchTool {
 
     /// Format search results with optional content
     fn format_results(results: &[SearchResult], contents: &[(usize, String)]) -> String {
+        // Build a lookup map from result index to content for O(1) access.
+        let content_map: std::collections::HashMap<usize, &str> = contents
+            .iter()
+            .map(|(idx, text)| (*idx, text.as_str()))
+            .collect();
+
         let mut output = String::new();
 
         for (i, result) in results.iter().enumerate() {
@@ -261,12 +423,17 @@ impl WebSearchTool {
             let _ = writeln!(output, "   Snippet: {}", result.snippet);
 
             // Add full content if available
-            if let Some((_, content)) = contents.iter().find(|(idx, _)| *idx == i) {
+            if let Some(content) = content_map.get(&i) {
                 let _ = writeln!(output, "   Content:");
-                for line in content.lines().take(30) {
+                let mut exceeded = false;
+                for (line_idx, line) in content.lines().enumerate() {
+                    if line_idx >= 30 {
+                        exceeded = true;
+                        break;
+                    }
                     let _ = writeln!(output, "     {line}");
                 }
-                if content.lines().count() > 30 {
+                if exceeded {
                     let _ = writeln!(output, "     [...]");
                 }
             }
@@ -407,22 +574,22 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_duckduckgo_url() {
+    fn test_decode_ddg_url() {
         // Test protocol-relative URL
         assert_eq!(
-            WebSearchTool::clean_duckduckgo_url("//example.com"),
+            WebSearchTool::decode_ddg_url("//example.com"),
             "https://example.com"
         );
 
         // Test plain URL
         assert_eq!(
-            WebSearchTool::clean_duckduckgo_url("https://example.com"),
+            WebSearchTool::decode_ddg_url("https://example.com"),
             "https://example.com"
         );
     }
 
     #[test]
-    fn test_parse_duckduckgo_results() {
+    fn test_parse_ddg_results() {
         // Sample DuckDuckGo HTML response
         let html = r#"
 <!DOCTYPE html>
@@ -440,7 +607,7 @@ mod tests {
 </html>
         "#;
 
-        let results = WebSearchTool::parse_duckduckgo_results(html, 10).unwrap();
+        let results = WebSearchTool::parse_ddg_results(html, 10).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].title, "Test Title 1");
         assert_eq!(results[0].url, "https://example.com/1");
@@ -470,5 +637,34 @@ mod tests {
         assert!(output.contains("Test Title 2"));
         assert!(output.contains("https://example.com/1"));
         assert!(output.contains("Full content for page 1"));
+    }
+
+    #[test]
+    #[ignore = "requires /tmp/bing.html from real Bing response"]
+    fn test_parse_bing_real_html() {
+        let html = std::fs::read_to_string("/tmp/bing.html").unwrap();
+        let results = WebSearchTool::parse_bing_results(&html, 3).unwrap();
+        assert!(!results.is_empty(), "Expected non-empty Bing results");
+        println!("Bing parsed {} results", results.len());
+        for (i, r) in results.iter().take(3).enumerate() {
+            println!("{}: {} -> {}", i, r.title, r.url);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "live network test"]
+    async fn test_search_bing_live() {
+        let tool = WebSearchTool::new();
+        let results = tool.search_bing("rust:ownership", 3).await;
+        println!("search_bing result: {results:?}");
+        assert!(results.is_ok(), "search_bing failed: {results:?}");
+        let results = results.unwrap();
+        assert!(
+            !results.is_empty(),
+            "search_bing returned empty results: {results:?}"
+        );
+        for (i, r) in results.iter().take(3).enumerate() {
+            println!("{}: {} -> {}", i, r.title, r.url);
+        }
     }
 }
