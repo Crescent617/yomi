@@ -273,6 +273,17 @@ fn render_tool(
         }
     }
 
+    // For subagent, show preset with text_secondary style
+    if tool_name == SUBAGENT_TOOL_NAME {
+        if let Some(value) = parsed_args {
+            let preset = value["preset"].as_str().unwrap_or("general-purpose");
+            header_spans.push(Span::styled(
+                format!(" {preset}"),
+                Style::default().fg(colors::text_secondary()),
+            ));
+        }
+    }
+
     lines.push(Arc::new(Line::from(header_spans)));
 
     // Output peek in folded mode (max 50 chars, indented)

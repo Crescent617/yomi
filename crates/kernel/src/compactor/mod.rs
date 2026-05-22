@@ -142,6 +142,7 @@ impl Compactor {
     }
 
     /// Compute the absolute token threshold from the ratio and context window.
+    #[allow(clippy::cast_precision_loss)]
     pub fn threshold(&self) -> u32 {
         (self.context_window as f32 * self.threshold_ratio) as u32
     }
