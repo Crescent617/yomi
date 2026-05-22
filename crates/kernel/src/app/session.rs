@@ -192,6 +192,14 @@ impl Session {
         }
     }
 
+    /// Gracefully shut down the main agent (sends Shutdown signal).
+    pub async fn close(&self) {
+        if let Some(handle) = &self.main_agent {
+            tracing::info!("Closing session {}", self.id.0);
+            let _ = handle.close().await;
+        }
+    }
+
     /// Send permission response to the main agent
     pub async fn send_permission_response(
         &self,

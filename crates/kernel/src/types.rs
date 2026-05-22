@@ -634,6 +634,9 @@ pub enum SessionError {
     /// Catch-all for other session errors (migration fallback).
     #[error("{0}")]
     Other(String),
+    /// Wire protocol version mismatch between client and daemon.
+    #[error("daemon wire protocol too old, please upgrade and restart daemon")]
+    WireProtocolMismatch,
 }
 
 /// Core error type for kernel operations
@@ -664,7 +667,7 @@ pub enum KernelError {
     Permission(String),
 
     /// Session not found or invalid
-    #[error("Session error: {0}")]
+    #[error(transparent)]
     Session(#[from] SessionError),
 
     /// Task operation failed

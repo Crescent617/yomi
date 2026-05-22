@@ -72,8 +72,7 @@ pub trait CoordinatorApi: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<Event>>;
-    async fn list_sessions(&self) -> Result<Vec<SessionId>>;
-    async fn list_sessions_filtered(
+    async fn list_sessions(
         &self,
         args: crate::storage::session::ListArgs,
     ) -> Result<Vec<crate::storage::session::SessionInfo>>;
@@ -170,25 +169,19 @@ impl CoordinatorApi for Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_session_events(session_id)
-            .await
-            .ok_or_else(|| {
-                SessionError::NotFound {
-                    session_id: session_id.0.clone(),
-                }
-                .into()
-            })
+        self.subscribe_session_events(session_id).ok_or_else(|| {
+            SessionError::NotFound {
+                session_id: session_id.0.clone(),
+            }
+            .into()
+        })
     }
 
-    async fn list_sessions(&self) -> Result<Vec<SessionId>> {
-        Ok(self.list_sessions().await)
-    }
-
-    async fn list_sessions_filtered(
+    async fn list_sessions(
         &self,
         args: crate::storage::session::ListArgs,
     ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        self.list_sessions_filtered(args).await
+        self.list_sessions(args).await
     }
 
     async fn get_checkpoints(
@@ -517,13 +510,7 @@ impl RemoteCoordinator {
                         crate::wire::WIRE_PROTOCOL_VERSION
                     );
                     self.invalidate_connection().await;
-                    return Err(SessionError::Other(format!(
-                        "Daemon wire protocol too old (server {}, client {}). \
-                         Please upgrade daemon.",
-                        server_proto,
-                        crate::wire::WIRE_PROTOCOL_VERSION
-                    ))
-                    .into());
+                    return Err(SessionError::WireProtocolMismatch.into());
                 }
             }
             Err(e) => {
@@ -532,12 +519,7 @@ impl RemoteCoordinator {
                 // mismatch rather than silently degrading.
                 tracing::error!("Hello handshake failed (old daemon?): {e}");
                 self.invalidate_connection().await;
-                return Err(SessionError::Other(format!(
-                    "Daemon does not support wire protocol handshake. \
-                     Please upgrade daemon to match client (>= protocol {}).",
-                    crate::wire::WIRE_PROTOCOL_VERSION
-                ))
-                .into());
+                return Err(SessionError::WireProtocolMismatch.into());
             }
         }
 
@@ -820,17 +802,11 @@ impl CoordinatorApi for RemoteCoordinator {
         self.subscribe_events_internal(session_id).await
     }
 
-    async fn list_sessions(&self) -> Result<Vec<SessionId>> {
-        let result = self.call(RequestMethod::ListSessions).await?;
-        let ids: Vec<String> = serde_json::from_value(result)?;
-        Ok(ids.into_iter().map(SessionId).collect())
-    }
-
-    async fn list_sessions_filtered(
+    async fn list_sessions(
         &self,
         args: crate::storage::session::ListArgs,
     ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        let result = self.call(RequestMethod::ListSessionsFiltered(args)).await?;
+        let result = self.call(RequestMethod::ListSessions(args)).await?;
         let sessions = serde_json::from_value(result)?;
         Ok(sessions)
     }

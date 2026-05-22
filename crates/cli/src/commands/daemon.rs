@@ -115,8 +115,10 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                         interval.tick().await;
                         let idle = coord_for_exit.idle_seconds();
                         let clients = server_for_exit.connection_count();
-                        let sessions = coord_for_exit.list_sessions().await;
-                        if idle >= DAEMON_IDLE_TIMEOUT_SECS && clients == 0 && sessions.is_empty() {
+                        if idle >= DAEMON_IDLE_TIMEOUT_SECS
+                            && clients == 0
+                            && coord_for_exit.live_session_count() == 0
+                        {
                             tracing::info!(
                                 "Auto-exiting daemon after {idle}s idle with no clients or sessions"
                             );

@@ -1,11 +1,11 @@
-use crate::agent::{AgentConfig, AgentShared};
+use crate::agent::{AgentConfig, AgentShared, AgentState};
 use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
 use crate::storage::{MessageStore, SessionStore, StorageSet};
 use crate::types::{KernelError, Result, SessionError, SessionId};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,9 +13,9 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 pub struct Coordinator {
     agent_shared: Arc<AgentShared>,
-    sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
+    sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
     /// Broadcast channels for session events (for forwarding and cleanup)
-    session_event_senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
+    session_event_senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
     /// Epoch seconds of the last event received from any session.
     /// Updated by `forward_session_events` on every event.
     last_activity_at: Arc<AtomicU64>,
@@ -96,12 +96,19 @@ impl Coordinator {
         };
 
         let agent_shared = Arc::new(agent_shared);
+        let sessions = Arc::new(DashMap::new());
+        let session_event_senders = Arc::new(DashMap::new());
+        let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
+        let agent_config = Arc::new(RwLock::new(agent_config));
+
+        Self::spawn_session_pruner(Arc::clone(&sessions), Arc::clone(&session_event_senders));
+
         Self {
             agent_shared,
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            session_event_senders: Arc::new(RwLock::new(HashMap::new())),
-            last_activity_at: Arc::new(AtomicU64::new(Self::now_epoch())),
-            agent_config: Arc::new(RwLock::new(agent_config)),
+            sessions,
+            session_event_senders,
+            last_activity_at,
+            agent_config,
         }
     }
 
@@ -112,13 +119,55 @@ impl Coordinator {
             .as_secs()
     }
 
-    /// Gracefully shut down a running session (cancel agent + remove from memory).
+    /// Spawn a background task that shuts down idle sessions which no longer
+    /// have any subscribers. This prevents unbounded memory growth when TUI
+    /// clients disconnect while the agent is waiting for input.
+    fn spawn_session_pruner(
+        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
+        senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
+    ) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let mut to_shutdown = Vec::new();
+                for entry in senders.iter() {
+                    let sid = entry.key().clone();
+                    let tx = entry.value();
+                    if tx.receiver_count() == 0 {
+                        if let Some(s_entry) = sessions.get(&sid) {
+                            if let Some(AgentState::Idle) =
+                                s_entry.value().read().await.agent_state()
+                            {
+                                to_shutdown.push(sid);
+                            }
+                        }
+                    }
+                }
+                for sid in to_shutdown {
+                    tracing::info!("Session {} idle with no subscribers — shutting down", sid.0);
+                    // Close the agent so it exits cleanly (Shutdown transitions
+                    // to Closed, which breaks the agent loop). Then remove
+                    // directly from the maps so memory is freed regardless
+                    // of whether forward_session_events finishes.
+                    if let Some(s_entry) = sessions.get(&sid) {
+                        s_entry.value().read().await.close().await;
+                    }
+                    sessions.remove(&sid);
+                    senders.remove(&sid);
+                }
+            }
+        });
+    }
+
+    /// Shut down a running session (close agent + remove from memory).
     pub async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id).await?;
-        session.read().await.cancel();
-        // Note: forward_session_events will detect the channel close
-        // and remove the session from sessions / session_event_senders.
-        tracing::info!("Session {} shutdown requested", session_id.0);
+        let session = self.require_session(session_id)?;
+        session.read().await.close().await;
+        self.sessions.remove(session_id);
+        self.session_event_senders.remove(session_id);
+        tracing::info!("Session {} shut down", session_id.0);
         Ok(())
     }
 
@@ -153,31 +202,33 @@ impl Coordinator {
     }
 
     /// Initialize a session in memory.
-    /// Uses a single write-lock to avoid the race window of double-checked locking.
     async fn init_session(&self, session_id: SessionId, config: SessionConfig) -> Result<()> {
-        // Hold write lock for the entire critical section.
-        let mut sessions = self.sessions.write().await;
-        if sessions.contains_key(&session_id) {
+        if self.sessions.contains_key(&session_id) {
             return Err(SessionError::AlreadyExists {
                 session_id: session_id.0,
             }
             .into());
         }
 
-        // Create session (this may await, but we hold the lock).
         let (session, event_rx) =
             Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared)).await?;
 
-        let main_agent_id = session.main_agent_id().cloned();
         let session_arc = Arc::new(RwLock::new(session));
         let (broadcast_tx, _) = broadcast::channel::<Event>(256);
 
-        sessions.insert(session_id.clone(), Arc::clone(&session_arc));
-        drop(sessions);
-
+        if self
+            .sessions
+            .insert(session_id.clone(), Arc::clone(&session_arc))
+            .is_some()
+        {
+            // Raced with another init — close the orphaned agent so it exits.
+            session_arc.read().await.close().await;
+            return Err(SessionError::AlreadyExists {
+                session_id: session_id.0,
+            }
+            .into());
+        }
         self.session_event_senders
-            .write()
-            .await
             .insert(session_id.clone(), broadcast_tx.clone());
 
         // Spawn event forwarding task
@@ -190,7 +241,6 @@ impl Coordinator {
                 sid_clone,
                 event_rx,
                 broadcast_tx,
-                main_agent_id,
                 sessions_clone,
                 senders_clone,
                 activity_clone,
@@ -206,9 +256,8 @@ impl Coordinator {
         session_id: SessionId,
         mut agent_rx: mpsc::Receiver<Event>,
         broadcast_tx: broadcast::Sender<Event>,
-        _main_agent_id: Option<crate::types::AgentId>,
-        sessions: Arc<RwLock<HashMap<SessionId, Arc<RwLock<Session>>>>>,
-        senders: Arc<RwLock<HashMap<SessionId, broadcast::Sender<Event>>>>,
+        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
+        senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
         last_activity_at: Arc<AtomicU64>,
     ) {
         let sid_str = session_id.0.clone();
@@ -234,8 +283,8 @@ impl Coordinator {
         let _ = broadcast_tx.send(shutdown_event);
 
         // Remove session from coordinator
-        sessions.write().await.remove(&session_id);
-        senders.write().await.remove(&session_id);
+        sessions.remove(&session_id);
+        senders.remove(&session_id);
         tracing::info!("Session {} removed from coordinator", sid_str);
     }
 
@@ -247,7 +296,7 @@ impl Coordinator {
         session_id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId> {
-        let live = self.get_session(session_id).await.is_some();
+        let live = self.get_session(session_id).is_some();
         tracing::info!("restore_session: {} live={}", session_id.0, live);
 
         // Already live in the daemon – just re-attach.
@@ -339,12 +388,12 @@ impl Coordinator {
         Ok(new_id)
     }
 
-    pub async fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
-        self.sessions.read().await.get(id).cloned()
+    pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
+        self.sessions.get(id).map(|e| Arc::clone(e.value()))
     }
 
-    async fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
-        self.get_session(session_id).await.ok_or_else(|| {
+    fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
+        self.get_session(session_id).ok_or_else(|| {
             SessionError::NotFound {
                 session_id: session_id.0.clone(),
             }
@@ -352,8 +401,9 @@ impl Coordinator {
         })
     }
 
-    pub async fn list_sessions(&self) -> Vec<SessionId> {
-        self.sessions.read().await.keys().cloned().collect()
+    /// Return the number of sessions currently live in memory.
+    pub fn live_session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     /// Send a multi-modal message with content blocks
@@ -367,7 +417,7 @@ impl Coordinator {
             blocks.len(),
             session_id.0
         );
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         let result = session.read().await.send_blocks(blocks).await;
         if let Err(ref e) = result {
             tracing::error!("Failed to send blocks to session {}: {}", session_id.0, e);
@@ -378,21 +428,20 @@ impl Coordinator {
     /// Subscribe to events for a session (to be called by TUI)
     /// Returns None if session not found
     /// Each call returns a new receiver that will receive all future events
-    pub async fn subscribe_session_events(
+    pub fn subscribe_session_events(
         &self,
         session_id: &SessionId,
     ) -> Option<broadcast::Receiver<Event>> {
         Some(
             self.session_event_senders
-                .read()
-                .await
                 .get(session_id)?
+                .value()
                 .subscribe(),
         )
     }
 
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         session.read().await.cancel();
         Ok(())
     }
@@ -404,7 +453,7 @@ impl Coordinator {
         approved: bool,
         remember: bool,
     ) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         session
             .read()
             .await
@@ -414,7 +463,7 @@ impl Coordinator {
     }
 
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         session.read().await.set_permission_level(level).await;
         tracing::info!(
             "Permission level set to {:?} for session {}",
@@ -426,7 +475,7 @@ impl Coordinator {
 
     /// Request compaction for a session's message buffer
     pub async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         let result = session.read().await.compact().await;
         if let Err(ref e) = result {
             tracing::error!("Failed to compact session {}: {}", session_id.0, e);
@@ -443,7 +492,7 @@ impl Coordinator {
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     ) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         let result = session.read().await.rewind(message_id, target).await;
         if let Err(ref e) = result {
             tracing::error!("Failed to rewind session {}: {}", session_id.0, e);
@@ -459,14 +508,14 @@ impl Coordinator {
         session_id: &SessionId,
         state: crate::goal::GoalState,
     ) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
         session_guard.start_goal(state).await
     }
 
     /// Stop autonomous goal-mode for a session
     pub async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id).await?;
+        let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
         session_guard.stop_goal().await
     }
@@ -485,7 +534,7 @@ impl Coordinator {
     }
 
     /// List sessions from storage with filters.
-    pub async fn list_sessions_filtered(
+    pub async fn list_sessions(
         &self,
         args: crate::storage::session::ListArgs,
     ) -> Result<Vec<crate::storage::session::SessionInfo>> {
@@ -539,11 +588,11 @@ impl Coordinator {
         }
 
         // Propagate skill refresh to all live sessions.
-        // Collect Arc handles first so we don't hold the read lock across await points.
-        let handles: Vec<_> = {
-            let sessions = self.sessions.read().await;
-            sessions.values().cloned().collect()
-        };
+        let handles: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|e| Arc::clone(e.value()))
+            .collect();
         for session in handles {
             let session = session.read().await;
             if let Err(e) = session.refresh_skills(skills.clone()).await {
