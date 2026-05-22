@@ -42,7 +42,10 @@ impl SessionStore for SqliteSessionStore {
                 .map_err(|e| storage_err(format!("failed to get parent session: {e}")))?;
 
         if parent_working_dir.is_none() {
-            return Err(SessionError::NotFound { session_id: parent_id.0.clone() }.into());
+            return Err(SessionError::NotFound {
+                session_id: parent_id.0.clone(),
+            }
+            .into());
         }
 
         let new_id = SessionId::new();

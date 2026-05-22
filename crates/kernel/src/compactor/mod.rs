@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// Default token threshold to trigger compaction (80% of context window)
-pub const DEFAULT_COMPACT_THRESHOLD: u32 = 104_857; // 80% of 131,072
+/// Default threshold ratio to trigger compaction (80% of context window)
+pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.8;
 /// Default context window size
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
 
@@ -104,8 +104,8 @@ fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Compactor {
-    /// Token threshold to trigger compaction
-    pub compact_threshold: u32,
+    /// Ratio (0.0–1.0) of the context window at which compaction is triggered
+    pub threshold_ratio: f32,
     /// Total context window size
     pub context_window: u32,
     /// Number of recent messages to preserve
@@ -117,7 +117,7 @@ pub struct Compactor {
 impl Default for Compactor {
     fn default() -> Self {
         Self {
-            compact_threshold: DEFAULT_COMPACT_THRESHOLD,
+            threshold_ratio: DEFAULT_THRESHOLD_RATIO,
             context_window: DEFAULT_CONTEXT_WINDOW,
             keep_recent: KEEP_RECENT_MESSAGES,
             summary_max_tokens: SUMMARY_MAX_TOKENS,
@@ -128,17 +128,22 @@ impl Default for Compactor {
 impl Compactor {
     /// Create a new compactor with custom settings
     pub const fn new(
-        compact_threshold: u32,
+        threshold_ratio: f32,
         context_window: u32,
         keep_recent: usize,
         summary_max_tokens: u32,
     ) -> Self {
         Self {
-            compact_threshold,
+            threshold_ratio,
             context_window,
             keep_recent,
             summary_max_tokens,
         }
+    }
+
+    /// Compute the absolute token threshold from the ratio and context window.
+    pub fn threshold(&self) -> u32 {
+        (self.context_window as f32 * self.threshold_ratio) as u32
     }
 
     /// Calculate total tokens from message history
@@ -173,7 +178,7 @@ impl Compactor {
     /// Check if compaction should be triggered
     pub fn should_compact(&self, messages: &[Arc<Message>]) -> bool {
         let tokens = Self::calculate_tokens(messages);
-        tokens >= self.compact_threshold
+        tokens >= self.threshold()
     }
 
     /// Try micro-compaction: clear old tool results
@@ -400,7 +405,7 @@ mod tests {
     fn test_micro_compact() {
         use std::sync::Arc;
 
-        let compactor = Compactor::new(100, 200, 2, 1000); // keep last 2 messages
+        let compactor = Compactor::new(0.5, 200, 2, 1000); // threshold=100, keep last 2 messages
         let messages: Vec<Arc<Message>> = vec![
             Arc::new(Message::user("Task 1")),
             Arc::new(Message::tool_result(

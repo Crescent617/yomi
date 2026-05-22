@@ -237,11 +237,7 @@ pub enum SystemEvent {
         messages: Vec<std::sync::Arc<crate::types::Message>>,
     },
     /// Connection to daemon is active (initial connect or after recovery)
-    Connected {
-        session_id: SessionId,
-    },
+    Connected { session_id: SessionId },
     /// Connection to daemon was lost (reader/heartbeat detected an error)
-    ConnectionLost {
-        session_id: SessionId,
-    },
+    ConnectionLost { session_id: SessionId },
 }

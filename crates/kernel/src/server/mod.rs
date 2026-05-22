@@ -119,7 +119,9 @@ impl KernelServer {
         };
         let model_id = new_agent.model.model_id.clone();
         let skill_count = new_agent.skills.len();
-        self.coordinator.update_agent_config(new_agent, hook_registry).await;
+        self.coordinator
+            .update_agent_config(new_agent, hook_registry)
+            .await;
         tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
         true
     }
@@ -398,8 +400,7 @@ impl KernelServer {
                                 code: "session_error".to_string(),
                                 message: KernelError::from(err.clone()).to_string(),
                                 detail: Some(
-                                    serde_json::to_value(&err)
-                                        .expect("SessionError serializes"),
+                                    serde_json::to_value(&err).expect("SessionError serializes"),
                                 ),
                             },
                         }
@@ -516,7 +517,10 @@ async fn dispatch_command(
     Ok(())
 }
 
-fn rpc_body<T: serde::Serialize>(default_code: &str, result: crate::types::Result<T>) -> ResponseBody {
+fn rpc_body<T: serde::Serialize>(
+    default_code: &str,
+    result: crate::types::Result<T>,
+) -> ResponseBody {
     match result {
         Ok(val) => match serde_json::to_value(val) {
             Ok(v) => ResponseBody::Ok { result: v },

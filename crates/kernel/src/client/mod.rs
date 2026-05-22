@@ -4,7 +4,9 @@ use crate::event::{ControlCommand, Event};
 use crate::goal::GoalState;
 use crate::permissions::Level;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
-use crate::types::{ContentBlock, KernelError, Message, MessageId, Result, SessionError, SessionId};
+use crate::types::{
+    ContentBlock, KernelError, Message, MessageId, Result, SessionError, SessionId,
+};
 use crate::wire::{RequestIdGenerator, RequestMethod, ResponseBody, RpcError, WireMsg};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -170,7 +172,12 @@ impl CoordinatorApi for Coordinator {
     ) -> Result<broadcast::Receiver<Event>> {
         self.subscribe_session_events(session_id)
             .await
-            .ok_or_else(|| SessionError::NotFound { session_id: session_id.0.clone() }.into())
+            .ok_or_else(|| {
+                SessionError::NotFound {
+                    session_id: session_id.0.clone(),
+                }
+                .into()
+            })
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionId>> {
@@ -441,9 +448,9 @@ impl RemoteCoordinator {
                     tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
                 }
                 Err(e) => {
-                    return Err(SessionError::Other(format!(
-                        "Failed to connect to daemon: {e}"
-                    )).into());
+                    return Err(
+                        SessionError::Other(format!("Failed to connect to daemon: {e}")).into(),
+                    );
                 }
             }
         };
@@ -551,9 +558,9 @@ impl RemoteCoordinator {
         // connection lock so we don't hold it across the network await.
         let (write_half, rx) = {
             let guard = self.connection.lock().await;
-            let conn = guard.as_ref().ok_or_else(|| {
-                KernelError::from(SessionError::ConnectionLost)
-            })?;
+            let conn = guard
+                .as_ref()
+                .ok_or_else(|| KernelError::from(SessionError::ConnectionLost))?;
             let (tx, rx) = tokio::sync::oneshot::channel();
             conn.pending.insert(id, tx);
             (Arc::clone(&conn.write_half), rx)
@@ -591,12 +598,10 @@ impl RemoteCoordinator {
                     return Err(SessionError::Other(format!(
                         "RPC session error [{}]: {}",
                         e.code, e.message
-                    )).into());
+                    ))
+                    .into());
                 }
-                Err(SessionError::Other(format!(
-                    "RPC error [{}]: {}",
-                    e.code, e.message
-                )).into())
+                Err(SessionError::Other(format!("RPC error [{}]: {}", e.code, e.message)).into())
             }
             Ok(Err(_)) => Err(SessionError::Cancelled.into()),
             Err(_) => {

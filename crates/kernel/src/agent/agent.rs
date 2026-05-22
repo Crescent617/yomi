@@ -806,7 +806,12 @@ impl Agent {
             .await;
 
         // Replace the first system message if it exists
-        if let Some(idx) = self.message_buffer.messages().iter().position(|m| m.role == Role::System) {
+        if let Some(idx) = self
+            .message_buffer
+            .messages()
+            .iter()
+            .position(|m| m.role == Role::System)
+        {
             self.message_buffer.update_message(idx, |msg| {
                 msg.content = vec![ContentBlock::Text { text: new_prompt }];
             });
@@ -827,11 +832,7 @@ impl Agent {
             &skills,
         )
         .await;
-        tracing::info!(
-            "Agent {} refreshed {} skill(s)",
-            self.id,
-            skills.len()
-        );
+        tracing::info!("Agent {} refreshed {} skill(s)", self.id, skills.len());
     }
 
     /// Inject a user message (with interceptors) and transition to Streaming.

@@ -89,7 +89,9 @@ impl Coordinator {
         )
         .with_message_interceptor(todo_interceptor);
         let agent_shared = match hook_registry {
-            Some(registry) => agent_shared.with_hook_registry(Arc::new(tokio::sync::RwLock::new(registry))),
+            Some(registry) => {
+                agent_shared.with_hook_registry(Arc::new(tokio::sync::RwLock::new(registry)))
+            }
             None => agent_shared,
         };
 
@@ -156,7 +158,10 @@ impl Coordinator {
         // Hold write lock for the entire critical section.
         let mut sessions = self.sessions.write().await;
         if sessions.contains_key(&session_id) {
-            return Err(SessionError::AlreadyExists { session_id: session_id.0 }.into());
+            return Err(SessionError::AlreadyExists {
+                session_id: session_id.0,
+            }
+            .into());
         }
 
         // Create session (this may await, but we hold the lock).
@@ -339,9 +344,12 @@ impl Coordinator {
     }
 
     async fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
-        self.get_session(session_id)
-            .await
-            .ok_or_else(|| SessionError::NotFound { session_id: session_id.0.clone() }.into())
+        self.get_session(session_id).await.ok_or_else(|| {
+            SessionError::NotFound {
+                session_id: session_id.0.clone(),
+            }
+            .into()
+        })
     }
 
     pub async fn list_sessions(&self) -> Vec<SessionId> {
@@ -526,9 +534,7 @@ impl Coordinator {
                 *guard = registry;
                 tracing::info!("Hot-reloaded shared hook registry");
             } else {
-                tracing::warn!(
-                    "Cannot hot-reload hooks: hooks were disabled at daemon startup"
-                );
+                tracing::warn!("Cannot hot-reload hooks: hooks were disabled at daemon startup");
             }
         }
 

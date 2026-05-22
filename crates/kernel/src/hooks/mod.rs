@@ -313,11 +313,7 @@ pub async fn build_hook_registry_with_skills(
                     hooks_value,
                     &mut registry,
                 ) {
-                    tracing::warn!(
-                        "Failed to load hooks for skill '{}': {}",
-                        skill.name,
-                        e
-                    );
+                    tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
                 }
             }
         }
