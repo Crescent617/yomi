@@ -13,7 +13,7 @@ use tuirealm::{
     event::Event,
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+        layout::{Alignment, Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
         Frame,
@@ -21,11 +21,8 @@ use tuirealm::{
     state::{State, StateValue},
 };
 
-use crate::{
-    attr,
-    components::input_edit::{TextBuffer, TextInput},
-    theme::colors,
-};
+use crate::components::input_edit::{TextBuffer, TextInput};
+use crate::{attr, theme::colors, utils::text::truncate_by_width};
 use unicode_width::UnicodeWidthStr;
 
 /// An item in the fuzzy picker
@@ -57,10 +54,6 @@ impl PickerItem {
 pub struct PickerConfig {
     pub title: String,
     pub placeholder: String,
-    pub max_list_height: u16,
-    pub width_percent: f32, // 0.0-1.0, defaults to 0.6
-    pub min_width: u16,     // Minimum width in columns, default 40
-    pub min_height: u16,    // Minimum height in rows, default 10
 }
 
 impl Default for PickerConfig {
@@ -68,10 +61,6 @@ impl Default for PickerConfig {
         Self {
             title: "Select".to_string(),
             placeholder: "Search...".to_string(),
-            max_list_height: 10,
-            width_percent: 0.6,
-            min_width: 60,
-            min_height: 20,
         }
     }
 }
@@ -87,30 +76,6 @@ impl PickerConfig {
     #[must_use]
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
-        self
-    }
-
-    #[must_use]
-    pub fn with_max_height(mut self, height: u16) -> Self {
-        self.max_list_height = height;
-        self
-    }
-
-    #[must_use]
-    pub fn with_width_percent(mut self, percent: f32) -> Self {
-        self.width_percent = percent.clamp(0.1, 1.0);
-        self
-    }
-
-    #[must_use]
-    pub fn with_min_width(mut self, width: u16) -> Self {
-        self.min_width = width;
-        self
-    }
-
-    #[must_use]
-    pub fn with_min_height(mut self, height: u16) -> Self {
-        self.min_height = height;
         self
     }
 }
@@ -263,18 +228,15 @@ impl FuzzyPicker {
     }
 
     fn render_picker(&mut self, frame: &mut Frame, area: Rect) {
-        // Calculate width: percentage-based with min/max constraints
-        let percent_width = (f32::from(area.width) * self.config.width_percent) as u16;
-        let palette_width = percent_width
-            .max(self.config.min_width)
-            .min(area.width.saturating_sub(4));
+        // 宽度拉满，占整个可用宽度
+        let palette_width = area.width;
 
-        // Calculate height: leave 2 rows margin top + 4 rows margin bottom
-        let palette_height = area.height.saturating_sub(6);
+        // 占据屏幕下半部分
+        let palette_height = area.height / 2;
 
         let palette_area = Rect {
-            x: area.x + (area.width - palette_width) / 2,
-            y: area.y + 2, // 2 rows margin from top
+            x: area.x,
+            y: area.y + area.height - palette_height,
             width: palette_width,
             height: palette_height,
         };
@@ -282,8 +244,8 @@ impl FuzzyPicker {
         frame.render_widget(Clear, palette_area);
 
         let block = Block::default()
-            .title(self.config.title.as_str())
-            .borders(Borders::ALL)
+            .title(format!("──{}", self.config.title.as_str()))
+            .borders(Borders::TOP)
             .border_type(BorderType::Rounded)
             .border_style(colors::accent_system())
             .title_style(
@@ -292,10 +254,8 @@ impl FuzzyPicker {
                     .add_modifier(Modifier::BOLD),
             );
 
-        let inner = palette_area.inner(Margin {
-            horizontal: 1,
-            vertical: 1,
-        });
+        // Use block.inner() so only top border consumes space; bottom is not wasted
+        let inner = block.inner(palette_area);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -304,9 +264,9 @@ impl FuzzyPicker {
 
         // Search input with placeholder
         let search_text = if self.input.is_empty() {
-            format!("> {}", self.config.placeholder)
+            format!(" {}", self.config.placeholder)
         } else {
-            format!("> {}", self.input.content())
+            format!(" {}", self.input.content())
         };
         let search_style = if self.input.is_empty() {
             Style::default().fg(colors::text_muted())
@@ -321,7 +281,7 @@ impl FuzzyPicker {
         // Separator line
         let separator = Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(colors::border()));
+            .border_style(colors::accent_system());
         let separator_area = Rect {
             x: inner.x,
             y: chunks[0].y + 1,
@@ -330,9 +290,12 @@ impl FuzzyPicker {
         };
         frame.render_widget(separator, separator_area);
 
-        // Filtered items list: fill available height
-        // -4: 2 (top/bottom borders) + 2 (search input + separator)
-        let max_visible = (palette_area.height.saturating_sub(4)) as usize;
+        // Filtered items list: fill available height (use actual chunk height)
+        let max_visible = chunks[1].height as usize;
+        if max_visible == 0 {
+            frame.render_widget(block, palette_area);
+            return;
+        }
 
         // Auto-calculate scroll_offset to keep selected item visible
         if self.selected >= self.scroll_offset + max_visible {
@@ -366,6 +329,7 @@ impl FuzzyPicker {
                         use std::fmt::Write;
                         write!(content, "  {meta}").ok();
                     }
+                    content = truncate_by_width(&content, inner.width as usize, "…");
 
                     let style = if is_selected {
                         Style::default()
@@ -397,8 +361,10 @@ impl FuzzyPicker {
 
         // Set cursor position (only if not showing placeholder)
         if !self.input.is_empty() {
+            let prompt = " ";
+            let prompt_width = prompt.width() as u16;
             let search_width = self.input.content().width() as u16;
-            let cursor_x = chunks[0].x + 2 + search_width;
+            let cursor_x = chunks[0].x + prompt_width + search_width;
             let cursor_y = chunks[0].y;
             frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
         }
@@ -427,7 +393,6 @@ impl Component for FuzzyPicker {
             }
             Attribute::Custom(attr::DIALOG_HIDE) => {
                 self.hide();
-                self.scroll_offset = 0;
             }
             Attribute::Custom(attr::PICKER_ITEMS) => {
                 if let AttrValue::Payload(payload) = value {
@@ -711,12 +676,4 @@ impl AppComponent<crate::msg::Msg, crate::msg::UserEvent> for FuzzyPickerCompone
             _ => None,
         }
     }
-}
-
-/// Generic message type for picker results
-/// Used with `AppComponent` to send messages back to the app
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PickerResult {
-    Selected(String), // Selected item ID
-    Cancelled,
 }

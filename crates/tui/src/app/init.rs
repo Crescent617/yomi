@@ -226,9 +226,7 @@ impl Model {
 
         // Mount session picker component (hidden by default, for /sessions command)
         let session_picker = FuzzyPickerComponent::new(
-            PickerConfig::new("Switch Session")
-                .with_placeholder("Search sessions...")
-                .with_max_height(12),
+            PickerConfig::new("Switch Session").with_placeholder("Search sessions..."),
         )
         .with_callbacks(crate::msg::Msg::SessionSelected, || {
             crate::msg::Msg::CloseSessionPicker
@@ -240,17 +238,14 @@ impl Model {
         )?;
 
         // Mount checkpoint picker component (hidden by default, for /rewind command)
-        let checkpoint_picker = FuzzyPickerComponent::new(
-            PickerConfig::new("Rewind to Checkpoint")
-                .with_placeholder(
-                    "Search checkpoints... (Enter=Both, C-c=Conversation only, C-f=Files only)",
-                )
-                .with_max_height(15),
-        )
-        .with_callbacks(
-            |id| crate::msg::Msg::CheckpointSelected(id, crate::msg::RewindTarget::Both),
-            || crate::msg::Msg::CloseCheckpointPicker,
-        );
+        let checkpoint_picker =
+            FuzzyPickerComponent::new(PickerConfig::new("Rewind to Checkpoint").with_placeholder(
+                "Search checkpoints... (Enter=Both, C-c=Conversation only, C-f=Files only)",
+            ))
+            .with_callbacks(
+                |id| crate::msg::Msg::CheckpointSelected(id, crate::msg::RewindTarget::Both),
+                || crate::msg::Msg::CloseCheckpointPicker,
+            );
         app.mount(
             Id::CheckpointPicker,
             Box::new(checkpoint_picker),
