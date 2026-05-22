@@ -449,6 +449,7 @@ impl Model {
                     let args = kernel::storage::session::ListArgs {
                         working_dir: Some(working_dir),
                         limit: Some(50),
+                        order_asc: false, // updated_at 降序，最新的在最上面
                         ..Default::default()
                     };
                     let sessions = self

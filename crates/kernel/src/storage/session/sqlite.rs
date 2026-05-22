@@ -142,12 +142,21 @@ impl SessionStore for SqliteSessionStore {
     }
 
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()> {
-        sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
-            .bind(title)
-            .bind(&id.0)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| storage_err(format!("failed to update session title: {e}")))?;
+        let result = sqlx::query(
+            "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(title)
+        .bind(&id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to update session title: {e}")))?;
+
+        tracing::info!(
+            "update_title: id={}, title={}, rows_affected={}",
+            id.0,
+            title,
+            result.rows_affected()
+        );
         Ok(())
     }
 
