@@ -19,8 +19,6 @@ pub struct SubagentTool {
     shared: Arc<AgentShared>,
     /// Parent's `input_tx` for forwarding async sub-agent results
     parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
-    /// Skills inherited from parent agent
-    skills: Vec<Arc<Skill>>,
     /// Session store for creating sub-agent sessions
     session_store: Option<Arc<dyn SessionStore>>,
     /// Parent session ID for task store sharing
@@ -31,12 +29,10 @@ pub struct SubagentTool {
 }
 
 impl SubagentTool {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         parent_id: AgentId,
         shared: Arc<AgentShared>,
         parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
-        skills: Vec<Arc<Skill>>,
         session_store: Option<Arc<dyn SessionStore>>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<Event>,
@@ -45,7 +41,6 @@ impl SubagentTool {
             parent_id,
             shared,
             parent_input_tx,
-            skills,
             session_store,
             parent_session_id,
             parent_event_tx,
@@ -69,7 +64,12 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
     }
 
     /// Create a `SimpleAgent` with the same configuration as this subagent tool
-    fn create_simple_agent(&self, session_id: &str, working_dir: &std::path::Path) -> SimpleAgent {
+    fn create_simple_agent(
+        &self,
+        session_id: &str,
+        working_dir: &std::path::Path,
+        skills: Vec<Arc<Skill>>,
+    ) -> SimpleAgent {
         use crate::permissions::Checker;
         let tool_registry = self.create_tool_registry(session_id);
         let agent_id = crate::types::AgentId::new();
@@ -93,6 +93,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
         .with_agent_id(agent_id)
         .with_event_tx(self.parent_event_tx.clone())
         .with_permission_checker_opt(permission_checker)
+        .with_skills(skills)
     }
 
     /// Create tool registry for the subagent
@@ -103,7 +104,6 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             &self.parent_id,
             &self.shared,
             &self.parent_event_tx,
-            self.skills.clone(),
             session_id,
             &self.parent_session_id,
         ))
@@ -238,7 +238,7 @@ Brief the agent like a smart colleague who just walked into the room — it hasn
         };
 
         // Create SimpleAgent for execution
-        let mut simple_agent = self.create_simple_agent(&subagent_session_id, &ctx.working_dir);
+        let mut simple_agent = self.create_simple_agent(&subagent_session_id, &ctx.working_dir, ctx.skills.clone());
         let sub_agent_id = AgentId::new();
 
         // Prepare history if inherit_context is enabled

@@ -1,7 +1,7 @@
 use crate::goal::JsonGoalStore;
 use crate::permissions::{Level, PermissionState};
 use crate::storage::file_state::JsonlFileStateStore;
-use crate::types::{AgentId, KernelError, Result, SessionId};
+use crate::types::{AgentId, KernelError, Result, SessionError, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
     event::Event,
@@ -101,7 +101,7 @@ impl Session {
         let history = agent_shared
             .message_store
             .as_ref()
-            .ok_or_else(|| KernelError::session("message store not configured"))?
+            .ok_or_else(|| KernelError::from(SessionError::StoreNotConfigured))?
             .get(&id.0)
             .await
             .unwrap_or_default();
@@ -158,7 +158,19 @@ impl Session {
                 handle.send_message(blocks).await?;
                 Ok(())
             }
-            None => Err(KernelError::session("Session not initialized")),
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
+    /// Refresh skills for the main agent of this session
+    pub async fn refresh_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
+        tracing::debug!("Session {} refreshing {} skills", self.id.0, skills.len());
+        match &self.main_agent {
+            Some(handle) => {
+                handle.refresh_skills(skills).await?;
+                Ok(())
+            }
+            None => Err(SessionError::NotInitialized.into()),
         }
     }
 
@@ -192,9 +204,9 @@ impl Session {
                 .send_permission_response(req_id, approved, remember)
                 .await
                 .map_err(|e| {
-                    KernelError::session(format!("Failed to send permission response: {e}"))
+                    SessionError::SendFailed(format!("permission response: {e}")).into()
                 }),
-            None => Err(KernelError::session("Session not initialized")),
+            None => Err(SessionError::NotInitialized.into()),
         }
     }
 
@@ -232,7 +244,7 @@ impl Session {
                 handle.force_compact().await?;
                 Ok(())
             }
-            None => Err(KernelError::session("Session not initialized")),
+            None => Err(SessionError::NotInitialized.into()),
         }
     }
 
@@ -251,11 +263,11 @@ impl Session {
         match &self.main_agent {
             Some(handle) => {
                 let result = handle.rewind(message_id, target).await.map_err(|e| {
-                    KernelError::session(format!("Failed to send rewind request: {e}"))
+                    KernelError::from(SessionError::SendFailed(format!("rewind request: {e}")))
                 })?;
-                result.map_err(|e| KernelError::session(format!("Rewind failed: {e}")))
+                result.map_err(|e| SessionError::RewindFailed(e.clone()).into())
             }
-            None => Err(KernelError::session("Session not initialized")),
+            None => Err(SessionError::NotInitialized.into()),
         }
     }
 

@@ -600,6 +600,42 @@ pub struct ToolDefinition {
     pub parameters: serde_json::Value,
 }
 
+/// Specific session-level error variants.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionError {
+    /// The requested session does not exist in memory or storage.
+    #[error("session_not_found: Session {session_id} not found")]
+    NotFound { session_id: String },
+    /// The session exists but its inner agent handle is not initialized.
+    #[error("Session not initialized")]
+    NotInitialized,
+    /// Attempted to create/restore a session that is already alive.
+    #[error("session_already_exists: Session {session_id} already initialized")]
+    AlreadyExists { session_id: String },
+    /// Message store is required but not configured.
+    #[error("message store not configured")]
+    StoreNotConfigured,
+    /// Connection to the daemon was lost.
+    #[error("Connection lost during operation")]
+    ConnectionLost,
+    /// RPC request timed out.
+    #[error("RPC request timed out (30s)")]
+    RequestTimeout,
+    /// Failed to send a request across the wire.
+    #[error("Failed to send request: {0}")]
+    SendFailed(String),
+    /// Rewind operation failed.
+    #[error("Rewind failed: {0}")]
+    RewindFailed(String),
+    /// Request was cancelled.
+    #[error("Request cancelled")]
+    Cancelled,
+    /// Catch-all for other session errors (migration fallback).
+    #[error("{0}")]
+    Other(String),
+}
+
 /// Core error type for kernel operations
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum KernelError {
@@ -629,7 +665,7 @@ pub enum KernelError {
 
     /// Session not found or invalid
     #[error("Session error: {0}")]
-    Session(String),
+    Session(#[from] SessionError),
 
     /// Task operation failed
     #[error("Task error: {0}")]
@@ -683,9 +719,9 @@ impl KernelError {
         Self::Permission(msg.into())
     }
 
-    /// Create a new session error
+    /// Create a generic session error (fallback).
     pub fn session(msg: impl Into<String>) -> Self {
-        Self::Session(msg.into())
+        Self::Session(SessionError::Other(msg.into()))
     }
 
     /// Create a new task error
@@ -710,7 +746,12 @@ impl KernelError {
 
     /// Check if this is a "session not found" error.
     pub fn is_session_not_found(&self) -> bool {
-        matches!(self, Self::Session(msg) if msg.starts_with("session_not_found"))
+        matches!(self, Self::Session(SessionError::NotFound { .. }))
+    }
+
+    /// Check if this is a "session already exists" error.
+    pub fn is_session_already_exists(&self) -> bool {
+        matches!(self, Self::Session(SessionError::AlreadyExists { .. }))
     }
 
     /// Check if this is a cancellation error

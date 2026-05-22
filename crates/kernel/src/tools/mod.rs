@@ -59,6 +59,8 @@ pub struct ToolExecCtx<'a> {
     /// Current turn for file tracking and checkpointing
     /// Tools use this to track modified files
     pub turn: Option<std::sync::Arc<crate::agent::Turn>>,
+    /// Skills available to this agent (for tools like `SubagentTool` that need to pass them on)
+    pub skills: Vec<Arc<crate::skill::Skill>>,
 }
 
 impl<'a> ToolExecCtx<'a> {
@@ -76,6 +78,7 @@ impl<'a> ToolExecCtx<'a> {
             session_id: session_id.into(),
             message_id: crate::types::MessageId::default(),
             turn: None,
+            skills: Vec::new(),
         }
     }
 
@@ -98,6 +101,7 @@ impl<'a> ToolExecCtx<'a> {
             session_id: session_id.into(),
             message_id,
             turn: None,
+            skills: Vec::new(),
         }
     }
 
@@ -110,6 +114,13 @@ impl<'a> ToolExecCtx<'a> {
     #[must_use]
     pub fn with_cancel_token(mut self, token: Option<tokio_util::sync::CancellationToken>) -> Self {
         self.cancel_token = token;
+        self
+    }
+
+    /// Set available skills for tools that need to spawn sub-agents
+    #[must_use]
+    pub fn with_skills(mut self, skills: Vec<Arc<crate::skill::Skill>>) -> Self {
+        self.skills = skills;
         self
     }
 

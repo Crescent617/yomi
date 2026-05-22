@@ -3,7 +3,7 @@
 use kernel::client::CoordinatorApi;
 use kernel::permissions::Level;
 use std::time::Instant;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 use crate::{
     id::Id,
@@ -85,8 +85,8 @@ pub struct Model {
     /// Application state flags
     pub state: AppState,
     pub terminal: CrosstermTerminalAdapter,
-    /// Channel to receive events from kernel
-    pub event_rx: broadcast::Receiver<Event>,
+    /// Channel to receive events from kernel (via transparent pump)
+    pub event_rx: mpsc::Receiver<Event>,
     /// Channel to send input to kernel (supports multi-modal content blocks)
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
@@ -117,11 +117,8 @@ pub struct Model {
     pub(crate) queued_message: Option<Vec<ContentBlock>>,
     /// Last known terminal size to detect resize events
     pub(crate) last_terminal_size: (u16, u16),
-    /// Background reconnect task for the event channel.
-    /// When the event channel dies (daemon restart), a task is spawned
-    /// to retry subscribe until success.  The run loop polls this
-    /// handle every tick and swaps in the new receiver when ready.
-    pub(crate) reconnect_task: Option<tokio::task::JoinHandle<Option<broadcast::Receiver<Event>>>>,
+    /// Transparent event pump that hides broadcast churn and auto-reconnects.
+    pub(crate) _event_pump: super::event_pump::EventPump,
 }
 
 /// Format a session ID for display, truncating long IDs with ellipsis.

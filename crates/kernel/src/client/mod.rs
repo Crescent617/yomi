@@ -4,7 +4,7 @@ use crate::event::{ControlCommand, Event};
 use crate::goal::GoalState;
 use crate::permissions::Level;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
-use crate::types::{ContentBlock, KernelError, Message, MessageId, Result, SessionId};
+use crate::types::{ContentBlock, KernelError, Message, MessageId, Result, SessionError, SessionId};
 use crate::wire::{RequestIdGenerator, RequestMethod, ResponseBody, RpcError, WireMsg};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -170,7 +170,7 @@ impl CoordinatorApi for Coordinator {
     ) -> Result<broadcast::Receiver<Event>> {
         self.subscribe_session_events(session_id)
             .await
-            .ok_or_else(|| KernelError::session(format!("Session not found: {}", session_id.0)))
+            .ok_or_else(|| SessionError::NotFound { session_id: session_id.0.clone() }.into())
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionId>> {
@@ -346,6 +346,7 @@ impl RemoteCoordinator {
                     let _ = tx.send(Err(RpcError {
                         code: "connection_closed".to_string(),
                         message: "Connection to kernel daemon closed".to_string(),
+                        detail: None,
                     }));
                 }
             }
@@ -357,13 +358,8 @@ impl RemoteCoordinator {
             let keys: Vec<String> = event_routers.iter().map(|e| e.key().clone()).collect();
             for key in &keys {
                 if let Some((_, tx)) = event_routers.remove(key) {
-                    let _ = tx.send(Event::System(crate::event::SystemEvent::Shutdown {
+                    let _ = tx.send(Event::System(crate::event::SystemEvent::ConnectionLost {
                         session_id: SessionId(key.clone()),
-                        error: Some(
-                            "Connection to kernel daemon closed. \
-                                 Daemon may have restarted."
-                                .to_string(),
-                        ),
                     }));
                 }
             }
@@ -445,9 +441,9 @@ impl RemoteCoordinator {
                     tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
                 }
                 Err(e) => {
-                    return Err(KernelError::session(format!(
+                    return Err(SessionError::Other(format!(
                         "Failed to connect to daemon: {e}"
-                    )));
+                    )).into());
                 }
             }
         };
@@ -500,6 +496,44 @@ impl RemoteCoordinator {
             }
         }
 
+        // Wire protocol version handshake.
+        match self.call_raw(RequestMethod::Hello).await {
+            Ok(val) => {
+                let server_proto = val
+                    .get("proto")
+                    .and_then(|v| v.as_u64())
+                    .map_or(0, |n| n as u32);
+                if server_proto < crate::wire::WIRE_PROTOCOL_VERSION {
+                    tracing::error!(
+                        "Wire protocol version too old: server {}, client {}",
+                        server_proto,
+                        crate::wire::WIRE_PROTOCOL_VERSION
+                    );
+                    self.invalidate_connection().await;
+                    return Err(SessionError::Other(format!(
+                        "Daemon wire protocol too old (server {}, client {}). \
+                         Please upgrade daemon.",
+                        server_proto,
+                        crate::wire::WIRE_PROTOCOL_VERSION
+                    ))
+                    .into());
+                }
+            }
+            Err(e) => {
+                // Old daemon that doesn't recognise `Hello` will close the
+                // connection (serde unknown variant). Treat this as a fatal
+                // mismatch rather than silently degrading.
+                tracing::error!("Hello handshake failed (old daemon?): {e}");
+                self.invalidate_connection().await;
+                return Err(SessionError::Other(format!(
+                    "Daemon does not support wire protocol handshake. \
+                     Please upgrade daemon to match client (>= protocol {}).",
+                    crate::wire::WIRE_PROTOCOL_VERSION
+                ))
+                .into());
+            }
+        }
+
         Ok(())
     }
 
@@ -510,8 +544,7 @@ impl RemoteCoordinator {
         }
     }
 
-    async fn call(&self, method: RequestMethod) -> Result<serde_json::Value> {
-        self.ensure_connected().await?;
+    async fn call_raw(&self, method: RequestMethod) -> Result<serde_json::Value> {
         let id = self.req_id.next();
 
         // Grab write_half and install pending oneshot, then drop the
@@ -519,7 +552,7 @@ impl RemoteCoordinator {
         let (write_half, rx) = {
             let guard = self.connection.lock().await;
             let conn = guard.as_ref().ok_or_else(|| {
-                KernelError::session("Connection lost during operation".to_string())
+                KernelError::from(SessionError::ConnectionLost)
             })?;
             let (tx, rx) = tokio::sync::oneshot::channel();
             conn.pending.insert(id, tx);
@@ -534,14 +567,12 @@ impl RemoteCoordinator {
                 Ok(Err(e)) => {
                     drop(w);
                     self.invalidate_connection().await;
-                    return Err(KernelError::session(format!("Failed to send request: {e}")));
+                    return Err(SessionError::SendFailed(e.to_string()).into());
                 }
                 Err(_) => {
                     drop(w);
                     self.invalidate_connection().await;
-                    return Err(KernelError::session(
-                        "Failed to send request: write timeout (5s)".to_string(),
-                    ));
+                    return Err(SessionError::SendFailed("write timeout (5s)".to_string()).into());
                 }
             }
         }
@@ -549,31 +580,38 @@ impl RemoteCoordinator {
         match tokio::time::timeout(RPC_TIMEOUT, rx).await {
             Ok(Ok(Ok(val))) => Ok(val),
             Ok(Ok(Err(e))) => {
-                // The server flattened our structured error into an
-                // RpcError string.  If it contains the known
-                // session-not-found marker, strip the outer wrapper and
-                // reconstruct the original KernelError so downstream can
-                // detect it structurally via is_session_not_found().
-                if let Some(pos) = e.message.find("session_not_found:") {
-                    let inner = e.message[pos..].trim().to_string();
-                    return Err(KernelError::session(inner));
+                // If the server sent a structured session error, try to
+                // reconstruct it exactly instead of losing the variant.
+                if e.code == "session_error" {
+                    if let Some(ref d) = e.detail {
+                        if let Ok(se) = serde_json::from_value::<SessionError>(d.clone()) {
+                            return Err(KernelError::from(se));
+                        }
+                    }
+                    return Err(SessionError::Other(format!(
+                        "RPC session error [{}]: {}",
+                        e.code, e.message
+                    )).into());
                 }
-                Err(KernelError::session(format!(
+                Err(SessionError::Other(format!(
                     "RPC error [{}]: {}",
                     e.code, e.message
-                )))
+                )).into())
             }
-            Ok(Err(_)) => Err(KernelError::session("Request cancelled".to_string())),
+            Ok(Err(_)) => Err(SessionError::Cancelled.into()),
             Err(_) => {
                 // RPC timeout usually means the reader task is stuck or
                 // the server is dead.  Force a reconnect on the next
                 // call by dropping the connection.
                 self.invalidate_connection().await;
-                Err(KernelError::session(
-                    "RPC request timed out (30s)".to_string(),
-                ))
+                Err(SessionError::RequestTimeout.into())
             }
         }
+    }
+
+    async fn call(&self, method: RequestMethod) -> Result<serde_json::Value> {
+        self.ensure_connected().await?;
+        self.call_raw(method).await
     }
 
     async fn subscribe_events_internal(
@@ -582,21 +620,16 @@ impl RemoteCoordinator {
     ) -> Result<broadcast::Receiver<Event>> {
         use dashmap::mapref::entry::Entry;
 
-        // Fast path: already subscribed locally with active receivers.
-        if let Some(entry) = self.event_routers.get(&session_id.0) {
-            if entry.value().receiver_count() > 0 {
-                return Ok(entry.value().subscribe());
-            }
-        }
-
-        // Slow path: atomically insert or re-activate a stale sender.
+        // Always send a fresh Subscribe RPC to the daemon.
+        //
+        // The old fast-path (checking `receiver_count > 0` and returning an
+        // existing receiver) was dangerous after a daemon restart: the
+        // local sender might still be alive while the daemon-side
+        // forwarding task has already died, so the receiver would never
+        // see new events.  By always sending Subscribe we guarantee the
+        // daemon creates (or refreshes) the forwarding task.
         let tx = match self.event_routers.entry(session_id.0.clone()) {
-            Entry::Occupied(entry) => {
-                // receiver_count == 0 here (fast path already handled > 0).
-                // Reuse the sender so any late receivers still get events,
-                // but we will re-send Subscribe below.
-                entry.get().clone()
-            }
+            Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
                 let (tx, _rx) = broadcast::channel(256);
                 entry.insert(tx.clone());

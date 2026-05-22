@@ -125,6 +125,17 @@ impl AgentHandle {
             .map_err(|_| AgentError::ChannelClosed)
     }
 
+    /// Dynamically refresh the skill list for a running agent
+    pub async fn refresh_skills(
+        &self,
+        skills: Vec<Arc<crate::skill::Skill>>,
+    ) -> Result<(), AgentError> {
+        self.input_tx
+            .send(AgentInput::RefreshSkills(skills))
+            .await
+            .map_err(|_| AgentError::ChannelClosed)
+    }
+
     /// Rewind to a specific checkpoint
     pub async fn rewind(
         &self,

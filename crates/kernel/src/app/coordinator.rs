@@ -4,7 +4,7 @@ use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
 use crate::storage::{MessageStore, SessionStore, StorageSet};
-use crate::types::{KernelError, Result, SessionId};
+use crate::types::{KernelError, Result, SessionError, SessionId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -89,7 +89,7 @@ impl Coordinator {
         )
         .with_message_interceptor(todo_interceptor);
         let agent_shared = match hook_registry {
-            Some(registry) => agent_shared.with_hook_registry(registry),
+            Some(registry) => agent_shared.with_hook_registry(Arc::new(tokio::sync::RwLock::new(registry))),
             None => agent_shared,
         };
 
@@ -156,10 +156,7 @@ impl Coordinator {
         // Hold write lock for the entire critical section.
         let mut sessions = self.sessions.write().await;
         if sessions.contains_key(&session_id) {
-            return Err(KernelError::session(format!(
-                "Session {} already initialized",
-                session_id.0
-            )));
+            return Err(SessionError::AlreadyExists { session_id: session_id.0 }.into());
         }
 
         // Create session (this may await, but we hold the lock).
@@ -256,7 +253,9 @@ impl Coordinator {
 
         // Verify session exists in storage
         let session_info = self.session_store().get(session_id).await?.ok_or_else(|| {
-            KernelError::session(format!("Session not found in storage: {}", session_id.0))
+            KernelError::from(SessionError::NotFound {
+                session_id: session_id.0.clone(),
+            })
         })?;
 
         let project_path = session_info.working_dir.map_or_else(
@@ -280,7 +279,7 @@ impl Coordinator {
             // If the session was raced into memory by another client
             // (e.g. TUI reconnect_task + CLI input_handle), treat it as
             // success instead of failing the caller's retry loop.
-            if e.to_string().contains("already initialized") {
+            if e.is_session_already_exists() {
                 tracing::debug!(
                     "Session {} already initialized — treating as restored",
                     session_id.0
@@ -305,10 +304,9 @@ impl Coordinator {
 
         // Read working_dir from parent session info
         let parent_info = self.session_store().get(parent_id).await?.ok_or_else(|| {
-            KernelError::session(format!(
-                "Parent session not found in storage: {}",
-                parent_id.0
-            ))
+            KernelError::from(SessionError::NotFound {
+                session_id: parent_id.0.clone(),
+            })
         })?;
         let project_path = parent_info.working_dir.map_or_else(
             || {
@@ -340,11 +338,10 @@ impl Coordinator {
         self.sessions.read().await.get(id).cloned()
     }
 
-    /// Get session or return not found error
     async fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
         self.get_session(session_id)
             .await
-            .ok_or_else(|| KernelError::session(format!("session_not_found: {}", session_id.0)))
+            .ok_or_else(|| SessionError::NotFound { session_id: session_id.0.clone() }.into())
     }
 
     pub async fn list_sessions(&self) -> Vec<SessionId> {
@@ -507,13 +504,48 @@ impl Coordinator {
 
     /// Update the agent configuration for new sessions.
     ///
-    /// NOTE: This only updates `AgentConfig` (skills, `system_prompt`, `max_iterations`,
-    /// etc.). `AgentShared` fields like `model_config` and `skill_folders` are
-    /// fixed at startup and cannot be hot-reloaded without restarting the daemon.
-    pub async fn update_agent_config(&self, agent_config: AgentConfig) {
+    /// NOTE: This updates `AgentConfig` (skills, `system_prompt`, `max_iterations`,
+    /// etc.) and **also pushes the new skill list to all currently live sessions**
+    /// so that their running agents pick up the changes on their next idle turn.
+    /// `hook_registry` replaces the shared base hooks so config-level hooks are
+    /// also hot-reloaded (only when hooks were originally enabled).
+    pub async fn update_agent_config(
+        &self,
+        agent_config: AgentConfig,
+        hook_registry: Option<crate::hooks::HookRegistry>,
+    ) {
         let model_id = agent_config.model.model_id.clone();
-        let skill_count = agent_config.skills.len();
+        let skills = agent_config.skills.clone();
+        let skill_count = skills.len();
         *self.agent_config.write().await = agent_config;
+
+        // Hot-reload shared hook registry if it was originally enabled
+        if let Some(registry) = hook_registry {
+            if let Some(ref existing) = self.agent_shared.hook_registry {
+                let mut guard = existing.write().await;
+                *guard = registry;
+                tracing::info!("Hot-reloaded shared hook registry");
+            } else {
+                tracing::warn!(
+                    "Cannot hot-reload hooks: hooks were disabled at daemon startup"
+                );
+            }
+        }
+
+        // Propagate skill refresh to all live sessions.
+        // Collect Arc handles first so we don't hold the read lock across await points.
+        let handles: Vec<_> = {
+            let sessions = self.sessions.read().await;
+            sessions.values().cloned().collect()
+        };
+        for session in handles {
+            let session = session.read().await;
+            if let Err(e) = session.refresh_skills(skills.clone()).await {
+                let sid = session.id().clone();
+                tracing::warn!("Failed to refresh skills for session {}: {}", sid.0, e);
+            }
+        }
+
         tracing::info!("Updated agent config (model={model_id}, {skill_count} skill(s))");
     }
 }

@@ -176,6 +176,7 @@ pub async fn execute_tools_parallel(
     session_id: &str,
     message_ids: &HashMap<String, MessageId>,
     turn: Option<Arc<crate::agent::Turn>>,
+    skills: &[Arc<crate::skill::Skill>],
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
     tracing::info!(
@@ -207,6 +208,7 @@ pub async fn execute_tools_parallel(
         let cancel_token_for_task = cancel_token.cloned();
         let working_dir = working_dir.to_path_buf();
         let turn_for_task = turn.clone();
+        let skills_for_task: Vec<Arc<crate::skill::Skill>> = skills.to_vec();
 
         join_set.spawn(async move {
             let start = std::time::Instant::now();
@@ -217,7 +219,8 @@ pub async fn execute_tools_parallel(
                 &working_dir,
                 session_id,
                 message_id.clone(),
-            );
+            )
+            .with_skills(skills_for_task);
             ctx.turn = turn_for_task;
             let result = match tool_opt {
                 Some(tool) => execute_single_tool_with_ctx(tool, arguments, ctx).await,

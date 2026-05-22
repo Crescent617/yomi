@@ -70,20 +70,6 @@ impl Model {
             // Process kernel events (fast, non-blocking)
             self.process_kernel_event().await;
 
-            // If a background reconnect task finished, swap in the new
-            // receiver and notify the user.
-            if let Some(task) = self.reconnect_task.take() {
-                if task.is_finished() {
-                    match task.await {
-                        Ok(Some(new_rx)) => self.finish_reconnect(new_rx),
-                        Ok(None) => tracing::warn!("Event channel reconnect timed out"),
-                        Err(e) => tracing::error!("Reconnect task panicked: {e}"),
-                    }
-                } else {
-                    self.reconnect_task = Some(task);
-                }
-            }
-
             // Tick the application
             match self.app.tick(PollStrategy::Once(Duration::from_millis(10))) {
                 Ok(messages) if !messages.is_empty() => {
