@@ -346,7 +346,7 @@ impl KernelServer {
             }
             RequestMethod::Subscribe { session_id } => {
                 let sid = SessionId(session_id.clone());
-                match self.coordinator.subscribe_session_events(&sid).await {
+                match self.coordinator.subscribe_session_events(&sid) {
                     Some(rx) => {
                         let session_id_for_task = session_id.clone();
                         let send_tx2 = send_tx.clone();
@@ -415,13 +415,6 @@ impl KernelServer {
                     result: serde_json::Value::Null,
                 }
             }
-            RequestMethod::ListSessions => {
-                let sessions = self.coordinator.list_sessions().await;
-                rpc_body(
-                    "list_sessions_failed",
-                    Ok(sessions.into_iter().map(|s| s.0).collect::<Vec<String>>()),
-                )
-            }
             RequestMethod::GetSessionMessages { session_id } => rpc_body(
                 "get_messages_failed",
                 self.coordinator
@@ -435,9 +428,9 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
-            RequestMethod::ListSessionsFiltered(args) => rpc_body(
+            RequestMethod::ListSessions(args) => rpc_body(
                 "list_sessions_failed",
-                self.coordinator.list_sessions_filtered(args).await,
+                self.coordinator.list_sessions(args).await,
             ),
             RequestMethod::GetCheckpoints { session_id } => rpc_body(
                 "get_checkpoints_failed",

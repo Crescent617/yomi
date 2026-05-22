@@ -4,7 +4,7 @@ use crate::types::ContentBlock;
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 1;
+pub const WIRE_PROTOCOL_VERSION: u32 = 2;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,11 +39,10 @@ pub enum RequestMethod {
     Unsubscribe {
         session_id: String,
     },
-    ListSessions,
+    ListSessions(crate::storage::session::ListArgs),
     GetSessionMessages {
         session_id: String,
     },
-    ListSessionsFiltered(crate::storage::session::ListArgs),
     GetCheckpoints {
         session_id: String,
     },

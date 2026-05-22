@@ -454,7 +454,7 @@ impl Model {
                     };
                     let sessions = self
                         .coordinator
-                        .list_sessions_filtered(args)
+                        .list_sessions(args)
                         .await
                         .unwrap_or_default();
 
