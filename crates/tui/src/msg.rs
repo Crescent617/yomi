@@ -70,6 +70,7 @@ pub enum Msg {
     CommandYolo,         // /yolo - toggle yolo mode
     CommandBrowse,       // /browse - toggle browse mode
     CommandCompact,      // /compact - force message compaction
+    CommandReload,       // /reload - reload skills and hooks in daemon
     CommandHelp,         // /help - show help dialog
     CommandSessions,     // /sessions - switch session
     CommandTodos,        // /todos - toggle todo list visibility

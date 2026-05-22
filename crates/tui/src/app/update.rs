@@ -5,6 +5,8 @@ use tuirealm::{
     terminal::TerminalAdapter,
 };
 
+use std::sync::Arc;
+
 use crate::{
     attr,
     components::{default_help_sections, info_bar::Notification, PickerItem},
@@ -357,6 +359,22 @@ impl Model {
                     // Send compact request
                     let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
                     self.show_notification(&Notification::info("Compacting messages...", 3000));
+                    None
+                }
+                Msg::CommandReload => {
+                    // Reload skills and hooks from disk via daemon
+                    let coord = Arc::clone(&self.coordinator);
+                    match coord.reload_agent_config().await {
+                        Ok(()) => {
+                            self.show_notification(&Notification::info("Reloaded", 3000));
+                        }
+                        Err(e) => {
+                            self.show_notification(&Notification::error(
+                                format!("Reload failed: {e}"),
+                                5000,
+                            ));
+                        }
+                    }
                     None
                 }
                 Msg::Suspend => {

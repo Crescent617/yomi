@@ -5,7 +5,6 @@
 
 use crate::agent::AgentInput;
 use crate::event::Event;
-use crate::skill::Skill;
 use crate::tools::{
     EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx, SubagentTool,
     ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
@@ -19,7 +18,6 @@ pub struct ToolRegistryConfig<'a> {
     pub agent_id: &'a AgentId,
     pub shared: &'a Arc<crate::agent::AgentShared>,
     pub event_tx: &'a mpsc::Sender<Event>,
-    pub skills: Vec<Arc<Skill>>,
     pub session_id: &'a str,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
     pub parent_session_id: Option<&'a str>,
@@ -35,14 +33,12 @@ impl<'a> ToolRegistryConfig<'a> {
         shared: &'a Arc<crate::agent::AgentShared>,
         input_tx: &'a mpsc::Sender<AgentInput>,
         event_tx: &'a mpsc::Sender<Event>,
-        skills: Vec<Arc<Skill>>,
         session_id: &'a str,
     ) -> Self {
         Self {
             agent_id,
             shared,
             event_tx,
-            skills,
             session_id,
             input_tx: Some(input_tx),
             parent_session_id: None,
@@ -57,7 +53,6 @@ impl<'a> ToolRegistryConfig<'a> {
         parent_id: &'a AgentId,
         shared: &'a Arc<crate::agent::AgentShared>,
         event_tx: &'a mpsc::Sender<Event>,
-        skills: Vec<Arc<Skill>>,
         session_id: &'a str,
         parent_session_id: &'a str,
     ) -> Self {
@@ -65,7 +60,6 @@ impl<'a> ToolRegistryConfig<'a> {
             agent_id: parent_id,
             shared,
             event_tx,
-            skills,
             session_id,
             input_tx: None,
             parent_session_id: Some(parent_session_id),
@@ -144,7 +138,6 @@ impl ToolRegistryFactory {
                 config.agent_id.clone(),
                 Arc::clone(config.shared),
                 config.input_tx.cloned().unwrap(),
-                config.skills,
                 config.shared.session_store.clone(),
                 config.session_id.to_owned(),
                 config.event_tx.clone(),

@@ -297,8 +297,8 @@ pub struct AgentShared {
     pub data_dir: std::path::PathBuf,
     /// Optional user message interceptor for injecting reminders/context
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
-    /// Hook registry for lifecycle event handlers
-    pub hook_registry: Option<crate::hooks::HookRegistry>,
+    /// Hook registry for lifecycle event handlers (wrapped for hot-reload)
+    pub hook_registry: Option<Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>>,
 }
 
 impl AgentShared {
@@ -395,9 +395,9 @@ impl AgentShared {
         self
     }
 
-    /// Set the hook registry
+    /// Set the hook registry (wrapped for hot-reload)
     #[must_use]
-    pub fn with_hook_registry(mut self, registry: crate::hooks::HookRegistry) -> Self {
+    pub fn with_hook_registry(mut self, registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>) -> Self {
         self.hook_registry = Some(registry);
         self
     }

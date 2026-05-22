@@ -27,6 +27,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/rewind", "Restore conversation/file checkpoint"),
     ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),
+    ("/reload", "Reload skills and hooks from disk"),
     ("/help", "Show keyboard shortcuts help"),
 ];
 

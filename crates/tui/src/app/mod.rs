@@ -4,6 +4,7 @@
 
 pub mod types;
 
+mod event_pump;
 mod events;
 mod init;
 mod model;

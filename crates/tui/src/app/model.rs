@@ -40,6 +40,13 @@ impl Model {
         let terminal = CrosstermTerminalAdapter::new()?;
         let app = Self::init_app(&working_dir)?;
 
+        let (event_pump, event_rx) = super::event_pump::EventPump::spawn(
+            event_rx,
+            Arc::clone(&coordinator),
+            session_id.clone(),
+            crate::config().auto_approve,
+        );
+
         Ok(Self {
             app,
             state: AppState {
@@ -67,7 +74,7 @@ impl Model {
             permission_level: crate::config().auto_approve,
             queued_message: None,
             last_terminal_size: (0, 0),
-            reconnect_task: None,
+            _event_pump: event_pump,
         })
     }
 

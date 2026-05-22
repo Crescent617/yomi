@@ -1,7 +1,5 @@
 //! Kernel event processing
 
-use std::sync::Arc;
-use std::time::Duration;
 use tuirealm::props::{AttrValue, Attribute};
 #[cfg(windows)]
 use tuirealm::terminal::TerminalAdapter;
@@ -9,99 +7,24 @@ use tuirealm::terminal::TerminalAdapter;
 use crate::{attr, id::Id};
 use kernel::event::{AgentStatus, Event, StopReason};
 use kernel::tools::TODO_TOOL_NAME;
-use kernel::types::{FinishReason, SessionId};
+use kernel::types::FinishReason;
 
 use super::types::{Model, StreamingStatus};
 
 impl Model {
-    /// Spawn a background task that retries subscribe until the daemon
-    /// is back and the session forwarding is re-established.
-    /// The task also handles `session_not_found` (daemon lost its
-    /// in-memory state after restart) by auto-restoring the session.
-    fn spawn_reconnect_task(
-        &self,
-    ) -> tokio::task::JoinHandle<Option<tokio::sync::broadcast::Receiver<Event>>> {
-        let coord = Arc::clone(&self.coordinator);
-        let sid = self.session_id.clone();
-        let auto_approve = self.permission_level;
-        tokio::spawn(async move {
-            let session_id = SessionId(sid);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-            while tokio::time::Instant::now() < deadline {
-                match tokio::time::timeout(
-                    Duration::from_secs(5),
-                    coord.subscribe_session_events(&session_id),
-                )
-                .await
-                {
-                    Ok(Ok(rx)) => return Some(rx),
-                    Ok(Err(e)) => {
-                        if e.is_session_not_found() {
-                            tracing::info!(
-                                "Session {} missing on daemon, attempting restore...",
-                                session_id.0
-                            );
-                            match coord.restore_session(&session_id, auto_approve).await {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    tokio::time::sleep(Duration::from_secs(1)).await;
-                                }
-                            }
-                        } else {
-                            tracing::debug!("Subscribe failed: {e}, retrying in 1s");
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                        }
-                    }
-                    Err(_) => {
-                        tracing::debug!("Subscribe timed out (5s), retrying in 1s");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                }
-            }
-            tracing::warn!("Event channel reconnect gave up after 30s");
-            None
-        })
-    }
-
-    /// Finish a successful reconnect: swap in the new receiver and
-    /// notify the user in both the info bar and chat view.
-    pub(crate) fn finish_reconnect(&mut self, new_rx: tokio::sync::broadcast::Receiver<Event>) {
-        self.event_rx = new_rx;
-        tracing::info!("Event channel re-subscribed");
-        self.show_notification(&crate::components::info_bar::Notification::info(
-            "Reconnected to daemon",
-            3000,
-        ));
-        let _ = self.app.attr(
-            &Id::ChatView,
-            Attribute::Custom(attr::ADD_NOTICE),
-            AttrValue::String("⚡Reconnected to daemon — session resumed".to_string()),
-        );
-        self.scroll_chat_to_bottom();
-    }
-
     /// Caps processing time to ~8ms per frame to avoid UI stalls when
     /// a large batch of events arrives over IPC.
     pub async fn process_kernel_event(&mut self) {
-        use tokio::sync::broadcast::error::TryRecvError;
+        use tokio::sync::mpsc::error::TryRecvError;
 
         let start = std::time::Instant::now();
         loop {
             let event = match self.event_rx.try_recv() {
                 Ok(ev) => ev,
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Closed) => {
-                    // The broadcast sender was dropped (daemon restart).
-                    // Spawn a background reconnect task so the UI never
-                    // blocks on the RPC.
-                    if self.reconnect_task.is_none() {
-                        self.reconnect_task = Some(self.spawn_reconnect_task());
-                    }
+                Err(TryRecvError::Disconnected) => {
+                    tracing::error!("EventPump disconnected");
                     break;
-                }
-                Err(TryRecvError::Lagged(n)) => {
-                    tracing::warn!("Event channel lagged by {n} events");
-                    continue;
                 }
             };
 
@@ -414,26 +337,30 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                // Session shutdown - only handle error cases (normal completion handled by ReActLoopEnd)
+                // Connection lost - pump will auto-reconnect
+                Event::System(kernel::event::SystemEvent::ConnectionLost { .. }) => {
+                    self.show_notification(
+                        &crate::components::info_bar::Notification::warn(
+                            "Connection lost, reconnecting…", 0,
+                        ),
+                    );
+                    self.state.should_redraw = true;
+                }
                 Event::System(kernel::event::SystemEvent::Shutdown {
                     error: Some(err), ..
                 }) => {
-                    // If the error indicates a daemon restart, spawn a
-                    // background reconnect task.  The run loop will poll
-                    // the handle and swap in the new receiver when ready.
-                    if err.contains("Daemon may have restarted")
-                        || err.contains("Connection to kernel daemon closed")
-                    {
-                        tracing::info!("Connection lost — spawning background reconnect task");
-                        if self.reconnect_task.is_none() {
-                            self.reconnect_task = Some(self.spawn_reconnect_task());
-                        }
-                    } else {
-                        self.handle_streaming_error(
-                            StreamingStatus::Failed,
-                            format!("Session closed with error: {err}"),
-                        );
-                    }
+                    self.handle_streaming_error(
+                        StreamingStatus::Failed,
+                        format!("Session closed with error: {err}"),
+                    );
+                    self.state.should_redraw = true;
+                }
+                Event::System(kernel::event::SystemEvent::Connected { .. }) => {
+                    self.show_notification(
+                        &crate::components::info_bar::Notification::info(
+                            "Connected to daemon", 3000,
+                        ),
+                    );
                     self.state.should_redraw = true;
                 }
                 // Rewind completed - refresh messages from the event

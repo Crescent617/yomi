@@ -60,6 +60,8 @@ pub struct SimpleAgent {
     working_dir: std::path::PathBuf,
     /// Session ID for session-scoped operations
     session_id: String,
+    /// Skills to pass to tools via `ToolExecCtx` (for nested subagents)
+    skills: Vec<Arc<crate::skill::Skill>>,
 }
 
 impl SimpleAgent {
@@ -80,6 +82,7 @@ impl SimpleAgent {
             agent_id: AgentId::new(),
             working_dir: working_dir.into(),
             session_id: session_id.into(),
+            skills: Vec::new(),
         }
     }
 
@@ -108,6 +111,13 @@ impl SimpleAgent {
     #[must_use]
     pub fn with_agent_id(mut self, agent_id: AgentId) -> Self {
         self.agent_id = agent_id;
+        self
+    }
+
+    /// Set skills to pass to nested tools (e.g. `SubagentTool`)
+    #[must_use]
+    pub fn with_skills(mut self, skills: Vec<Arc<crate::skill::Skill>>) -> Self {
+        self.skills = skills;
         self
     }
 
@@ -400,7 +410,8 @@ impl SimpleAgent {
             &self.working_dir,
             &self.session_id,
             message_id.clone(),
-        );
+        )
+        .with_skills(self.skills.clone());
 
         let output = tool.exec(call.arguments.clone(), ctx).await?;
 

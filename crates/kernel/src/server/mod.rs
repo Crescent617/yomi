@@ -3,7 +3,7 @@ use crate::app::Coordinator;
 use crate::config::Config;
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
-use crate::types::{Result, SessionId};
+use crate::types::{KernelError, Result, SessionError, SessionId};
 use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -100,13 +100,18 @@ impl KernelServer {
         let _guard = self.reload_lock.lock().await;
         let file_path = self.config_file_path.clone();
         let base_dir = self.base_dir.clone();
-        let new_agent = match tokio::task::spawn_blocking(move || {
+        let (new_agent, hook_registry) = match tokio::task::spawn_blocking(move || {
             let config = reload_config(file_path.as_ref(), &base_dir);
-            build_agent_config(&config, &base_dir)
+            let agent = build_agent_config(&config, &base_dir);
+            let hooks = config
+                .features
+                .hooks
+                .then(|| crate::hooks::build_registry(&config.hooks));
+            (agent, hooks)
         })
         .await
         {
-            Ok(a) => a,
+            Ok(pair) => pair,
             Err(e) => {
                 tracing::error!("Reload task panicked: {e}");
                 return false;
@@ -114,7 +119,7 @@ impl KernelServer {
         };
         let model_id = new_agent.model.model_id.clone();
         let skill_count = new_agent.skills.len();
-        self.coordinator.update_agent_config(new_agent).await;
+        self.coordinator.update_agent_config(new_agent, hook_registry).await;
         tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
         true
     }
@@ -384,12 +389,21 @@ impl KernelServer {
                             result: serde_json::Value::Null,
                         }
                     }
-                    None => ResponseBody::Err {
-                        error: RpcError {
-                            code: "session_not_found".to_string(),
-                            message: format!("Session {} not found", sid.0),
-                        },
-                    },
+                    None => {
+                        let err = SessionError::NotFound {
+                            session_id: sid.0.clone(),
+                        };
+                        ResponseBody::Err {
+                            error: RpcError {
+                                code: "session_error".to_string(),
+                                message: KernelError::from(err.clone()).to_string(),
+                                detail: Some(
+                                    serde_json::to_value(&err)
+                                        .expect("SessionError serializes"),
+                                ),
+                            },
+                        }
+                    }
                 }
             }
             RequestMethod::Unsubscribe { session_id } => {
@@ -452,10 +466,16 @@ impl KernelServer {
                         error: RpcError {
                             code: "reload_failed".to_string(),
                             message: "Failed to reload agent configuration".to_string(),
+                            detail: None,
                         },
                     }
                 }
             }
+            RequestMethod::Hello => ResponseBody::Ok {
+                result: serde_json::json!({
+                    "proto": crate::wire::WIRE_PROTOCOL_VERSION,
+                }),
+            },
         }
     }
 }
@@ -496,7 +516,7 @@ async fn dispatch_command(
     Ok(())
 }
 
-fn rpc_body<T: serde::Serialize>(code: &str, result: crate::types::Result<T>) -> ResponseBody {
+fn rpc_body<T: serde::Serialize>(default_code: &str, result: crate::types::Result<T>) -> ResponseBody {
     match result {
         Ok(val) => match serde_json::to_value(val) {
             Ok(v) => ResponseBody::Ok { result: v },
@@ -504,14 +524,25 @@ fn rpc_body<T: serde::Serialize>(code: &str, result: crate::types::Result<T>) ->
                 error: RpcError {
                     code: "serialize_error".to_string(),
                     message: e.to_string(),
+                    detail: None,
                 },
             },
         },
-        Err(e) => ResponseBody::Err {
-            error: RpcError {
-                code: code.to_string(),
-                message: e.to_string(),
-            },
-        },
+        Err(e) => {
+            let (code, detail) = match &e {
+                crate::types::KernelError::Session(ref se) => (
+                    "session_error",
+                    Some(serde_json::to_value(se).expect("SessionError serializes")),
+                ),
+                _ => (default_code, None),
+            };
+            ResponseBody::Err {
+                error: RpcError {
+                    code: code.to_string(),
+                    message: e.to_string(),
+                    detail,
+                },
+            }
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! `SQLite` implementation of `SessionStore`
 
 use super::{storage_err, ListArgs, SessionInfo, SessionStore};
-use crate::types::{KernelError, Result, SessionId};
+use crate::types::{Result, SessionError, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::SqlitePool;
@@ -42,10 +42,7 @@ impl SessionStore for SqliteSessionStore {
                 .map_err(|e| storage_err(format!("failed to get parent session: {e}")))?;
 
         if parent_working_dir.is_none() {
-            return Err(KernelError::Session(format!(
-                "parent session '{}' does not exist",
-                parent_id.0
-            )));
+            return Err(SessionError::NotFound { session_id: parent_id.0.clone() }.into());
         }
 
         let new_id = SessionId::new();

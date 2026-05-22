@@ -38,6 +38,8 @@ pub enum AgentInput {
     Compact,
     /// Dynamically set or clear goal context
     SetGoal(Option<crate::goal::GoalContext>),
+    /// Dynamically refresh skills list, system prompt, and hooks
+    RefreshSkills(Vec<Arc<crate::skill::Skill>>),
     /// Rewind to a specific checkpoint
     Rewind {
         message_id: MessageId,
@@ -68,6 +70,7 @@ impl Clone for AgentInput {
             Self::Shutdown => Self::Shutdown,
             Self::Compact => Self::Compact,
             Self::SetGoal(goal) => Self::SetGoal(goal.clone()),
+            Self::RefreshSkills(skills) => Self::RefreshSkills(skills.clone()),
             // Rewind cannot be cloned due to oneshot sender, panic if attempted
             Self::Rewind { .. } => panic!("Rewind input cannot be cloned"),
         }
@@ -102,6 +105,10 @@ pub struct Agent {
     data_dir: std::path::PathBuf,
     /// Current turn (contains tracked files, shared with tools)
     current_turn: Option<Arc<super::turn::Turn>>,
+    /// Base system prompt (without skills/project memory) for rebuilding on refresh
+    base_prompt: String,
+    /// Current skills list (dynamically refreshable)
+    skills: Vec<Arc<crate::skill::Skill>>,
 }
 
 impl Agent {
@@ -158,7 +165,6 @@ impl Agent {
                 &shared,
                 &input_tx,
                 &event_tx,
-                args.skills.clone(),
                 &args.session_id,
             )
             .with_enable_sub_agents(args.enable_sub_agents)
@@ -168,22 +174,11 @@ impl Agent {
         // Build hook registry: if user-level hooks are enabled (Some), also load
         // skill-level hooks. When hooks are disabled (None) the registry stays
         // empty and `run_*_tool_hooks` will short-circuit without spawning.
-        let mut hook_registry = shared.hook_registry.clone().unwrap_or_default();
-        if shared.hook_registry.is_some() {
-            for skill in &args.skills {
-                if let Some(ref hooks_value) = skill.hooks {
-                    if let Err(e) =
-                        crate::hooks::skill::SkillHookHandler::load_and_register_from_value(
-                            &skill.name,
-                            hooks_value,
-                            &mut hook_registry,
-                        )
-                    {
-                        tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
-                    }
-                }
-            }
-        }
+        let hook_registry = crate::hooks::build_hook_registry_with_skills(
+            shared.hook_registry.as_deref(),
+            &args.skills,
+        )
+        .await;
 
         // Create permission checker and responder from shared state
         // If no permission_state in shared (YOLO mode), all tools auto-approve
@@ -227,6 +222,8 @@ impl Agent {
             checkpoint_store,
             data_dir,
             current_turn: None,
+            base_prompt: args.base_prompt,
+            skills: args.skills.clone(),
         };
 
         let handle_id = id.clone();
@@ -626,6 +623,15 @@ impl Agent {
                 // next iteration because goal_ctx.is_some() is true.
                 Ok(())
             }
+            Some(AgentInput::RefreshSkills(skills)) => {
+                tracing::info!(
+                    "Agent {} received refresh-skills request ({} skills)",
+                    self.id,
+                    skills.len()
+                );
+                self.apply_skills_refresh(skills).await;
+                Ok(())
+            }
             Some(AgentInput::Rewind {
                 message_id,
                 target,
@@ -663,6 +669,14 @@ impl Agent {
                 }
                 AgentInput::SetGoal(Some(state)) => {
                     self.goal_ctx = Some(state);
+                }
+                AgentInput::RefreshSkills(skills) => {
+                    tracing::info!(
+                        "Agent {} refreshing {} skills in goal idle",
+                        self.id,
+                        skills.len()
+                    );
+                    self.apply_skills_refresh(skills).await;
                 }
                 AgentInput::User {
                     content,
@@ -778,6 +792,46 @@ impl Agent {
         self.message_buffer.push(msg);
         self.context.transition_to(AgentState::Streaming);
         Ok(())
+    }
+
+    /// Apply a dynamic skills refresh: rebuild system prompt and hook registry.
+    /// Tool registry stays intact because `SubagentTool` now reads skills from `ToolExecCtx`.
+    async fn apply_skills_refresh(&mut self, skills: Vec<Arc<crate::skill::Skill>>) {
+        // 1. Rebuild system prompt
+        let new_prompt = SystemPromptBuilder::new()
+            .base_prompt(&self.base_prompt)
+            .with_skills(&skills)
+            .with_working_dir(&self.working_dir)
+            .build()
+            .await;
+
+        // Replace the first system message if it exists
+        if let Some(idx) = self.message_buffer.messages().iter().position(|m| m.role == Role::System) {
+            self.message_buffer.update_message(idx, |msg| {
+                msg.content = vec![ContentBlock::Text { text: new_prompt }];
+            });
+            tracing::debug!("Agent {} system prompt refreshed", self.id);
+        } else {
+            tracing::warn!(
+                "Agent {} has no system message, skipping prompt refresh",
+                self.id
+            );
+        }
+
+        // 2. Update local skills list (used by ToolExecCtx for SubagentTool)
+        self.skills.clone_from(&skills);
+
+        // 3. Rebuild hook registry (same logic as spawn)
+        self.hook_registry = crate::hooks::build_hook_registry_with_skills(
+            self.shared.hook_registry.as_deref(),
+            &skills,
+        )
+        .await;
+        tracing::info!(
+            "Agent {} refreshed {} skill(s)",
+            self.id,
+            skills.len()
+        );
     }
 
     /// Inject a user message (with interceptors) and transition to Streaming.
@@ -1302,6 +1356,11 @@ impl Agent {
     }
 
     async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
+        // Early-out if cancelled before doing any work
+        if self.cancel_token.is_cancelled() {
+            return self.handle_cancel("tool execution").await;
+        }
+
         let tool_calls: Vec<_> = self
             .message_buffer
             .messages()
@@ -1401,6 +1460,7 @@ impl Agent {
                 &self.session_id,
                 &tool_message_ids,
                 turn_for_tools,
+                &self.skills,
             )
             .await
         };

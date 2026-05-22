@@ -38,6 +38,7 @@ impl ToolExecutionHandler {
         &self,
         message_buffer: &mut MessageBuffer,
         cancel_token: &super::CancelToken,
+        skills: &[Arc<crate::skill::Skill>],
     ) -> Result<ExecutionOutcome, super::AgentError> {
         let tool_calls: Vec<_> = message_buffer
             .messages()
@@ -126,6 +127,7 @@ impl ToolExecutionHandler {
                 &self.session_id,
                 &tool_message_ids,
                 None, // No turn in ToolExecutionHandler context
+                skills,
             )
             .await
         };

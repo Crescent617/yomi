@@ -292,3 +292,36 @@ pub fn build_registry(entries: &[HookEntry]) -> HookRegistry {
 
     registry
 }
+
+/// Build a `HookRegistry` from a shared base (config hooks) plus skill-level hooks.
+///
+/// This is used both at agent spawn time and during hot-reload so the logic stays in one place.
+pub async fn build_hook_registry_with_skills(
+    base: Option<&tokio::sync::RwLock<HookRegistry>>,
+    skills: &[std::sync::Arc<crate::skill::Skill>],
+) -> HookRegistry {
+    let mut registry = match base {
+        Some(arc) => arc.read().await.clone(),
+        None => HookRegistry::default(),
+    };
+
+    if base.is_some() {
+        for skill in skills {
+            if let Some(ref hooks_value) = skill.hooks {
+                if let Err(e) = SkillHookHandler::load_and_register_from_value(
+                    &skill.name,
+                    hooks_value,
+                    &mut registry,
+                ) {
+                    tracing::warn!(
+                        "Failed to load hooks for skill '{}': {}",
+                        skill.name,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    registry
+}
