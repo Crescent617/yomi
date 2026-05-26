@@ -10,10 +10,9 @@ use tuirealm::{
     props::{AttrValue, Attribute, Props, QueryResult},
     ratatui::{
         layout::{Margin, Rect},
-        style::{Modifier, Style},
+        style::Style,
         widgets::{
-            Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
-            ScrollbarState,
+            Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
         },
         Frame,
     },
@@ -21,6 +20,8 @@ use tuirealm::{
 };
 
 use crate::{attr, msg::Msg, theme::colors};
+
+use super::dialog::{dialog_block, dialog_inner_area};
 
 /// A section of help content with a title and list of key bindings
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,14 +121,13 @@ impl HelpDialog {
     }
 
     fn render_dialog(&self, frame: &mut Frame, area: Rect) {
-        // Calculate dialog size (same as picker: 60% width, min 60, margins 2 top / 4 bottom)
-        let percent_width = (f32::from(area.width) * 0.6) as u16;
-        let dialog_width = percent_width.max(60).min(area.width.saturating_sub(4));
+        // 宽度拉满
+        let dialog_width = area.width;
         let dialog_height = area.height.saturating_sub(6);
 
         let dialog_area = Rect {
-            x: area.x + (area.width - dialog_width) / 2,
-            y: area.y + 2, // 2 rows margin from top (same as picker)
+            x: area.x,
+            y: area.y + 2,
             width: dialog_width,
             height: dialog_height,
         };
@@ -135,23 +135,8 @@ impl HelpDialog {
         // Clear the background behind dialog
         frame.render_widget(Clear, dialog_area);
 
-        // Create block with title
-        let block = Block::default()
-            .title(self.title.as_str())
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(colors::accent_system())
-            .title_style(
-                Style::default()
-                    .fg(colors::accent_system())
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        // Create layout for content
-        let inner = dialog_area.inner(Margin {
-            horizontal: 1,
-            vertical: 1,
-        });
+        let block = dialog_block(self.title.as_str());
+        let inner = dialog_inner_area(dialog_area);
 
         // Build and render content
         let content = self.build_content();

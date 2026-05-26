@@ -491,6 +491,15 @@ async fn dispatch_command(
                 .send_permission_response(sid, &req_id, approved, remember)
                 .await?;
         }
+        ControlCommand::AskUserResponse { req_id, answers } => {
+            let response = crate::tools::AskUserResponse {
+                answers: answers.into_iter().collect(),
+                annotations: None,
+            };
+            coordinator
+                .send_ask_user_response(sid, &req_id, response)
+                .await?;
+        }
         ControlCommand::SetLevel(level) => {
             coordinator.set_permission_level(sid, level).await?;
         }

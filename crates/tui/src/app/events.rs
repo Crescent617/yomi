@@ -412,6 +412,42 @@ impl Model {
                 }
                 // Note: StateChanged is currently ignored to avoid UI noise
                 // Could be shown in status bar for debugging if needed
+                Event::Agent(kernel::event::AgentEvent::AskUserQuestion {
+                    req_id,
+                    questions,
+                    ..
+                }) => {
+                    tracing::info!(
+                        "TUI received AskUserQuestion: {} with {} questions",
+                        req_id,
+                        questions.len()
+                    );
+
+                    // Auto-deny any previous pending ask-user request
+                    if let Some((old_req_id, _, _)) = self.pending_ask_user.take() {
+                        tracing::warn!(
+                            "Auto-denying stale ask_user request {} (new: {})",
+                            old_req_id,
+                            req_id
+                        );
+                        let _ =
+                            self.ctrl_tx
+                                .try_send(kernel::event::ControlCommand::AskUserResponse {
+                                    req_id: old_req_id,
+                                    answers: Vec::new(),
+                                });
+                    }
+
+                    // Store the request and show the first question
+                    let first = questions.first().cloned();
+                    self.pending_ask_user =
+                        Some((req_id, questions, std::collections::HashMap::new()));
+
+                    if let Some(q) = first {
+                        self.show_ask_user_question(&q);
+                    }
+                    self.state.should_redraw = true;
+                }
                 Event::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
                     tool_name,

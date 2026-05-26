@@ -216,6 +216,21 @@ impl Session {
         }
     }
 
+    /// Send `ask_user` response to the main agent
+    pub async fn send_ask_user_response(
+        &self,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<()> {
+        match &self.main_agent {
+            Some(handle) => handle
+                .send_ask_user_response(req_id, response)
+                .await
+                .map_err(|e| SessionError::SendFailed(format!("ask_user response: {e}")).into()),
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
     pub fn agent_state(&self) -> Option<AgentState> {
         self.main_agent.as_ref().map(|h| h.state())
     }

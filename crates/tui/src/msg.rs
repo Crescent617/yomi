@@ -61,6 +61,7 @@ pub enum Msg {
 
     // Dialog results
     DialogSelected(usize), // Selected option index
+    DialogCustomInput(String), // User entered a custom free-text answer
     DialogCancelled,       // Dialog was cancelled
 
     // Slash commands (String = raw user input, e.g. "/goal do stuff")

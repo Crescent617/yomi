@@ -158,6 +158,9 @@ impl Agent {
 
         let shared = shared.clone();
 
+        // Create ask-user state (session-level, independent of permission state)
+        let (ask_user_state, ask_user_responder) = crate::tools::AskUserState::new();
+
         // Create agent-specific tool registry with standard tools
         let tool_registry = crate::tools::ToolRegistryFactory::create(
             crate::tools::ToolRegistryConfig::for_main_agent(
@@ -168,7 +171,8 @@ impl Agent {
                 &args.session_id,
             )
             .with_enable_sub_agents(args.enable_sub_agents)
-            .with_file_state_store(args.file_state_store.clone()),
+            .with_file_state_store(args.file_state_store.clone())
+            .with_ask_user_state(ask_user_state.clone()),
         );
 
         // Build hook registry: if user-level hooks are enabled (Some), also load
@@ -242,6 +246,7 @@ impl Agent {
             state_rx,
             cancel_token,
             permission_responder,
+            Some(ask_user_responder),
             Arc::clone(&input_stale_since),
         );
         (handle, event_rx)
