@@ -49,17 +49,6 @@ pub struct AskUserInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AskUserResponse {
     pub answers: HashMap<String, String>,
-    /// Optional per-question annotations keyed by question text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub annotations: Option<HashMap<String, AskAnnotation>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AskAnnotation {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
 }
 
 /// Shared state for ask-user requests across a session.
@@ -241,7 +230,7 @@ impl Tool for AskUserTool {
         // If answers are already provided (e.g. pre-filled by the UI layer),
         // return them immediately without blocking.
         if input.answers.len() == input.questions.len() {
-            let text = format_answers(&input.answers, None);
+            let text = format_answers(&input.answers);
             return Ok(ToolOutput::text(text));
         }
 
@@ -272,7 +261,7 @@ impl Tool for AskUserTool {
         // Wait for response (5-minute timeout to avoid hanging forever)
         match tokio::time::timeout(std::time::Duration::from_mins(5), rx).await {
             Ok(Ok(response)) => {
-                let text = format_answers(&response.answers, response.annotations.as_ref());
+                let text = format_answers(&response.answers);
                 Ok(ToolOutput::text(text))
             }
             Ok(Err(_)) => {
@@ -292,32 +281,15 @@ impl Tool for AskUserTool {
     }
 }
 
-fn format_answers(
-    answers: &HashMap<String, String>,
-    annotations: Option<&HashMap<String, AskAnnotation>>,
-) -> String {
+fn format_answers(answers: &HashMap<String, String>) -> String {
     let parts: Vec<String> = answers
         .iter()
-        .map(|(question, answer)| {
-            let mut parts = vec![format!("\"{}\"=\"{}\"", question, answer)];
-            if let Some(annotations) = annotations {
-                if let Some(a) = annotations.get(question) {
-                    if let Some(preview) = &a.preview {
-                        parts.push(format!("selected preview:\n{preview}"));
-                    }
-                    if let Some(notes) = &a.notes {
-                        parts.push(format!("user notes: {notes}"));
-                    }
-                }
-            }
-            parts.join(" ")
-        })
+        .map(|(question, answer)| format!("Q:{question}\nA:{answer}"))
         .collect();
-
     if parts.is_empty() {
         "User declined to answer questions.".to_string()
     } else {
-        format!("User answered your questions: {}. You can now continue with the user's answers in mind.", parts.join(", "))
+        format!("User answered your questions:\n\n{}\n\nYou can now continue with the user's answers in mind.", parts.join("\n\n"))
     }
 }
 
@@ -337,7 +309,7 @@ mod tests {
         let mut answers = HashMap::new();
         answers.insert("Which library?".to_string(), "chrono".to_string());
 
-        let text = format_answers(&answers, None);
+        let text = format_answers(&answers);
         assert!(text.contains("chrono"));
         assert!(text.contains("Which library?"));
     }

@@ -317,7 +317,6 @@ pub async fn run_session_loop(
                 ControlCommand::AskUserResponse { req_id, answers } => {
                     let response = AskUserResponse {
                         answers: answers.into_iter().collect(),
-                        annotations: None,
                     };
                     if let Err(e) = coord_for_ctrl
                         .send_ask_user_response(&session_id_for_ctrl, &req_id, response)
