@@ -200,7 +200,7 @@ impl SelectDialog {
             vec![
                 Constraint::Length(message_height + 1), // Message + padding
                 Constraint::Min(1),                     // Options list
-                Constraint::Length(1),                   // Custom input line
+                Constraint::Length(1),                  // Custom input line
             ]
         } else {
             vec![
@@ -229,7 +229,11 @@ impl SelectDialog {
             chunks[0]
         };
 
-        let input_area = if message_height > 0 { chunks[2] } else { chunks[1] };
+        let input_area = if message_height > 0 {
+            chunks[2]
+        } else {
+            chunks[1]
+        };
 
         let max_visible = list_area.height as usize;
         let item_count = self.options.len().min(max_visible);
@@ -289,9 +293,8 @@ impl SelectDialog {
 
         // Set cursor when input line is focused
         if self.input_focused {
-            let cursor_x = input_area.x
-                + input_prefix.width() as u16
-                + self.custom_input.width() as u16;
+            let cursor_x =
+                input_area.x + input_prefix.width() as u16 + self.custom_input.width() as u16;
             let cursor_y = input_area.y;
             frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
         }
@@ -511,7 +514,8 @@ impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
                     self.component.hide();
                     tracing::info!("Dialog: custom input submitted: {}", text);
                     Some(Msg::DialogCustomInput(text))
-                } else if !self.component.is_input_focused() && self.component.is_custom_selected() {
+                } else if !self.component.is_input_focused() && self.component.is_custom_selected()
+                {
                     // Selected "Other..." in list mode: switch to input focus
                     self.component.toggle_input_focus();
                     Some(Msg::Redraw)

@@ -11,9 +11,7 @@ use tuirealm::{
     ratatui::{
         layout::{Margin, Rect},
         style::Style,
-        widgets::{
-            Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        },
+        widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
         Frame,
     },
     state::{State, StateValue},

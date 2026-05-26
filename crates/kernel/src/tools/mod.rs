@@ -31,8 +31,8 @@ pub use executor::{execute_tools_parallel, ToolExecutionResult};
 pub use factory::{ToolRegistryConfig, ToolRegistryFactory};
 
 pub use ask_user::{
-    AskAnnotation, AskOption, AskQuestion, AskUserResponder, AskUserResponse, AskUserState,
-    AskUserTool, ASK_USER_TOOL_NAME,
+    AskOption, AskQuestion, AskUserResponder, AskUserResponse, AskUserState, AskUserTool,
+    ASK_USER_TOOL_NAME,
 };
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};

@@ -60,9 +60,9 @@ pub enum Msg {
     ToggleYoloMode,
 
     // Dialog results
-    DialogSelected(usize), // Selected option index
+    DialogSelected(usize),     // Selected option index
     DialogCustomInput(String), // User entered a custom free-text answer
-    DialogCancelled,       // Dialog was cancelled
+    DialogCancelled,           // Dialog was cancelled
 
     // Slash commands (String = raw user input, e.g. "/goal do stuff")
     CommandNew,          // /new - create new session
