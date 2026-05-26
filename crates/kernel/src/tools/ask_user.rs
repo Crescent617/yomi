@@ -170,10 +170,6 @@ impl Tool for AskUserTool {
                                         "description": {
                                             "type": "string",
                                             "description": "Explanation of what this option means or what will happen if chosen."
-                                        },
-                                        "preview": {
-                                            "type": "string",
-                                            "description": "Optional preview content (ASCII mockup, code snippet, etc.) shown when focused."
                                         }
                                     },
                                     "required": ["label", "description"]

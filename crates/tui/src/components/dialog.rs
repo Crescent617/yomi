@@ -73,6 +73,8 @@ pub struct SelectDialog {
     active: bool,
     /// Optional message/body text (shown above options)
     message: Option<String>,
+    /// Whether custom input option ("Other...") is enabled
+    has_custom_option: bool,
     /// Custom free-text input when user selects "Other..."
     custom_input: String,
     /// Whether focus is on the custom input line (true) or option list (false)
@@ -88,6 +90,7 @@ impl SelectDialog {
             selected: 0,
             active: false,
             message: None,
+            has_custom_option: false,
             custom_input: String::new(),
             input_focused: false,
         }
@@ -95,6 +98,7 @@ impl SelectDialog {
 
     /// Show the dialog with given options ("Other..." is appended by the caller)
     pub fn show(&mut self, options: Vec<String>, message: Option<String>) {
+        self.has_custom_option = options.last().is_some_and(|last| last == "Other...");
         self.options = options;
         self.selected = 0;
         self.message = message;
@@ -144,7 +148,10 @@ impl SelectDialog {
 
     /// Check if the currently selected option is the custom "Other..." entry
     const fn is_custom_selected(&self) -> bool {
-        self.active && !self.options.is_empty() && self.selected == self.options.len() - 1
+        self.has_custom_option
+            && self.active
+            && !self.options.is_empty()
+            && self.selected == self.options.len() - 1
     }
 
     /// Insert a character into the custom input buffer
@@ -179,9 +186,9 @@ impl SelectDialog {
             .message
             .as_ref()
             .map_or(0, |m| m.lines().count() as u16);
-        // +1 for the custom input line
-        let dialog_height =
-            (6 + message_height + self.options.len() as u16).min(area.height.saturating_sub(4));
+        let custom_input_height = u16::from(self.has_custom_option);
+        let dialog_height = (5 + message_height + self.options.len() as u16 + custom_input_height)
+            .min(area.height.saturating_sub(4));
 
         let dialog_area = Rect {
             x: area.x,
@@ -196,17 +203,23 @@ impl SelectDialog {
         let block = dialog_block(self.title.as_str());
         let inner = dialog_inner_area(dialog_area);
 
-        let constraints = if message_height > 0 {
-            vec![
+        let constraints = match (message_height > 0, self.has_custom_option) {
+            (true, true) => vec![
                 Constraint::Length(message_height + 1), // Message + padding
                 Constraint::Min(1),                     // Options list
                 Constraint::Length(1),                  // Custom input line
-            ]
-        } else {
-            vec![
+            ],
+            (true, false) => vec![
+                Constraint::Length(message_height + 1), // Message + padding
+                Constraint::Min(1),                     // Options list
+            ],
+            (false, true) => vec![
                 Constraint::Min(1),    // Options list
                 Constraint::Length(1), // Custom input line
-            ]
+            ],
+            (false, false) => vec![
+                Constraint::Min(1), // Options list
+            ],
         };
 
         let chunks = Layout::default()
@@ -227,12 +240,6 @@ impl SelectDialog {
             chunks[1]
         } else {
             chunks[0]
-        };
-
-        let input_area = if message_height > 0 {
-            chunks[2]
-        } else {
-            chunks[1]
         };
 
         let max_visible = list_area.height as usize;
@@ -266,37 +273,47 @@ impl SelectDialog {
             }
         }
 
-        // Render custom input line
-        let input_prefix = "> ";
-        let input_text = if self.custom_input.is_empty() {
-            if self.input_focused {
-                format!("{input_prefix}_")
+        // Render custom input line (only when "Other..." option is present)
+        if self.has_custom_option {
+            let input_area = if message_height > 0 {
+                chunks[2]
             } else {
-                format!("{input_prefix}Other...")
+                chunks[1]
+            };
+
+            let input_prefix = "> ";
+            let input_text = if self.custom_input.is_empty() {
+                if self.input_focused {
+                    format!("{input_prefix}_")
+                } else {
+                    format!("{input_prefix}Other...")
+                }
+            } else {
+                format!("{input_prefix}{}", self.custom_input)
+            };
+
+            let input_style = if self.input_focused {
+                Style::default()
+                    .fg(colors::text_primary())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::text_muted())
+            };
+
+            let input_para = Paragraph::new(input_text)
+                .alignment(Alignment::Left)
+                .style(input_style);
+            frame.render_widget(input_para, input_area);
+
+            // Set cursor when input line is focused
+            if self.input_focused {
+                let cursor_x =
+                    input_area.x + input_prefix.width() as u16 + self.custom_input.width() as u16;
+                let cursor_y = input_area.y;
+                frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(
+                    cursor_x, cursor_y,
+                ));
             }
-        } else {
-            format!("{input_prefix}{}", self.custom_input)
-        };
-
-        let input_style = if self.input_focused {
-            Style::default()
-                .fg(colors::text_primary())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(colors::text_muted())
-        };
-
-        let input_para = Paragraph::new(input_text)
-            .alignment(Alignment::Left)
-            .style(input_style);
-        frame.render_widget(input_para, input_area);
-
-        // Set cursor when input line is focused
-        if self.input_focused {
-            let cursor_x =
-                input_area.x + input_prefix.width() as u16 + self.custom_input.width() as u16;
-            let cursor_y = input_area.y;
-            frame.set_cursor_position(tuirealm::ratatui::layout::Position::new(cursor_x, cursor_y));
         }
 
         // Render the border block last (on top)
@@ -411,6 +428,10 @@ impl SelectDialogComponent {
     pub const fn is_active(&self) -> bool {
         self.component.is_active()
     }
+
+    pub const fn has_custom_option(&self) -> bool {
+        self.component.has_custom_option
+    }
 }
 
 impl Component for SelectDialogComponent {
@@ -451,11 +472,11 @@ impl AppComponent<Msg, crate::msg::UserEvent> for SelectDialogComponent {
         }
 
         match *ev {
-            // Tab: toggle focus between option list and custom input line
+            // Tab: toggle focus between option list and custom input line (only when custom input is enabled)
             Keyboard(KeyEvent {
                 code: Key::Tab,
                 modifiers: KeyModifiers::NONE,
-            }) => {
+            }) if self.component.has_custom_option => {
                 self.component.toggle_input_focus();
                 Some(Msg::Redraw)
             }
