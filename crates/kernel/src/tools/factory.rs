@@ -6,8 +6,8 @@
 use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::tools::{
-    EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx, SubagentTool,
-    ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
+    AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
+    SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
 use std::sync::Arc;
@@ -24,6 +24,7 @@ pub struct ToolRegistryConfig<'a> {
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     pub enable_sub_agents: bool,
     pub enable_reminder: bool,
+    pub ask_user_state: Option<crate::tools::AskUserState>,
 }
 
 impl<'a> ToolRegistryConfig<'a> {
@@ -45,6 +46,7 @@ impl<'a> ToolRegistryConfig<'a> {
             file_state_store: None,
             enable_sub_agents: true,
             enable_reminder: true,
+            ask_user_state: None,
         }
     }
 
@@ -66,6 +68,7 @@ impl<'a> ToolRegistryConfig<'a> {
             file_state_store: None,
             enable_sub_agents: false,
             enable_reminder: false,
+            ask_user_state: None,
         }
     }
 
@@ -83,6 +86,13 @@ impl<'a> ToolRegistryConfig<'a> {
         store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     ) -> Self {
         self.file_state_store = store;
+        self
+    }
+
+    /// Set the ask-user state.
+    #[must_use]
+    pub fn with_ask_user_state(mut self, state: crate::tools::AskUserState) -> Self {
+        self.ask_user_state = Some(state);
         self
     }
 }
@@ -155,6 +165,15 @@ impl ToolRegistryFactory {
             if let Some(tx) = config.input_tx {
                 registry.register(ReminderTool::new(tx.clone()));
             }
+        }
+
+        // Register ask_user tool if state is provided
+        if let Some(ask_user_state) = config.ask_user_state {
+            registry.register(AskUserTool::new(
+                config.agent_id.clone(),
+                config.event_tx.clone(),
+                ask_user_state,
+            ));
         }
 
         registry

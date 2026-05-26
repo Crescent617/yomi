@@ -24,6 +24,11 @@ pub enum ControlCommand {
         approved: bool,
         remember: bool,
     },
+    /// Response to an `ask_user` question
+    AskUserResponse {
+        req_id: String,
+        answers: Vec<(String, String)>,
+    },
     /// Set permission level (for YOLO mode toggle)
     SetLevel(Level),
     /// Force message compaction
@@ -65,7 +70,12 @@ pub enum AgentEvent {
         tool_level: String,
         reason: String,
     },
-    /// Recoverable or non-recoverable operation error
+    /// The user answered an `ask_user` question
+    AskUserQuestion {
+        agent_id: AgentId,
+        req_id: String,
+        questions: Vec<crate::tools::ask_user::AskQuestion>,
+    },
     Error {
         agent_id: AgentId,
         /// Phase where the error occurred

@@ -229,9 +229,18 @@ impl Model {
                     None
                 }
                 Msg::DialogSelected(idx) => {
-                    // Send permission response based on selection
-                    // idx: 0 = Approve, 1 = Always approve, 2 = Deny, 3 = YOLO
-                    if let Some(req_id) = self.pending_permission.take() {
+                    // Priority: ask_user > permission request
+                    if self.pending_ask_user.is_some() {
+                        let answer =
+                            self.pending_ask_user
+                                .as_ref()
+                                .and_then(|(_, questions, _)| {
+                                    questions.first().and_then(|q| {
+                                        q.options.get(idx).map(|opt| opt.label.clone())
+                                    })
+                                });
+                        self.advance_ask_user(answer);
+                    } else if let Some(req_id) = self.pending_permission.take() {
                         let (approved, remember) = match idx {
                             0 => (true, false), // Approve once
                             1 => (true, true),  // Always approve this tool
@@ -262,22 +271,30 @@ impl Model {
                             approved,
                             remember,
                         });
+                        // Return focus to input box
+                        self.set_focus(&Id::InputBox);
                     }
-                    // Return focus to input box
-                    self.set_focus(&Id::InputBox);
+                    None
+                }
+                Msg::DialogCustomInput(text) => {
+                    if self.pending_ask_user.is_some() {
+                        self.advance_ask_user(Some(text));
+                    }
                     None
                 }
                 Msg::DialogCancelled => {
-                    // Deny the permission request if dialog is cancelled
-                    if let Some(req_id) = self.pending_permission.take() {
+                    // Priority: ask_user > permission request
+                    if self.pending_ask_user.is_some() {
+                        self.cancel_ask_user();
+                    } else if let Some(req_id) = self.pending_permission.take() {
                         let _ = self.ctrl_tx.try_send(ControlCommand::Response {
                             req_id,
                             approved: false,
                             remember: false,
                         });
+                        // Return focus to input box
+                        self.set_focus(&Id::InputBox);
                     }
-                    // Return focus to input box
-                    self.set_focus(&Id::InputBox);
                     None
                 }
                 // Slash commands

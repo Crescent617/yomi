@@ -462,6 +462,21 @@ impl Coordinator {
         Ok(())
     }
 
+    pub async fn send_ask_user_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<()> {
+        let session = self.require_session(session_id)?;
+        session
+            .read()
+            .await
+            .send_ask_user_response(req_id, response)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.set_permission_level(level).await;

@@ -80,6 +80,12 @@ pub trait CoordinatorApi: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::checkpoint::Checkpoint>>;
+    async fn send_ask_user_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<()>;
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
@@ -193,6 +199,16 @@ impl CoordinatorApi for Coordinator {
 
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
         self.get_todos(session_id).await
+    }
+
+    async fn send_ask_user_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<()> {
+        self.send_ask_user_response(session_id, req_id, response)
+            .await
     }
 
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
@@ -822,6 +838,23 @@ impl CoordinatorApi for RemoteCoordinator {
             .await?;
         let checkpoints = serde_json::from_value(result)?;
         Ok(checkpoints)
+    }
+
+    async fn send_ask_user_response(
+        &self,
+        session_id: &SessionId,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::AskUserResponse {
+                req_id: req_id.to_string(),
+                answers: response.answers.into_iter().collect(),
+            },
+        })
+        .await?;
+        Ok(())
     }
 
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {

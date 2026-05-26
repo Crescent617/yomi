@@ -67,6 +67,7 @@ impl Model {
             thinking_start_time: None,
             mode: AppMode::Normal,
             pending_permission: None,
+            pending_ask_user: None,
             input_history,
             new_history_entries: Vec::new(),
             working_dir,
@@ -76,6 +77,94 @@ impl Model {
             last_terminal_size: (0, 0),
             _event_pump: event_pump,
         })
+    }
+
+    /// Show an ask-user question in the select dialog.
+    pub(crate) fn show_ask_user_question(&mut self, q: &kernel::tools::AskQuestion) {
+        let header = if q.header.is_empty() {
+            "Question".to_string()
+        } else {
+            q.header.clone()
+        };
+
+        let mut options: Vec<String> = q
+            .options
+            .iter()
+            .map(|opt| format!("{} – {}", opt.label, opt.description))
+            .collect();
+        options.push("Other...".to_string());
+
+        let multi_hint = if q.multi_select {
+            "\n(Multi-select enabled – choose one or more options)"
+        } else {
+            ""
+        };
+        let message = format!("{}{}", q.question, multi_hint);
+
+        // Format: title\x00option1\x00option2\x00...\x00message
+        let mut parts = vec![header];
+        parts.extend(options);
+        parts.push(message);
+        let dialog_data = parts.join("\x00");
+
+        let _ = self.app.attr(
+            &Id::Dialog,
+            Attribute::Custom(attr::DIALOG_SHOW),
+            AttrValue::String(dialog_data),
+        );
+        self.set_focus(&Id::Dialog);
+        tracing::debug!("AskUser dialog shown for question: {}", q.question);
+    }
+
+    /// Advance to the next ask-user question or send the final response.
+    pub(crate) fn advance_ask_user(&mut self, answer: Option<String>) {
+        let Some((req_id, mut questions, mut answers)) = self.pending_ask_user.take() else {
+            return;
+        };
+
+        // Store answer for the current (first) question
+        if let Some(current) = questions.first() {
+            if let Some(ans) = answer {
+                answers.insert(current.question.clone(), ans);
+            }
+        }
+
+        // Remove the answered question
+        questions.remove(0);
+
+        if questions.is_empty() {
+            // All questions answered – send response to kernel
+            let req_id_clone = req_id.clone();
+            let _ = self
+                .ctrl_tx
+                .try_send(kernel::event::ControlCommand::AskUserResponse {
+                    req_id,
+                    answers: answers.into_iter().collect(),
+                });
+            tracing::info!("AskUser response sent for req_id={}", req_id_clone);
+            self.set_focus(&Id::InputBox);
+        } else {
+            // More questions remain – show the next one
+            let next = questions.first().cloned().unwrap();
+            self.pending_ask_user = Some((req_id, questions, answers));
+            self.show_ask_user_question(&next);
+        }
+    }
+
+    /// Cancel the current ask-user request.
+    pub(crate) fn cancel_ask_user(&mut self) {
+        let Some((req_id, _, _)) = self.pending_ask_user.take() else {
+            return;
+        };
+        let req_id_clone = req_id.clone();
+        let _ = self
+            .ctrl_tx
+            .try_send(kernel::event::ControlCommand::AskUserResponse {
+                req_id,
+                answers: Vec::new(),
+            });
+        tracing::info!("AskUser request cancelled for req_id={}", req_id_clone);
+        self.set_focus(&Id::InputBox);
     }
 
     /// Get new history entries collected during this session

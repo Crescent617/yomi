@@ -1,5 +1,6 @@
 use crate::agent::{AgentError, AgentInput, AgentState, CancelToken};
 use crate::permissions::Responder;
+use crate::tools::AskUserResponder;
 use crate::types::{AgentId, ContentBlock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -13,6 +14,7 @@ pub struct AgentHandle {
     pub(super) state_rx: tokio::sync::watch::Receiver<AgentState>,
     cancel_token: CancelToken,
     pub(super) permission_responder: Option<Responder>,
+    pub(super) ask_user_responder: Option<AskUserResponder>,
     /// Generation counter: inputs with lower generation are stale (cancelled before send)
     input_stale_since: Arc<AtomicU64>,
 }
@@ -23,6 +25,7 @@ impl std::fmt::Debug for AgentHandle {
             .field("id", &self.id)
             .field("cancel_token", &self.cancel_token)
             .field("permission_responder", &self.permission_responder.is_some())
+            .field("ask_user_responder", &self.ask_user_responder.is_some())
             .field(
                 "input_generation",
                 &self.input_stale_since.load(Ordering::Acquire),
@@ -38,6 +41,7 @@ impl AgentHandle {
         state_rx: tokio::sync::watch::Receiver<AgentState>,
         cancel_token: CancelToken,
         permission_responder: Option<Responder>,
+        ask_user_responder: Option<AskUserResponder>,
         input_stale_since: Arc<AtomicU64>,
     ) -> Self {
         Self {
@@ -46,6 +50,7 @@ impl AgentHandle {
             state_rx,
             cancel_token,
             permission_responder,
+            ask_user_responder,
             input_stale_since,
         }
     }
@@ -77,6 +82,20 @@ impl AgentHandle {
     ) -> Result<(), AgentError> {
         if let Some(ref responder) = self.permission_responder {
             responder.respond(req_id, approved, remember).await;
+            Ok(())
+        } else {
+            Err(AgentError::NoPermissionChecker)
+        }
+    }
+
+    /// Send an `ask_user` response to the Agent
+    pub async fn send_ask_user_response(
+        &self,
+        req_id: &str,
+        response: crate::tools::AskUserResponse,
+    ) -> Result<(), AgentError> {
+        if let Some(ref responder) = self.ask_user_responder {
+            responder.respond(req_id, response).await;
             Ok(())
         } else {
             Err(AgentError::NoPermissionChecker)

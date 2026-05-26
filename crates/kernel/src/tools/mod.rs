@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod ask_user;
 pub mod edit;
 pub mod executor;
 pub mod factory;
@@ -29,6 +30,10 @@ pub use helper::{FileStateStore, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
 pub use executor::{execute_tools_parallel, ToolExecutionResult};
 pub use factory::{ToolRegistryConfig, ToolRegistryFactory};
 
+pub use ask_user::{
+    AskAnnotation, AskOption, AskQuestion, AskUserResponder, AskUserResponse, AskUserState,
+    AskUserTool, ASK_USER_TOOL_NAME,
+};
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};

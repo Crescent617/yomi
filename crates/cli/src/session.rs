@@ -6,6 +6,7 @@ use kernel::{
     client::CoordinatorApi,
     event::ControlCommand,
     permissions::Level,
+    tools::AskUserResponse,
     types::{ContentBlock, SessionId},
 };
 use std::path::Path;
@@ -311,6 +312,18 @@ pub async fn run_session_loop(
                         .await
                     {
                         tracing::error!("Failed to rewind session: {}", e);
+                    }
+                }
+                ControlCommand::AskUserResponse { req_id, answers } => {
+                    let response = AskUserResponse {
+                        answers: answers.into_iter().collect(),
+                        annotations: None,
+                    };
+                    if let Err(e) = coord_for_ctrl
+                        .send_ask_user_response(&session_id_for_ctrl, &req_id, response)
+                        .await
+                    {
+                        tracing::error!("Failed to send ask_user response: {}", e);
                     }
                 }
             }

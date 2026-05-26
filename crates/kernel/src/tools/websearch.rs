@@ -150,8 +150,10 @@ impl WebSearchTool {
 
         // DuckDuckGo result selector
         let result_selector = scraper::Selector::parse(".result").expect("static CSS selector");
-        let title_selector = scraper::Selector::parse(".result__title a").expect("static CSS selector");
-        let snippet_selector = scraper::Selector::parse(".result__snippet").expect("static CSS selector");
+        let title_selector =
+            scraper::Selector::parse(".result__title a").expect("static CSS selector");
+        let snippet_selector =
+            scraper::Selector::parse(".result__snippet").expect("static CSS selector");
         let url_selector = scraper::Selector::parse(".result__url").expect("static CSS selector");
 
         let mut results = Vec::new();
@@ -278,7 +280,8 @@ impl WebSearchTool {
 
         let result_selector = scraper::Selector::parse(".b_algo").expect("static CSS selector");
         let title_selector = scraper::Selector::parse(".b_algo h2 a").expect("static CSS selector");
-        let snippet_selector = scraper::Selector::parse(".b_algo .b_caption p").expect("static CSS selector");
+        let snippet_selector =
+            scraper::Selector::parse(".b_algo .b_caption p").expect("static CSS selector");
 
         let mut results = Vec::new();
 

@@ -103,6 +103,12 @@ pub struct Model {
     pub(crate) mode: AppMode,
     /// Pending permission request (`req_id`) waiting for user confirmation
     pub(crate) pending_permission: Option<String>,
+    /// Pending ask-user request: (`req_id`, remaining questions, collected answers)
+    pub(crate) pending_ask_user: Option<(
+        String,
+        Vec<kernel::tools::AskQuestion>,
+        std::collections::HashMap<String, String>,
+    )>,
     /// Input history for the current working directory (loaded + new)
     pub(crate) input_history: Vec<String>,
     /// New entries collected during this session (not yet persisted)
