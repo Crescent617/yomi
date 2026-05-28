@@ -43,13 +43,13 @@ pub fn pid_file_path() -> PathBuf {
             p.set_extension("pid");
             p
         }
-        SocketAddr::Tcp(ref addr_str) => {
-            let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
-            directories::BaseDirs::new().map_or_else(
-                || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
-                |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
-            )
-        }
+            SocketAddr::Tcp(ref addr_str) | SocketAddr::Ws(ref addr_str) | SocketAddr::Wss(ref addr_str) => {
+                let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
+                directories::BaseDirs::new().map_or_else(
+                    || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
+                    |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
+                )
+            }
     }
 }
 

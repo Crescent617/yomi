@@ -42,6 +42,8 @@ scraper = { workspace = true }
 # Note: fs4 removed - using SQLite instead of file-based storage
 dashmap = { workspace = true }
 
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
+
 [lints]
 workspace = true
 
