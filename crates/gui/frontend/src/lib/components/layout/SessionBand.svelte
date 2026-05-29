@@ -17,9 +17,15 @@
   }
 
   async function activateSession(id: string) {
-    setActiveSession(id);
+    const prevId = sessionState.activeSessionId;
     try {
+      // Unsubscribe previous session if any
+      if (prevId && prevId !== id) {
+        await api.unsubscribe(prevId);
+      }
+      // Subscribe new session (server auto-restores if shutdown)
       await api.subscribe(id);
+      setActiveSession(id);
       const raw = await api.getMessages(id);
       const session = getSession(id);
       if (session) {
@@ -27,6 +33,17 @@
       }
     } catch (e: any) {
       console.error("Failed to activate session:", e?.message ?? e);
+      // Revert to previous session if activation failed
+      if (prevId && prevId !== id) {
+        try {
+          await api.subscribe(prevId);
+          setActiveSession(prevId);
+        } catch {
+          setActiveSession(null);
+        }
+      } else {
+        setActiveSession(null);
+      }
     }
   }
 </script>
@@ -40,13 +57,6 @@
         : 'hover:bg-secondary border-transparent'}"
       onclick={() => activateSession(session.id)}
     >
-      <div
-        class="relative shrink-0 w-2 h-2 rounded-full {session.streaming
-          ? 'animate-pulse bg-primary'
-          : session.id === sessionState.activeSessionId
-            ? 'bg-primary'
-            : 'bg-muted-foreground'}"
-      ></div>
       {#if !collapsed}
         <span class="flex-1 truncate text-sm font-medium"
           >{session.alias ?? formatShortId(session.id)}</span
@@ -64,6 +74,15 @@
 
   <button
     class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-secondary transition-colors"
+    onclick={async () => {
+      try {
+        const cwd = await api.getCwd();
+        const newId = await api.createSession(cwd, "safe");
+        await activateSession(newId);
+      } catch (e: any) {
+        console.error("Failed to create session:", e?.message ?? e);
+      }
+    }}
   >
     <Plus size={16} />
     {#if !collapsed}New Session{/if}

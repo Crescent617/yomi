@@ -13,3 +13,10 @@ pub async fn ping(state: State<'_, AppState>) -> Result<bool, GuiError> {
         }
     }
 }
+
+#[tauri::command]
+pub fn get_cwd() -> Result<String, GuiError> {
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| GuiError::unknown(format!("Failed to get cwd: {e}")))
+}

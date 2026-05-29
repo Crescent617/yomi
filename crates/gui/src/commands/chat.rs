@@ -1,9 +1,19 @@
 use kernel::client::CoordinatorApi;
+use kernel::permissions::Level;
 use kernel::types::{ContentBlock, SessionId};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::GuiError;
 use crate::state::AppState;
+
+fn parse_level(s: &str) -> Result<Level, GuiError> {
+    match s.to_lowercase().as_str() {
+        "safe" => Ok(Level::Safe),
+        "caution" => Ok(Level::Caution),
+        "dangerous" => Ok(Level::Dangerous),
+        _ => Err(GuiError::unknown(format!("Unknown permission level: {s}"))),
+    }
+}
 
 #[tauri::command]
 pub async fn send_message(
@@ -26,11 +36,13 @@ pub async fn subscribe(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     session_id: String,
+    auto_approve_level: String,
 ) -> Result<(), GuiError> {
     let coord = state.get_or_connect().await?;
     let sid = SessionId(session_id.clone());
+    let level = parse_level(&auto_approve_level)?;
     let mut rx = coord
-        .subscribe_session_events(&sid)
+        .subscribe_session_events(&sid, level)
         .await
         .map_err(GuiError::kernel)?;
 

@@ -122,7 +122,7 @@ impl EventPump {
             }
             match tokio::time::timeout(
                 Duration::from_secs(5),
-                coordinator.subscribe_session_events(session_id),
+                coordinator.subscribe_session_events(session_id, auto_approve),
             )
             .await
             {

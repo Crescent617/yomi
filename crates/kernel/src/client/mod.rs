@@ -71,6 +71,7 @@ pub trait CoordinatorApi: Send + Sync {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
+        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>>;
     async fn list_sessions(
         &self,
@@ -174,6 +175,7 @@ impl CoordinatorApi for Coordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
+        _auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
         self.subscribe_session_events(session_id).ok_or_else(|| {
             SessionError::NotFound {
@@ -506,7 +508,10 @@ impl RemoteCoordinator {
         // gone when subsequent `send_message` calls return
         // `session_not_found`.
         for sid in sessions_to_resub {
-            if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe { session_id: sid })).await
+            if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe {
+                session_id: sid,
+                auto_approve_level: Level::Safe,
+            })).await
             {
                 tracing::warn!("Re-subscribe failed: {e}");
             }
@@ -620,17 +625,10 @@ impl RemoteCoordinator {
     async fn subscribe_events_internal(
         &self,
         session_id: &SessionId,
+        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
         use dashmap::mapref::entry::Entry;
 
-        // Always send a fresh Subscribe RPC to the daemon.
-        //
-        // The old fast-path (checking `receiver_count > 0` and returning an
-        // existing receiver) was dangerous after a daemon restart: the
-        // local sender might still be alive while the daemon-side
-        // forwarding task has already died, so the receiver would never
-        // see new events.  By always sending Subscribe we guarantee the
-        // daemon creates (or refreshes) the forwarding task.
         let tx = match self.event_routers.entry(session_id.0.clone()) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
@@ -643,6 +641,7 @@ impl RemoteCoordinator {
         let result = self
             .call(RequestMethod::Subscribe {
                 session_id: session_id.0.clone(),
+                auto_approve_level,
             })
             .await;
         if let Err(ref e) = result {
@@ -814,8 +813,9 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
+        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_events_internal(session_id).await
+        self.subscribe_events_internal(session_id, auto_approve_level).await
     }
 
     async fn list_sessions(

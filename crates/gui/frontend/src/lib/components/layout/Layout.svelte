@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../../api";
-  import { sessionState, setActiveSession, appState, loadSessionMessages } from "../../state.svelte";
+  import { sessionState, appState } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
   import ExplorerTree from "../explorer/ExplorerTree.svelte";
   import ChatView from "../chat/ChatView.svelte";
@@ -51,21 +51,8 @@
         }
       }
 
-      // Auto-activate first session
-      if (list.length > 0 && !sessionState.activeSessionId) {
-        const first = list[0];
-        setActiveSession(first.id);
-        try {
-          await api.subscribe(first.id);
-          const raw = await api.getMessages(first.id);
-          const session = sessionState.sessions.find(sess => sess.id === first.id);
-          if (session) {
-            loadSessionMessages(first.id, raw);
-          }
-        } catch (e: any) {
-          console.error("Failed to auto-activate session:", e?.message ?? e);
-        }
-      }
+      // No auto-activate — user will see the centered create-session screen
+      // when no session is active.
     } catch (e) {
       console.error("Failed to load sessions:", e);
     }

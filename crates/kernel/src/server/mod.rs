@@ -344,58 +344,37 @@ impl KernelServer {
                         .map(|()| serde_json::Value::Null),
                 )
             }
-            RequestMethod::Subscribe { session_id } => {
+            RequestMethod::Subscribe { session_id, auto_approve_level } => {
                 let sid = SessionId(session_id.clone());
-                match self.coordinator.subscribe_session_events(&sid) {
-                    Some(rx) => {
-                        let session_id_for_task = session_id.clone();
-                        let send_tx2 = send_tx.clone();
-                        let cancel2 = cancel.clone();
+                let level = auto_approve_level;
 
-                        let mut subs = subscriptions.write().await;
-                        if let Some(old) = subs.remove(&session_id) {
-                            old.abort();
+                // Try to subscribe directly first
+                let mut rx = self.coordinator.subscribe_session_events(&sid);
+                if rx.is_none() {
+                    // Session not in memory - try to restore from storage
+                    match self.coordinator.restore_session(&sid, level).await {
+                        Ok(_) => {
+                            rx = self.coordinator.subscribe_session_events(&sid);
                         }
-
-                        let handle = tokio::spawn(async move {
-                            let mut rx = rx;
-                            loop {
-                                let event = tokio::select! {
-                                    biased;
-                                    () = cancel2.cancelled() => break,
-                                    result = rx.recv() => match result {
-                                        Ok(ev) => ev,
-                                        Err(_) => break,
-                                    },
-                                };
-                                let msg = WireMsg::Event {
-                                    session_id: session_id_for_task.clone(),
-                                    event,
-                                };
-                                if let Err(e) = send_tx2.try_send(msg) {
-                                    match e {
-                                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                                            tracing::warn!(
-                                                "Outbound channel full, dropping event for session={}",
-                                                session_id_for_task
-                                            );
-                                        }
-                                        tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
-                                    }
-                                }
-                            }
-                        });
-
-                        subs.insert(session_id, handle);
-                        ResponseBody::Ok {
-                            result: serde_json::Value::Null,
+                        Err(e) => {
+                            return ResponseBody::Err {
+                                error: RpcError {
+                                    code: "restore_failed".to_string(),
+                                    message: e.to_string(),
+                                    detail: None,
+                                },
+                            };
                         }
                     }
+                }
+
+                let rx = match rx {
+                    Some(rx) => rx,
                     None => {
                         let err = SessionError::NotFound {
                             session_id: sid.0.clone(),
                         };
-                        ResponseBody::Err {
+                        return ResponseBody::Err {
                             error: RpcError {
                                 code: "session_error".to_string(),
                                 message: KernelError::from(err.clone()).to_string(),
@@ -403,8 +382,51 @@ impl KernelServer {
                                     serde_json::to_value(&err).expect("SessionError serializes"),
                                 ),
                             },
+                        };
+                    }
+                };
+
+                let session_id_for_task = session_id.clone();
+                let send_tx2 = send_tx.clone();
+                let cancel2 = cancel.clone();
+
+                let mut subs = subscriptions.write().await;
+                if let Some(old) = subs.remove(&session_id) {
+                    old.abort();
+                }
+
+                let handle = tokio::spawn(async move {
+                    let mut rx = rx;
+                    loop {
+                        let event = tokio::select! {
+                            biased;
+                            () = cancel2.cancelled() => break,
+                            result = rx.recv() => match result {
+                                Ok(ev) => ev,
+                                Err(_) => break,
+                            },
+                        };
+                        let msg = WireMsg::Event {
+                            session_id: session_id_for_task.clone(),
+                            event,
+                        };
+                        if let Err(e) = send_tx2.try_send(msg) {
+                            match e {
+                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                    tracing::warn!(
+                                        "Outbound channel full, dropping event for session={}",
+                                        session_id_for_task
+                                    );
+                                }
+                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+                            }
                         }
                     }
+                });
+
+                subs.insert(session_id, handle);
+                ResponseBody::Ok {
+                    result: serde_json::Value::Null,
                 }
             }
             RequestMethod::Unsubscribe { session_id } => {

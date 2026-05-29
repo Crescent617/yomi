@@ -66,8 +66,61 @@ impl std::fmt::Display for SocketAddr {
     }
 }
 
+/// Resolve the daemon socket address from environment or platform default.
+///
+/// Priority:
+/// 1. `YOMI_SOCKET` environment variable (if set)
+/// 2. Unix: `$XDG_RUNTIME_DIR/yomi/daemon.sock`
+/// 3. Unix fallback: `directories::BaseDirs::data_dir()/yomi/daemon.sock` (macOS: `~/Library/Application Support/`)
+/// 4. Final fallback: `/tmp/yomi-daemon.sock`
+/// 5. Windows: `Tcp("127.0.0.1:57231")`
+pub fn socket_addr() -> SocketAddr {
+    let socket_env = format!("{}SOCKET", crate::ENV_PREFIX);
+    if let Ok(val) = std::env::var(&socket_env) {
+        return val.parse().expect("Invalid YOMI_SOCKET format");
+    }
+    #[cfg(unix)]
+    {
+        SocketAddr::Unix(std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+            || {
+                directories::BaseDirs::new().map_or_else(
+                    || std::path::PathBuf::from("/tmp/yomi-daemon.sock"),
+                    |b| b.data_dir().join("yomi/daemon.sock"),
+                )
+            },
+            |p| std::path::PathBuf::from(p).join("yomi/daemon.sock"),
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        SocketAddr::Tcp("127.0.0.1:57231".to_string())
+    }
+}
+
+/// PID file used for daemon process tracking.
+///
+/// Derived from [`socket_addr()`]:
+/// - Unix socket: sibling `.pid` file next to the socket
+/// - TCP: `data_dir()/yomi-daemon-{port}.pid`
+pub fn pid_file_path() -> PathBuf {
+    match socket_addr() {
+        SocketAddr::Unix(path) => {
+            let mut p = path;
+            p.set_extension("pid");
+            p
+        }
+        SocketAddr::Tcp(ref addr_str) | SocketAddr::Ws(ref addr_str) | SocketAddr::Wss(ref addr_str) => {
+            let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
+            directories::BaseDirs::new().map_or_else(
+                || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
+                |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
+            )
+        }
+    }
+}
+
 pub type WsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
-pub type WssStream =
+ pub type WssStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Platform-agnostic stream.

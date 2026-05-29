@@ -6,11 +6,26 @@ export interface Tab {
   pinned?: boolean;
 }
 
+export interface ToolCall {
+  id: string;
+  toolName: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  arguments?: string;
+  parsedArgs?: Record<string, any>;
+  output?: string;
+  error?: string;
+  progress?: string;
+  tokens?: number;
+  elapsedMs?: number;
+  folded?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   thinking?: { content: string; elapsedMs: number } | null;
+  tools?: ToolCall[];
 }
 
 export interface SessionState {
@@ -139,6 +154,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
         role,
         content,
         thinking: null,
+        tools: [] as ToolCall[],
       };
     }),
   });
@@ -158,6 +174,8 @@ export function handleEvent(sessionId: string, rawEvent: any) {
     changed = handleAgentEvent(next, rawEvent.Agent) || changed;
   } else if (rawEvent.System) {
     changed = handleSystemEvent(next, rawEvent.System) || changed;
+  } else if (rawEvent.Tool) {
+    changed = handleToolEvent(next, rawEvent.Tool) || changed;
   }
 
   if (changed) {
@@ -183,7 +201,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
       } else {
         session.messages = [
           ...session.messages,
-          { id: extractId(chunk.message_id), role: "assistant", content: text },
+          { id: extractId(chunk.message_id), role: "assistant", content: text, tools: [] },
         ];
         return true;
       }
@@ -197,10 +215,87 @@ function handleModelEvent(session: SessionState, event: any): boolean {
         return true;
       }
     }
+  } else if (event.ToolCallDelta) {
+    const delta = event.ToolCallDelta;
+    const lastMsg = session.messages[session.messages.length - 1];
+    if (lastMsg && lastMsg.role === "assistant") {
+      if (!lastMsg.tools) lastMsg.tools = [];
+      let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
+      if (!tool) {
+        tool = {
+          id: delta.tool_id,
+          toolName: delta.tool_name,
+          status: "running",
+          arguments: "",
+          folded: true,
+        };
+        lastMsg.tools.push(tool);
+      }
+      if (delta.arguments_delta) {
+        tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
+      }
+      return true;
+    }
   } else if (event.Completed || event.Error) {
     if (session.streaming) {
       session.streaming = false;
       return true;
+    }
+  }
+  return false;
+}
+
+function handleToolEvent(session: SessionState, event: any): boolean {
+  if (event.Start) {
+    const start = event.Start;
+    const lastMsg = session.messages[session.messages.length - 1];
+    if (lastMsg && lastMsg.role === "assistant") {
+      if (!lastMsg.tools) lastMsg.tools = [];
+      let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
+      if (!tool) {
+        tool = {
+          id: start.tool_id,
+          toolName: start.tool_name,
+          status: "running",
+          arguments: start.arguments ?? "",
+          folded: true,
+        };
+        lastMsg.tools.push(tool);
+      } else {
+        tool.status = "running";
+        if (start.arguments) tool.arguments = start.arguments;
+      }
+      return true;
+    }
+  } else if (event.End) {
+    const end = event.End;
+    const lastMsg = session.messages[session.messages.length - 1];
+    if (lastMsg && lastMsg.tools) {
+      const tool = lastMsg.tools.find((t) => t.id === end.tool_id);
+      if (tool) {
+        tool.status = end.is_error ? "failed" : "completed";
+        tool.elapsedMs = end.elapsed_ms;
+        tool.output = end.content_blocks
+          ?.map((b: any) => {
+            if (typeof b === "string") return b;
+            if (b.Text) return b.Text;
+            if (b.text) return b.text;
+            return "";
+          })
+          .join("");
+        return true;
+      }
+    }
+  } else if (event.Progress) {
+    const progress = event.Progress;
+    const lastMsg = session.messages[session.messages.length - 1];
+    if (lastMsg && lastMsg.tools) {
+      const tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
+      if (tool) {
+        tool.progress = progress.message;
+        tool.tokens = progress.tokens;
+        return true;
+      }
     }
   }
   return false;

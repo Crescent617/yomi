@@ -11,6 +11,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
   return invoke("list_sessions");
 }
 
+export async function getCwd(): Promise<string> {
+  return invoke("get_cwd");
+}
+
 export async function createSession(
   projectPath: string,
   level: string = "safe"
@@ -47,8 +51,8 @@ export async function sendMessage(
   return invoke("send_message", { sessionId, content });
 }
 
-export async function subscribe(sessionId: string): Promise<void> {
-  return invoke("subscribe", { sessionId });
+export async function subscribe(sessionId: string, level: string = "safe"): Promise<void> {
+  return invoke("subscribe", { sessionId, autoApproveLevel: level });
 }
 
 export async function unsubscribe(sessionId: string): Promise<void> {

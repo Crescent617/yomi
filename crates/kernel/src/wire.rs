@@ -35,6 +35,7 @@ pub enum RequestMethod {
     },
     Subscribe {
         session_id: String,
+        auto_approve_level: Level,
     },
     Unsubscribe {
         session_id: String,

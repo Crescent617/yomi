@@ -2,56 +2,13 @@
 
 use anyhow::{Context, Result};
 use kernel::transport::SocketAddr;
-use std::path::PathBuf;
+pub use kernel::transport::{socket_addr, pid_file_path};
 use tokio::time::{sleep, Duration};
 
 /// How long to wait for graceful shutdown before falling back to kill.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 /// Polling interval while waiting for graceful shutdown.
 const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Resolve daemon address from environment or platform default.
-///
-/// `YOMI_SOCKET` accepts `unix://<path>`, `tcp://<host:port>`, bare paths, or bare `host:port`.
-pub fn socket_addr() -> SocketAddr {
-    let socket_env = format!("{}SOCKET", kernel::ENV_PREFIX);
-    if let Ok(val) = std::env::var(&socket_env) {
-        return val.parse().expect("Invalid YOMI_SOCKET format");
-    }
-    if cfg!(unix) {
-        SocketAddr::Unix(std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
-            || {
-                directories::BaseDirs::new().map_or_else(
-                    || std::path::PathBuf::from("/tmp/yomi-daemon.sock"),
-                    |b| b.data_dir().join("yomi/daemon.sock"),
-                )
-            },
-            |p| std::path::PathBuf::from(p).join("yomi/daemon.sock"),
-        ))
-    } else {
-        SocketAddr::Tcp("127.0.0.1:57231".to_string())
-    }
-}
-
-/// PID file used for daemon process tracking.
-/// Derived from the socket address so lifecycle commands always
-/// target the correct daemon instance.
-pub fn pid_file_path() -> PathBuf {
-    match socket_addr() {
-        SocketAddr::Unix(path) => {
-            let mut p = path;
-            p.set_extension("pid");
-            p
-        }
-            SocketAddr::Tcp(ref addr_str) | SocketAddr::Ws(ref addr_str) | SocketAddr::Wss(ref addr_str) => {
-                let port = addr_str.rsplit_once(':').map_or("tcp", |(_, p)| p);
-                directories::BaseDirs::new().map_or_else(
-                    || std::env::temp_dir().join(format!("yomi-daemon-{port}.pid")),
-                    |b| b.data_dir().join(format!("yomi-daemon-{port}.pid")),
-                )
-            }
-    }
-}
 
 /// Check whether a process with the given PID exists.
 #[cfg(unix)]

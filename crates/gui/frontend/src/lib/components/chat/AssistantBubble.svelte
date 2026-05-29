@@ -1,28 +1,29 @@
 <script lang="ts">
   import type { ChatMessage } from "../../state.svelte";
+  import TextBlock from "./TextBlock.svelte";
+  import ThinkingBlock from "./ThinkingBlock.svelte";
+  import ToolBlock from "./ToolBlock.svelte";
 
   let { message }: { message: ChatMessage } = $props();
 </script>
 
-<div class="flex gap-3 max-w-[85%]">
-  <div
-    class="shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-sm font-bold"
-  >
-    Y
-  </div>
-  <div class="flex-1 space-y-2">
-    <div
-      class="rounded-2xl rounded-tl-sm bg-card border border-border px-4 py-3 text-sm"
-    >
-      {message.content}
+<div class="w-full space-y-2">
+  <!-- Text content -->
+  {#if message.content}
+    <TextBlock content={message.content} />
+  {/if}
+
+  <!-- Thinking block -->
+  {#if message.thinking}
+    <ThinkingBlock content={message.thinking.content} elapsedMs={message.thinking.elapsedMs} />
+  {/if}
+
+  <!-- Tool blocks -->
+  {#if message.tools && message.tools.length > 0}
+    <div class="space-y-1">
+      {#each message.tools as tool (tool.id)}
+        <ToolBlock {tool} />
+      {/each}
     </div>
-    {#if message.thinking}
-      <div class="text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2">
-        <details>
-          <summary>Thinking ({message.thinking.elapsedMs}ms)</summary>
-          <pre class="mt-1 whitespace-pre-wrap">{message.thinking.content}</pre>
-        </details>
-      </div>
-    {/if}
-  </div>
+  {/if}
 </div>

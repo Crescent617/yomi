@@ -3,25 +3,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use kernel::client::RemoteCoordinator;
-use kernel::transport::SocketAddr;
 
 use crate::error::GuiError;
 use crate::terminal::manager::TerminalManager;
-
-fn default_socket_addr() -> SocketAddr {
-    let path = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(std::path::PathBuf::from)
-        .map(|p| p.join("yomi/daemon.sock"))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| {
-                let mut p = std::path::PathBuf::from(h);
-                p.push(".local/share/yomi/daemon.sock");
-                p
-            })
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/yomi-daemon.sock"));
-    SocketAddr::Unix(path)
-}
 
 pub struct AppState {
     pub coordinator: Arc<Mutex<Option<Arc<RemoteCoordinator>>>>,
@@ -46,7 +30,7 @@ impl AppState {
             return Ok(Arc::clone(coord));
         }
 
-        let addr = default_socket_addr();
+        let addr = kernel::transport::socket_addr();
         let coord = Arc::new(
             RemoteCoordinator::connect(&addr)
                 .await
