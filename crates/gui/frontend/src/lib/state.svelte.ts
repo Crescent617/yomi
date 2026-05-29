@@ -132,31 +132,107 @@ function extractId(raw: any): string {
 export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
   const session = getSession(sessionId);
   if (!session) return;
+
+  // First pass: build assistant messages with tool_calls
+  const parsedMessages: ChatMessage[] = [];
+  const toolOutputs: Record<string, string> = {}; // tool_call_id -> output
+  const toolOutputByName: Record<string, string> = {}; // tool_name -> output
+
+  for (const m of rawMessages) {
+    const role = m.role === "User" || m.role === "user" ? "user" : m.role === "tool" || m.role === "Tool" ? "tool" : "assistant";
+    
+    if (role === "tool") {
+      // Tool result message — store output for later association
+      let output = "";
+      if (Array.isArray(m.content)) {
+        output = m.content.map((block: any) => {
+          if (typeof block === "string") return block;
+          if (block.Text) return block.Text;
+          if (block.text) return block.text;
+          return "";
+        }).join("");
+      } else if (typeof m.content === "string") {
+        output = m.content;
+      }
+      // 存储多种 key 以便查找
+      if (m.tool_call_id) {
+        toolOutputs[m.tool_call_id] = output;
+        // 从 functions.toolName:xxx 提取 toolName
+        const match = m.tool_call_id.match(/^functions\.(\w+):/);
+        if (match) {
+          toolOutputByName[match[1]] = output;
+        }
+      }
+      if (m.id && typeof m.id === "string") {
+        toolOutputs[m.id] = output;
+      }
+      continue; // Don't add tool messages as separate chat messages
+    }
+
+    if (role === "user") {
+      parsedMessages.push({
+        id: extractId(m.id),
+        role: "user",
+        content: typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((b: any) => b.Text || b.text || "").join("") : "",
+        thinking: null,
+        tools: [],
+      });
+    } else {
+      // Assistant message
+      let text = "";
+      let thinking: { content: string; elapsedMs: number } | null = null;
+      
+      if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (typeof block === "string") {
+            text += block;
+          } else if (block.type === "text" || block.Text || block.text) {
+            text += block.text || block.Text || "";
+          } else if (block.type === "thinking" || block.Thinking) {
+            thinking = { content: block.thinking || block.Thinking?.thinking || "", elapsedMs: 0 };
+          }
+        }
+      } else if (typeof m.content === "string") {
+        text = m.content;
+      }
+
+      // Extract tool_calls from the message
+      const tools: ToolCall[] = [];
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          const toolId = tc.id || "";
+          const toolName = tc.name || tc.tool_name || "";
+          let args = "";
+          if (tc.arguments) {
+            args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
+          }
+          // 尝试多种 key 查找 output
+          let output = toolOutputs[toolId] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
+          const hasOutput = output !== "" || toolId in toolOutputs || toolName in toolOutputs || toolName.toLowerCase() in toolOutputByName;
+          tools.push({
+            id: toolId,
+            toolName,
+            status: hasOutput ? "completed" : "running",
+            arguments: args,
+            output: output || undefined,
+            folded: true,
+          });
+        }
+      }
+
+      parsedMessages.push({
+        id: extractId(m.id),
+        role: "assistant",
+        content: text,
+        thinking,
+        tools,
+      });
+    }
+  }
+
   upsertSession({
     ...session,
-    messages: rawMessages.map((m) => {
-      const role = m.role === "User" || m.role === "user" ? "user" : "assistant";
-      let content = "";
-      if (Array.isArray(m.content)) {
-        content = m.content
-          .map((block: any) => {
-            if (typeof block === "string") return block;
-            if (block.Text) return block.Text;
-            if (block.text) return block.text;
-            return "";
-          })
-          .join("");
-      } else if (typeof m.content === "string") {
-        content = m.content;
-      }
-      return {
-        id: extractId(m.id),
-        role,
-        content,
-        thinking: null,
-        tools: [] as ToolCall[],
-      };
-    }),
+    messages: parsedMessages,
   });
 }
 
@@ -201,7 +277,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
       } else {
         session.messages = [
           ...session.messages,
-          { id: extractId(chunk.message_id), role: "assistant", content: text, tools: [] },
+          { id: extractId(chunk.message_id), role: "assistant", content: text, thinking: null, tools: [] },
         ];
         return true;
       }
@@ -213,29 +289,42 @@ function handleModelEvent(session: SessionState, event: any): boolean {
         }
         lastMsg.thinking.content += content.Thinking.thinking ?? "";
         return true;
+      } else {
+        // 还没有 assistant 消息，创建一个
+        session.messages = [
+          ...session.messages,
+          { id: extractId(chunk.message_id), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] },
+        ];
+        return true;
       }
     }
   } else if (event.ToolCallDelta) {
     const delta = event.ToolCallDelta;
-    const lastMsg = session.messages[session.messages.length - 1];
-    if (lastMsg && lastMsg.role === "assistant") {
-      if (!lastMsg.tools) lastMsg.tools = [];
-      let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
-      if (!tool) {
-        tool = {
-          id: delta.tool_id,
-          toolName: delta.tool_name,
-          status: "running",
-          arguments: "",
-          folded: true,
-        };
-        lastMsg.tools.push(tool);
-      }
-      if (delta.arguments_delta) {
-        tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
-      }
-      return true;
+    let lastMsg = session.messages[session.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== "assistant") {
+      // 创建新的 assistant 消息
+      session.messages = [
+        ...session.messages,
+        { id: extractId(delta.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+      ];
+      lastMsg = session.messages[session.messages.length - 1];
     }
+    if (!lastMsg.tools) lastMsg.tools = [];
+    let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
+    if (!tool) {
+      tool = {
+        id: delta.tool_id,
+        toolName: delta.tool_name,
+        status: "running",
+        arguments: "",
+        folded: true,
+      };
+      lastMsg.tools.push(tool);
+    }
+    if (delta.arguments_delta) {
+      tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
+    }
+    return true;
   } else if (event.Completed || event.Error) {
     if (session.streaming) {
       session.streaming = false;
@@ -248,55 +337,91 @@ function handleModelEvent(session: SessionState, event: any): boolean {
 function handleToolEvent(session: SessionState, event: any): boolean {
   if (event.Start) {
     const start = event.Start;
-    const lastMsg = session.messages[session.messages.length - 1];
-    if (lastMsg && lastMsg.role === "assistant") {
-      if (!lastMsg.tools) lastMsg.tools = [];
-      let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
-      if (!tool) {
-        tool = {
-          id: start.tool_id,
-          toolName: start.tool_name,
-          status: "running",
-          arguments: start.arguments ?? "",
-          folded: true,
-        };
-        lastMsg.tools.push(tool);
-      } else {
-        tool.status = "running";
-        if (start.arguments) tool.arguments = start.arguments;
-      }
-      return true;
+    let lastMsg = session.messages[session.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== "assistant") {
+      // 创建新的 assistant 消息来承载 tool
+      session.messages = [
+        ...session.messages,
+        { id: extractId(start.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+      ];
+      lastMsg = session.messages[session.messages.length - 1];
     }
+    if (!lastMsg.tools) lastMsg.tools = [];
+    let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
+    if (!tool) {
+      tool = {
+        id: start.tool_id,
+        toolName: start.tool_name,
+        status: "running",
+        arguments: start.arguments ?? "",
+        folded: true,
+      };
+      lastMsg.tools.push(tool);
+    } else {
+      tool.status = "running";
+      if (start.arguments) tool.arguments = start.arguments;
+    }
+    return true;
   } else if (event.End) {
     const end = event.End;
-    const lastMsg = session.messages[session.messages.length - 1];
-    if (lastMsg && lastMsg.tools) {
-      const tool = lastMsg.tools.find((t) => t.id === end.tool_id);
-      if (tool) {
-        tool.status = end.is_error ? "failed" : "completed";
-        tool.elapsedMs = end.elapsed_ms;
-        tool.output = end.content_blocks
-          ?.map((b: any) => {
-            if (typeof b === "string") return b;
-            if (b.Text) return b.Text;
-            if (b.text) return b.text;
-            return "";
-          })
-          .join("");
-        return true;
-      }
+    let lastMsg = session.messages[session.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== "assistant") {
+      // 没有 assistant 消息，创建一个空的
+      session.messages = [
+        ...session.messages,
+        { id: extractId(end.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+      ];
+      lastMsg = session.messages[session.messages.length - 1];
     }
+    if (!lastMsg.tools) lastMsg.tools = [];
+    let tool = lastMsg.tools.find((t) => t.id === end.tool_id);
+    if (!tool) {
+      // Tool 的 Start 事件可能丢失，从 End 重建
+      tool = {
+        id: end.tool_id,
+        toolName: end.tool_name,
+        status: end.is_error ? "failed" : "completed",
+        arguments: "",
+        folded: true,
+      };
+      lastMsg.tools.push(tool);
+    }
+    tool.status = end.is_error ? "failed" : "completed";
+    tool.elapsedMs = end.elapsed_ms;
+    tool.output = end.content_blocks
+      ?.map((b: any) => {
+        if (typeof b === "string") return b;
+        if (b.Text) return b.Text;
+        if (b.text) return b.text;
+        return "";
+      })
+      .join("");
+    return true;
   } else if (event.Progress) {
     const progress = event.Progress;
-    const lastMsg = session.messages[session.messages.length - 1];
-    if (lastMsg && lastMsg.tools) {
-      const tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
-      if (tool) {
-        tool.progress = progress.message;
-        tool.tokens = progress.tokens;
-        return true;
-      }
+    let lastMsg = session.messages[session.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== "assistant") {
+      session.messages = [
+        ...session.messages,
+        { id: extractId(progress.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+      ];
+      lastMsg = session.messages[session.messages.length - 1];
     }
+    if (!lastMsg.tools) lastMsg.tools = [];
+    let tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
+    if (!tool) {
+      tool = {
+        id: progress.tool_id,
+        toolName: "",
+        status: "running",
+        arguments: "",
+        folded: true,
+      };
+      lastMsg.tools.push(tool);
+    }
+    tool.progress = progress.message;
+    tool.tokens = progress.tokens;
+    return true;
   }
   return false;
 }
