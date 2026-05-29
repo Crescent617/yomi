@@ -1,0 +1,53 @@
+{
+  "$schema": "./frontend/node_modules/@tauri-apps/cli/schema.json",
+  "productName": "Yomi",
+  "version": "0.1.0",
+  "identifier": "com.yomi.gui",
+  "build": {
+    "beforeDevCommand": "cd frontend && npm run dev",
+    "beforeBuildCommand": "cd frontend && npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "frontend/build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Yomi",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "default",
+          "windows": ["main"],
+          "permissions": [
+            "core:default",
+            "opener:default",
+            {
+              "identifier": "fs:default",
+              "allow": [{ "path": "$HOME/**" }, { "path": "$HOME/*" }, { "path": "$HOME/" }]
+            },
+            "fs:read-files",
+            "fs:write-files",
+            "fs:read-dirs",
+            "fs:allow-read-text-file",
+            "fs:allow-write-text-file"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

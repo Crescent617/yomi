@@ -1,0 +1,14 @@
+{
+  "name": "yomi-gui",
+  "version": "0.1.0",
+  "description": "Yomi GUI — Tauri v2 + Svelte 5",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}

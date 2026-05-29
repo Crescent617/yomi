@@ -38,6 +38,10 @@ debug *ARGS:
 info *ARGS:
     RUST_LOG=info cargo run --bin yomi -- {{ARGS}}
 
+# Start GUI dev mode (Tauri + Svelte 5 single process)
+gui-dev:
+    cd crates/gui && npx tauri dev
+
 build-release:
     cargo build --release
 
