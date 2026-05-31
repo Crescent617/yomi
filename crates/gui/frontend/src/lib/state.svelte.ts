@@ -22,7 +22,7 @@ export interface ToolCall {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   thinking?: { content: string; elapsedMs: number } | null;
   tools?: ToolCall[];
@@ -45,6 +45,27 @@ export const appState = $state({
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
 });
+
+// ── UI notification state (for InfoBar inline notifications) ──
+export const uiState = $state<{
+  notification: { text: string; level: "info" | "warn" | "error" | "success" } | null;
+}>({
+  notification: null,
+});
+
+let _notificationTimeout: ReturnType<typeof setTimeout> | null = null;
+
+export function showNotification(
+  text: string,
+  level: "info" | "warn" | "error" | "success" = "info",
+  durationMs = 4000
+) {
+  uiState.notification = { text, level };
+  if (_notificationTimeout) clearTimeout(_notificationTimeout);
+  _notificationTimeout = setTimeout(() => {
+    uiState.notification = null;
+  }, durationMs);
+}
 
 export const sessionState = $state({
   sessions: [] as SessionState[],
@@ -139,7 +160,14 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
   const toolOutputByName: Record<string, string> = {}; // tool_name -> output
 
   for (const m of rawMessages) {
-    const role = m.role === "User" || m.role === "user" ? "user" : m.role === "tool" || m.role === "Tool" ? "tool" : "assistant";
+    const role =
+      m.role === "User" || m.role === "user"
+        ? "user"
+        : m.role === "tool" || m.role === "Tool"
+          ? "tool"
+          : m.role === "system" || m.role === "System"
+            ? "system"
+            : "assistant";
     
     if (role === "tool") {
       // Tool result message — store output for later association
@@ -154,10 +182,15 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
       } else if (typeof m.content === "string") {
         output = m.content;
       }
-      // 存储多种 key 以便查找
+      // 存储多种 key 以便查找（处理 functions. 前缀差异）
       if (m.tool_call_id) {
         toolOutputs[m.tool_call_id] = output;
-        // 从 functions.toolName:xxx 提取 toolName
+        // 同时存储去掉 functions. 前缀的版本
+        const cleanId = m.tool_call_id.replace(/^functions\./, '');
+        if (cleanId !== m.tool_call_id) {
+          toolOutputs[cleanId] = output;
+        }
+        // 从 functions.toolName:index 提取 toolName
         const match = m.tool_call_id.match(/^functions\.(\w+):/);
         if (match) {
           toolOutputByName[match[1]] = output;
@@ -174,6 +207,26 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
         id: extractId(m.id),
         role: "user",
         content: typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((b: any) => b.Text || b.text || "").join("") : "",
+        thinking: null,
+        tools: [],
+      });
+    } else if (role === "system") {
+      let text = "";
+      if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (typeof block === "string") {
+            text += block;
+          } else if (block.type === "text" || block.Text || block.text) {
+            text += block.text || block.Text || "";
+          }
+        }
+      } else if (typeof m.content === "string") {
+        text = m.content;
+      }
+      parsedMessages.push({
+        id: extractId(m.id),
+        role: "system",
+        content: text,
         thinking: null,
         tools: [],
       });
@@ -207,8 +260,8 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
           }
           // 尝试多种 key 查找 output
-          let output = toolOutputs[toolId] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
-          const hasOutput = output !== "" || toolId in toolOutputs || toolName in toolOutputs || toolName.toLowerCase() in toolOutputByName;
+          let output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
+          const hasOutput = output !== "" || toolId in toolOutputs || toolId.replace(/^functions\./, '') in toolOutputs || toolName in toolOutputs || toolName.toLowerCase() in toolOutputByName;
           tools.push({
             id: toolId,
             toolName,
@@ -273,14 +326,16 @@ function handleModelEvent(session: SessionState, event: any): boolean {
       const lastMsg = session.messages[session.messages.length - 1];
       if (lastMsg && lastMsg.role === "assistant") {
         lastMsg.content += text;
-        return true;
       } else {
         session.messages = [
           ...session.messages,
           { id: extractId(chunk.message_id), role: "assistant", content: text, thinking: null, tools: [] },
         ];
-        return true;
       }
+      if (!session.streaming) {
+        session.streaming = true;
+      }
+      return true;
     } else if (content?.Thinking) {
       const lastMsg = session.messages[session.messages.length - 1];
       if (lastMsg && lastMsg.role === "assistant") {
@@ -288,15 +343,17 @@ function handleModelEvent(session: SessionState, event: any): boolean {
           lastMsg.thinking = { content: "", elapsedMs: 0 };
         }
         lastMsg.thinking.content += content.Thinking.thinking ?? "";
-        return true;
       } else {
         // 还没有 assistant 消息，创建一个
         session.messages = [
           ...session.messages,
           { id: extractId(chunk.message_id), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] },
         ];
-        return true;
       }
+      if (!session.streaming) {
+        session.streaming = true;
+      }
+      return true;
     }
   } else if (event.ToolCallDelta) {
     const delta = event.ToolCallDelta;
@@ -357,6 +414,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
         folded: true,
       };
       lastMsg.tools.push(tool);
+      showNotification(`Calling ${start.tool_name}...`, "info", 2000);
     } else {
       tool.status = "running";
       if (start.arguments) tool.arguments = start.arguments;
@@ -396,6 +454,9 @@ function handleToolEvent(session: SessionState, event: any): boolean {
         return "";
       })
       .join("");
+    if (end.is_error) {
+      showNotification(`${end.tool_name} failed`, "error", 4000);
+    }
     return true;
   } else if (event.Progress) {
     const progress = event.Progress;
@@ -431,6 +492,7 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
     const state = event.Lifecycle.state;
     if (state === "Running" && !session.streaming) {
       session.streaming = true;
+      showNotification("AI is responding...", "info", 2000);
       return true;
     } else if (typeof state === "object") {
       if ((state.TurnCompleted || state.Stopped) && session.streaming) {
@@ -440,6 +502,7 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
     }
   } else if (event.Error && session.streaming) {
     session.streaming = false;
+    showNotification("Agent error: " + (event.Error.message ?? "Unknown"), "error", 5000);
     return true;
   }
   return false;
@@ -448,6 +511,7 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
 function handleSystemEvent(session: SessionState, event: any): boolean {
   if (event.Shutdown && session.streaming) {
     session.streaming = false;
+    showNotification("Session ended", "info", 3000);
     return true;
   }
   return false;

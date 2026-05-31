@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { sessionState, getActiveSession, closeTab, setActiveSession } from "../../state.svelte";
+  import { sessionState, getActiveSession, closeTab, setActiveSession, showNotification } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
+  import InfoBar from "./InfoBar.svelte";
   import { Plus, FolderOpen, Shield, AlertTriangle, Skull } from "lucide-svelte";
 
   const activeSession = $derived(getActiveSession());
@@ -67,7 +68,7 @@
       }
     } catch (e: any) {
       console.error("Failed to create session:", e?.message ?? e);
-      alert("Failed to create session: " + (e?.message ?? "Unknown error"));
+      showNotification("Failed to create session: " + (e?.message ?? "Unknown error"), "error", 5000);
     } finally {
       creating = false;
     }
@@ -137,13 +138,9 @@
         <span class="text-muted-foreground">No active session</span>
       {/if}
     </div>
-    {#if activeSession?.streaming}
-      <div class="flex items-center gap-1.5 text-xs text-primary">
-        <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
-        Streaming...
-      </div>
-    {/if}
   </div>
+
+  <!-- InfoBar removed from here — moved into chat area above ChatInput -->
 
   <!-- Tabs -->
   {#if activeSession}
@@ -226,6 +223,7 @@
     {:else if activeSession?.activeTabId === "chat"}
       <div class="flex flex-col h-full">
         <MessageList />
+        <InfoBar session={activeSession} />
         <ChatInput />
       </div>
     {:else if activeSession}

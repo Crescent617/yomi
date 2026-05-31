@@ -4,18 +4,18 @@
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
 
-  let { message }: { message: ChatMessage } = $props();
+  let { message, isStreaming = false }: { message: ChatMessage; isStreaming?: boolean } = $props();
 </script>
 
 <div class="w-full space-y-2">
+  <!-- Thinking block -->
+  {#if message.thinking}
+    <ThinkingBlock content={message.thinking.content} elapsedMs={message.thinking.elapsedMs} {isStreaming} />
+  {/if}
+
   <!-- Text content -->
   {#if message.content}
     <TextBlock content={message.content} />
-  {/if}
-
-  <!-- Thinking block -->
-  {#if message.thinking}
-    <ThinkingBlock content={message.thinking.content} elapsedMs={message.thinking.elapsedMs} />
   {/if}
 
   <!-- Tool blocks -->

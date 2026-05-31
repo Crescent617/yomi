@@ -2,6 +2,7 @@
   import { getActiveSession } from "../../state.svelte";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
+  import SystemBubble from "./SystemBubble.svelte";
 
   const activeSession = $derived(getActiveSession());
 
@@ -36,11 +37,15 @@
 
 {#if activeSession}
   <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4">
-    {#each activeSession.messages as message (message.id)}
+    {#each activeSession.messages as message, index (message.id)}
+      {@const isLastMessage = index === activeSession.messages.length - 1}
+      {@const isStreaming = activeSession.streaming && isLastMessage}
       {#if message.role === "user"}
         <UserBubble {message} />
+      {:else if message.role === "system"}
+        <SystemBubble {message} />
       {:else}
-        <AssistantBubble {message} />
+        <AssistantBubble {message} {isStreaming} />
       {/if}
     {/each}
   </div>

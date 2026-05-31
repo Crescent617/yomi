@@ -196,38 +196,37 @@
 
         <div class="rounded-md overflow-hidden mb-0.5">
           <!-- workspace header -->
-          <button
+          <div
             class="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs
                    transition-colors select-none
                    {isActiveWorkspace
               ? 'text-foreground bg-secondary/60'
               : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'}"
-            onclick={() => toggleGroup(projectPath)}
-            title={projectPath === "unknown" ? "No project path" : projectPath}
           >
-            {#if isExpanded}
-              <ChevronDown size={13} class="shrink-0" />
-            {:else}
-              <ChevronRight size={13} class="shrink-0" />
-            {/if}
-            <Folder size={13} class="shrink-0 opacity-70" />
-            <span class="flex-1 truncate text-left font-medium">{formatPath(projectPath)}</span>
-            <span class="text-[10px] opacity-50 tabular-nums">{sessions.length}</span>
-          </button>
+            <button
+              class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+              onclick={() => toggleGroup(projectPath)}
+              title={projectPath}
+            >
+              {#if isExpanded}
+                <ChevronDown size={13} class="shrink-0" />
+              {:else}
+                <ChevronRight size={13} class="shrink-0" />
+              {/if}
+              <Folder size={13} class="shrink-0 opacity-70" />
+              <span class="truncate font-medium">{formatPath(projectPath)}</span>
+            </button>
+            <button
+              class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
+              onclick={() => quickCreateSession(projectPath)}
+              title="Create session in this workspace"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
 
           {#if isExpanded}
             <div class="ml-4 pl-2 border-l border-border/40 space-y-0.5 pb-1">
-              <!-- quick create in this workspace -->
-              <button
-                class="w-full flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs
-                       text-muted-foreground hover:text-foreground hover:bg-secondary/40 transition-colors"
-                onclick={() => quickCreateSession(projectPath)}
-                title="Create session in this workspace"
-              >
-                <Plus size={12} />
-                <span>New</span>
-              </button>
-
               {#each sessions as session (session.id)}
                 <button
                   class="group flex items-center gap-2 rounded-lg px-3 py-2 text-left

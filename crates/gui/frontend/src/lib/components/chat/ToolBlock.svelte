@@ -6,15 +6,6 @@
 
   let expanded = $state(false);
 
-  function toolIcon(name: string): string {
-    const map: Record<string, string> = {
-      shell: "", read: "", write: "", edit: "", grep: "󰑑",
-      glob: "󰱼", webfetch: "󰖟", websearch: "", subagent: "󰚩",
-      skill: "⚡", reminder: "󰀠", todo: "", ask_user: "",
-    };
-    return map[name.toLowerCase()] ?? "";
-  }
-
   function statusColor(status: string): string {
     switch (status) {
       case "running": return "text-amber-600 border-amber-200 bg-amber-50/50";
@@ -56,10 +47,41 @@
       return args.replace(/\s+/g, " ").slice(0, maxLen) + (args.length > maxLen ? "…" : "");
     }
   }
+
+  function extraMeta(toolName: string, args: string): string {
+    try {
+      const parsed = JSON.parse(args);
+      const extras: string[] = [];
+      switch (toolName.toLowerCase()) {
+        case "shell": {
+          if (parsed.background) extras.push("async");
+          const timeout = parsed.timeout;
+          if (timeout != null && (parsed.background || timeout !== 60)) {
+            extras.push(`timeout ${timeout}s`);
+          }
+          break;
+        }
+        case "grep": {
+          const mode = parsed.output_mode || "filename";
+          if (mode !== "filename") extras.push(mode);
+          break;
+        }
+        case "subagent": {
+          const preset = parsed.preset || "general-purpose";
+          if (preset !== "general-purpose") extras.push(preset);
+          break;
+        }
+      }
+      return extras.join(" · ");
+    } catch { return ""; }
+  }
+
+  const target = $derived(extractTarget(tool.toolName, tool.arguments));
+  const meta = $derived(extraMeta(tool.toolName, tool.arguments));
 </script>
 
 <div class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}">
-  <!-- Header — always visible, shows name + icon + status + chevron -->
+  <!-- Header — always visible: name + target/args + status + chevron -->
   <button
     type="button"
     class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/3 dark:hover:bg-white/3 transition-colors"
@@ -76,16 +98,26 @@
     {:else}
       <AlertCircle class="w-4 h-4 shrink-0" />
     {/if}
-    <span class="font-mono">{toolIcon(tool.toolName)}</span>
-    <span class="font-semibold capitalize">{tool.toolName}</span>
+
+    <span class="font-semibold capitalize shrink-0">{tool.toolName}</span>
+
+    {#if target}
+      <span class="text-xs opacity-70 truncate">{target}</span>
+    {:else if tool.arguments}
+      <span class="text-xs opacity-60 truncate">{compactArgs(tool.arguments, 80)}</span>
+    {/if}
+    {#if meta}
+      <span class="text-xs opacity-50 shrink-0">· {meta}</span>
+    {/if}
+
     {#if tool.elapsedMs && tool.elapsedMs > 1000}
-      <span class="text-xs opacity-60">{formatElapsed(tool.elapsedMs)}</span>
+      <span class="text-xs opacity-60 shrink-0">{formatElapsed(tool.elapsedMs)}</span>
     {/if}
     {#if tool.progress && tool.status === "running"}
       <span class="text-xs opacity-60 truncate">· {tool.progress}</span>
     {/if}
     {#if tool.tokens}
-      <span class="text-xs opacity-60">· {tool.tokens} tokens</span>
+      <span class="text-xs opacity-60 shrink-0">· {tool.tokens} tokens</span>
     {/if}
     <span class="ml-auto">
       {#if expanded}
@@ -100,10 +132,6 @@
   {#if expanded}
     <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/5">
       {#if tool.arguments}
-        {@const target = extractTarget(tool.toolName, tool.arguments)}
-        {#if target}
-          <div class="text-xs pt-1.5 font-medium opacity-70">{target}</div>
-        {/if}
         <div class="text-xs opacity-60">
           <div class="font-medium mb-0.5">Arguments:</div>
           <pre class="bg-black/3 dark:bg-white/3 rounded px-2 py-1 overflow-x-auto">{compactArgs(tool.arguments)}</pre>
