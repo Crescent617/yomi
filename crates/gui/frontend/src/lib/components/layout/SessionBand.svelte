@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus, ChevronDown, ChevronRight, Folder } from "lucide-svelte";
+  import { Plus, Folder, FolderOpen } from "lucide-svelte";
   import * as api from "../../api";
   import {
     sessionState,
@@ -209,11 +209,10 @@
               title={projectPath}
             >
               {#if isExpanded}
-                <ChevronDown size={13} class="shrink-0" />
+                <FolderOpen size={13} class="shrink-0 opacity-70" />
               {:else}
-                <ChevronRight size={13} class="shrink-0" />
+                <Folder size={13} class="shrink-0 opacity-70" />
               {/if}
-              <Folder size={13} class="shrink-0 opacity-70" />
               <span class="truncate font-medium">{formatPath(projectPath)}</span>
             </button>
             <button

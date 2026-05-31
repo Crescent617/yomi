@@ -10,11 +10,19 @@
   let lastMessageCount = $state(0);
   let isNearBottom = $state(true);
 
+  let { onNearBottomChange }: { onNearBottomChange?: (near: boolean) => void } = $props();
+
   function checkNearBottom() {
     if (!scrollContainer) return true;
     const threshold = 80; // px from bottom
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
     return scrollHeight - scrollTop - clientHeight <= threshold;
+  }
+
+  export function scrollToBottom() {
+    if (!scrollContainer) return;
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    isNearBottom = true;
   }
 
   // Auto-scroll to bottom only when user is already near bottom
@@ -32,6 +40,7 @@
 
   function onScroll() {
     isNearBottom = checkNearBottom();
+    onNearBottomChange?.(isNearBottom);
   }
 </script>
 

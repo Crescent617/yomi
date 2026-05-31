@@ -4,10 +4,13 @@ const DEFAULT_TIMEOUT = 30000; // 30s
 const PING_TIMEOUT = 5000;     // 5s
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-  );
-  return Promise.race([promise, timeout]);
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  const result = await Promise.race([promise, timeout]);
+  clearTimeout(timeoutId!);
+  return result;
 }
 
 export interface SessionInfo {

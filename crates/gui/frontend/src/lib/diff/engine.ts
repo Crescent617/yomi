@@ -8,11 +8,11 @@ export function computeFileDiff(
   oldContent: string,
   newContent: string
 ): FileDiff {
-  const oldLines = oldContent.split("\n");
-  const newLines = newContent.split("\n");
-
   // Simple line-level diff using LCS-like approach
-  const hunks = computeHunks(oldLines, newLines);
+  const hunks = computeHunks(
+    oldContent.split("\n"),
+    newContent.split("\n")
+  );
 
   return {
     path,
@@ -45,9 +45,7 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
             createHunk(
               hunkOldStart,
               hunkNewStart,
-              hunkLines,
-              oldLines,
-              newLines
+              hunkLines
             )
           );
         }
@@ -114,7 +112,7 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
 
   if (inHunk && hunkLines.filter((l) => l.type !== "context").length > 0) {
     hunks.push(
-      createHunk(hunkOldStart, hunkNewStart, hunkLines, oldLines, newLines)
+      createHunk(hunkOldStart, hunkNewStart, hunkLines)
     );
   }
 
@@ -124,9 +122,7 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
 function createHunk(
   oldStart: number,
   newStart: number,
-  lines: DiffLine[],
-  oldLines: string[],
-  newLines: string[]
+  lines: DiffLine[]
 ): Hunk {
   const oldCount = lines.filter((l) => l.type !== "add").length;
   const newCount = lines.filter((l) => l.type !== "remove").length;

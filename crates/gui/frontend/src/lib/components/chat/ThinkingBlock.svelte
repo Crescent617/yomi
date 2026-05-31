@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, ChevronRight } from "lucide-svelte";
+  import { formatElapsed, tokenEstimate } from "../../utils";
 
   let { content, elapsedMs, isStreaming = false }: { content: string; elapsedMs: number; isStreaming?: boolean } = $props();
 
@@ -15,17 +16,6 @@
       expanded = false;
     }
   });
-
-  function formatElapsed(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
-
-  function tokenEstimate(text: string): string {
-    const n = Math.round(text.length / 4);
-    if (n >= 1000) return `~${(n / 1000).toFixed(1)}k`;
-    return `~${n}`;
-  }
 
   function toggle() {
     expanded = !expanded;

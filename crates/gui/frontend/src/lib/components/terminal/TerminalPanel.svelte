@@ -9,7 +9,7 @@
   let {
     id,
     cwd,
-    onClose,
+    onClose: _onClose,
   }: {
     id: string;
     cwd: string;

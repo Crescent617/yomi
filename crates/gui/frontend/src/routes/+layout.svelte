@@ -1,7 +1,7 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
-  import { sessionState, handleEvent, getSession } from "../lib/state.svelte";
+  import { handleEvent, getSession } from "../lib/state.svelte";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
   import { applyTheme, settings, startThemeListener } from "../lib/settings.svelte";
   import "../app.css";

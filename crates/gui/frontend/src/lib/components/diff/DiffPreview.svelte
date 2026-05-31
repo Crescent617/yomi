@@ -82,7 +82,7 @@
 
     <!-- File tabs -->
     <div class="flex items-center gap-1 border-b border-border mt-4 overflow-x-auto px-2">
-      {#each diffs as diff, i}
+      {#each diffs as diff, i (diff.path)}
         <button
           class="px-3 py-1.5 text-xs rounded-t-lg transition-colors {i === activeFileIndex
             ? 'bg-primary/10 text-primary border-b-2 border-primary'
@@ -136,7 +136,7 @@
               </div>
 
               <!-- Lines -->
-              {#each hunk.lines as line}
+              {#each hunk.lines as line (line)}
                 <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add'
                   ? 'bg-emerald-500/10'
                   : line.type === 'remove'
@@ -159,7 +159,7 @@
                   </span>
                   <span class="flex-1 break-all">
                     {#if line.intraLineSegments}
-                      {#each line.intraLineSegments as seg}
+                      {#each line.intraLineSegments as seg, segIdx (segIdx)}
                         <span class={seg.type === 'add'
                           ? 'bg-emerald-500/30'
                           : seg.type === 'remove'
@@ -181,8 +181,8 @@
           <div class="flex">
             <div class="flex-1 border-r border-border">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">Old</div>
-              {#each activeFile.hunks as hunk}
-                {#each hunk.lines as line}
+              {#each activeFile.hunks as hunk (hunk.id)}
+                {#each hunk.lines as line (line)}
                   {#if line.type !== 'add'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'remove' ? 'bg-red-500/10' : ''}">
                       <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.oldLineNum ?? ''}</span>
@@ -195,15 +195,15 @@
             </div>
             <div class="flex-1">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">New</div>
-              {#each activeFile.hunks as hunk}
-                {#each hunk.lines as line}
+              {#each activeFile.hunks as hunk (hunk.id)}
+                {#each hunk.lines as line (line)}
                   {#if line.type !== 'remove'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add' ? 'bg-emerald-500/10' : ''}">
                       <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.newLineNum ?? ''}</span>
                       <span class="w-4 shrink-0 select-none {line.type === 'add' ? 'text-emerald-600' : 'text-muted-foreground'}">+</span>
                       <span class="flex-1 break-all">
                         {#if line.intraLineSegments}
-                          {#each line.intraLineSegments as seg}
+                          {#each line.intraLineSegments as seg, segIdx (segIdx)}
                             <span class={seg.type === 'add' ? 'bg-emerald-500/30' : ''}>{seg.text}</span>
                           {/each}
                         {:else}

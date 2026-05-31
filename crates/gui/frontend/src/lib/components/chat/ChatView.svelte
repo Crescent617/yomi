@@ -1,19 +1,33 @@
 <script lang="ts">
-  import { sessionState, getActiveSession, closeTab, setActiveSession, showNotification } from "../../state.svelte";
+  import { sessionState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
+  import RightPanel from "../layout/RightPanel.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import InfoBar from "./InfoBar.svelte";
-  import { Plus, FolderOpen, Shield, AlertTriangle, Skull } from "lucide-svelte";
+  import { Plus, FolderOpen, Shield, AlertTriangle, Skull, ArrowDown } from "lucide-svelte";
 
   const activeSession = $derived(getActiveSession());
+
+  const hasNonChatTabs = $derived(activeSession?.tabs.some(t => t.type !== "chat") ?? false);
 
   let projectPath = $state("");
   let permissionLevel = $state("safe");
   let creating = $state(false);
+  let listRef: any = $state(null);
+  let isNearBottom = $state(true);
+
+  function onNearBottomChange(near: boolean) {
+    isNearBottom = near;
+  }
+
+  function scrollToBottom() {
+    listRef?.scrollToBottom?.();
+    isNearBottom = true;
+  }
 
   // Load default cwd on mount when no session active
   $effect(() => {
@@ -50,21 +64,7 @@
       const raw = await api.getMessages(id);
       const session = sessionState.sessions.find(s => s.id === id);
       if (session) {
-        session.messages = raw.map((m: any) => {
-          const role = m.role === "User" || m.role === "user" ? "user" : "assistant";
-          let content = "";
-          if (Array.isArray(m.content)) {
-            content = m.content.map((b: any) => {
-              if (typeof b === "string") return b;
-              if (b.Text) return b.Text;
-              if (b.text) return b.text;
-              return "";
-            }).join("");
-          } else if (typeof m.content === "string") {
-            content = m.content;
-          }
-          return { id: crypto.randomUUID(), role, content, thinking: null };
-        });
+        loadSessionMessages(id, raw);
       }
     } catch (e: any) {
       console.error("Failed to create session:", e?.message ?? e);
@@ -142,8 +142,8 @@
 
   <!-- InfoBar removed from here — moved into chat area above ChatInput -->
 
-  <!-- Tabs -->
-  {#if activeSession}
+  <!-- Tabs — only show non-chat tabs (e.g. preview/edit) -->
+  {#if activeSession && hasNonChatTabs}
     <TabBar
       tabs={activeSession.tabs}
       activeTabId={activeSession.activeTabId}
@@ -183,7 +183,7 @@
             <div class="space-y-1.5">
               <label class="text-sm font-medium">Permission Level</label>
               <div class="grid grid-cols-3 gap-2">
-                {#each ["safe", "caution", "dangerous"] as level}
+                {#each ["safe", "caution", "dangerous"] as level (level)}
                   {@const Icon = levelIcon(level)}
                   <button
                     type="button"
@@ -221,21 +221,46 @@
         </div>
       </div>
     {:else if activeSession?.activeTabId === "chat"}
-      <div class="flex flex-col h-full">
-        <MessageList />
-        <InfoBar session={activeSession} />
-        <ChatInput />
+      <div class="flex h-full relative">
+        <!-- Main chat area -->
+        <div class="flex-1 flex flex-col h-full min-w-0 relative">
+          <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
+          <InfoBar session={activeSession} />
+          <ChatInput />
+          {#if !isNearBottom}
+            <button
+              type="button"
+              onclick={scrollToBottom}
+              class="absolute bottom-16 right-4 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+            >
+              <ArrowDown class="w-3 h-3" />
+              Bottom
+            </button>
+          {/if}
+        </div>
+        <!-- Right side panel -->
+        <RightPanel session={activeSession} />
       </div>
     {:else if activeSession}
       {@const activeTab = activeSession.tabs.find(t => t.id === activeSession.activeTabId)}
       {#if activeTab?.type === "preview" && activeTab.entry}
-        <FilePreview
-          entry={activeTab.entry}
-          onEdit={(e) => { /* TODO: open edit tab */ }}
-          onAskAI={(path) => { /* TODO: send to chat */ }}
-        />
+        <div class="flex h-full relative">
+          <div class="flex-1 min-w-0">
+            <FilePreview
+              entry={activeTab.entry}
+              onEdit={(_e) => { /* TODO: open edit tab */ }}
+              onAskAI={(_path) => { /* TODO: send to chat */ }}
+            />
+          </div>
+          <RightPanel session={activeSession} />
+        </div>
       {:else if activeTab?.type === "edit" && activeTab.entry}
-        <FileEditor entry={activeTab.entry} />
+        <div class="flex h-full relative">
+          <div class="flex-1 min-w-0">
+            <FileEditor entry={activeTab.entry} />
+          </div>
+          <RightPanel session={activeSession} />
+        </div>
       {/if}
     {:else}
       <div class="flex items-center justify-center h-full text-muted-foreground">

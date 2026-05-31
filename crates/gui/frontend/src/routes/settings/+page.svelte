@@ -55,7 +55,7 @@
         Appearance
       </h2>
       <div class="flex gap-2">
-        {#each themes as t}
+        {#each themes as t (t.id)}
           <button
             onclick={() => setTheme(t.id)}
             class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors text-sm {settings.theme === t.id
@@ -76,7 +76,7 @@
         Font Size
       </h2>
       <div class="flex gap-2">
-        {#each ["sm", "base", "lg"] as size}
+        {#each ["sm", "base", "lg"] as size (size)}
           <button
             onclick={() => { settings.fontSize = size as any; persistSettings(settings); }}
             class="px-3 py-2 rounded-lg border text-sm transition-colors {settings.fontSize === size

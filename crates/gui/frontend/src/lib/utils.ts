@@ -45,3 +45,19 @@ export function detectLang(filename: string): string {
   };
   return map[ext] ?? "plaintext";
 }
+
+export function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function tokenEstimate(text: string): string {
+  const n = Math.round(text.length / 4);
+  if (n >= 1000) return `~${(n / 1000).toFixed(1)}k`;
+  return `~${n}`;
+}
+
+export function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}

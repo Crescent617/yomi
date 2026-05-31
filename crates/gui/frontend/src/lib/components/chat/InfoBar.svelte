@@ -2,6 +2,7 @@
   import { Loader2, CheckCircle2, Info, AlertTriangle, XCircle, Check } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import { uiState } from "../../state.svelte";
+  import { formatElapsed, formatTokens } from "../../utils";
 
   let { session }: { session: SessionState | null } = $props();
 
@@ -67,19 +68,6 @@
     }
     return null;
   });
-
-  // ── Format helpers ──
-  function formatElapsed(ms: number): string {
-    if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
-    const mins = Math.floor(ms / 60000);
-    const secs = Math.floor((ms % 60000) / 1000);
-    return `${mins}m${secs.toString().padStart(2, "0")}s`;
-  }
-
-  function formatTokens(count: number): string {
-    if (count >= 1000) return `~${(count / 1000).toFixed(1)}k`;
-    return `~${count}`;
-  }
 </script>
 
 {#if session?.streaming || streamingTokens > 0 || uiState.notification}

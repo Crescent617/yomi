@@ -9,6 +9,9 @@
   let content = $state("");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
 
+  // ── dir cache for file picker ──
+  let dirCache = $state<Map<string, FileEntry[]>>(new Map());
+
   // ── command completion ──
   let showCommands = $state(false);
   let commandFilter = $state("");
@@ -64,15 +67,26 @@
 
   async function loadFilePickerRoot() {
     const session = getActiveSession();
-    const root = session?.projectPath || "/home/hrli";
+    const root = session?.projectPath || "";
     filePickerRoot = root;
+    if (!root) {
+      fileEntries = [];
+      return;
+    }
     try {
-      const list = await fsProvider.listDir(root);
-      fileEntries = list.sort((a, b) => {
-        if (a.isDirectory && !b.isDirectory) return -1;
-        if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
-      });
+      const cached = dirCache.get(root);
+      if (cached) {
+        fileEntries = cached;
+      } else {
+        const list = await fsProvider.listDir(root);
+        const sorted = list.sort((a, b) => {
+          if (a.isDirectory && !b.isDirectory) return -1;
+          if (!a.isDirectory && b.isDirectory) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        dirCache.set(root, sorted);
+        fileEntries = sorted;
+      }
       selectedFileIdx = 0;
     } catch (e) {
       console.error("Failed to load files:", e);
@@ -81,13 +95,17 @@
   }
 
   async function loadDir(path: string) {
+    const cached = dirCache.get(path);
+    if (cached) return cached;
     try {
       const list = await fsProvider.listDir(path);
-      return list.sort((a, b) => {
+      const sorted = list.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
         return a.name.localeCompare(b.name);
       });
+      dirCache.set(path, sorted);
+      return sorted;
     } catch (e) {
       console.error("Failed to list dir:", path, e);
       return [];
@@ -141,11 +159,13 @@
     if (showCommands) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        if (filteredCommands.length === 0) return;
         selectedCommandIdx = (selectedCommandIdx + 1) % filteredCommands.length;
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
+        if (filteredCommands.length === 0) return;
         selectedCommandIdx = (selectedCommandIdx - 1 + filteredCommands.length) % filteredCommands.length;
         return;
       }

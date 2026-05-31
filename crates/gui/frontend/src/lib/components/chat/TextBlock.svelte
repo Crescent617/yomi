@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { marked } from "marked";
+  import { Marked } from "marked";
 
   let { content }: { content: string } = $props();
 
-  marked.setOptions({ gfm: true, breaks: true });
+  const md = new Marked();
+  md.setOptions({ gfm: true, breaks: true });
 
-  const rendered = $derived(marked.parse(content || "", { async: false }) as string);
+  const rendered = $derived(md.parse(content || "", { async: false }) as string);
 </script>
 
 <style>

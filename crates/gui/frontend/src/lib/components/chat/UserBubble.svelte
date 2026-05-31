@@ -1,12 +1,13 @@
 <script lang="ts">
   import type { ChatMessage } from "../../state.svelte";
-  import { marked } from "marked";
+  import { Marked } from "marked";
 
   let { message }: { message: ChatMessage } = $props();
 
-  marked.setOptions({ gfm: true, breaks: true });
+  const md = new Marked();
+  md.setOptions({ gfm: true, breaks: true });
 
-  const rendered = $derived(marked.parse(message.content || "", { async: false }) as string);
+  const rendered = $derived(md.parse(message.content || "", { async: false }) as string);
 
   let expanded = $state(false);
 

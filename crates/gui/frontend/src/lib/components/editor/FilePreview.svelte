@@ -56,7 +56,7 @@
 <div class="h-full flex flex-col">
   <!-- Breadcrumb + Actions -->
   <div class="flex items-center gap-1 px-4 py-2 border-b border-border text-sm">
-    {#each breadcrumb(entry.path) as part, i}
+    {#each breadcrumb(entry.path) as part, i (i)}
       <span class="text-muted-foreground">{part}</span>
       {#if i < breadcrumb(entry.path).length - 1}
         <ChevronRight size={14} class="text-muted-foreground" />

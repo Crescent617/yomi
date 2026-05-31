@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronDown, ChevronUp, Loader2, CheckCircle2, XCircle, MinusCircle, AlertCircle } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
+  import { formatElapsed } from "../../utils";
 
   let { tool }: { tool: ToolCall } = $props();
 
@@ -16,12 +17,8 @@
     }
   }
 
-  function formatElapsed(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
-  }
-
   function extractTarget(toolName: string, args: string): string {
+    if (!args) return "";
     try {
       const parsed = JSON.parse(args);
       switch (toolName.toLowerCase()) {
@@ -38,6 +35,7 @@
   }
 
   function compactArgs(args: string, maxLen = 120): string {
+    if (!args) return "";
     try {
       const parsed = JSON.parse(args);
       const s = JSON.stringify(parsed);
@@ -49,6 +47,7 @@
   }
 
   function extraMeta(toolName: string, args: string): string {
+    if (!args) return "";
     try {
       const parsed = JSON.parse(args);
       const extras: string[] = [];
@@ -76,8 +75,8 @@
     } catch { return ""; }
   }
 
-  const target = $derived(extractTarget(tool.toolName, tool.arguments));
-  const meta = $derived(extraMeta(tool.toolName, tool.arguments));
+  const target = $derived(extractTarget(tool.toolName, tool.arguments ?? ""));
+  const meta = $derived(extraMeta(tool.toolName, tool.arguments ?? ""));
 </script>
 
 <div class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}">

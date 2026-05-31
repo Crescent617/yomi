@@ -44,6 +44,7 @@ export const appState = $state({
   connectionStatus: "disconnected" as "connected" | "disconnected" | "connecting",
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
+  rightPanelCollapsed: true,
 });
 
 // ── UI notification state (for InfoBar inline notifications) ──
@@ -193,7 +194,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
         // 从 functions.toolName:index 提取 toolName
         const match = m.tool_call_id.match(/^functions\.(\w+):/);
         if (match) {
-          toolOutputByName[match[1]] = output;
+          toolOutputByName[match[1].toLowerCase()] = output;
         }
       }
       if (m.id && typeof m.id === "string") {
@@ -260,7 +261,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
           }
           // 尝试多种 key 查找 output
-          let output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
+          const output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
           const hasOutput = output !== "" || toolId in toolOutputs || toolId.replace(/^functions\./, '') in toolOutputs || toolName in toolOutputs || toolName.toLowerCase() in toolOutputByName;
           tools.push({
             id: toolId,
@@ -294,26 +295,18 @@ export function handleEvent(sessionId: string, rawEvent: any) {
   const session = getSession(sessionId);
   if (!session) return;
 
-  let next = { ...session };
-  let changed = false;
-
   if (rawEvent.Model) {
-    changed = handleModelEvent(next, rawEvent.Model) || changed;
+    handleModelEvent(session, rawEvent.Model);
   } else if (rawEvent.Agent) {
-    changed = handleAgentEvent(next, rawEvent.Agent) || changed;
+    handleAgentEvent(session, rawEvent.Agent);
   } else if (rawEvent.System) {
-    changed = handleSystemEvent(next, rawEvent.System) || changed;
+    handleSystemEvent(session, rawEvent.System);
   } else if (rawEvent.Tool) {
-    changed = handleToolEvent(next, rawEvent.Tool) || changed;
-  }
-
-  if (changed) {
-    upsertSession(next);
+    handleToolEvent(session, rawEvent.Tool);
   }
 
   if (sessionState.activeSessionId !== sessionId) {
-    next.unread++;
-    upsertSession(next);
+    session.unread++;
   }
 }
 
@@ -380,6 +373,9 @@ function handleModelEvent(session: SessionState, event: any): boolean {
     }
     if (delta.arguments_delta) {
       tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
+    }
+    if (!session.streaming) {
+      session.streaming = true;
     }
     return true;
   } else if (event.Completed || event.Error) {
