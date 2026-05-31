@@ -15,7 +15,7 @@ const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Global shutdown token for the in-process daemon server.
-static DAEMON_SHUTDOWN: std::sync::Mutex<Option<CancellationToken>> = std::sync::Mutex::new(None);
+static DAEMON_SHUTDOWN: tokio::sync::Mutex<Option<CancellationToken>> = tokio::sync::Mutex::const_new(None);
 
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
@@ -120,7 +120,7 @@ pub async fn spawn_daemon() -> Result<()> {
     let shutdown = CancellationToken::new();
 
     {
-        let mut guard = DAEMON_SHUTDOWN.lock().unwrap();
+        let mut guard = DAEMON_SHUTDOWN.lock().await;
         *guard = Some(shutdown.clone());
     }
 
@@ -193,7 +193,7 @@ pub async fn spawn_daemon() -> Result<()> {
 pub async fn stop_daemon() -> Result<()> {
     let pid_file = pid_file_path();
     {
-        let guard = DAEMON_SHUTDOWN.lock().unwrap();
+        let guard = DAEMON_SHUTDOWN.lock().await;
         if let Some(token) = guard.clone() {
             token.cancel();
         }
@@ -220,7 +220,7 @@ pub async fn graceful_shutdown() -> Result<()> {
     }
 
     {
-        let guard = DAEMON_SHUTDOWN.lock().unwrap();
+        let guard = DAEMON_SHUTDOWN.lock().await;
         if let Some(token) = guard.clone() {
             tracing::info!("cancelling in-process daemon...");
             token.cancel();

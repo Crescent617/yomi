@@ -3,7 +3,6 @@
   import * as api from "../../api";
   import { sessionState, appState } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
-  import ExplorerTree from "../explorer/ExplorerTree.svelte";
   import ChatView from "../chat/ChatView.svelte";
 
   let isDesktop = $state(false);
@@ -64,15 +63,14 @@
     <aside
       class="flex flex-col border-r border-border transition-all {appState.sidebarCollapsed
         ? 'w-16'
-        : 'w-64'}"
+        : 'w-64'} h-full"
     >
-      <div class="p-3 border-b border-border">
+      <div class="p-3 border-b border-border shrink-0">
         <h1 class="font-bold text-lg truncate">Yomi</h1>
       </div>
-      <SessionBand collapsed={appState.sidebarCollapsed} />
-      {#if !appState.sidebarCollapsed}
-        <ExplorerTree />
-      {/if}
+      <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
+        <SessionBand collapsed={appState.sidebarCollapsed} />
+      </div>
     </aside>
   {/if}
 

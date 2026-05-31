@@ -7,19 +7,35 @@
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let lastMessageCount = $state(0);
+  let isNearBottom = $state(true);
 
-  // Auto-scroll to bottom when new messages arrive
+  function checkNearBottom() {
+    if (!scrollContainer) return true;
+    const threshold = 80; // px from bottom
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+    return scrollHeight - scrollTop - clientHeight <= threshold;
+  }
+
+  // Auto-scroll to bottom only when user is already near bottom
   $effect(() => {
     const msgCount = activeSession?.messages?.length ?? 0;
     if (scrollContainer && msgCount > lastMessageCount) {
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      if (isNearBottom) {
+        requestAnimationFrame(() => {
+          scrollContainer!.scrollTop = scrollContainer!.scrollHeight;
+        });
+      }
     }
     lastMessageCount = msgCount;
   });
+
+  function onScroll() {
+    isNearBottom = checkNearBottom();
+  }
 </script>
 
 {#if activeSession}
-  <div bind:this={scrollContainer} class="h-full overflow-y-auto px-4 py-4 space-y-4">
+  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4">
     {#each activeSession.messages as message (message.id)}
       {#if message.role === "user"}
         <UserBubble {message} />
