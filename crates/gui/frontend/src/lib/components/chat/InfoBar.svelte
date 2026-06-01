@@ -71,7 +71,7 @@
 </script>
 
 {#if session?.streaming || streamingTokens > 0 || uiState.notification}
-  <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-[28px]">
+  <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-[28px] font-mono">
     <!-- Left: streaming status -->
     <div class="flex items-center gap-1.5 min-w-0">
       {#if session?.streaming}

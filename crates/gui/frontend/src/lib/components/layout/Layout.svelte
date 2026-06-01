@@ -52,6 +52,8 @@
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
             activeTabId: "chat",
+            pendingPermissions: [],
+            pendingAskUser: null,
           });
         }
       }

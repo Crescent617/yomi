@@ -12,6 +12,7 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|_app| {
             // Spawn the yomi daemon inside Tauri's async runtime so the
             // background server task survives the whole app lifetime.
@@ -39,6 +40,9 @@ pub fn run() {
             commands::chat::subscribe,
             commands::chat::unsubscribe,
             commands::chat::get_messages,
+            commands::chat::cancel_session,
+            commands::chat::respond_permission,
+            commands::chat::respond_ask_user,
             commands::checkpoint::get_checkpoints,
             commands::checkpoint::rewind,
             commands::skill::list_skills,

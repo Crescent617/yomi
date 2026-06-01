@@ -102,3 +102,56 @@ pub async fn get_messages(
         .collect();
     Ok(values)
 }
+
+// ── Cancel ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn cancel_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), GuiError> {
+    let coord = state.get_or_connect().await?;
+    let sid = SessionId(session_id);
+    coord.cancel(&sid).await.map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+// ── Permission response ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn respond_permission(
+    state: State<'_, AppState>,
+    session_id: String,
+    req_id: String,
+    approved: bool,
+    remember: bool,
+) -> Result<(), GuiError> {
+    let coord = state.get_or_connect().await?;
+    let sid = SessionId(session_id);
+    coord
+        .send_permission_response(&sid, &req_id, approved, remember)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+// ── Ask user response ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn respond_ask_user(
+    state: State<'_, AppState>,
+    session_id: String,
+    req_id: String,
+    answers: Vec<(String, String)>,
+) -> Result<(), GuiError> {
+    let coord = state.get_or_connect().await?;
+    let sid = SessionId(session_id);
+    let response = kernel::tools::AskUserResponse {
+        answers: answers.into_iter().collect(),
+    };
+    coord
+        .send_ask_user_response(&sid, &req_id, response)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}

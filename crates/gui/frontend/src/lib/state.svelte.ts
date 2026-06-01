@@ -36,6 +36,33 @@ export interface ProjectState {
   updatedAt: string;
 }
 
+export interface PendingPermission {
+  reqId: string;
+  toolName: string;
+  toolArgs: string;
+  toolLevel: string;
+  reason: string;
+}
+
+export interface AskOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+export interface AskQuestion {
+  question: string;
+  header: string;
+  options: AskOption[];
+  multiSelect: boolean;
+}
+
+export interface PendingAskUser {
+  reqId: string;
+  agentId: string;
+  questions: AskQuestion[];
+}
+
 export interface SessionState {
   id: string;
   projectPath: string;
@@ -47,6 +74,8 @@ export interface SessionState {
   checkpoints: unknown[];
   tabs: Tab[];
   activeTabId: string;
+  pendingPermissions: PendingPermission[];
+  pendingAskUser: PendingAskUser | null;
 }
 
 export const appState = $state({
@@ -168,56 +197,58 @@ function extractId(raw: any): string {
   return typeof raw === "string" && raw.length > 0 ? raw : crypto.randomUUID();
 }
 
+function normalizeRole(role: any): "user" | "tool" | "system" | "assistant" {
+  if (role === "User" || role === "user") return "user";
+  if (role === "tool" || role === "Tool") return "tool";
+  if (role === "system" || role === "System") return "system";
+  return "assistant";
+}
+
 export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
   const session = getSession(sessionId);
   if (!session) return;
 
-  // First pass: build assistant messages with tool_calls
-  const parsedMessages: ChatMessage[] = [];
-  const toolOutputs: Record<string, string> = {}; // tool_call_id -> output
-  const toolOutputByName: Record<string, string> = {}; // tool_name -> output
-
+  // First pass: collect all tool outputs from tool result messages
+  const toolOutputs: Record<string, string> = {};
+  const toolOutputByName: Record<string, string> = {};
   for (const m of rawMessages) {
-    const role =
-      m.role === "User" || m.role === "user"
-        ? "user"
-        : m.role === "tool" || m.role === "Tool"
-          ? "tool"
-          : m.role === "system" || m.role === "System"
-            ? "system"
-            : "assistant";
-    
+    const role = normalizeRole(m.role);
+    if (role !== "tool") continue;
+
+    let output = "";
+    if (Array.isArray(m.content)) {
+      output = m.content.map((block: any) => {
+        if (typeof block === "string") return block;
+        if (block.Text) return block.Text;
+        if (block.text) return block.text;
+        return "";
+      }).join("");
+    } else if (typeof m.content === "string") {
+      output = m.content;
+    }
+    if (m.tool_call_id) {
+      toolOutputs[m.tool_call_id] = output;
+      const cleanId = m.tool_call_id.replace(/^functions\./, '');
+      if (cleanId !== m.tool_call_id) {
+        toolOutputs[cleanId] = output;
+      }
+      const match = m.tool_call_id.match(/^functions\.(\w+):/);
+      if (match) {
+        toolOutputByName[match[1].toLowerCase()] = output;
+      }
+    }
+    if (m.id && typeof m.id === "string") {
+      toolOutputs[m.id] = output;
+    }
+  }
+
+  // Second pass: build all messages with correct tool statuses
+  const parsedMessages: ChatMessage[] = [];
+  for (const m of rawMessages) {
+    const role = normalizeRole(m.role);
+
     if (role === "tool") {
-      // Tool result message — store output for later association
-      let output = "";
-      if (Array.isArray(m.content)) {
-        output = m.content.map((block: any) => {
-          if (typeof block === "string") return block;
-          if (block.Text) return block.Text;
-          if (block.text) return block.text;
-          return "";
-        }).join("");
-      } else if (typeof m.content === "string") {
-        output = m.content;
-      }
-      // 存储多种 key 以便查找（处理 functions. 前缀差异）
-      if (m.tool_call_id) {
-        toolOutputs[m.tool_call_id] = output;
-        // 同时存储去掉 functions. 前缀的版本
-        const cleanId = m.tool_call_id.replace(/^functions\./, '');
-        if (cleanId !== m.tool_call_id) {
-          toolOutputs[cleanId] = output;
-        }
-        // 从 functions.toolName:index 提取 toolName
-        const match = m.tool_call_id.match(/^functions\.(\w+):/);
-        if (match) {
-          toolOutputByName[match[1].toLowerCase()] = output;
-        }
-      }
-      if (m.id && typeof m.id === "string") {
-        toolOutputs[m.id] = output;
-      }
-      continue; // Don't add tool messages as separate chat messages
+      continue;
     }
 
     if (role === "user") {
@@ -277,9 +308,8 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
           if (tc.arguments) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
           }
-          // 尝试多种 key 查找 output
-          const output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputs[toolName] || toolOutputByName[toolName.toLowerCase()] || "";
-          const hasOutput = output !== "" || toolId in toolOutputs || toolId.replace(/^functions\./, '') in toolOutputs || toolName in toolOutputs || toolName.toLowerCase() in toolOutputByName;
+          const output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputByName[toolName.toLowerCase()] || "";
+          const hasOutput = output !== "" || toolId in toolOutputs || toolId.replace(/^functions\./, '') in toolOutputs || toolName.toLowerCase() in toolOutputByName;
           tools.push({
             id: toolId,
             toolName,
@@ -327,6 +357,18 @@ export function handleEvent(sessionId: string, rawEvent: any) {
   }
 }
 
+/** Search all messages for a tool with the given id. */
+function findToolById(session: SessionState, toolId: string): { msg: ChatMessage; tool: ToolCall } | null {
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (msg.role === "assistant" && msg.tools) {
+      const tool = msg.tools.find((t) => t.id === toolId);
+      if (tool) return { msg, tool };
+    }
+  }
+  return null;
+}
+
 function handleModelEvent(session: SessionState, event: any): boolean {
   if (event.Chunk) {
     const chunk = event.Chunk;
@@ -334,12 +376,25 @@ function handleModelEvent(session: SessionState, event: any): boolean {
     if (content?.Text) {
       const text = content.Text;
       const lastMsg = session.messages[session.messages.length - 1];
-      if (lastMsg && lastMsg.role === "assistant") {
+      // Append only if the last assistant message is a pure text block
+      // (no thinking, no tools). Otherwise start a new message.
+      if (
+        lastMsg &&
+        lastMsg.role === "assistant" &&
+        !lastMsg.thinking &&
+        (!lastMsg.tools || lastMsg.tools.length === 0)
+      ) {
         lastMsg.content += text;
       } else {
         session.messages = [
           ...session.messages,
-          { id: extractId(chunk.message_id), role: "assistant", content: text, thinking: null, tools: [] },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: text,
+            thinking: null,
+            tools: [],
+          },
         ];
       }
       if (!session.streaming) {
@@ -348,16 +403,28 @@ function handleModelEvent(session: SessionState, event: any): boolean {
       return true;
     } else if (content?.Thinking) {
       const lastMsg = session.messages[session.messages.length - 1];
-      if (lastMsg && lastMsg.role === "assistant") {
+      // Append only if the last assistant message is a pure thinking block
+      // (empty content, no tools). Otherwise start a new message.
+      if (
+        lastMsg &&
+        lastMsg.role === "assistant" &&
+        !lastMsg.content &&
+        (!lastMsg.tools || lastMsg.tools.length === 0)
+      ) {
         if (!lastMsg.thinking) {
           lastMsg.thinking = { content: "", elapsedMs: 0 };
         }
         lastMsg.thinking.content += content.Thinking.thinking ?? "";
       } else {
-        // 还没有 assistant 消息，创建一个
         session.messages = [
           ...session.messages,
-          { id: extractId(chunk.message_id), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 },
+            tools: [],
+          },
         ];
       }
       if (!session.streaming) {
@@ -372,7 +439,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
       // 创建新的 assistant 消息
       session.messages = [
         ...session.messages,
-        { id: extractId(delta.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
       ];
       lastMsg = session.messages[session.messages.length - 1];
     }
@@ -407,12 +474,18 @@ function handleModelEvent(session: SessionState, event: any): boolean {
 function handleToolEvent(session: SessionState, event: any): boolean {
   if (event.Start) {
     const start = event.Start;
+    const found = findToolById(session, start.tool_id);
+    if (found) {
+      found.tool.status = "running";
+      if (start.arguments) found.tool.arguments = start.arguments;
+      return true;
+    }
     let lastMsg = session.messages[session.messages.length - 1];
     if (!lastMsg || lastMsg.role !== "assistant") {
       // 创建新的 assistant 消息来承载 tool
       session.messages = [
         ...session.messages,
-        { id: extractId(start.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
       ];
       lastMsg = session.messages[session.messages.length - 1];
     }
@@ -435,12 +508,29 @@ function handleToolEvent(session: SessionState, event: any): boolean {
     return true;
   } else if (event.End) {
     const end = event.End;
+    const found = findToolById(session, end.tool_id);
+    if (found) {
+      found.tool.status = end.is_error ? "failed" : "completed";
+      found.tool.elapsedMs = end.elapsed_ms;
+      found.tool.output = end.content_blocks
+        ?.map((b: any) => {
+          if (typeof b === "string") return b;
+          if (b.Text) return b.Text;
+          if (b.text) return b.text;
+          return "";
+        })
+        .join("");
+      if (end.is_error) {
+        showNotification(`${end.tool_name} failed`, "error", 4000);
+      }
+      return true;
+    }
     let lastMsg = session.messages[session.messages.length - 1];
     if (!lastMsg || lastMsg.role !== "assistant") {
       // 没有 assistant 消息，创建一个空的
       session.messages = [
         ...session.messages,
-        { id: extractId(end.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
       ];
       lastMsg = session.messages[session.messages.length - 1];
     }
@@ -473,11 +563,17 @@ function handleToolEvent(session: SessionState, event: any): boolean {
     return true;
   } else if (event.Progress) {
     const progress = event.Progress;
+    const found = findToolById(session, progress.tool_id);
+    if (found) {
+      found.tool.progress = progress.message;
+      found.tool.tokens = progress.tokens;
+      return true;
+    }
     let lastMsg = session.messages[session.messages.length - 1];
     if (!lastMsg || lastMsg.role !== "assistant") {
       session.messages = [
         ...session.messages,
-        { id: extractId(progress.message_id), role: "assistant", content: "", thinking: null, tools: [] },
+        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
       ];
       lastMsg = session.messages[session.messages.length - 1];
     }
@@ -516,6 +612,26 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
   } else if (event.Error && session.streaming) {
     session.streaming = false;
     showNotification("Agent error: " + (event.Error.message ?? "Unknown"), "error", 5000);
+    return true;
+  } else if (event.PermissionRequest) {
+    const req = event.PermissionRequest;
+    session.pendingPermissions.push({
+      reqId: req.req_id,
+      toolName: req.tool_name,
+      toolArgs: req.tool_args ?? "",
+      toolLevel: req.tool_level ?? "safe",
+      reason: req.reason ?? "",
+    });
+    showNotification(`${req.tool_name} needs approval`, "warn", 5000);
+    return true;
+  } else if (event.AskUserQuestion) {
+    const q = event.AskUserQuestion;
+    session.pendingAskUser = {
+      reqId: q.req_id,
+      agentId: q.agent_id,
+      questions: q.questions ?? [],
+    };
+    showNotification("AI has a question for you", "info", 5000);
     return true;
   }
   return false;

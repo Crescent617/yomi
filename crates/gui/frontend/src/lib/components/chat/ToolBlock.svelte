@@ -9,11 +9,16 @@
 
   function statusColor(status: string): string {
     switch (status) {
-      case "running": return "text-amber-600 border-amber-200 bg-amber-50/50";
-      case "completed": return "text-green-600 border-green-200 bg-green-50/50";
-      case "failed": return "text-red-600 border-red-200 bg-red-50/50";
-      case "cancelled": return "text-gray-500 border-gray-200 bg-gray-50/50";
-      default: return "text-gray-500 border-gray-200 bg-gray-50/50";
+      case "running":
+        return "text-amber-700 border-amber-200 bg-amber-50/60 dark:text-amber-400 dark:border-amber-800 dark:bg-amber-950/30";
+      case "completed":
+        return "text-green-700 border-green-200 bg-green-50/60 dark:text-green-400 dark:border-green-800 dark:bg-green-950/30";
+      case "failed":
+        return "text-red-700 border-red-200 bg-red-50/60 dark:text-red-400 dark:border-red-800 dark:bg-red-950/30";
+      case "cancelled":
+        return "text-gray-600 border-gray-200 bg-gray-50/60 dark:text-gray-400 dark:border-gray-700 dark:bg-gray-900/50";
+      default:
+        return "text-gray-600 border-gray-200 bg-gray-50/60 dark:text-gray-400 dark:border-gray-700 dark:bg-gray-900/50";
     }
   }
 
@@ -83,7 +88,7 @@
   <!-- Header — always visible: name + target/args + status + chevron -->
   <button
     type="button"
-    class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/3 dark:hover:bg-white/3 transition-colors"
+    class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
     onclick={() => expanded = !expanded}
   >
     {#if tool.status === "running"}
@@ -129,11 +134,11 @@
 
   <!-- Expanded body — args, output, error -->
   {#if expanded}
-    <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/5">
+    <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/10">
       {#if tool.arguments}
-        <div class="text-xs opacity-60">
+        <div class="text-xs opacity-60 dark:opacity-50">
           <div class="font-medium mb-0.5">Arguments:</div>
-          <pre class="bg-black/3 dark:bg-white/3 rounded px-2 py-1 overflow-x-auto">{compactArgs(tool.arguments)}</pre>
+          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{compactArgs(tool.arguments)}</pre>
         </div>
       {/if}
 
@@ -146,15 +151,15 @@
 
       {#if tool.output}
         <div class="text-xs">
-          <div class="font-medium mb-0.5 opacity-70">Output:</div>
-          <pre class="bg-black/3 dark:bg-white/3 rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
+          <div class="font-medium mb-0.5 opacity-70 dark:opacity-50">Output:</div>
+          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
         </div>
       {/if}
 
       {#if tool.error}
-        <div class="text-xs text-red-600">
+        <div class="text-xs text-red-600 dark:text-red-400">
           <div class="font-medium mb-0.5">Error:</div>
-          <pre class="bg-red-50 dark:bg-red-950/30 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
+          <pre class="bg-red-50/80 dark:bg-red-950/40 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
         </div>
       {/if}
     </div>

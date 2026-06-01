@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode } from "lucide-svelte";
+  import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
   import * as api from "../../api";
   import { sessionState, addUserMessage, getActiveSession } from "../../state.svelte";
   import { SLASH_COMMANDS } from "../../commands";
@@ -24,6 +24,9 @@
   let fileExpanded = $state<Set<string>>(new Set());
   let selectedFileIdx = $state(0);
   let filePickerRoot = $state("");
+
+  const activeSession = $derived(getActiveSession());
+  const isStreaming = $derived(activeSession?.streaming ?? false);
 
   // detect completion triggers
   function detectCompletion() {
@@ -154,6 +157,15 @@
     }
   }
 
+  async function handleCancel() {
+    if (!sessionState.activeSessionId) return;
+    try {
+      await api.cancelSession(sessionState.activeSessionId);
+    } catch (e: any) {
+      console.error("Failed to cancel:", e?.message ?? e);
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     // Command picker navigation
     if (showCommands) {
@@ -218,7 +230,11 @@
     // Normal input
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit();
+      if (isStreaming) {
+        handleCancel();
+      } else {
+        handleSubmit();
+      }
     }
   }
 
@@ -334,16 +350,29 @@
       onkeydown={handleKeydown}
       onfocus={detectCompletion}
       onblur={() => { /* dropdowns close via item clicks or Escape */ }}
-      placeholder="Ask anything... (Shift+Enter newline, /command, @file)"
+      placeholder={isStreaming ? "AI is responding..." : "Ask anything... (Shift+Enter newline, /command, @file)"}
       rows={1}
-      class="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={isStreaming}
+      class="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-h-[40px] max-h-[200px]"
     ></textarea>
-    <button
-      onclick={handleSubmit}
-      disabled={!content.trim() || !sessionState.activeSessionId}
-      class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
-    >
-      <Send size={16} />
-    </button>
+    {#if isStreaming}
+      <button
+        type="button"
+        onclick={handleCancel}
+        class="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground h-9 w-9 hover:bg-destructive/90 active:scale-95 transition-all shrink-0"
+        title="Cancel"
+      >
+        <Square class="w-4 h-4 fill-current" />
+      </button>
+    {:else}
+      <button
+        type="button"
+        onclick={handleSubmit}
+        disabled={!content.trim() || !sessionState.activeSessionId}
+        class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
+      >
+        <Send size={16} />
+      </button>
+    {/if}
   </div>
 </div>

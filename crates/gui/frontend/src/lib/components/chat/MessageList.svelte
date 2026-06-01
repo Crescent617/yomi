@@ -8,13 +8,14 @@
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let lastMessageCount = $state(0);
+  let lastSessionId = $state<string | undefined>(undefined);
   let isNearBottom = $state(true);
 
   let { onNearBottomChange }: { onNearBottomChange?: (near: boolean) => void } = $props();
 
   function checkNearBottom() {
     if (!scrollContainer) return true;
-    const threshold = 80; // px from bottom
+    const threshold = 20; // px from bottom
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
     return scrollHeight - scrollTop - clientHeight <= threshold;
   }
@@ -28,6 +29,14 @@
   // Auto-scroll to bottom only when user is already near bottom
   $effect(() => {
     const msgCount = activeSession?.messages?.length ?? 0;
+    const sessionId = activeSession?.id;
+
+    if (sessionId !== lastSessionId) {
+      lastSessionId = sessionId;
+      lastMessageCount = msgCount;
+      return;
+    }
+
     if (scrollContainer && msgCount > lastMessageCount) {
       if (isNearBottom) {
         requestAnimationFrame(() => {
@@ -45,7 +54,7 @@
 </script>
 
 {#if activeSession}
-  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4">
+  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4" style="scrollbar-width: thin;">
     {#each activeSession.messages as message, index (message.id)}
       {@const isLastMessage = index === activeSession.messages.length - 1}
       {@const isStreaming = activeSession.streaming && isLastMessage}

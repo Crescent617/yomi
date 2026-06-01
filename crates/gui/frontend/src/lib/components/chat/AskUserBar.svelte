@@ -1,0 +1,99 @@
+<script lang="ts">
+  import { Send } from "lucide-svelte";
+  import { getActiveSession, showNotification } from "../../state.svelte";
+  import * as api from "../../api";
+
+  const activeSession = $derived(getActiveSession());
+  const askUser = $derived(activeSession?.pendingAskUser);
+
+  // Map question header -> selected option labels
+  let selections = $state<Record<string, string[]>>({});
+
+  function toggleOption(header: string, label: string, multi: boolean) {
+    const current = selections[header] ?? [];
+    if (multi) {
+      if (current.includes(label)) {
+        selections[header] = current.filter((l) => l !== label);
+      } else {
+        selections[header] = [...current, label];
+      }
+    } else {
+      selections[header] = [label];
+    }
+  }
+
+  async function submit() {
+    if (!activeSession || !askUser) return;
+    const answers: [string, string][] = [];
+    for (const q of askUser.questions) {
+      const selected = selections[q.header] ?? [];
+      answers.push([q.header, selected.join(", ")]);
+    }
+    try {
+      await api.respondAskUser(activeSession.id, askUser.reqId, answers);
+      activeSession.pendingAskUser = null;
+      selections = {};
+    } catch (e: any) {
+      showNotification("Response failed: " + (e?.message ?? ""), "error", 3000);
+    }
+  }
+
+  async function dismiss() {
+    if (!activeSession || !askUser) return;
+    // Send empty response to unblock the agent
+    try {
+      await api.respondAskUser(activeSession.id, askUser.reqId, []);
+    } catch { /* ignore */ }
+    activeSession.pendingAskUser = null;
+    selections = {};
+  }
+</script>
+
+{#if askUser && askUser.questions.length > 0}
+  <div class="shrink-0 border-t border-border bg-blue-50/40 dark:bg-blue-950/20 px-4 py-3">
+    <div class="rounded-lg border border-blue-200 dark:border-blue-800 bg-background px-3 py-2.5 space-y-3">
+      {#each askUser.questions as question (question.header)}
+        <div>
+          <div class="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1.5">{question.question}</div>
+          <div class="flex flex-wrap gap-1.5">
+            {#each question.options as opt (opt.label)}
+              {@const selected = (selections[question.header] ?? []).includes(opt.label)}
+              <button
+                type="button"
+                onclick={() => toggleOption(question.header, opt.label, question.multiSelect)}
+                class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"
+                title={opt.description}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+          {#if question.options.some((o) => o.preview)}
+            {#each question.options.filter((o) => o.preview && (selections[question.header] ?? []).includes(o.label)) as opt (opt.label)}
+              <pre class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
+            {/each}
+          {/if}
+        </div>
+      {/each}
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onclick={dismiss}
+          class="px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors"
+        >
+          Skip
+        </button>
+        <button
+          type="button"
+          onclick={submit}
+          class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 active:scale-95 transition-colors flex items-center gap-1"
+        >
+          <Send class="w-3 h-3" />
+          Submit
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}

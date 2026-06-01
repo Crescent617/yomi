@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus, FolderOpen } from "lucide-svelte";
+  import { Plus, Folder, FolderOpen, MoreVertical, Pencil, Trash2, X } from "lucide-svelte";
   import * as api from "../../api";
   import {
     sessionState,
@@ -13,12 +13,11 @@
 
   let { collapsed = false }: { collapsed?: boolean } = $props();
 
-  // ===== project-based grouping (orphan sessions excluded) =====
+  // ===== project-based grouping =====
   const groups = $derived.by(() => {
     const map = new Map<string, { name: string; sessions: typeof sessionState.sessions }>();
     for (const s of sessionState.sessions) {
-      // Skip orphan sessions (no projectId)
-      if (!s.projectId) continue;
+      if (!s.projectId) continue; // skip orphan sessions
       const project = projectState.projects.find((p) => p.id === s.projectId);
       const key = s.projectId;
       const name = project?.name ?? formatPath(s.projectPath);
@@ -48,8 +47,7 @@
   // always include the active project
   const allExpanded = $derived.by(() => {
     const active = getSession(sessionState.activeSessionId ?? "");
-    const key = active?.projectId;
-    if (!key) return expanded;
+    const key = active?.projectId ?? "";
     return new Set([...expanded, key]);
   });
 
@@ -102,6 +100,8 @@
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
             activeTabId: "chat",
+            pendingPermissions: [],
+            pendingAskUser: null,
           });
         }
       }
@@ -116,6 +116,53 @@
       console.error("Failed to load sessions:", e?.message ?? e);
     } finally {
       loadingProjects.delete(projectId);
+    }
+  }
+
+  // ===== project menu =====
+  let showProjectMenu = $state<string | null>(null);
+  let renamingProjectId = $state<string | null>(null);
+  let renameValue = $state("");
+
+  function startRenameProject(projectId: string, currentName: string) {
+    renamingProjectId = projectId;
+    renameValue = currentName;
+    showProjectMenu = null;
+  }
+
+  async function confirmRenameProject(projectId: string) {
+    const name = renameValue.trim();
+    if (!name) {
+      renamingProjectId = null;
+      return;
+    }
+    try {
+      await api.renameProject(projectId, name);
+      const p = projectState.projects.find((x) => x.id === projectId);
+      if (p) p.name = name;
+      showNotification("Project renamed", "success", 2000);
+    } catch (e: any) {
+      console.error("Failed to rename project:", e?.message ?? e);
+      showNotification("Failed to rename project", "error", 3000);
+    } finally {
+      renamingProjectId = null;
+    }
+  }
+
+  async function deleteProject(projectId: string) {
+    showProjectMenu = null;
+    const hasSessions = sessionState.sessions.some((s) => s.projectId === projectId);
+    if (hasSessions) {
+      showNotification("Cannot delete project with sessions", "error", 3000);
+      return;
+    }
+    try {
+      await api.deleteProject(projectId);
+      projectState.projects = projectState.projects.filter((p) => p.id !== projectId);
+      showNotification("Project deleted", "success", 2000);
+    } catch (e: any) {
+      console.error("Failed to delete project:", e?.message ?? e);
+      showNotification("Failed to delete project", "error", 3000);
     }
   }
 
@@ -142,6 +189,21 @@
   }
 
   // ===== activate =====
+  async function deleteSession(sessionId: string) {
+    if (!confirm("Delete this session?")) return;
+    try {
+      await api.deleteSession(sessionId);
+      sessionState.sessions = sessionState.sessions.filter((s) => s.id !== sessionId);
+      if (sessionState.activeSessionId === sessionId) {
+        setActiveSession(null);
+      }
+      showNotification("Session deleted", "success", 2000);
+    } catch (e: any) {
+      console.error("Failed to delete session:", e?.message ?? e);
+      showNotification("Failed to delete session", "error", 3000);
+    }
+  }
+
   async function activateSession(id: string) {
     const prevId = sessionState.activeSessionId;
     try {
@@ -173,7 +235,7 @@
 
 <div class="flex flex-col h-full {collapsed ? 'items-center' : ''}">
   {#if !collapsed}
-    <!-- global new-session button -->
+    <!-- new session button -->
     <div class="shrink-0 p-2 border-b border-border/50">
       <button
         class="w-full flex items-center justify-center gap-1.5 rounded-lg border border-border
@@ -259,10 +321,55 @@
               {#if isExpanded}
                 <FolderOpen size={13} class="shrink-0 opacity-70" />
               {:else}
-                <FolderOpen size={13} class="shrink-0 opacity-70" />
+                <Folder size={13} class="shrink-0 opacity-70" />
               {/if}
-              <span class="truncate font-medium">{group.name}</span>
+              {#if renamingProjectId === key}
+                <input
+                  type="text"
+                  bind:value={renameValue}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') confirmRenameProject(key); if (e.key === 'Escape') renamingProjectId = null; }}
+                  onblur={() => confirmRenameProject(key)}
+                  class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  autofocus
+                />
+              {:else}
+                <span class="truncate font-medium">{group.name}</span>
+              {/if}
             </button>
+
+            {#if key !== ""}
+              <!-- more menu -->
+              <div class="relative">
+                <button
+                  class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
+                  onclick={(e: Event) => { e.stopPropagation(); showProjectMenu = showProjectMenu === key ? null : key; }}
+                  title="Project options"
+                >
+                  <MoreVertical size={12} />
+                </button>
+                {#if showProjectMenu === key}
+                  <div class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1">
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                      onclick={(e: Event) => { e.stopPropagation(); startRenameProject(key, group.name); }}
+                    >
+                      <Pencil size={12} />
+                      Rename
+                    </button>
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                      onclick={(e: Event) => { e.stopPropagation(); deleteProject(key); }}
+                    >
+                      <Trash2 size={12} />
+                      Delete
+                    </button>
+                  </div>
+                  <!-- click outside to close -->
+                  <div class="fixed inset-0 z-10" onclick={() => showProjectMenu = null}></div>
+                {/if}
+              </div>
+            {/if}
+
             <button
               class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
               onclick={() => quickCreateSession(key)}
@@ -275,30 +382,41 @@
           {#if isExpanded}
             <div class="ml-4 pl-2 border-l border-border/40 space-y-0.5 pb-1">
               {#each group.sessions as session (session.id)}
-                <button
-                  class="group flex items-center gap-2 rounded-lg px-3 py-2 text-left
-                         transition-colors border-l-4 {session.id === sessionState.activeSessionId
-                    ? 'bg-primary/10 border-primary'
-                    : 'hover:bg-secondary/50 border-transparent'}"
+                <div
+                  class="group w-full flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer
+                         transition-colors {session.id === sessionState.activeSessionId
+                    ? 'bg-primary/10 text-foreground'
+                    : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
                   onclick={() => activateSession(session.id)}
+                  role="button"
+                  tabindex="0"
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') activateSession(session.id); }}
                 >
                   <span class="flex-1 truncate text-sm font-medium">
                     {session.alias ?? formatShortId(session.id)}
                   </span>
-                  <div class="flex items-center gap-1.5 shrink-0">
+                  <div class="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     {#if session.streaming}
                       <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
                     {/if}
                     {#if session.unread > 0}
                       <span
                         class="min-w-[1.1rem] h-4 px-1 rounded-full bg-destructive
-                                 text-destructive-foreground text-[10px] font-bold flex items-center justify-center"
+                               text-destructive-foreground text-[10px] font-bold flex items-center justify-center"
                       >
                         {session.unread > 99 ? "99+" : session.unread}
                       </span>
                     {/if}
+                    <button
+                      type="button"
+                      class="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                      onclick={(e: Event) => { e.stopPropagation(); deleteSession(session.id); }}
+                      title="Delete session"
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
-                </button>
+                </div>
               {/each}
               {#if sessionCursors.get(key) !== null}
                 <button

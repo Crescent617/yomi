@@ -88,14 +88,47 @@ export async function listSessions(
   return {
     sessions: result.sessions.map((s: any) => ({
       id: s.id,
-      projectPath: s.working_dir ?? "",
+      projectPath: s.workingDir ?? "",
       createdAt: s.created_at,
       endedAt: s.updated_at,
       title: s.title,
-      projectId: s.project_id,
+      projectId: s.projectId,
     })),
     hasMore: result.has_more,
   };
+}
+
+export async function cancelSession(sessionId: string): Promise<void> {
+  return withTimeout(
+    invoke("cancel_session", { sessionId }),
+    DEFAULT_TIMEOUT,
+    "cancel_session",
+  );
+}
+
+export async function respondPermission(
+  sessionId: string,
+  reqId: string,
+  approved: boolean,
+  remember: boolean = false,
+): Promise<void> {
+  return withTimeout(
+    invoke("respond_permission", { sessionId, reqId, approved, remember }),
+    DEFAULT_TIMEOUT,
+    "respond_permission",
+  );
+}
+
+export async function respondAskUser(
+  sessionId: string,
+  reqId: string,
+  answers: [string, string][],
+): Promise<void> {
+  return withTimeout(
+    invoke("respond_ask_user", { sessionId, reqId, answers }),
+    DEFAULT_TIMEOUT,
+    "respond_ask_user",
+  );
 }
 
 export async function getCwd(): Promise<string> {
@@ -103,12 +136,12 @@ export async function getCwd(): Promise<string> {
 }
 
 export async function createSession(
-  projectPath: string,
+  workingDir: string,
   level: string = "safe",
   projectId?: string,
 ): Promise<string> {
   return withTimeout(
-    invoke("create_session", { projectPath, autoApproveLevel: level, projectId }),
+    invoke("create_session", { projectId, workingDir, autoApproveLevel: level }),
     DEFAULT_TIMEOUT,
     "create_session",
   );

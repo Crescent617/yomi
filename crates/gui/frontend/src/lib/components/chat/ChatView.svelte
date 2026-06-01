@@ -8,17 +8,28 @@
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import InfoBar from "./InfoBar.svelte";
+  import PermissionBar from "./PermissionBar.svelte";
+  import AskUserBar from "./AskUserBar.svelte";
   import { Plus, FolderOpen, Shield, AlertTriangle, Skull, ArrowDown } from "lucide-svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
 
   const activeSession = $derived(getActiveSession());
 
   const hasNonChatTabs = $derived(activeSession?.tabs.some(t => t.type !== "chat") ?? false);
 
-  let projectPath = $state("");
+  let selectedProjectId = $state<string | "new">("");
+  let newProjectPath = $state("");
+  let newProjectName = $state("");
   let permissionLevel = $state("safe");
   let creating = $state(false);
   let listRef: any = $state(null);
   let isNearBottom = $state(true);
+
+  const selectedProject = $derived(
+    selectedProjectId && selectedProjectId !== "new"
+      ? projectState.projects.find((p) => p.id === selectedProjectId)
+      : undefined
+  );
 
   function onNearBottomChange(near: boolean) {
     isNearBottom = near;
@@ -29,10 +40,10 @@
     isNearBottom = true;
   }
 
-  // Load default cwd on mount when no session active
+  // Pick the first project by default when projects load and nothing selected
   $effect(() => {
-    if (!sessionState.activeSessionId && projectPath === "") {
-      api.getCwd().then(p => { projectPath = p; }).catch(() => { projectPath = ""; });
+    if (!sessionState.activeSessionId && selectedProjectId === "" && projectState.projects.length > 0) {
+      selectedProjectId = projectState.projects[0].id;
     }
   });
 
@@ -50,13 +61,48 @@
   });
 
   async function handleCreate() {
-    if (!projectPath.trim() || creating) return;
-    creating = true;
+    if (creating) return;
+
+    let projectId: string | undefined;
+    let workingDir: string;
+
+    if (selectedProjectId === "new") {
+      const dir = newProjectPath.trim();
+      if (!dir) {
+        showNotification("Project path is required", "error", 3000);
+        return;
+      }
+      creating = true;
+      try {
+        const project = await api.createProject(dir, newProjectName.trim() || undefined);
+        projectId = project.id;
+        workingDir = project.dir;
+        projectState.projects.push({
+          id: project.id,
+          name: project.name,
+          dir: project.dir,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt,
+        });
+      } catch (e: any) {
+        console.error("Failed to create project:", e?.message ?? e);
+        showNotification("Failed to create project: " + (e?.message ?? ""), "error", 5000);
+        creating = false;
+        return;
+      }
+    } else {
+      const project = projectState.projects.find((p) => p.id === selectedProjectId);
+      if (!project) {
+        showNotification("Please select a project", "error", 3000);
+        return;
+      }
+      projectId = project.id;
+      workingDir = project.dir;
+      creating = true;
+    }
+
     try {
-      // Find or create the project for this directory
-      const project = await findOrCreateProject(projectPath.trim());
-      const projectId = project.id;
-      const id = await api.createSession(projectPath.trim(), permissionLevel, projectId);
+      const id = await api.createSession(workingDir, permissionLevel, projectId);
       // Refresh sessions for this project
       const result = await api.listSessions(projectId, undefined, 20);
       for (const s of result.sessions) {
@@ -72,6 +118,8 @@
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
             activeTabId: "chat",
+            pendingPermissions: [],
+            pendingAskUser: null,
           });
         }
       }
@@ -91,11 +139,18 @@
     }
   }
 
-  async function findOrCreateProject(dir: string): Promise<api.ProjectInfo> {
-    const projects = await api.listProjects();
-    const existing = projects.find(p => p.dir === dir);
-    if (existing) return existing;
-    return await api.createProject(dir);
+  async function browseProjectDir() {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+      if (selected) {
+        newProjectPath = selected as string;
+      }
+    } catch (e) {
+      console.error("Failed to open directory picker:", e);
+    }
   }
 
   function switchTab(id: string) {
@@ -181,26 +236,56 @@
     {#if !sessionState.activeSessionId}
       <!-- Centered create session screen -->
       <div class="flex items-center justify-center h-full">
-        <div class="w-full max-w-lg px-6">
+        <div class="w-full max-w-lg px-6" onkeydown={onKeydown} role="presentation">
           <div class="text-center mb-8">
             <h1 class="text-3xl font-bold mb-2">Yomi</h1>
             <p class="text-muted-foreground">Create a new session to start coding</p>
           </div>
 
           <div class="space-y-4">
-            <!-- Project path input -->
+            <!-- Project selector -->
             <div class="space-y-1.5">
-              <label class="text-sm font-medium">Project Path</label>
-              <div class="relative">
-                <FolderOpen class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input
-                  type="text"
-                  bind:value={projectPath}
-                  onkeydown={onKeydown}
-                  placeholder="Enter project path..."
-                  class="w-full pl-9 pr-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
-                />
-              </div>
+              <label class="text-sm font-medium">Project</label>
+              <select
+                bind:value={selectedProjectId}
+                class="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+              >
+                <option value="" disabled>Select a project...</option>
+                {#each projectState.projects as project (project.id)}
+                  <option value={project.id}>{project.name} — {project.dir}</option>
+                {/each}
+                <option value="new">+ New Project...</option>
+              </select>
+
+              {#if selectedProjectId === "new"}
+                <div class="space-y-1.5 pt-1">
+                  <div class="flex gap-1.5">
+                    <div class="relative flex-1">
+                      <FolderOpen class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <input
+                        type="text"
+                        bind:value={newProjectPath}
+                        placeholder="Project directory path..."
+                        class="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onclick={browseProjectDir}
+                      class="shrink-0 px-3 py-2 rounded-lg border border-border bg-background text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                      title="Browse directory"
+                    >
+                      Browse
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    bind:value={newProjectName}
+                    placeholder="Project name (optional)..."
+                    class="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
+                  />
+                </div>
+              {/if}
             </div>
 
             <!-- Permission level -->
@@ -226,7 +311,7 @@
             <button
               type="button"
               onclick={handleCreate}
-              disabled={creating || !projectPath.trim()}
+              disabled={creating || (!selectedProjectId || (selectedProjectId === "new" && !newProjectPath.trim()))}
               class="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-primary text-primary-foreground font-medium text-sm transition-all hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {#if creating}
@@ -250,12 +335,14 @@
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
           <InfoBar session={activeSession} />
+          <PermissionBar />
+          <AskUserBar />
           <ChatInput />
           {#if !isNearBottom}
             <button
               type="button"
               onclick={scrollToBottom}
-              class="absolute bottom-16 right-4 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+              class="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
             >
               <ArrowDown class="w-3 h-3" />
               Bottom
