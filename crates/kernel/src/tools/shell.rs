@@ -97,7 +97,7 @@ impl Tool for ShellTool {
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete.",
+                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete. Do NOT use the reminder tool to track this task — you will be notified automatically.",
                     "default": false
                 }
             },

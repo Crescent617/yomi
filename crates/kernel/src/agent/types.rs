@@ -17,6 +17,8 @@ pub struct AgentConfig {
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
+    /// Tool blocklist (regex patterns) for disabling tools
+    pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
     pub compactor: Compactor,
 }
@@ -157,6 +159,7 @@ impl Default for AgentConfig {
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
+            tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
         }
     }
@@ -299,6 +302,8 @@ pub struct AgentShared {
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
     /// Hook registry for lifecycle event handlers (wrapped for hot-reload)
     pub hook_registry: Option<Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>>,
+    /// Tool blocklist (regex patterns) inherited from config
+    pub tool_blocklist: Vec<String>,
 }
 
 impl AgentShared {
@@ -366,6 +371,7 @@ impl AgentShared {
             data_dir,
             message_interceptor: None,
             hook_registry: None,
+            tool_blocklist: Vec::new(),
         }
     }
 
@@ -402,6 +408,13 @@ impl AgentShared {
         registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>,
     ) -> Self {
         self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set the tool blocklist
+    #[must_use]
+    pub fn with_tool_blocklist(mut self, blocklist: Vec<String>) -> Self {
+        self.tool_blocklist = blocklist;
         self
     }
 }

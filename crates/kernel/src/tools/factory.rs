@@ -25,6 +25,7 @@ pub struct ToolRegistryConfig<'a> {
     pub enable_sub_agents: bool,
     pub enable_reminder: bool,
     pub ask_user_state: Option<crate::tools::AskUserState>,
+    pub tool_blocklist: Vec<String>,
 }
 
 impl<'a> ToolRegistryConfig<'a> {
@@ -47,6 +48,7 @@ impl<'a> ToolRegistryConfig<'a> {
             enable_sub_agents: true,
             enable_reminder: true,
             ask_user_state: None,
+            tool_blocklist: shared.tool_blocklist.clone(),
         }
     }
 
@@ -69,6 +71,7 @@ impl<'a> ToolRegistryConfig<'a> {
             enable_sub_agents: false,
             enable_reminder: false,
             ask_user_state: None,
+            tool_blocklist: shared.tool_blocklist.clone(),
         }
     }
 
@@ -174,6 +177,23 @@ impl ToolRegistryFactory {
                 config.event_tx.clone(),
                 ask_user_state,
             ));
+        }
+
+        // Apply tool blocklist (regex patterns) — remove matching tools from the registry
+        if !config.tool_blocklist.is_empty() {
+            if let Ok(set) = regex::RegexSet::new(&config.tool_blocklist) {
+                let to_remove: Vec<String> = registry
+                    .list()
+                    .into_iter()
+                    .filter(|name| set.is_match(name))
+                    .collect();
+                for name in &to_remove {
+                    registry.remove(name);
+                    tracing::info!("Tool '{}' blocked by blocklist pattern", name);
+                }
+            } else {
+                tracing::warn!("Invalid regex in tool_blocklist: {:?}", config.tool_blocklist);
+            }
         }
 
         registry

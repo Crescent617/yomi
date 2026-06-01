@@ -16,6 +16,7 @@
   let showCommands = $state(false);
   let commandFilter = $state("");
   let selectedCommandIdx = $state(0);
+  let commandListRef: HTMLDivElement | null = $state(null);
 
   // ── file picker ──
   let showFilePicker = $state(false);
@@ -24,6 +25,7 @@
   let fileExpanded = $state<Set<string>>(new Set());
   let selectedFileIdx = $state(0);
   let filePickerRoot = $state("");
+  let fileListRef: HTMLDivElement | null = $state(null);
 
   const activeSession = $derived(getActiveSession());
   const isStreaming = $derived(activeSession?.streaming ?? false);
@@ -267,6 +269,26 @@
     return File;
   }
 
+  $effect(() => {
+    if (showCommands && commandListRef) {
+      const buttons = commandListRef.querySelectorAll("button");
+      const selected = buttons[selectedCommandIdx];
+      if (selected) {
+        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }
+  });
+
+  $effect(() => {
+    if (showFilePicker && fileListRef) {
+      const buttons = fileListRef.querySelectorAll("button");
+      const selected = buttons[selectedFileIdx];
+      if (selected) {
+        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }
+  });
+
   function toggleDir(path: string) {
     const next = new Set(fileExpanded);
     if (next.has(path)) next.delete(path);
@@ -278,7 +300,7 @@
 <div class="border-t border-border p-3 relative">
   <!-- Command completion dropdown -->
   {#if showCommands && filteredCommands.length > 0}
-    <div class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
+    <div bind:this={commandListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
       {#each filteredCommands as [cmd, desc], i (cmd)}
         <button
           class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i === selectedCommandIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
@@ -294,7 +316,7 @@
 
   <!-- File picker dropdown -->
   {#if showFilePicker}
-    <div class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-56 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
+    <div bind:this={fileListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-56 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
       <div class="px-3 py-1.5 text-xs text-muted-foreground border-b border-border flex items-center gap-1.5">
         <FileText size={12} />
         <span class="truncate">{filePickerRoot}</span>

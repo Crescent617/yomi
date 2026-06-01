@@ -59,9 +59,12 @@ pub mod env_names {
     pub const COMPACTOR_RATIO: &str = env_name!("COMPACTOR_RATIO");
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
+    /// Tool blocklist (comma-separated regex patterns)
+    pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
 }
+
 
 /// Provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -362,6 +365,15 @@ impl Config {
         // Maximum checkpoints per session
         if let Some(max) = env_parse::<usize>(env_names::MAX_CHECKPOINTS) {
             self.max_checkpoints = max;
+        }
+
+        // Tool blocklist (comma-separated regex patterns)
+        if let Some(list) = env_var(env_names::TOOL_BLOCKLIST) {
+            self.agent.tool_blocklist = list
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
     }
 
