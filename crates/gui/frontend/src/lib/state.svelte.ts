@@ -79,6 +79,7 @@ export interface SessionState {
   pendingPermissions: PendingPermission[];
   pendingAskUser: PendingAskUser | null;
   queuedInput: string | null;
+  updatedAt: string;
 }
 
 export const appState = $state({
@@ -153,12 +154,15 @@ function upsertSession(session: SessionState) {
 export function addUserMessage(sessionId: string, text: string) {
   const session = getSession(sessionId);
   if (!session) return;
+  const now = new Date().toISOString();
   upsertSession({
     ...session,
     messages: [
       ...session.messages,
       { id: crypto.randomUUID(), role: "user", content: text },
     ],
+    updatedAt: now,
+    alias: session.alias ?? text.slice(0, 20),
   });
 }
 
@@ -468,6 +472,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
   } else if (event.Completed || event.Error) {
     if (session.streaming) {
       session.streaming = false;
+      session.updatedAt = new Date().toISOString();
       // Auto-send queued message when streaming ends
       if (session.queuedInput) {
         const text = session.queuedInput;

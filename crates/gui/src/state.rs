@@ -34,7 +34,7 @@ impl AppState {
         let coord = Arc::new(
             RemoteCoordinator::connect(&addr)
                 .await
-                .map_err(|e| GuiError::kernel(e))?,
+                .map_err(GuiError::kernel)?,
         );
         *guard = Some(Arc::clone(&coord));
         Ok(coord)

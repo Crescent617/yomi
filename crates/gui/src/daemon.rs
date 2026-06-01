@@ -190,6 +190,7 @@ pub async fn spawn_daemon() -> Result<()> {
 }
 
 /// Force-stop the daemon.
+#[allow(dead_code)]
 pub async fn stop_daemon() -> Result<()> {
     let pid_file = pid_file_path();
     {
@@ -212,6 +213,7 @@ pub async fn stop_daemon() -> Result<()> {
 }
 
 /// Gracefully shut down the daemon.
+#[allow(dead_code)]
 pub async fn graceful_shutdown() -> Result<()> {
     let pid_file = pid_file_path();
     if !pid_file.exists() {
@@ -247,6 +249,7 @@ pub async fn graceful_shutdown() -> Result<()> {
 }
 
 /// Check daemon status.
+#[allow(dead_code)]
 pub async fn daemon_status() -> Result<String> {
     let addr = socket_addr();
     let pid_file = pid_file_path();

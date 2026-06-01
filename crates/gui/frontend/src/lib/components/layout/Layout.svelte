@@ -4,6 +4,7 @@
   import { sessionState, projectState, sessionCursors, appState } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
   import ChatView from "../chat/ChatView.svelte";
+  import StatusBar from "./StatusBar.svelte";
 
   let isDesktop = $state(false);
 
@@ -55,6 +56,7 @@
             pendingPermissions: [],
             pendingAskUser: null,
             queuedInput: null,
+            updatedAt: s.endedAt ?? s.createdAt,
           });
         }
       }
@@ -70,23 +72,29 @@
   }
 </script>
 
-<div class="h-screen w-screen flex bg-background text-foreground overflow-hidden">
-  {#if isDesktop}
-    <aside
-      class="flex flex-col border-r border-border transition-all {appState.sidebarCollapsed
-        ? 'w-16'
-        : 'w-64'} h-full"
-    >
-      <div class="p-3 border-b border-border shrink-0">
-        <h1 class="font-bold text-lg truncate">Yomi</h1>
-      </div>
-      <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
-        <SessionBand collapsed={appState.sidebarCollapsed} />
-      </div>
-    </aside>
-  {/if}
+<div class="h-screen w-screen flex flex-col bg-background text-foreground overflow-hidden">
+  <!-- Main content area -->
+  <div class="flex-1 flex min-h-0 overflow-hidden">
+    {#if isDesktop}
+      <aside
+        class="flex flex-col border-r border-border transition-all {appState.sidebarCollapsed
+          ? 'w-16'
+          : 'w-64'} h-full"
+      >
+        <div class="p-3 border-b border-border shrink-0">
+          <h1 class="font-bold text-lg truncate">Yomi</h1>
+        </div>
+        <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <SessionBand collapsed={appState.sidebarCollapsed} />
+        </div>
+      </aside>
+    {/if}
 
-  <main class="flex-1 flex flex-col min-w-0">
-    <ChatView />
-  </main>
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <ChatView />
+    </main>
+  </div>
+
+  <!-- Status bar at bottom -->
+  <StatusBar />
 </div>

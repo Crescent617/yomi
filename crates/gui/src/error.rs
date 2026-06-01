@@ -8,6 +8,7 @@ pub struct GuiError {
 }
 
 impl GuiError {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn kernel(msg: impl ToString) -> Self {
         Self {
             code: "KERNEL_ERROR",
@@ -15,6 +16,7 @@ impl GuiError {
         }
     }
 
+    #[allow(dead_code)]
     pub fn not_connected() -> Self {
         Self {
             code: "NOT_CONNECTED",
@@ -22,6 +24,7 @@ impl GuiError {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn unknown(msg: impl ToString) -> Self {
         Self {
             code: "UNKNOWN",

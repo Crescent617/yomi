@@ -130,6 +130,7 @@
             pendingPermissions: [],
             pendingAskUser: null,
             queuedInput: null,
+            updatedAt: s.endedAt ?? s.createdAt,
           });
         }
       }

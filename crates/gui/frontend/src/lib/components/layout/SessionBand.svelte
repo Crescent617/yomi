@@ -28,8 +28,12 @@
         map.set(key, { name, sessions: [s] });
       }
     }
+    // Sort sessions within each group by updatedAt desc (most recent first)
+    for (const [, group] of map) {
+      group.sessions.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    }
     const entries = Array.from(map.entries());
-    // active project first, then alphabetical
+    // active project first, then by most-recent session updatedAt desc
     const active = getSession(sessionState.activeSessionId ?? "");
     const activeProjectId = active?.projectId ?? "";
     entries.sort((a, b) => {
@@ -37,18 +41,38 @@
       const bIsActive = b[0] === activeProjectId;
       if (aIsActive && !bIsActive) return -1;
       if (bIsActive && !aIsActive) return 1;
-      return a[1].name.localeCompare(b[1].name);
+      // Most recently updated project first
+      const aLatest = a[1].sessions[0]?.updatedAt ?? "";
+      const bLatest = b[1].sessions[0]?.updatedAt ?? "";
+      return bLatest.localeCompare(aLatest);
     });
     return entries;
   });
 
   // ===== expand/collapse =====
   let expanded = $state(new Set<string>());
-  // always include the active project
+  // always include the active project, and the most-recent project when no active session
   const allExpanded = $derived.by(() => {
     const active = getSession(sessionState.activeSessionId ?? "");
-    const key = active?.projectId ?? "";
-    return new Set([...expanded, key]);
+    const activeKey = active?.projectId ?? "";
+    const next = new Set(expanded);
+    if (activeKey) {
+      next.add(activeKey);
+    } else {
+      // No active session: auto-expand the project with the most recent session
+      let latestProjectId = "";
+      let latestTime = "";
+      for (const s of sessionState.sessions) {
+        if (!s.projectId) continue;
+        const t = s.updatedAt ?? "";
+        if (t > latestTime) {
+          latestTime = t;
+          latestProjectId = s.projectId;
+        }
+      }
+      if (latestProjectId) next.add(latestProjectId);
+    }
+    return next;
   });
 
   function toggleGroup(key: string) {
@@ -102,6 +126,8 @@
             activeTabId: "chat",
             pendingPermissions: [],
             pendingAskUser: null,
+            queuedInput: null,
+            updatedAt: s.endedAt ?? s.createdAt,
           });
         }
       }
