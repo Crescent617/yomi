@@ -8,6 +8,8 @@
 
   // Map question header -> selected option labels
   let selections = $state<Record<string, string[]>>({});
+  // Map question header -> custom text input
+  let customInputs = $state<Record<string, string>>({});
 
   function toggleOption(header: string, label: string, multi: boolean) {
     const current = selections[header] ?? [];
@@ -27,12 +29,18 @@
     const answers: [string, string][] = [];
     for (const q of askUser.questions) {
       const selected = selections[q.header] ?? [];
-      answers.push([q.header, selected.join(", ")]);
+      const custom = (customInputs[q.header] ?? "").trim();
+      let answer = selected.join(", ");
+      if (custom) {
+        answer = answer ? answer + "\n" + custom : custom;
+      }
+      answers.push([q.header, answer || "(skipped)"]);
     }
     try {
       await api.respondAskUser(activeSession.id, askUser.reqId, answers);
       activeSession.pendingAskUser = null;
       selections = {};
+      customInputs = {};
     } catch (e: any) {
       showNotification("Response failed: " + (e?.message ?? ""), "error", 3000);
     }
@@ -46,6 +54,7 @@
     } catch { /* ignore */ }
     activeSession.pendingAskUser = null;
     selections = {};
+    customInputs = {};
   }
 </script>
 
@@ -55,26 +64,35 @@
       {#each askUser.questions as question (question.header)}
         <div>
           <div class="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1.5">{question.question}</div>
-          <div class="flex flex-wrap gap-1.5">
-            {#each question.options as opt (opt.label)}
-              {@const selected = (selections[question.header] ?? []).includes(opt.label)}
-              <button
-                type="button"
-                onclick={() => toggleOption(question.header, opt.label, question.multiSelect)}
-                class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"
-                title={opt.description}
-              >
-                {opt.label}
-              </button>
-            {/each}
-          </div>
-          {#if question.options.some((o) => o.preview)}
-            {#each question.options.filter((o) => o.preview && (selections[question.header] ?? []).includes(o.label)) as opt (opt.label)}
-              <pre class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
-            {/each}
+          {#if question.options.length > 0}
+            <div class="flex flex-wrap gap-1.5 mb-2">
+              {#each question.options as opt (opt.label)}
+                {@const selected = (selections[question.header] ?? []).includes(opt.label)}
+                <button
+                  type="button"
+                  onclick={() => toggleOption(question.header, opt.label, question.multiSelect)}
+                  class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"
+                  title={opt.description}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+            {#if question.options.some((o) => o.preview)}
+              {#each question.options.filter((o) => o.preview && (selections[question.header] ?? []).includes(o.label)) as opt (opt.label)}
+                <pre class="mb-2 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
+              {/each}
+            {/if}
           {/if}
+          <!-- Custom text input -->
+          <textarea
+            bind:value={customInputs[question.header]}
+            placeholder="Type your response here..."
+            rows={2}
+            class="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+          ></textarea>
         </div>
       {/each}
       <div class="flex items-center justify-end gap-2 pt-1">

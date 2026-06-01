@@ -7,8 +7,6 @@
   const activeSession = $derived(getActiveSession());
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
-  let lastMessageCount = $state(0);
-  let lastSessionId = $state<string | undefined>(undefined);
   let isNearBottom = $state(true);
 
   let { onNearBottomChange }: { onNearBottomChange?: (near: boolean) => void } = $props();
@@ -26,25 +24,33 @@
     isNearBottom = true;
   }
 
-  // Auto-scroll to bottom only when user is already near bottom
-  $effect(() => {
-    const msgCount = activeSession?.messages?.length ?? 0;
-    const sessionId = activeSession?.id;
+  // Track last message fingerprint for detecting changes during streaming
+  let lastFingerprint = $state("");
 
-    if (sessionId !== lastSessionId) {
-      lastSessionId = sessionId;
-      lastMessageCount = msgCount;
-      return;
-    }
-
-    if (scrollContainer && msgCount > lastMessageCount) {
-      if (isNearBottom) {
-        requestAnimationFrame(() => {
-          scrollContainer!.scrollTop = scrollContainer!.scrollHeight;
-        });
+  function getFingerprint() {
+    if (!activeSession?.messages?.length) return "";
+    const last = activeSession.messages[activeSession.messages.length - 1];
+    const parts: string[] = [last.id, last.role, last.content.length.toString()];
+    if (last.thinking) parts.push(last.thinking.content.length.toString());
+    if (last.tools) {
+      for (const t of last.tools) {
+        parts.push(t.id, t.status, (t.output ?? "").length.toString());
       }
     }
-    lastMessageCount = msgCount;
+    return parts.join("|");
+  }
+
+  // Auto-scroll to bottom only when user is already near bottom
+  $effect(() => {
+    const fp = getFingerprint();
+    if (fp === lastFingerprint) return;
+    lastFingerprint = fp;
+
+    if (scrollContainer && isNearBottom) {
+      requestAnimationFrame(() => {
+        scrollContainer!.scrollTop = scrollContainer!.scrollHeight;
+      });
+    }
   });
 
   function onScroll() {
