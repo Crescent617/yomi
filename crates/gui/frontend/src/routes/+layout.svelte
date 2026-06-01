@@ -6,6 +6,11 @@
   import { applyTheme, settings, startThemeListener } from "../lib/settings.svelte";
   import "../app.css";
 
+  // Client-side only — avoid SSR crash
+  if (typeof document !== "undefined") {
+    applyTheme(settings.theme);
+  }
+
   onMount(() => {
     applyTheme(settings.theme);
     startThemeListener();

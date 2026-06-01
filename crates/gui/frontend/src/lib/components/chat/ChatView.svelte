@@ -10,7 +10,8 @@
   import InfoBar from "./InfoBar.svelte";
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
-  import { Plus, FolderOpen, Shield, AlertTriangle, Skull, ArrowDown } from "lucide-svelte";
+  import QueuedInputBar from "./QueuedInputBar.svelte";
+  import { Plus, FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
 
   const activeSession = $derived(getActiveSession());
@@ -24,6 +25,9 @@
   let creating = $state(false);
   let listRef: any = $state(null);
   let isNearBottom = $state(true);
+  let chatInputRef: any = $state(null);
+  let projectDropdownOpen = $state(false);
+  let projectDropdownRef = $state<HTMLDivElement | null>(null);
 
   const selectedProject = $derived(
     selectedProjectId && selectedProjectId !== "new"
@@ -120,6 +124,7 @@
             activeTabId: "chat",
             pendingPermissions: [],
             pendingAskUser: null,
+            queuedInput: null,
           });
         }
       }
@@ -199,6 +204,19 @@
     }
   }
 
+  function closeProjectDropdown(e: MouseEvent) {
+    if (projectDropdownRef && !projectDropdownRef.contains(e.target as Node)) {
+      projectDropdownOpen = false;
+    }
+  }
+
+  $effect(() => {
+    if (projectDropdownOpen) {
+      window.addEventListener("click", closeProjectDropdown);
+      return () => window.removeEventListener("click", closeProjectDropdown);
+    }
+  });
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       handleCreate();
@@ -207,17 +225,15 @@
 </script>
 
 <div class="flex flex-col h-full">
+  {#if activeSession}
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
     <div class="flex items-center gap-2">
-      {#if activeSession}
-        <span class="font-medium truncate">{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
-        <span class="text-xs text-muted-foreground">{activeSession.projectPath}</span>
-      {:else}
-        <span class="text-muted-foreground">No active session</span>
-      {/if}
+      <span class="font-medium truncate">{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
+      <span class="text-xs text-muted-foreground">{activeSession.projectPath}</span>
     </div>
   </div>
+  {/if}
 
   <!-- InfoBar removed from here — moved into chat area above ChatInput -->
 
@@ -245,17 +261,49 @@
           <div class="space-y-4">
             <!-- Project selector -->
             <div class="space-y-1.5">
-              <label class="text-sm font-medium">Project</label>
-              <select
-                bind:value={selectedProjectId}
-                class="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
-              >
-                <option value="" disabled>Select a project...</option>
-                {#each projectState.projects as project (project.id)}
-                  <option value={project.id}>{project.name} — {project.dir}</option>
-                {/each}
-                <option value="new">+ New Project...</option>
-              </select>
+              <div class="text-sm font-medium">Project</div>
+              <div class="relative" bind:this={projectDropdownRef}>
+                <button
+                  type="button"
+                  onclick={() => projectDropdownOpen = !projectDropdownOpen}
+                  class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring hover:bg-secondary/50 transition-colors"
+                >
+                  <span class={selectedProjectId === "" ? "text-muted-foreground" : ""}>
+                    {#if selectedProjectId === ""}
+                      Select a project...
+                    {:else if selectedProjectId === "new"}
+                      + New Project...
+                    {:else}
+                      {@const project = projectState.projects.find(p => p.id === selectedProjectId)}
+                      {project?.name ?? "Unknown"} — {project?.dir ?? ""}
+                    {/if}
+                  </span>
+                  <ChevronDown class="w-4 h-4 text-muted-foreground shrink-0 transition-transform {projectDropdownOpen ? 'rotate-180' : ''}" />
+                </button>
+
+                {#if projectDropdownOpen}
+                  <div class="absolute z-50 w-full mt-1 rounded-lg border border-border bg-popover shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+                    {#each projectState.projects as project (project.id)}
+                      <button
+                        type="button"
+                        onclick={() => { selectedProjectId = project.id; projectDropdownOpen = false; }}
+                        class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors {selectedProjectId === project.id ? 'bg-accent/50' : ''}"
+                      >
+                        <div class="font-medium">{project.name}</div>
+                        <div class="text-xs text-muted-foreground truncate">{project.dir}</div>
+                      </button>
+                    {/each}
+                    <div class="border-t border-border"></div>
+                    <button
+                      type="button"
+                      onclick={() => { selectedProjectId = "new"; projectDropdownOpen = false; }}
+                      class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors text-primary font-medium {selectedProjectId === 'new' ? 'bg-accent/50' : ''}"
+                    >
+                      + New Project...
+                    </button>
+                  </div>
+                {/if}
+              </div>
 
               {#if selectedProjectId === "new"}
                 <div class="space-y-1.5 pt-1">
@@ -290,7 +338,7 @@
 
             <!-- Permission level -->
             <div class="space-y-1.5">
-              <label class="text-sm font-medium">Permission Level</label>
+              <div class="text-sm font-medium">Permission Level</div>
               <div class="grid grid-cols-3 gap-2">
                 {#each ["safe", "caution", "dangerous"] as level (level)}
                   {@const Icon = levelIcon(level)}
@@ -334,10 +382,11 @@
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
+          <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} />
           <InfoBar session={activeSession} />
           <PermissionBar />
           <AskUserBar />
-          <ChatInput />
+          <ChatInput bind:this={chatInputRef} />
           {#if !isNearBottom}
             <button
               type="button"

@@ -54,6 +54,7 @@
             activeTabId: "chat",
             pendingPermissions: [],
             pendingAskUser: null,
+            queuedInput: null,
           });
         }
       }

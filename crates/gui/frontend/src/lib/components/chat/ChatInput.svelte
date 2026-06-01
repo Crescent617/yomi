@@ -123,6 +123,19 @@
   });
 
   // ── actions ──
+  export function setContent(text: string) {
+    content = text;
+    requestAnimationFrame(autoResize);
+  }
+
+  function queueInput() {
+    const session = activeSession;
+    if (!session || !content.trim()) return;
+    session.queuedInput = content.trim();
+    content = "";
+    autoResize();
+  }
+
   function acceptCommand(cmd: string) {
     content = cmd + " ";
     showCommands = false;
@@ -231,7 +244,7 @@
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (isStreaming) {
-        handleCancel();
+        queueInput();
       } else {
         handleSubmit();
       }
@@ -350,10 +363,9 @@
       onkeydown={handleKeydown}
       onfocus={detectCompletion}
       onblur={() => { /* dropdowns close via item clicks or Escape */ }}
-      placeholder={isStreaming ? "AI is responding..." : "Ask anything... (Shift+Enter newline, /command, @file)"}
+      placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file)"}
       rows={1}
-      disabled={isStreaming}
-      class="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-h-[40px] max-h-[200px]"
+      class="flex-1 resize-none rounded-lg bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[40px] max-h-[200px]"
     ></textarea>
     {#if isStreaming}
       <button

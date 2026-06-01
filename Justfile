@@ -40,6 +40,7 @@ info *ARGS:
 
 # Start GUI dev mode (Tauri + Svelte 5 single process)
 gui-dev:
+    cd crates/gui/frontend && npm install
     cd crates/gui && npx tauri dev
 
 build-release:

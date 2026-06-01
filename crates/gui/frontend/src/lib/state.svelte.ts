@@ -1,8 +1,10 @@
+import * as api from "./api";
+
 export interface Tab {
   id: string;
   type: "chat" | "preview" | "edit";
   label: string;
-  entry?: { name: string; path: string; isDirectory: boolean };
+  entry?: { name: string; path: string; isDirectory: boolean; isFile: boolean };
   pinned?: boolean;
 }
 
@@ -76,6 +78,7 @@ export interface SessionState {
   activeTabId: string;
   pendingPermissions: PendingPermission[];
   pendingAskUser: PendingAskUser | null;
+  queuedInput: string | null;
 }
 
 export const appState = $state({
@@ -465,6 +468,18 @@ function handleModelEvent(session: SessionState, event: any): boolean {
   } else if (event.Completed || event.Error) {
     if (session.streaming) {
       session.streaming = false;
+      // Auto-send queued message when streaming ends
+      if (session.queuedInput) {
+        const text = session.queuedInput;
+        session.queuedInput = null;
+        session.messages = [
+          ...session.messages,
+          { id: crypto.randomUUID(), role: "user", content: text, thinking: null, tools: [] },
+        ];
+        api.sendMessage(session.id, text).catch((e) => {
+          console.error("Failed to send queued message:", e);
+        });
+      }
       return true;
     }
   }

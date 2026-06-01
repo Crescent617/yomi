@@ -15,6 +15,7 @@ const defaults: AppSettings = {
 };
 
 function load(): AppSettings {
+  if (typeof window === "undefined") return { ...defaults };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -28,6 +29,7 @@ function load(): AppSettings {
 }
 
 function save(settings: AppSettings) {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
   } catch {
@@ -41,6 +43,7 @@ export const settings = $state<AppSettings>(load());
 export { save as persistSettings, defaults as defaultSettings };
 
 export function applyTheme(theme: AppSettings["theme"]) {
+  if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (theme === "dark") {
     root.classList.add("dark");
@@ -59,7 +62,7 @@ let mediaQuery: MediaQueryList | null = null;
 let mediaListener: ((e: MediaQueryListEvent) => void) | null = null;
 
 export function startThemeListener() {
-  if (mediaQuery) return; // already started
+  if (typeof window === "undefined" || mediaQuery) return;
   mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
   mediaListener = () => {
     if (settings.theme === "system") {
