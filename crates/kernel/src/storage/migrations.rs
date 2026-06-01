@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -60,6 +60,22 @@ const MIGRATIONS: &[Migration] = &[
             );",
             r"CREATE INDEX idx_token_session ON token_usage(session_id);",
             r"CREATE INDEX idx_token_type ON token_usage(session_id, usage_type);",
+        ],
+    },
+    Migration {
+        version: 4,
+        name: "add_projects",
+        sqls: &[
+            r"CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dir TEXT NOT NULL UNIQUE,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
+            r"CREATE UNIQUE INDEX idx_projects_dir ON projects(dir);",
+            r"ALTER TABLE sessions ADD COLUMN project_id TEXT;",
+            r"CREATE INDEX idx_sessions_project_id ON sessions(project_id);",
         ],
     },
 ];

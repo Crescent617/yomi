@@ -22,7 +22,8 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub agent: AgentConfig,
-    pub project_path: std::path::PathBuf,
+    pub project: Option<crate::types::Project>,
+    pub working_dir: Option<std::path::PathBuf>,
     pub auto_approve_level: Level,
     pub data_dir: std::path::PathBuf,
 }
@@ -118,9 +119,13 @@ impl Session {
             .with_skills(config.agent.skills.clone())
             .with_history(history)
             .with_max_iterations(config.agent.max_iterations)
-            .with_working_dir(config.project_path.clone())
             .with_subagent(config.agent.enable_subagent)
             .with_file_state_store(Arc::clone(file_state_store));
+
+        // Only set working_dir if resolved
+        if let Some(cwd) = resolve_cwd(config) {
+            spawn_args = spawn_args.with_working_dir(cwd);
+        }
 
         let goal_ctx = goal_state.map(|state| {
             crate::goal::GoalContext::new(state, Some(Arc::clone(goal_store)), id.0.clone())
@@ -329,4 +334,12 @@ impl Session {
         tracing::info!("Session {} goal mode stopped", self.id.0);
         Ok(())
     }
+}
+
+/// Resolve working directory from `SessionConfig`
+fn resolve_cwd(config: &SessionConfig) -> Option<std::path::PathBuf> {
+    config
+        .working_dir
+        .clone()
+        .or_else(|| config.project.as_ref().map(|p| p.dir.clone()))
 }

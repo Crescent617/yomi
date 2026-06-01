@@ -1,7 +1,6 @@
 //! Daemon lifecycle management for yomi.
 
 use anyhow::{Context, Result};
-use kernel::transport::SocketAddr;
 pub use kernel::transport::{socket_addr, pid_file_path};
 use tokio::time::{sleep, Duration};
 

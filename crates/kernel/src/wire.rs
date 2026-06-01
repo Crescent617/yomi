@@ -1,10 +1,11 @@
 use crate::event::{ControlCommand, Event};
 use crate::permissions::Level;
 use crate::types::ContentBlock;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 2;
+pub const WIRE_PROTOCOL_VERSION: u32 = 3;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,8 +14,27 @@ pub enum RequestMethod {
     /// Handshake: client checks daemon wire protocol version.
     Hello,
 
+    // ── Project ──────────────────────────────────────────────────────────
+    ListProjects,
+    CreateProject {
+        dir: String,
+        name: Option<String>,
+    },
+    GetProject {
+        project_id: String,
+    },
+    RenameProject {
+        project_id: String,
+        name: String,
+    },
+    DeleteProject {
+        project_id: String,
+    },
+
+    // ── Session ──────────────────────────────────────────────────────────
     CreateSession {
-        project_path: String,
+        project_id: Option<String>,
+        working_dir: Option<String>,
         auto_approve_level: Level,
     },
     RestoreSession {
@@ -40,7 +60,11 @@ pub enum RequestMethod {
     Unsubscribe {
         session_id: String,
     },
-    ListSessions(crate::storage::session::ListArgs),
+    ListSessions {
+        project_id: Option<String>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    },
     GetSessionMessages {
         session_id: String,
     },

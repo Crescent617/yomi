@@ -24,6 +24,11 @@ pub fn run() {
         })
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::project::list_projects,
+            commands::project::create_project,
+            commands::project::get_project,
+            commands::project::rename_project,
+            commands::project::delete_project,
             commands::session::list_sessions,
             commands::session::create_session,
             commands::session::restore_session,

@@ -69,7 +69,7 @@ impl AgentSpawnArgs {
             parent_session_id: None,
             max_iterations: 100,
             enable_sub_agents: true,
-            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            working_dir: std::path::PathBuf::new(),
             cancel_token: None,
             file_state_store: None,
             goal_ctx: None,

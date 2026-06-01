@@ -1,9 +1,10 @@
 use crate::agent::AgentConfig;
+use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::config::Config;
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
-use crate::types::{KernelError, Result, SessionError, SessionId};
+use crate::types::{KernelError, ProjectId, Result, SessionError, SessionId};
 use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -292,16 +293,53 @@ impl KernelServer {
         method: RequestMethod,
     ) -> ResponseBody {
         match method {
-            RequestMethod::CreateSession {
-                project_path,
-                auto_approve_level,
-            } => rpc_body(
-                "create_session_failed",
-                self.coordinator
-                    .create_session(project_path.into(), auto_approve_level)
-                    .await
-                    .map(|sid| sid.0),
+            // ── Project ──────────────────────────────────────────────────
+            RequestMethod::ListProjects => rpc_body(
+                "list_projects_failed",
+                self.coordinator.list_projects().await,
             ),
+            RequestMethod::CreateProject { dir, name } => rpc_body(
+                "create_project_failed",
+                self.coordinator.create_project(dir.into(), name).await,
+            ),
+            RequestMethod::GetProject { project_id } => rpc_body(
+                "get_project_failed",
+                self.coordinator.get_project(&ProjectId(project_id)).await,
+            ),
+            RequestMethod::RenameProject { project_id, name } => rpc_body(
+                "rename_project_failed",
+                self.coordinator
+                    .rename_project(&ProjectId(project_id), name)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::DeleteProject { project_id } => rpc_body(
+                "delete_project_failed",
+                self.coordinator
+                    .delete_project(&ProjectId(project_id))
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+
+            // ── Session ──────────────────────────────────────────────────
+            RequestMethod::CreateSession {
+                project_id,
+                working_dir,
+                auto_approve_level,
+            } => {
+                let input = CreateSessionInput {
+                    project_id: project_id.map(ProjectId),
+                    working_dir: working_dir.map(std::path::PathBuf::from),
+                    auto_approve_level,
+                };
+                rpc_body(
+                    "create_session_failed",
+                    self.coordinator
+                        .create_session(input)
+                        .await
+                        .map(|sid| sid.0),
+                )
+            }
             RequestMethod::RestoreSession {
                 session_id,
                 auto_approve_level,
@@ -344,7 +382,10 @@ impl KernelServer {
                         .map(|()| serde_json::Value::Null),
                 )
             }
-            RequestMethod::Subscribe { session_id, auto_approve_level } => {
+            RequestMethod::Subscribe {
+                session_id,
+                auto_approve_level,
+            } => {
                 let sid = SessionId(session_id.clone());
                 let level = auto_approve_level;
 
@@ -450,10 +491,18 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
-            RequestMethod::ListSessions(args) => rpc_body(
-                "list_sessions_failed",
-                self.coordinator.list_sessions(args).await,
-            ),
+            RequestMethod::ListSessions {
+                project_id,
+                before,
+                limit,
+            } => {
+                let pid = project_id.as_ref().map(|p| ProjectId(p.clone()));
+                let result = self
+                    .coordinator
+                    .list_sessions(pid.as_ref(), before, limit)
+                    .await;
+                rpc_body("list_sessions_failed", result.map(|(s, _)| s))
+            }
             RequestMethod::GetCheckpoints { session_id } => rpc_body(
                 "get_checkpoints_failed",
                 self.coordinator

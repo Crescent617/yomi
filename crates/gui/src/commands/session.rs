@@ -14,41 +14,78 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     pub title: Option<String>,
     pub message_count: i64,
-    #[serde(rename = "projectPath")]
-    pub project_path: Option<String>,
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
+    #[serde(rename = "workingDir")]
+    pub working_dir: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct PaginatedSessions {
+    pub sessions: Vec<SessionInfo>,
+    pub has_more: bool,
 }
 
 #[tauri::command]
-pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, GuiError> {
+pub async fn list_sessions(
+    state: State<'_, AppState>,
+    project_id: Option<String>,
+    before: Option<String>,
+    limit: Option<usize>,
+) -> Result<PaginatedSessions, GuiError> {
     let coord = state.get_or_connect().await?;
-    let sessions = coord
-        .list_sessions(Default::default())
+
+    let pid = project_id.map(kernel::types::ProjectId);
+    let before_dt = match before {
+        Some(s) => Some(
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .map_err(|e| GuiError::unknown(format!("Invalid before date: {e}")))?
+                .with_timezone(&chrono::Utc),
+        ),
+        None => None,
+    };
+    let limit = limit.unwrap_or(50);
+
+    let result = coord
+        .list_sessions(pid.as_ref(), before_dt, limit)
         .await
         .map_err(GuiError::kernel)?;
-    Ok(sessions
-        .into_iter()
-        .map(|s| SessionInfo {
-            id: s.id.0,
-            created_at: s.created_at.to_rfc3339(),
-            updated_at: s.updated_at.to_rfc3339(),
-            parent_id: s.parent_id.map(|p| p.0),
-            title: s.title,
-            message_count: s.message_count,
-            project_path: s.working_dir,
-        })
-        .collect())
+
+    Ok(PaginatedSessions {
+        sessions: result
+            .sessions
+            .into_iter()
+            .map(|s| SessionInfo {
+                id: s.id.0,
+                created_at: s.created_at.to_rfc3339(),
+                updated_at: s.updated_at.to_rfc3339(),
+                parent_id: s.parent_id.map(|p| p.0),
+                title: s.title,
+                message_count: s.message_count,
+                project_id: s.project_id.map(|p| p.0),
+                working_dir: s.working_dir,
+            })
+            .collect(),
+        has_more: result.has_more,
+    })
 }
 
 #[tauri::command]
 pub async fn create_session(
     state: State<'_, AppState>,
-    project_path: String,
+    project_id: Option<String>,
+    working_dir: Option<String>,
     auto_approve_level: String,
 ) -> Result<String, GuiError> {
     let coord = state.get_or_connect().await?;
     let level = parse_level(&auto_approve_level)?;
+    let input = kernel::CreateSessionInput {
+        project_id: project_id.map(kernel::types::ProjectId),
+        working_dir: working_dir.map(std::path::PathBuf::from),
+        auto_approve_level: level,
+    };
     let session_id = coord
-        .create_session(project_path.into(), level)
+        .create_session(input)
         .await
         .map_err(GuiError::kernel)?;
     Ok(session_id.0)

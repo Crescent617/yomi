@@ -463,17 +463,26 @@ impl Model {
                 Msg::CommandSessions => {
                     // Load sessions for current working dir and show picker
                     let working_dir = self.working_dir.to_string_lossy().to_string();
-                    let args = kernel::storage::session::ListArgs {
-                        working_dir: Some(working_dir),
-                        limit: Some(50),
-                        order_asc: false, // updated_at 降序，最新的在最上面
-                        ..Default::default()
-                    };
-                    let sessions = self
+                    let result = self
                         .coordinator
-                        .list_sessions(args)
-                        .await
-                        .unwrap_or_default();
+                        .list_sessions(None, None, 200)
+                        .await;
+                    let sessions: Vec<_> = match result {
+                        Ok(paginated) => paginated
+                            .sessions
+                            .into_iter()
+                            .filter(|s| {
+                                s.working_dir
+                                    .as_ref()
+                                    .is_some_and(|wd| wd == &working_dir)
+                            })
+                            .take(50)
+                            .collect(),
+                        Err(e) => {
+                            tracing::warn!("Failed to list sessions: {e}");
+                            Vec::new()
+                        }
+                    };
 
                     let items: Vec<PickerItem> = sessions
                         .into_iter()

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessionState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
+  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
   import RightPanel from "../layout/RightPanel.svelte";
@@ -36,18 +36,35 @@
     }
   });
 
+  // Refresh project list on mount
+  $effect(() => {
+    api.listProjects().then(list => {
+      projectState.projects = list.map(p => ({
+        id: p.id,
+        name: p.name,
+        dir: p.dir,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+    }).catch(() => {});
+  });
+
   async function handleCreate() {
     if (!projectPath.trim() || creating) return;
     creating = true;
     try {
-      const id = await api.createSession(projectPath.trim(), permissionLevel);
-      // Load sessions to refresh list
-      const list = await api.listSessions();
-      for (const s of list) {
+      // Find or create the project for this directory
+      const project = await findOrCreateProject(projectPath.trim());
+      const projectId = project.id;
+      const id = await api.createSession(projectPath.trim(), permissionLevel, projectId);
+      // Refresh sessions for this project
+      const result = await api.listSessions(projectId, undefined, 20);
+      for (const s of result.sessions) {
         if (!sessionState.sessions.find(sess => sess.id === s.id)) {
           sessionState.sessions.push({
             id: s.id,
             projectPath: s.projectPath ?? "",
+            projectId: s.projectId,
             alias: s.title,
             messages: [],
             streaming: false,
@@ -61,10 +78,10 @@
       // Activate new session
       setActiveSession(id);
       await api.subscribe(id);
-      const raw = await api.getMessages(id);
+      const msgs = await api.getMessages(id);
       const session = sessionState.sessions.find(s => s.id === id);
       if (session) {
-        loadSessionMessages(id, raw);
+        loadSessionMessages(id, msgs);
       }
     } catch (e: any) {
       console.error("Failed to create session:", e?.message ?? e);
@@ -72,6 +89,13 @@
     } finally {
       creating = false;
     }
+  }
+
+  async function findOrCreateProject(dir: string): Promise<api.ProjectInfo> {
+    const projects = await api.listProjects();
+    const existing = projects.find(p => p.dir === dir);
+    if (existing) return existing;
+    return await api.createProject(dir);
   }
 
   function switchTab(id: string) {

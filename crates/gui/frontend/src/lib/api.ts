@@ -13,15 +13,89 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   return result;
 }
 
+// ── Project API ──────────────────────────────────────────────────────────
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  dir: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listProjects(): Promise<ProjectInfo[]> {
+  return withTimeout(invoke("list_projects"), DEFAULT_TIMEOUT, "list_projects");
+}
+
+export async function createProject(dir: string, name?: string): Promise<ProjectInfo> {
+  return withTimeout(
+    invoke("create_project", { dir, name }),
+    DEFAULT_TIMEOUT,
+    "create_project"
+  );
+}
+
+export async function getProject(projectId: string): Promise<ProjectInfo | null> {
+  return withTimeout(
+    invoke("get_project", { projectId }),
+    DEFAULT_TIMEOUT,
+    "get_project"
+  );
+}
+
+export async function renameProject(projectId: string, name: string): Promise<void> {
+  return withTimeout(
+    invoke("rename_project", { projectId, name }),
+    DEFAULT_TIMEOUT,
+    "rename_project"
+  );
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  return withTimeout(
+    invoke("delete_project", { projectId }),
+    DEFAULT_TIMEOUT,
+    "delete_project"
+  );
+}
+
+// ── Session API ──────────────────────────────────────────────────────────
+
 export interface SessionInfo {
   id: string;
   projectPath: string;
   createdAt: string;
   endedAt?: string;
+  title?: string;
+  projectId?: string;
 }
 
-export async function listSessions(): Promise<SessionInfo[]> {
-  return withTimeout(invoke("list_sessions"), DEFAULT_TIMEOUT, "list_sessions");
+export interface PaginatedSessions {
+  sessions: SessionInfo[];
+  hasMore: boolean;
+}
+
+export async function listSessions(
+  projectId?: string,
+  before?: string,
+  limit?: number,
+): Promise<PaginatedSessions> {
+  const result = await withTimeout(
+    invoke<{ sessions: unknown[]; has_more: boolean }>("list_sessions", { projectId, before, limit }),
+    DEFAULT_TIMEOUT,
+    "list_sessions",
+  );
+  return {
+    sessions: result.sessions.map((s: any) => ({
+      id: s.id,
+      projectPath: s.working_dir ?? "",
+      createdAt: s.created_at,
+      endedAt: s.updated_at,
+      title: s.title,
+      projectId: s.project_id,
+    })),
+    hasMore: result.has_more,
+  };
 }
 
 export async function getCwd(): Promise<string> {
@@ -30,34 +104,35 @@ export async function getCwd(): Promise<string> {
 
 export async function createSession(
   projectPath: string,
-  level: string = "safe"
+  level: string = "safe",
+  projectId?: string,
 ): Promise<string> {
   return withTimeout(
-    invoke("create_session", { projectPath, autoApproveLevel: level }),
+    invoke("create_session", { projectPath, autoApproveLevel: level, projectId }),
     DEFAULT_TIMEOUT,
-    "create_session"
+    "create_session",
   );
 }
 
 export async function restoreSession(
   sessionId: string,
-  level: string = "safe"
+  level: string = "safe",
 ): Promise<void> {
   return withTimeout(
     invoke("restore_session", { sessionId, autoApproveLevel: level }),
     DEFAULT_TIMEOUT,
-    "restore_session"
+    "restore_session",
   );
 }
 
 export async function forkSession(
   parentId: string,
-  level: string = "safe"
+  level: string = "safe",
 ): Promise<string> {
   return withTimeout(
     invoke("fork_session", { parentId, autoApproveLevel: level }),
     DEFAULT_TIMEOUT,
-    "fork_session"
+    "fork_session",
   );
 }
 
@@ -65,7 +140,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
   return withTimeout(
     invoke("delete_session", { sessionId }),
     DEFAULT_TIMEOUT,
-    "delete_session"
+    "delete_session",
   );
 }
 
@@ -73,18 +148,18 @@ export async function shutdownSession(sessionId: string): Promise<void> {
   return withTimeout(
     invoke("shutdown_session", { sessionId }),
     DEFAULT_TIMEOUT,
-    "shutdown_session"
+    "shutdown_session",
   );
 }
 
 export async function sendMessage(
   sessionId: string,
-  content: string
+  content: string,
 ): Promise<void> {
   return withTimeout(
     invoke("send_message", { sessionId, content }),
     DEFAULT_TIMEOUT,
-    "send_message"
+    "send_message",
   );
 }
 
@@ -92,7 +167,7 @@ export async function subscribe(sessionId: string, level: string = "safe"): Prom
   return withTimeout(
     invoke("subscribe", { sessionId, autoApproveLevel: level }),
     DEFAULT_TIMEOUT,
-    "subscribe"
+    "subscribe",
   );
 }
 
@@ -100,7 +175,7 @@ export async function unsubscribe(sessionId: string): Promise<void> {
   return withTimeout(
     invoke("unsubscribe", { sessionId }),
     DEFAULT_TIMEOUT,
-    "unsubscribe"
+    "unsubscribe",
   );
 }
 
@@ -108,7 +183,7 @@ export async function getMessages(sessionId: string): Promise<unknown[]> {
   return withTimeout(
     invoke("get_messages", { sessionId }),
     DEFAULT_TIMEOUT,
-    "get_messages"
+    "get_messages",
   );
 }
 
@@ -116,7 +191,7 @@ export async function getCheckpoints(sessionId: string): Promise<unknown[]> {
   return withTimeout(
     invoke("get_checkpoints", { sessionId }),
     DEFAULT_TIMEOUT,
-    "get_checkpoints"
+    "get_checkpoints",
   );
 }
 
@@ -124,7 +199,7 @@ export async function rewind(sessionId: string, messageId: string): Promise<void
   return withTimeout(
     invoke("rewind", { sessionId, messageId }),
     DEFAULT_TIMEOUT,
-    "rewind"
+    "rewind",
   );
 }
 

@@ -3,13 +3,22 @@ use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
-use crate::storage::{MessageStore, SessionStore, StorageSet};
-use crate::types::{KernelError, Result, SessionError, SessionId};
+use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet};
+use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc, RwLock};
+
+/// Input for creating a new session
+#[derive(Debug, Clone)]
+pub struct CreateSessionInput {
+    pub project_id: Option<ProjectId>,
+    pub working_dir: Option<std::path::PathBuf>,
+    pub auto_approve_level: Level,
+}
 
 pub struct Coordinator {
     agent_shared: Arc<AgentShared>,
@@ -22,6 +31,8 @@ pub struct Coordinator {
     /// Default agent configuration for new sessions.
     /// Wrapped in `RwLock` so it can be hot-reloaded in daemon mode.
     agent_config: Arc<RwLock<AgentConfig>>,
+    /// Project store for project operations
+    project_store: Arc<dyn ProjectStore>,
 }
 
 impl Coordinator {
@@ -72,6 +83,7 @@ impl Coordinator {
         ));
         let checkpoint_store = storage.checkpoint_store();
         let data_dir = storage.data_dir().to_path_buf();
+        let project_store = storage.project_store();
         let agent_shared = AgentShared::with_data_dir(
             provider,
             Arc::new(agent_config.model.clone()),
@@ -109,6 +121,7 @@ impl Coordinator {
             session_event_senders,
             last_activity_at,
             agent_config,
+            project_store,
         }
     }
 
@@ -177,25 +190,111 @@ impl Coordinator {
         Self::now_epoch().saturating_sub(last)
     }
 
-    /// Create a new session with the given project path and auto-approve level.
-    pub async fn create_session(
+    // ── Project API ──────────────────────────────────────────────────────
+
+    /// Create a new project.
+    /// If a project already exists for the given directory, returns the existing one.
+    pub async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
-        let working_dir = project_path.to_string_lossy().to_string();
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project> {
+        let abs = std::fs::canonicalize(&dir).unwrap_or(dir);
+        let dir_str = abs.to_str().ok_or_else(|| {
+            SessionError::Other("Invalid project directory path".to_string())
+        })?;
+
+        // Check for existing project by directory
+        if let Some(existing) = self.project_store.get_by_dir(dir_str).await? {
+            return Ok(existing);
+        }
+
+        let name = name.unwrap_or_else(|| {
+            abs.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Unnamed")
+                .to_string()
+        });
+        let id = ProjectId::new();
+        self.project_store.create(&id, &name, dir_str).await?;
+        Ok(Project {
+            id,
+            name,
+            dir: abs,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+    }
+
+    /// List all projects
+    pub async fn list_projects(&self) -> Result<Vec<Project>> {
+        self.project_store.list().await
+    }
+
+    /// Get project by ID
+    pub async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
+        self.project_store.get(id).await
+    }
+
+    /// Rename a project
+    pub async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
+        self.project_store.update_name(id, &name).await
+    }
+
+    /// Delete a project (only if it has no sessions)
+    pub async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+        let (sessions, _) = self.session_store().list(Some(id), None, 1).await?;
+        if !sessions.is_empty() {
+            return Err(SessionError::Other(format!(
+                "Project {} has sessions, remove or reassign them first",
+                id.0
+            ))
+            .into());
+        }
+        self.project_store.delete(id).await
+    }
+
+    // ── Session API ──────────────────────────────────────────────────────
+
+    /// Create a new session with the given input.
+    pub async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
+        let project = match &input.project_id {
+            Some(pid) => Some(
+                self.project_store
+                    .get(pid)
+                    .await?
+                    .ok_or_else(|| SessionError::Other(format!("Project {} not found", pid.0)))?,
+            ),
+            None => None,
+        };
+
+        let working_dir = input.working_dir.map(|p| {
+            std::fs::canonicalize(&p)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .to_string()
+        });
+
         let id = SessionId::new();
-        self.session_store().create(&id, Some(&working_dir)).await?;
+        self.session_store()
+            .create(&id, input.project_id.as_ref(), working_dir.as_deref())
+            .await?;
+
         let config = SessionConfig {
             agent: self.agent_config.read().await.clone(),
-            project_path,
-            auto_approve_level,
+            project,
+            working_dir: working_dir.map(std::path::PathBuf::from),
+            auto_approve_level: input.auto_approve_level,
             data_dir: self.data_dir().clone(),
         };
+
         if let Err(e) = self.init_session(id.clone(), config).await {
-            // Rollback: remove the orphaned storage record
             let _ = self.session_store().delete(&id).await;
             return Err(e);
+        }
+
+        if let Some(ref pid) = input.project_id {
+            let _ = self.project_store.touch(pid).await;
         }
         tracing::info!("Session {} created", id.0);
         Ok(id)
@@ -289,8 +388,6 @@ impl Coordinator {
     }
 
     /// Restore a session from storage by its ID.
-    /// If the session is already in memory (e.g., a previous client left it
-    /// running in the daemon), return its ID without re-initialising.
     pub async fn restore_session(
         &self,
         session_id: &SessionId,
@@ -299,51 +396,43 @@ impl Coordinator {
         let live = self.get_session(session_id).is_some();
         tracing::info!("restore_session: {} live={}", session_id.0, live);
 
-        // Already live in the daemon – just re-attach.
         if live {
             tracing::info!("Session {} already live, re-attaching", session_id.0);
             return Ok(session_id.clone());
         }
 
-        // Verify session exists in storage
-        let session_info = self.session_store().get(session_id).await?.ok_or_else(|| {
+        let info = self.session_store().get(session_id).await?.ok_or_else(|| {
             KernelError::from(SessionError::NotFound {
                 session_id: session_id.0.clone(),
             })
         })?;
 
-        let project_path = session_info.working_dir.map_or_else(
-            || {
-                tracing::warn!(
-                    "Session {} has no working_dir, falling back to current_dir",
-                    session_id.0
-                );
-                std::env::current_dir().unwrap_or_default()
-            },
-            std::path::PathBuf::from,
-        );
+        let project = match &info.project_id {
+            Some(pid) => self.project_store.get(pid).await?,
+            None => None,
+        };
+        let working_dir = info.working_dir.map(std::path::PathBuf::from);
+
         let config = SessionConfig {
             agent: self.agent_config.read().await.clone(),
-            project_path,
+            project,
+            working_dir,
             auto_approve_level,
             data_dir: self.data_dir().clone(),
         };
         tracing::info!("Restoring session {} from storage", session_id.0);
-        if let Err(e) = self.init_session(session_info.id.clone(), config).await {
-            // If the session was raced into memory by another client
-            // (e.g. TUI reconnect_task + CLI input_handle), treat it as
-            // success instead of failing the caller's retry loop.
+        if let Err(e) = self.init_session(info.id.clone(), config).await {
             if e.is_session_already_exists() {
                 tracing::debug!(
                     "Session {} already initialized — treating as restored",
                     session_id.0
                 );
-                return Ok(session_info.id);
+                return Ok(info.id);
             }
             return Err(e);
         }
-        tracing::info!("Session {} restored", session_info.id.0);
-        Ok(session_info.id)
+        tracing::info!("Session {} restored", info.id.0);
+        Ok(info.id)
     }
 
     /// Fork a session: create new session with copied history from parent
@@ -352,40 +441,44 @@ impl Coordinator {
         parent_id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId> {
-        // Create new session with copied history in storage
-        let new_id = self.session_store().fork(parent_id).await?;
-        tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
-
-        // Read working_dir from parent session info
         let parent_info = self.session_store().get(parent_id).await?.ok_or_else(|| {
             KernelError::from(SessionError::NotFound {
                 session_id: parent_id.0.clone(),
             })
         })?;
-        let project_path = parent_info.working_dir.map_or_else(
-            || {
-                tracing::warn!(
-                    "Parent session {} has no working_dir, falling back to current_dir",
-                    parent_id.0
-                );
-                std::env::current_dir().unwrap_or_default()
-            },
-            std::path::PathBuf::from,
-        );
+
+        let new_id = self.session_store().fork(parent_id).await?;
+        tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
+
+        let project = match &parent_info.project_id {
+            Some(pid) => self.project_store.get(pid).await?,
+            None => None,
+        };
 
         let config = SessionConfig {
             agent: self.agent_config.read().await.clone(),
-            project_path,
+            project,
+            working_dir: parent_info.working_dir.map(std::path::PathBuf::from),
             auto_approve_level,
             data_dir: self.data_dir().clone(),
         };
+
         if let Err(e) = self.init_session(new_id.clone(), config).await {
-            // Rollback: remove the orphaned forked storage record
             let _ = self.session_store().delete(&new_id).await;
             return Err(e);
         }
         tracing::info!("Forked session {} initialized", new_id.0);
         Ok(new_id)
+    }
+
+    /// List sessions with cursor-based pagination.
+    pub async fn list_sessions(
+        &self,
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<(Vec<crate::storage::session::SessionInfo>, bool)> {
+        self.session_store().list(project_id, before, limit).await
     }
 
     pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
@@ -426,8 +519,6 @@ impl Coordinator {
     }
 
     /// Subscribe to events for a session (to be called by TUI)
-    /// Returns None if session not found
-    /// Each call returns a new receiver that will receive all future events
     pub fn subscribe_session_events(
         &self,
         session_id: &SessionId,
@@ -548,14 +639,6 @@ impl Coordinator {
         self.message_store().get(&session_id.0).await
     }
 
-    /// List sessions from storage with filters.
-    pub async fn list_sessions(
-        &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        self.session_store().list(args).await
-    }
-
     /// Get checkpoints for a session.
     pub async fn get_checkpoints(
         &self,
@@ -575,12 +658,6 @@ impl Coordinator {
     }
 
     /// Update the agent configuration for new sessions.
-    ///
-    /// NOTE: This updates `AgentConfig` (skills, `system_prompt`, `max_iterations`,
-    /// etc.) and **also pushes the new skill list to all currently live sessions**
-    /// so that their running agents pick up the changes on their next idle turn.
-    /// `hook_registry` replaces the shared base hooks so config-level hooks are
-    /// also hot-reloaded (only when hooks were originally enabled).
     pub async fn update_agent_config(
         &self,
         agent_config: AgentConfig,
@@ -603,11 +680,7 @@ impl Coordinator {
         }
 
         // Propagate skill refresh to all live sessions.
-        let handles: Vec<_> = self
-            .sessions
-            .iter()
-            .map(|e| Arc::clone(e.value()))
-            .collect();
+        let handles: Vec<_> = self.sessions.iter().map(|e| Arc::clone(e.value())).collect();
         for session in handles {
             let session = session.read().await;
             if let Err(e) = session.refresh_skills(skills.clone()).await {

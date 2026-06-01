@@ -28,9 +28,18 @@ export interface ChatMessage {
   tools?: ToolCall[];
 }
 
+export interface ProjectState {
+  id: string;
+  name: string;
+  dir: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SessionState {
   id: string;
   projectPath: string;
+  projectId?: string;
   alias?: string;
   messages: ChatMessage[];
   streaming: boolean;
@@ -46,6 +55,14 @@ export const appState = $state({
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
 });
+
+export const projectState = $state({
+  projects: [] as ProjectState[],
+  activeProjectId: null as string | null,
+});
+
+// Per-project session cursors for pagination
+export const sessionCursors = $state(new Map<string, string | null>());
 
 // ── UI notification state (for InfoBar inline notifications) ──
 export const uiState = $state<{

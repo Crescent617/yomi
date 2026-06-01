@@ -46,6 +46,7 @@ pub use permissions::{Checker, Level, ToolLevelResolver};
 pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedFileInfo};
 
 // Re-export commonly used types
+pub use app::coordinator::CreateSessionInput;
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
@@ -60,7 +61,8 @@ pub use skill::{deduplicate_skills, Skill, SkillLoader};
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
-    session::{ListArgs, SessionInfo, SessionStore, SqliteSessionStore},
+    project::{ProjectStore, SqliteProjectStore},
+    session::{SessionInfo, SessionStore, SqliteSessionStore},
     todo::{
         strip_system_reminders, JsonTodoStore, TodoItem, TodoListData, TodoStatus, TodoStore,
         SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,

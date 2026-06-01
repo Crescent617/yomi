@@ -1,3 +1,4 @@
+use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::checkpoint::RewindTarget;
 use crate::event::{ControlCommand, Event};
@@ -5,10 +6,12 @@ use crate::goal::GoalState;
 use crate::permissions::Level;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
 use crate::types::{
-    ContentBlock, KernelError, Message, MessageId, Result, SessionError, SessionId,
+    ContentBlock, KernelError, Message, MessageId, Project, ProjectId, Result, SessionError,
+    SessionId,
 };
 use crate::wire::{RequestIdGenerator, RequestMethod, ResponseBody, RpcError, WireMsg};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
@@ -32,16 +35,34 @@ type PendingMap = dashmap::DashMap<
 >;
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Event>>;
 
+/// Paginated session list result
+#[derive(Debug, Clone)]
+pub struct PaginatedSessions {
+    pub sessions: Vec<crate::storage::session::SessionInfo>,
+    pub has_more: bool,
+}
+
 /// Unified API for both local (in-process) and remote (IPC) coordinators.
 #[async_trait]
 pub trait CoordinatorApi: Send + Sync {
-    async fn create_session(
+    // ── Project ──────────────────────────────────────────────────────────
+    async fn list_projects(&self) -> Result<Vec<Project>>;
+    async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project>;
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>>;
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()>;
+    async fn delete_project(&self, id: &ProjectId) -> Result<()>;
+
+    // ── Session ──────────────────────────────────────────────────────────
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
+    async fn restore_session(
+        &self,
+        id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId>;
-    async fn restore_session(&self, id: &SessionId, auto_approve_level: Level)
-        -> Result<SessionId>;
     async fn fork_session(
         &self,
         parent: &SessionId,
@@ -75,8 +96,10 @@ pub trait CoordinatorApi: Send + Sync {
     ) -> Result<broadcast::Receiver<Event>>;
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>>;
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions>;
     async fn get_checkpoints(
         &self,
         session_id: &SessionId,
@@ -96,12 +119,32 @@ pub trait CoordinatorApi: Send + Sync {
 
 #[async_trait]
 impl CoordinatorApi for Coordinator {
-    async fn create_session(
+    async fn list_projects(&self) -> Result<Vec<Project>> {
+        self.list_projects().await
+    }
+
+    async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
-        self.create_session(project_path, auto_approve_level).await
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project> {
+        self.create_project(dir, name).await
+    }
+
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
+        self.get_project(id).await
+    }
+
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
+        self.rename_project(id, name).await
+    }
+
+    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+        self.delete_project(id).await
+    }
+
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
+        self.create_session(input).await
     }
 
     async fn restore_session(
@@ -187,9 +230,15 @@ impl CoordinatorApi for Coordinator {
 
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        self.list_sessions(args).await
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions> {
+        let (sessions, has_more) = self.list_sessions(project_id, before, limit).await?;
+        Ok(PaginatedSessions {
+            sessions,
+            has_more,
+        })
     }
 
     async fn get_checkpoints(
@@ -511,7 +560,8 @@ impl RemoteCoordinator {
             if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe {
                 session_id: sid,
                 auto_approve_level: Level::Safe,
-            })).await
+            }))
+            .await
             {
                 tracing::warn!("Re-subscribe failed: {e}");
             }
@@ -524,11 +574,12 @@ impl RemoteCoordinator {
                     .get("proto")
                     .and_then(|v| v.as_u64())
                     .map_or(0, |n| n as u32);
-                if server_proto < crate::wire::WIRE_PROTOCOL_VERSION {
+                let client_proto = crate::wire::WIRE_PROTOCOL_VERSION;
+                if server_proto != client_proto {
                     tracing::error!(
-                        "Wire protocol version too old: server {}, client {}",
+                        "Wire protocol version mismatch: server v{}, client v{}",
                         server_proto,
-                        crate::wire::WIRE_PROTOCOL_VERSION
+                        client_proto,
                     );
                     self.invalidate_connection().await;
                     return Err(SessionError::WireProtocolMismatch.into());
@@ -660,15 +711,60 @@ impl RemoteCoordinator {
 
 #[async_trait]
 impl CoordinatorApi for RemoteCoordinator {
-    async fn create_session(
+    async fn list_projects(&self) -> Result<Vec<Project>> {
+        let result = self.call(RequestMethod::ListProjects).await?;
+        let projects: Vec<Project> = serde_json::from_value(result)?;
+        Ok(projects)
+    }
+
+    async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project> {
+        let result = self
+            .call(RequestMethod::CreateProject {
+                dir: dir.to_string_lossy().to_string(),
+                name,
+            })
+            .await?;
+        let project: Project = serde_json::from_value(result)?;
+        Ok(project)
+    }
+
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
+        let result = self
+            .call(RequestMethod::GetProject {
+                project_id: id.0.clone(),
+            })
+            .await?;
+        let project: Option<Project> = serde_json::from_value(result)?;
+        Ok(project)
+    }
+
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
+        self.call(RequestMethod::RenameProject {
+            project_id: id.0.clone(),
+            name,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+        self.call(RequestMethod::DeleteProject {
+            project_id: id.0.clone(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::CreateSession {
-                project_path: project_path.to_string_lossy().to_string(),
-                auto_approve_level,
+                project_id: input.project_id.map(|p| p.0),
+                working_dir: input.working_dir.map(|p| p.to_string_lossy().to_string()),
+                auto_approve_level: input.auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -815,16 +911,32 @@ impl CoordinatorApi for RemoteCoordinator {
         session_id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_events_internal(session_id, auto_approve_level).await
+        self.subscribe_events_internal(session_id, auto_approve_level)
+            .await
     }
 
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        let result = self.call(RequestMethod::ListSessions(args)).await?;
-        let sessions = serde_json::from_value(result)?;
-        Ok(sessions)
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions> {
+        let result = self
+            .call(RequestMethod::ListSessions {
+                project_id: project_id.map(|p| p.0.clone()),
+                before,
+                limit,
+            })
+            .await?;
+        let sessions: Vec<crate::storage::session::SessionInfo> = serde_json::from_value(result)?;
+        // Remote server doesn't return has_more separately in this version;
+        // we infer from the result length.
+        let has_more = sessions.len() > limit;
+        let sessions = sessions.into_iter().take(limit).collect();
+        Ok(PaginatedSessions {
+            sessions,
+            has_more,
+        })
     }
 
     async fn get_checkpoints(

@@ -3,6 +3,7 @@
 use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
+    app::coordinator::CreateSessionInput,
     client::CoordinatorApi,
     event::ControlCommand,
     permissions::Level,
@@ -106,9 +107,12 @@ pub async fn resolve_session(
 ) -> Result<SessionId> {
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
     if !is_launch {
-        return Ok(coordinator
-            .create_session(working_dir.to_path_buf(), auto_approve_level)
-            .await?);
+        let input = CreateSessionInput {
+            project_id: None,
+            working_dir: Some(working_dir.to_path_buf()),
+            auto_approve_level,
+        };
+        return Ok(coordinator.create_session(input).await?);
     }
 
     match session_arg {
@@ -125,9 +129,12 @@ pub async fn resolve_session(
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    Ok(coordinator
-                        .create_session(working_dir.to_path_buf(), auto_approve_level)
-                        .await?)
+                    let input = CreateSessionInput {
+                        project_id: None,
+                        working_dir: Some(working_dir.to_path_buf()),
+                        auto_approve_level,
+                    };
+                    Ok(coordinator.create_session(input).await?)
                 }
             }
         }
@@ -145,23 +152,34 @@ pub async fn resolve_session(
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        Ok(coordinator
-                            .create_session(working_dir.to_path_buf(), auto_approve_level)
-                            .await?)
+                        let input = CreateSessionInput {
+                            project_id: None,
+                            working_dir: Some(working_dir.to_path_buf()),
+                            auto_approve_level,
+                        };
+                        Ok(coordinator.create_session(input).await?)
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                Ok(coordinator
-                    .create_session(working_dir.to_path_buf(), auto_approve_level)
-                    .await?)
+                let input = CreateSessionInput {
+                    project_id: None,
+                    working_dir: Some(working_dir.to_path_buf()),
+                    auto_approve_level,
+                };
+                Ok(coordinator.create_session(input).await?)
             }
         },
         // No --session: create new session
-        SessionArg::New => Ok(coordinator
-            .create_session(working_dir.to_path_buf(), auto_approve_level)
-            .await?),
+        SessionArg::New => {
+            let input = CreateSessionInput {
+                project_id: None,
+                working_dir: Some(working_dir.to_path_buf()),
+                auto_approve_level,
+            };
+            Ok(coordinator.create_session(input).await?)
+        }
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
@@ -173,9 +191,12 @@ pub async fn resolve_session(
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                Ok(coordinator
-                    .create_session(working_dir.to_path_buf(), auto_approve_level)
-                    .await?)
+                let input = CreateSessionInput {
+                    project_id: None,
+                    working_dir: Some(working_dir.to_path_buf()),
+                    auto_approve_level,
+                };
+                Ok(coordinator.create_session(input).await?)
             }
         },
         // --fork <id>: fork specific session

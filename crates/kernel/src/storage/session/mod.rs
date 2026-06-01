@@ -14,6 +14,7 @@ pub struct SessionInfo {
     pub title: Option<String>,
     pub message_count: i64,
     pub working_dir: Option<String>,
+    pub project_id: Option<crate::types::ProjectId>,
 }
 
 impl SessionInfo {
@@ -37,6 +38,7 @@ const DEFAULT_LIST_LIMIT: usize = 1000;
 
 /// Arguments for listing sessions with various filters
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[deprecated(since = "0.2.0", note = "Use cursor-based list(project_id, before, limit) instead")]
 pub struct ListArgs {
     /// Filter: sessions with `updated_at` < before
     pub before: Option<chrono::DateTime<chrono::Utc>>,
@@ -52,6 +54,7 @@ pub struct ListArgs {
     pub order_asc: bool,
 }
 
+#[allow(deprecated)]
 impl Default for ListArgs {
     fn default() -> Self {
         Self {
@@ -68,8 +71,13 @@ impl Default for ListArgs {
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// Create a new session with the given ID and optional working directory
-    async fn create(&self, id: &SessionId, working_dir: Option<&str>) -> Result<()>;
+    /// Create a new session with the given ID, optional `project_id`, and optional working directory
+    async fn create(
+        &self,
+        id: &SessionId,
+        project_id: Option<&crate::types::ProjectId>,
+        working_dir: Option<&str>,
+    ) -> Result<()>;
 
     /// Fork a session, copying its metadata
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;
@@ -80,8 +88,15 @@ pub trait SessionStore: Send + Sync {
     /// Delete a session
     async fn delete(&self, id: &SessionId) -> Result<()>;
 
-    /// List sessions with filters
-    async fn list(&self, args: ListArgs) -> Result<Vec<SessionInfo>>;
+    /// List sessions with cursor-based pagination.
+    /// `project_id` = None returns all sessions (including independent ones).
+    /// Returns `(sessions, has_more)`.
+    async fn list(
+        &self,
+        project_id: Option<&crate::types::ProjectId>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+        limit: usize,
+    ) -> Result<(Vec<SessionInfo>, bool)>;
 
     /// Update message count for a session
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()>;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../../api";
-  import { sessionState, appState } from "../../state.svelte";
+  import { sessionState, projectState, sessionCursors, appState } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
   import ChatView from "../chat/ChatView.svelte";
 
@@ -13,32 +13,38 @@
       isDesktop = window.innerWidth >= 1024;
     };
     window.addEventListener("resize", onResize);
-    loadSessions();
+    loadProjects();
     return () => window.removeEventListener("resize", onResize);
   });
 
-  async function loadSessions() {
+  async function loadProjects() {
     try {
-      const list = await api.listSessions();
-      const remoteIds = new Set(list.map((s) => s.id));
+      const list = await api.listProjects();
+      projectState.projects = list.map((p) => ({
+        id: p.id,
+        name: p.name,
+        dir: p.dir,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+      // Load sessions for each project
+      for (const project of projectState.projects) {
+        await loadSessionsForProject(project.id);
+      }
+    } catch (e) {
+      console.error("Failed to load projects:", e);
+    }
+  }
 
-      // Remove sessions deleted on backend
-      sessionState.sessions = sessionState.sessions.filter(s => remoteIds.has(s.id));
-
-      // Add or update
-      for (const s of list) {
-        const idx = sessionState.sessions.findIndex(sess => sess.id === s.id);
-        if (idx >= 0) {
-          const existing = sessionState.sessions[idx];
-          sessionState.sessions[idx] = {
-            ...existing,
-            projectPath: s.projectPath ?? existing.projectPath ?? "",
-            alias: s.title ?? existing.alias,
-          };
-        } else {
+  async function loadSessionsForProject(projectId: string) {
+    try {
+      const result = await api.listSessions(projectId, undefined, 20);
+      for (const s of result.sessions) {
+        if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
           sessionState.sessions.push({
             id: s.id,
             projectPath: s.projectPath ?? "",
+            projectId: s.projectId,
             alias: s.title,
             messages: [],
             streaming: false,
@@ -49,11 +55,14 @@
           });
         }
       }
-
-      // No auto-activate — user will see the centered create-session screen
-      // when no session is active.
+      if (result.hasMore && result.sessions.length > 0) {
+        const last = result.sessions[result.sessions.length - 1];
+        sessionCursors.set(projectId, last.endedAt ?? last.createdAt);
+      } else {
+        sessionCursors.set(projectId, null);
+      }
     } catch (e) {
-      console.error("Failed to load sessions:", e);
+      console.error("Failed to load sessions for project:", projectId, e);
     }
   }
 </script>
