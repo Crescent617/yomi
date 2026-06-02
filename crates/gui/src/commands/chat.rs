@@ -40,10 +40,7 @@ pub async fn subscribe(
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id.clone());
     let level = parse_level(&auto_approve_level)?;
-    let mut rx = match coord
-        .subscribe_session_events(&sid, level)
-        .await
-    {
+    let mut rx = match coord.subscribe_session_events(&sid, level).await {
         Ok(rx) => rx,
         Err(_) => {
             coord
@@ -241,16 +238,10 @@ pub async fn start_goal(
 }
 
 #[tauri::command]
-pub async fn stop_goal(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), GuiError> {
+pub async fn stop_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
-    coord
-        .stop_goal(&sid)
-        .await
-        .map_err(GuiError::kernel)?;
+    coord.stop_goal(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }
 

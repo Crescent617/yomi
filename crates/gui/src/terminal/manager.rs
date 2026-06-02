@@ -101,7 +101,9 @@ impl TerminalManager {
 
     pub async fn write(&self, id: &str, data: &str) -> Result<(), GuiError> {
         let sessions = self.sessions.lock().await;
-        let session = sessions.get(id).ok_or(GuiError::unknown("Terminal not found"))?;
+        let session = sessions
+            .get(id)
+            .ok_or(GuiError::unknown("Terminal not found"))?;
         let mut writer = session.writer.lock().await;
         writer
             .write_all(data.as_bytes())
@@ -112,7 +114,9 @@ impl TerminalManager {
 
     pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), GuiError> {
         let sessions = self.sessions.lock().await;
-        let session = sessions.get(id).ok_or(GuiError::unknown("Terminal not found"))?;
+        let session = sessions
+            .get(id)
+            .ok_or(GuiError::unknown("Terminal not found"))?;
         session
             .pty_pair
             .master

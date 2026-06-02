@@ -166,21 +166,7 @@ function upsertSession(session: SessionState) {
   }
 }
 
-export function addUserMessage(sessionId: string, text: string) {
-  const session = getSession(sessionId);
-  if (!session) return;
-  const now = new Date().toISOString();
-  upsertSession({
-    ...session,
-    messages: [
-      ...session.messages,
-      { id: crypto.randomUUID(), role: "user", content: text },
-    ],
-    updatedAt: now,
-    alias: session.alias ?? text.slice(0, 20),
-    streaming: true,
-  });
-}
+
 
 export function openFileTab(
   session: SessionState,
@@ -230,20 +216,23 @@ function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" 
   return "assistant";
 }
 
-// Helper for content blocks coming from the Rust backend
-interface ContentBlock {
-  Text?: string;
+// Tagged content block from Rust (tag = "type", rename_all = "snake_case")
+// Used by ContentBlock, ToolOutputBlock, etc.
+interface TaggedContentBlock {
+  type: string;
   text?: string;
-  type?: string;
   thinking?: string;
-  Thinking?: { thinking?: string };
+  signature?: string;
+  image_url?: { url: string };
+  url?: string;
+  mime_type?: string;
 }
 
 // Raw message shape from the Rust backend
 interface RawMessage {
   id?: unknown;
   role: unknown;
-  content?: string | ContentBlock[];
+  content?: string | TaggedContentBlock[];
   tool_call_id?: string;
   tool_calls?: RawToolCall[];
 }
@@ -268,11 +257,9 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
 
     let output = "";
     if (Array.isArray(m.content)) {
-      output = m.content.map((block: ContentBlock) => {
+      output = m.content.map((block: TaggedContentBlock) => {
         if (typeof block === "string") return block;
-        if (block.Text) return block.Text;
-        if (block.text) return block.text;
-        return "";
+        return block.type === "text" && block.text ? block.text : "";
       }).join("");
     } else if (typeof m.content === "string") {
       output = m.content;
@@ -309,7 +296,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         content: typeof m.content === "string"
           ? m.content
           : Array.isArray(m.content)
-            ? m.content.map((b: ContentBlock) => b.Text || b.text || "").join("")
+            ? m.content.map((b: TaggedContentBlock) => b.type === "text" && b.text ? b.text : "").join("")
             : "",
         thinking: null,
         tools: [],
@@ -320,8 +307,8 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         for (const block of m.content) {
           if (typeof block === "string") {
             text += block;
-          } else if (block.type === "text" || block.Text || block.text) {
-            text += block.text || block.Text || "";
+          } else if (block.type === "text" && block.text) {
+            text += block.text;
           }
         }
       } else if (typeof m.content === "string") {
@@ -429,7 +416,7 @@ interface ToolEnd {
   tool_name: string;
   is_error: boolean;
   elapsed_ms: number;
-  content_blocks?: ContentBlock[];
+  content_blocks?: TaggedContentBlock[];
 }
 
 interface ToolProgress {
@@ -445,7 +432,7 @@ interface ToolEvent {
 }
 
 interface AgentLifecycle {
-  state: string | { TurnCompleted?: true; Stopped?: true };
+  state: string | { Stopped?: true };
 }
 
 interface AgentEvent {
@@ -471,11 +458,19 @@ interface SystemEvent {
   SessionSwitched?: { session_id: string };
 }
 
+interface UserEvent {
+  Message?: {
+    message_id: string;
+    content: TaggedContentBlock[];
+  };
+}
+
 type KernelEvent =
   | { Model: ModelChunk }
   | { Agent: AgentEvent }
   | { System: SystemEvent }
-  | { Tool: ToolEvent };
+  | { Tool: ToolEvent }
+  | { User: UserEvent };
 
 export function handleEvent(sessionId: string, rawEvent: unknown) {
   const session = getSession(sessionId);
@@ -490,6 +485,8 @@ export function handleEvent(sessionId: string, rawEvent: unknown) {
     handleSystemEvent(session, ev.System);
   } else if ("Tool" in ev) {
     handleToolEvent(session, ev.Tool);
+  } else if ("User" in ev) {
+    handleUserEvent(session, ev.User);
   }
 
   if (sessionState.activeSessionId !== sessionId) {
@@ -571,25 +568,25 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       }).catch((e: Error) => console.error("Failed to reload messages after compaction:", e));
     }
     return true;
-  } else if (event.Completed || event.Error) {
-    if (session.streaming) {
-      session.streaming = false;
-      session.updatedAt = new Date().toISOString();
-      // Merge streaming buffer into session messages
-      const buf = streamingMessages[session.id] ?? [];
-      if (buf.length > 0) {
-        session.messages = [...session.messages, ...buf];
-        streamingMessages[session.id] = [];
-      }
-      // Auto-send queued message when streaming ends
-      if (session.queuedInput) {
-        const text = session.queuedInput;
-        session.queuedInput = null;
-        session.messages = [...session.messages, { id: crypto.randomUUID(), role: "user", content: text, thinking: null, tools: [] }];
-        api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
-      }
-      return true;
+  } else if (event.Completed) {
+    // Streaming chunks finished — merge buffer, but do not mutate session.messages
+    // here. User messages are added only via UserEvent::Message from the kernel.
+    const buf = streamingMessages[session.id] ?? [];
+    if (buf.length > 0) {
+      session.messages = [...session.messages, ...buf];
+      streamingMessages[session.id] = [];
     }
+    // Auto-send queued message when this step finishes (kernel will emit
+    // UserEvent::Message when it processes the input).
+    if (session.queuedInput) {
+      const text = session.queuedInput;
+      session.queuedInput = null;
+      api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
+    }
+    return true;
+  } else if (event.Error) {
+    // Model-level streaming error — Stopped::Failed will end streaming
+    return false;
   }
   return false;
 }
@@ -634,11 +631,9 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       found.tool.status = end.is_error ? "failed" : "completed";
       found.tool.elapsedMs = end.elapsed_ms;
       found.tool.output = end.content_blocks
-        ?.map((b: ContentBlock) => {
+        ?.map((b: TaggedContentBlock) => {
           if (typeof b === "string") return b;
-          if (b.Text) return b.Text;
-          if (b.text) return b.text;
-          return "";
+          return b.type === "text" && b.text ? b.text : "";
         })
         .join("");
       if (end.is_error) {
@@ -668,11 +663,9 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     tool.status = end.is_error ? "failed" : "completed";
     tool.elapsedMs = end.elapsed_ms;
     tool.output = end.content_blocks
-      ?.map((b: ContentBlock) => {
+      ?.map((b: TaggedContentBlock) => {
         if (typeof b === "string") return b;
-        if (b.Text) return b.Text;
-        if (b.text) return b.text;
-        return "";
+        return b.type === "text" && b.text ? b.text : "";
       })
       .join("");
     if (end.is_error) {
@@ -722,7 +715,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       showNotification("AI is responding...", "info", 2000);
       return true;
     } else if (typeof state === "object") {
-      if ((state.TurnCompleted || state.Stopped) && session.streaming) {
+      if (state.Stopped && session.streaming) {
         session.streaming = false;
         const buf = streamingMessages[session.id] ?? [];
         if (buf.length > 0) {
@@ -760,6 +753,25 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       questions: req.questions,
     };
     showNotification("Agent has a question for you", "info", 5000);
+    return true;
+  }
+  return false;
+}
+
+function handleUserEvent(session: SessionState, event: UserEvent): boolean {
+  if (event.Message) {
+    const msg = event.Message;
+    const content = msg.content
+      ?.map((b: TaggedContentBlock) => {
+        if (typeof b === "string") return b;
+        return b.type === "text" && b.text ? b.text : "";
+      })
+      .join("") ?? "";
+    session.messages = [
+      ...session.messages,
+      { id: msg.message_id, role: "user", content, thinking: null, tools: [] },
+    ];
+    session.updatedAt = new Date().toISOString();
     return true;
   }
   return false;

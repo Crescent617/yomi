@@ -99,14 +99,6 @@ pub enum AgentEvent {
 pub enum AgentStatus {
     /// Agent started running
     Running,
-    /// Task completed naturally (was `ReActLoopEnd`)
-    TurnCompleted {
-        total_iterations: usize,
-        /// Finish reason from the API (e.g. `MaxTokens`, `ContentFilter`)
-        finish_reason: Option<crate::types::FinishReason>,
-        /// ID of the last assistant message
-        last_message_id: Option<MessageId>,
-    },
     /// Agent stopped (includes various end reasons)
     Stopped { reason: StopReason },
 }
@@ -114,8 +106,11 @@ pub enum AgentStatus {
 /// Reasons why the Agent stopped
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
-    /// Normal completion
-    Completed,
+    /// Normal completion of a step
+    Completed {
+        /// Finish reason from the API (e.g. `MaxTokens`, `ContentFilter`)
+        finish_reason: Option<crate::types::FinishReason>,
+    },
     /// User cancelled
     Cancelled {
         /// Name of the cancelled operation (e.g. "streaming", "compaction")

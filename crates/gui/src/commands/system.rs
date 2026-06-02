@@ -16,9 +16,7 @@ pub fn get_cwd() -> Result<String, GuiError> {
 }
 
 #[tauri::command]
-pub async fn get_config_toml(
-    _state: State<'_, AppState>,
-) -> Result<serde_json::Value, GuiError> {
+pub async fn get_config_toml(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let path = kernel::config::Config::discover_file();
     let (content, file_path) = match &path {
         Some(p) => {
@@ -55,8 +53,8 @@ pub async fn save_config_toml(
         }
     };
 
-    let _: toml::Value = toml::from_str(&content)
-        .map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
+    let _: toml::Value =
+        toml::from_str(&content).map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
 
     std::fs::write(&file_path, content)
         .map_err(|e| GuiError::unknown(format!("Failed to write config: {e}")))?;
@@ -65,9 +63,7 @@ pub async fn save_config_toml(
 }
 
 #[tauri::command]
-pub async fn get_config(
-    _state: State<'_, AppState>,
-) -> Result<serde_json::Value, GuiError> {
+pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let working_dir = std::env::current_dir()
         .map_err(|e| GuiError::unknown(format!("Failed to get cwd: {e}")))?;
     let config_file = kernel::config::Config::discover_file();
@@ -98,14 +94,9 @@ pub async fn get_config(
 }
 
 #[tauri::command]
-pub async fn get_usage_summary(
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, GuiError> {
+pub async fn get_usage_summary(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let coord = state.coordinator.clone();
-    let summary = coord
-        .get_usage_summary()
-        .await
-        .map_err(GuiError::kernel)?;
+    let summary = coord.get_usage_summary().await.map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
         "prompt_tokens": summary.prompt_tokens,
         "completion_tokens": summary.completion_tokens,

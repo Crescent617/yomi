@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, addUserMessage, streamingMessages } from "../../state.svelte";
+  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
@@ -178,7 +178,6 @@
       // Send the home input
       const text = homeInput.trim();
       homeInput = "";
-      addUserMessage(id, text);
       await api.sendMessage(id, text);
     } catch (e: any) {
       console.error("Failed to create session:", e?.message ?? e);

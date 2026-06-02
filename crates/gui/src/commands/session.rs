@@ -123,13 +123,13 @@ pub async fn fork_session(
 }
 
 #[tauri::command]
-pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
+pub async fn delete_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
-    coord
-        .delete_session(&sid)
-        .await
-        .map_err(GuiError::kernel)?;
+    coord.delete_session(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }
 

@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use kernel::transport::SocketAddr;
-pub use kernel::transport::{socket_addr, pid_file_path};
+pub use kernel::transport::{pid_file_path, socket_addr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -20,7 +20,8 @@ const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Global shutdown token for the in-process daemon server.
-static DAEMON_SHUTDOWN: tokio::sync::Mutex<Option<CancellationToken>> = tokio::sync::Mutex::const_new(None);
+static DAEMON_SHUTDOWN: tokio::sync::Mutex<Option<CancellationToken>> =
+    tokio::sync::Mutex::const_new(None);
 
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
@@ -109,10 +110,9 @@ pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
         Some(task_store),
         Some(config.agent.compactor.clone()),
         skill_folders,
-        config
-            .features
-            .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
+        config.features.hooks.then(|| {
+            kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+        }),
     ));
 
     Ok(coordinator)
@@ -155,10 +155,10 @@ pub async fn spawn_daemon() -> Result<()> {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm = signal(SignalKind::terminate())
-                    .expect("Failed to register SIGTERM handler");
-                let mut sigint = signal(SignalKind::interrupt())
-                    .expect("Failed to register SIGINT handler");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+                let mut sigint =
+                    signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
                 tokio::select! {
                     _ = sigterm.recv() => {
                         tracing::info!("Received SIGTERM, initiating graceful shutdown");

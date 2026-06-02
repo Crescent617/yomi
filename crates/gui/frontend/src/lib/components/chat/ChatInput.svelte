@@ -2,7 +2,7 @@
 import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
-import { sessionState, addUserMessage, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
+import { sessionState, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
 import { fsProvider } from "../../fs/factory";
 import type { FileEntry } from "../../fs/provider";
@@ -251,7 +251,6 @@ async function handleSubmit() {
   if (text.startsWith("/")) {
     await handleCommand(text);
   } else {
-    addUserMessage(sessionId, text);
     try {
       await api.sendMessage(sessionId, text);
     } catch (e: any) {

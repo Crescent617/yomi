@@ -443,21 +443,18 @@ impl Agent {
         }
     }
 
-    /// Emit `TurnCompleted` lifecycle event.
-    fn emit_turn_completed(
+    /// Emit `Stopped` lifecycle event with completed reason.
+    fn emit_stopped_completed(
         &self,
         finish_reason: Option<crate::types::FinishReason>,
-        last_message_id: Option<MessageId>,
     ) {
         if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
             agent_id: self.id.clone(),
-            state: AgentStatus::TurnCompleted {
-                total_iterations: self.context.iteration_count(),
-                finish_reason,
-                last_message_id,
+            state: AgentStatus::Stopped {
+                reason: StopReason::Completed { finish_reason },
             },
         })) {
-            tracing::warn!("Failed to send TurnCompleted event: {}", e);
+            tracing::warn!("Failed to send Stopped::Completed event: {}", e);
         }
     }
 
@@ -1332,7 +1329,9 @@ impl Agent {
                             self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
                                 agent_id: self.id.clone(),
                                 state: AgentStatus::Stopped {
-                                    reason: StopReason::Completed,
+                                    reason: StopReason::Completed {
+                                        finish_reason: None,
+                                    },
                                 },
                             }))
                         {
@@ -1354,10 +1353,8 @@ impl Agent {
                 "Agent {} streaming complete, waiting for next input",
                 self.id
             );
-            let last_message_id = self.message_buffer.messages().last().map(|m| m.id.clone());
-
             // Note: finish_turn() will be called automatically when transitioning to Idle
-            self.emit_turn_completed(finish_reason, last_message_id);
+            self.emit_stopped_completed(finish_reason);
             self.context.transition_to(AgentState::Idle);
         }
         Ok(())

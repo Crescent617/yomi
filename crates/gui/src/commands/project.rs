@@ -16,10 +16,7 @@ pub struct ProjectInfo {
 #[tauri::command]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>, GuiError> {
     let coord = state.coordinator.clone();
-    let projects = coord
-        .list_projects()
-        .await
-        .map_err(GuiError::kernel)?;
+    let projects = coord.list_projects().await.map_err(GuiError::kernel)?;
     Ok(projects
         .into_iter()
         .map(|p| ProjectInfo {
