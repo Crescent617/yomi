@@ -1,12 +1,14 @@
 <script lang="ts">
   import { Loader2, CheckCircle2, Info, AlertTriangle, XCircle, Check } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
-  import { uiState } from "../../state.svelte";
+  import { uiState, getDisplayMessages } from "../../state.svelte";
   import { formatElapsed, formatTokens } from "../../utils";
   import * as api from "../../api";
   import { onMount } from "svelte";
 
   let { session }: { session: SessionState | null } = $props();
+
+  const displayMessages = $derived(getDisplayMessages(session?.id ?? ""));
 
   let config = $state<{ model: string; context_window: number } | null>(null);
 
@@ -46,7 +48,7 @@
   const totalTokens = $derived.by(() => {
     if (!session) return 0;
     let chars = 0;
-    for (const msg of session.messages) {
+    for (const msg of displayMessages) {
       chars += msg.content.length;
       if (msg.thinking) chars += msg.thinking.content.length;
       for (const tool of msg.tools ?? []) {
@@ -60,10 +62,10 @@
   // ── Token estimate: last assistant message only ──
   const streamingTokens = $derived.by(() => {
     if (!session) return 0;
-    let lastAssistant: typeof session.messages[0] | null = null;
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      if (session.messages[i].role === "assistant") {
-        lastAssistant = session.messages[i];
+    let lastAssistant: typeof displayMessages[0] | null = null;
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === "assistant") {
+        lastAssistant = displayMessages[i];
         break;
       }
     }
@@ -81,8 +83,8 @@
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
     if (!session?.streaming) return null;
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      const msg = session.messages[i];
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      const msg = displayMessages[i];
       if (msg.role === "assistant" && msg.tools) {
         for (const tool of msg.tools) {
           if (tool.status === "running") return tool;

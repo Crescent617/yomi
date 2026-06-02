@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../../api";
-  import { sessionState, getActiveSession } from "../../state.svelte";
+  import { sessionState, getActiveSession, getDisplayMessages } from "../../state.svelte";
   import {
     Cpu,
     MemoryStick,
@@ -21,12 +21,13 @@
   let loading = $state(true);
 
   const activeSession = $derived(getActiveSession());
+  const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
 
   // Current session estimated tokens
   const sessionTokens = $derived.by(() => {
     if (!activeSession) return 0;
     let chars = 0;
-    for (const msg of activeSession.messages) {
+    for (const msg of displayMessages) {
       chars += msg.content.length;
       if (msg.thinking) chars += msg.thinking.content.length;
       for (const tool of msg.tools ?? []) {
@@ -106,7 +107,7 @@
               <span class="text-sm font-medium">Current Session</span>
               <span class="text-xs text-muted-foreground">{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
             </div>
-            <span class="text-xs text-muted-foreground">{activeSession.messages.length} msgs</span>
+            <span class="text-xs text-muted-foreground">{displayMessages.length} msgs</span>
           </div>
 
           <div class="space-y-1">

@@ -125,6 +125,16 @@ export const sessionState = $state({
   activeSessionId: null as string | null,
 });
 
+export const streamingMessages = $state<Record<string, ChatMessage[]>>({});
+
+export function getDisplayMessages(sessionId: string): ChatMessage[] {
+  const session = getSession(sessionId);
+  if (!session) return [];
+  const streamBuf = streamingMessages[sessionId] ?? [];
+  if (streamBuf.length === 0) return session.messages;
+  return [...session.messages, ...streamBuf];
+}
+
 export function getSession(id: string): SessionState | undefined {
   return sessionState.sessions.find((s) => s.id === id);
 }
@@ -368,8 +378,9 @@ export function handleEvent(sessionId: string, rawEvent: any) {
 
 /** Search all messages for a tool with the given id. */
 function findToolById(session: SessionState, toolId: string): { msg: ChatMessage; tool: ToolCall } | null {
-  for (let i = session.messages.length - 1; i >= 0; i--) {
-    const msg = session.messages[i];
+  const allMessages = [...session.messages, ...(streamingMessages[session.id] ?? [])];
+  for (let i = allMessages.length - 1; i >= 0; i--) {
+    const msg = allMessages[i];
     if (msg.role === "assistant" && msg.tools) {
       const tool = msg.tools.find((t) => t.id === toolId);
       if (tool) return { msg, tool };
@@ -384,108 +395,65 @@ function handleModelEvent(session: SessionState, event: any): boolean {
     const content = chunk.content;
     if (content?.Text) {
       const text = content.Text;
-      const lastMsg = session.messages[session.messages.length - 1];
-      // Append only if the last assistant message is a pure text block
-      // (no thinking, no tools). Otherwise start a new message.
-      if (
-        lastMsg &&
-        lastMsg.role === "assistant" &&
-        !lastMsg.thinking &&
-        (!lastMsg.tools || lastMsg.tools.length === 0)
-      ) {
+      const buf = streamingMessages[session.id] ?? [];
+      const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.thinking && (!lastMsg.tools || lastMsg.tools.length === 0)) {
         lastMsg.content += text;
       } else {
-        session.messages = [
-          ...session.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: text,
-            thinking: null,
-            tools: [],
-          },
-        ];
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [] });
       }
-      if (!session.streaming) {
-        session.streaming = true;
-      }
+      streamingMessages[session.id] = buf;
+      if (!session.streaming) session.streaming = true;
       return true;
     } else if (content?.Thinking) {
-      const lastMsg = session.messages[session.messages.length - 1];
-      // Append only if the last assistant message is a pure thinking block
-      // (empty content, no tools). Otherwise start a new message.
-      if (
-        lastMsg &&
-        lastMsg.role === "assistant" &&
-        !lastMsg.content &&
-        (!lastMsg.tools || lastMsg.tools.length === 0)
-      ) {
-        if (!lastMsg.thinking) {
-          lastMsg.thinking = { content: "", elapsedMs: 0 };
-        }
+      const buf = streamingMessages[session.id] ?? [];
+      const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content && (!lastMsg.tools || lastMsg.tools.length === 0)) {
+        if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsedMs: 0 };
         lastMsg.thinking.content += content.Thinking.thinking ?? "";
       } else {
-        session.messages = [
-          ...session.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 },
-            tools: [],
-          },
-        ];
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] });
       }
-      if (!session.streaming) {
-        session.streaming = true;
-      }
+      streamingMessages[session.id] = buf;
+      if (!session.streaming) session.streaming = true;
       return true;
     }
   } else if (event.ToolCallDelta) {
     const delta = event.ToolCallDelta;
-    let lastMsg = session.messages[session.messages.length - 1];
+    const buf = streamingMessages[session.id] ?? [];
+    let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      // 创建新的 assistant 消息
-      session.messages = [
-        ...session.messages,
-        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
-      ];
-      lastMsg = session.messages[session.messages.length - 1];
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
     let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
     if (!tool) {
-      tool = {
-        id: delta.tool_id,
-        toolName: delta.tool_name,
-        status: "running",
-        arguments: "",
-        folded: true,
-      };
+      tool = { id: delta.tool_id, toolName: delta.tool_name, status: "running", arguments: "", folded: true };
       lastMsg.tools.push(tool);
     }
     if (delta.arguments_delta) {
       tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
     }
-    if (!session.streaming) {
-      session.streaming = true;
-    }
+    streamingMessages[session.id] = buf;
+    if (!session.streaming) session.streaming = true;
     return true;
   } else if (event.Completed || event.Error) {
     if (session.streaming) {
       session.streaming = false;
       session.updatedAt = new Date().toISOString();
+      // Merge streaming buffer into session messages
+      const buf = streamingMessages[session.id] ?? [];
+      if (buf.length > 0) {
+        session.messages = [...session.messages, ...buf];
+        streamingMessages[session.id] = [];
+      }
       // Auto-send queued message when streaming ends
       if (session.queuedInput) {
         const text = session.queuedInput;
         session.queuedInput = null;
-        session.messages = [
-          ...session.messages,
-          { id: crypto.randomUUID(), role: "user", content: text, thinking: null, tools: [] },
-        ];
-        api.sendMessage(session.id, text).catch((e) => {
-          console.error("Failed to send queued message:", e);
-        });
+        session.messages = [...session.messages, { id: crypto.randomUUID(), role: "user", content: text, thinking: null, tools: [] }];
+        api.sendMessage(session.id, text).catch((e) => console.error("Failed to send queued message:", e));
       }
       return true;
     }
@@ -502,14 +470,11 @@ function handleToolEvent(session: SessionState, event: any): boolean {
       if (start.arguments) found.tool.arguments = start.arguments;
       return true;
     }
-    let lastMsg = session.messages[session.messages.length - 1];
+    const buf = streamingMessages[session.id] ?? [];
+    let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      // 创建新的 assistant 消息来承载 tool
-      session.messages = [
-        ...session.messages,
-        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
-      ];
-      lastMsg = session.messages[session.messages.length - 1];
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
     let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
@@ -527,6 +492,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
       tool.status = "running";
       if (start.arguments) tool.arguments = start.arguments;
     }
+    streamingMessages[session.id] = buf;
     return true;
   } else if (event.End) {
     const end = event.End;
@@ -547,14 +513,11 @@ function handleToolEvent(session: SessionState, event: any): boolean {
       }
       return true;
     }
-    let lastMsg = session.messages[session.messages.length - 1];
+    const buf = streamingMessages[session.id] ?? [];
+    let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      // 没有 assistant 消息，创建一个空的
-      session.messages = [
-        ...session.messages,
-        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
-      ];
-      lastMsg = session.messages[session.messages.length - 1];
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
     let tool = lastMsg.tools.find((t) => t.id === end.tool_id);
@@ -582,6 +545,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
     if (end.is_error) {
       showNotification(`${end.tool_name} failed`, "error", 4000);
     }
+    streamingMessages[session.id] = buf;
     return true;
   } else if (event.Progress) {
     const progress = event.Progress;
@@ -591,13 +555,11 @@ function handleToolEvent(session: SessionState, event: any): boolean {
       found.tool.tokens = progress.tokens;
       return true;
     }
-    let lastMsg = session.messages[session.messages.length - 1];
+    const buf = streamingMessages[session.id] ?? [];
+    let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      session.messages = [
-        ...session.messages,
-        { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] },
-      ];
-      lastMsg = session.messages[session.messages.length - 1];
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
     let tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
@@ -613,6 +575,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
     }
     tool.progress = progress.message;
     tool.tokens = progress.tokens;
+    streamingMessages[session.id] = buf;
     return true;
   }
   return false;
@@ -628,11 +591,21 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
     } else if (typeof state === "object") {
       if ((state.TurnCompleted || state.Stopped) && session.streaming) {
         session.streaming = false;
+        const buf = streamingMessages[session.id] ?? [];
+        if (buf.length > 0) {
+          session.messages = [...session.messages, ...buf];
+          streamingMessages[session.id] = [];
+        }
         return true;
       }
     }
   } else if (event.Error && session.streaming) {
     session.streaming = false;
+    const buf = streamingMessages[session.id] ?? [];
+    if (buf.length > 0) {
+      session.messages = [...session.messages, ...buf];
+      streamingMessages[session.id] = [];
+    }
     showNotification("Agent error: " + (event.Error.message ?? "Unknown"), "error", 5000);
     return true;
   } else if (event.PermissionRequest) {
@@ -662,6 +635,11 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
 function handleSystemEvent(session: SessionState, event: any): boolean {
   if (event.Shutdown && session.streaming) {
     session.streaming = false;
+    const buf = streamingMessages[session.id] ?? [];
+    if (buf.length > 0) {
+      session.messages = [...session.messages, ...buf];
+      streamingMessages[session.id] = [];
+    }
     showNotification("Session ended", "info", 3000);
     return true;
   }

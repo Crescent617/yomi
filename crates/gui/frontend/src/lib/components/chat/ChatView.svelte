@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, addUserMessage } from "../../state.svelte";
+  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, addUserMessage, streamingMessages } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
   import RightPanel from "../layout/RightPanel.svelte";
@@ -140,6 +140,12 @@
       const session = sessionState.sessions.find(s => s.id === id);
       if (session) {
         loadSessionMessages(id, msgs);
+        // Merge any stale streaming buffer (defensive)
+        const buf = streamingMessages[id] ?? [];
+        if (buf.length > 0) {
+          session.messages = [...session.messages, ...buf];
+          streamingMessages[id] = [];
+        }
       }
       // Send the home input
       const text = homeInput.trim();

@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { getActiveSession } from "../../state.svelte";
+  import { getActiveSession, getDisplayMessages } from "../../state.svelte";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SystemBubble from "./SystemBubble.svelte";
 
   const activeSession = $derived(getActiveSession());
+  const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let isNearBottom = $state(true);
@@ -28,8 +29,8 @@
   let lastFingerprint = $state("");
 
   function getFingerprint() {
-    if (!activeSession?.messages?.length) return "";
-    const last = activeSession.messages[activeSession.messages.length - 1];
+    if (!displayMessages?.length) return "";
+    const last = displayMessages[displayMessages.length - 1];
     const parts: string[] = [last.id, last.role, last.content.length.toString()];
     if (last.thinking) parts.push(last.thinking.content.length.toString());
     if (last.tools) {
@@ -61,8 +62,8 @@
 
 {#if activeSession}
   <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4" style="scrollbar-width: thin;">
-    {#each activeSession.messages as message, index (message.id)}
-      {@const isLastMessage = index === activeSession.messages.length - 1}
+    {#each displayMessages as message, index (message.id)}
+      {@const isLastMessage = index === displayMessages.length - 1}
       {@const isStreaming = activeSession.streaming && isLastMessage}
       {#if message.role === "user"}
         <UserBubble {message} />
