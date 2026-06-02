@@ -3,6 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 const DEFAULT_TIMEOUT = 30000; // 30s
 const PING_TIMEOUT = 5000;     // 5s
 
+async function invokeCmd<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  const promise: Promise<T> = args
+    ? invoke(cmd, args as Record<string, unknown>)
+    : invoke(cmd);
+  return withTimeout(promise, DEFAULT_TIMEOUT, cmd);
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -14,8 +24,6 @@ async function withTimeout<T>(
     timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
 
-  // If an external signal is provided, race against it as well so the caller
-  // can drop the request on component unmount or navigation.
   const result = signal
     ? await Promise.race([
         promise,
@@ -41,39 +49,23 @@ export interface ProjectInfo {
 }
 
 export async function listProjects(): Promise<ProjectInfo[]> {
-  return withTimeout(invoke("list_projects"), DEFAULT_TIMEOUT, "list_projects");
+  return invokeCmd("list_projects");
 }
 
 export async function createProject(dir: string, name?: string): Promise<ProjectInfo> {
-  return withTimeout(
-    invoke("create_project", { dir, name }),
-    DEFAULT_TIMEOUT,
-    "create_project"
-  );
+  return invokeCmd("create_project", { dir, name });
 }
 
 export async function getProject(projectId: string): Promise<ProjectInfo | null> {
-  return withTimeout(
-    invoke("get_project", { projectId }),
-    DEFAULT_TIMEOUT,
-    "get_project"
-  );
+  return invokeCmd("get_project", { projectId });
 }
 
 export async function renameProject(projectId: string, name: string): Promise<void> {
-  return withTimeout(
-    invoke("rename_project", { projectId, name }),
-    DEFAULT_TIMEOUT,
-    "rename_project"
-  );
+  return invokeCmd("rename_project", { projectId, name });
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  return withTimeout(
-    invoke("delete_project", { projectId }),
-    DEFAULT_TIMEOUT,
-    "delete_project"
-  );
+  return invokeCmd("delete_project", { projectId });
 }
 
 // ── Session API ──────────────────────────────────────────────────────────
@@ -97,10 +89,9 @@ export async function listSessions(
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
-  const result = await withTimeout(
-    invoke<{ sessions: unknown[]; has_more: boolean }>("list_sessions", { projectId, before, limit }),
-    DEFAULT_TIMEOUT,
+  const result = await invokeCmd<{ sessions: unknown[]; has_more: boolean }>(
     "list_sessions",
+    { projectId, before, limit }
   );
   return {
     sessions: result.sessions.map((s: unknown) => {
@@ -119,11 +110,7 @@ export async function listSessions(
 }
 
 export async function cancelSession(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("cancel_session", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "cancel_session",
-  );
+  return invokeCmd("cancel_session", { sessionId });
 }
 
 export async function respondPermission(
@@ -132,11 +119,7 @@ export async function respondPermission(
   approved: boolean,
   remember: boolean = false,
 ): Promise<void> {
-  return withTimeout(
-    invoke("respond_permission", { sessionId, reqId, approved, remember }),
-    DEFAULT_TIMEOUT,
-    "respond_permission",
-  );
+  return invokeCmd("respond_permission", { sessionId, reqId, approved, remember });
 }
 
 export async function respondAskUser(
@@ -144,15 +127,11 @@ export async function respondAskUser(
   reqId: string,
   answers: [string, string][],
 ): Promise<void> {
-  return withTimeout(
-    invoke("respond_ask_user", { sessionId, reqId, answers }),
-    DEFAULT_TIMEOUT,
-    "respond_ask_user",
-  );
+  return invokeCmd("respond_ask_user", { sessionId, reqId, answers });
 }
 
 export async function getCwd(): Promise<string> {
-  return withTimeout(invoke("get_cwd"), DEFAULT_TIMEOUT, "get_cwd");
+  return invokeCmd("get_cwd");
 }
 
 export async function createSession(
@@ -160,152 +139,94 @@ export async function createSession(
   level: string = "safe",
   projectId?: string,
 ): Promise<string> {
-  return withTimeout(
-    invoke("create_session", { projectId, workingDir, autoApproveLevel: level }),
-    DEFAULT_TIMEOUT,
-    "create_session",
-  );
+  return invokeCmd("create_session", { projectId, workingDir, autoApproveLevel: level });
 }
 
 export async function restoreSession(
   sessionId: string,
   level: string = "safe",
 ): Promise<void> {
-  return withTimeout(
-    invoke("restore_session", { sessionId, autoApproveLevel: level }),
-    DEFAULT_TIMEOUT,
-    "restore_session",
-  );
+  return invokeCmd("restore_session", { sessionId, autoApproveLevel: level });
 }
 
 export async function forkSession(
   parentId: string,
   level: string = "safe",
 ): Promise<string> {
-  return withTimeout(
-    invoke("fork_session", { parentId, autoApproveLevel: level }),
-    DEFAULT_TIMEOUT,
-    "fork_session",
-  );
+  return invokeCmd("fork_session", { parentId, autoApproveLevel: level });
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("delete_session", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "delete_session",
-  );
+  return invokeCmd("delete_session", { sessionId });
 }
 
 export async function shutdownSession(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("shutdown_session", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "shutdown_session",
-  );
+  return invokeCmd("shutdown_session", { sessionId });
 }
 
-export async function sendMessage(
-  sessionId: string,
-  content: string,
-): Promise<void> {
-  return withTimeout(
-    invoke("send_message", { sessionId, content }),
-    DEFAULT_TIMEOUT,
-    "send_message",
-  );
+export async function sendMessage(sessionId: string, content: string): Promise<void> {
+  return invokeCmd("send_message", { sessionId, content });
 }
 
 export async function subscribe(sessionId: string, level: string = "safe"): Promise<void> {
-  return withTimeout(
-    invoke("subscribe", { sessionId, autoApproveLevel: level }),
-    DEFAULT_TIMEOUT,
-    "subscribe",
-  );
+  return invokeCmd("subscribe", { sessionId, autoApproveLevel: level });
 }
 
 export async function unsubscribe(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("unsubscribe", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "unsubscribe",
-  );
+  return invokeCmd("unsubscribe", { sessionId });
 }
 
 export async function getMessages(sessionId: string): Promise<unknown[]> {
-  return withTimeout(
-    invoke("get_messages", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "get_messages",
-  );
+  return invokeCmd("get_messages", { sessionId });
 }
 
 export async function getCheckpoints(sessionId: string): Promise<unknown[]> {
-  return withTimeout(
-    invoke("get_checkpoints", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "get_checkpoints",
-  );
+  return invokeCmd("get_checkpoints", { sessionId });
 }
 
 export async function rewind(sessionId: string, messageId: string): Promise<void> {
-  return withTimeout(
-    invoke("rewind", { sessionId, messageId }),
-    DEFAULT_TIMEOUT,
-    "rewind",
-  );
+  return invokeCmd("rewind", { sessionId, messageId });
 }
 
 export async function listSkills(): Promise<unknown[]> {
-  return withTimeout(invoke("list_skills"), DEFAULT_TIMEOUT, "list_skills");
+  return invokeCmd("list_skills");
 }
 
 export async function reloadConfig(): Promise<void> {
-  return withTimeout(invoke("reload_config"), DEFAULT_TIMEOUT, "reload_config");
+  return invokeCmd("reload_config");
 }
 
 export async function compactSession(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("compact_session", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "compact_session",
-  );
+  return invokeCmd("compact_session", { sessionId });
 }
 
 export async function setPermissionLevel(sessionId: string, level: string): Promise<void> {
-  return withTimeout(
-    invoke("set_permission_level", { sessionId, level }),
-    DEFAULT_TIMEOUT,
-    "set_permission_level",
-  );
+  return invokeCmd("set_permission_level", { sessionId, level });
 }
 
 export async function startGoal(sessionId: string, description: string): Promise<void> {
-  return withTimeout(
-    invoke("start_goal", { sessionId, description }),
-    DEFAULT_TIMEOUT,
-    "start_goal",
-  );
+  return invokeCmd("start_goal", { sessionId, description });
 }
 
 export async function stopGoal(sessionId: string): Promise<void> {
-  return withTimeout(
-    invoke("stop_goal", { sessionId }),
-    DEFAULT_TIMEOUT,
-    "stop_goal",
-  );
+  return invokeCmd("stop_goal", { sessionId });
 }
 
 export async function getConfigToml(): Promise<{ content: string; path: string }> {
-  return withTimeout(invoke("get_config_toml"), DEFAULT_TIMEOUT, "get_config_toml");
+  return invokeCmd("get_config_toml");
 }
 
 export async function saveConfigToml(content: string): Promise<void> {
-  return withTimeout(invoke("save_config_toml", { content }), DEFAULT_TIMEOUT, "save_config_toml");
+  return invokeCmd("save_config_toml", { content });
 }
 
-export async function getConfig(): Promise<{ model: string; context_window: number; provider: string; auto_approve: string }> {
-  return withTimeout(invoke("get_config"), DEFAULT_TIMEOUT, "get_config");
+export async function getConfig(): Promise<{
+  model: string;
+  context_window: number;
+  provider: string;
+  auto_approve: string;
+}> {
+  return invokeCmd("get_config");
 }
 
 export async function getUsageSummary(): Promise<{
@@ -315,7 +236,7 @@ export async function getUsageSummary(): Promise<{
   total_tokens: number;
   request_count: number;
 }> {
-  return withTimeout(invoke("get_usage_summary"), DEFAULT_TIMEOUT, "get_usage_summary");
+  return invokeCmd("get_usage_summary");
 }
 
 export async function getDailyUsage(days: number): Promise<
@@ -329,7 +250,7 @@ export async function getDailyUsage(days: number): Promise<
     models: string[];
   }[]
 > {
-  return withTimeout(invoke("get_daily_usage", { days }), DEFAULT_TIMEOUT, "get_daily_usage");
+  return invokeCmd("get_daily_usage", { days });
 }
 
 export async function getSessionUsage(sessionId: string): Promise<{
@@ -339,11 +260,17 @@ export async function getSessionUsage(sessionId: string): Promise<{
   total_tokens: number;
   request_count: number;
 }> {
-  return withTimeout(invoke("get_session_usage", { sessionId }), DEFAULT_TIMEOUT, "get_session_usage");
+  return invokeCmd("get_session_usage", { sessionId });
 }
 
-export async function getTodos(sessionId: string): Promise<{ todos: { id: string; content: string; status: string }[] }> {
-  return withTimeout(invoke("get_todos", { sessionId }), DEFAULT_TIMEOUT, "get_todos");
+export async function getTodos(sessionId: string): Promise<{
+  todos: { id: string; content: string; status: string }[];
+}> {
+  return invokeCmd("get_todos", { sessionId });
+}
+
+export async function renameSession(sessionId: string, title: string): Promise<void> {
+  return invokeCmd("rename_session", { sessionId, title });
 }
 
 export async function ping(): Promise<boolean> {

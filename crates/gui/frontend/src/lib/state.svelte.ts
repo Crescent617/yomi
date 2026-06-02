@@ -88,6 +88,7 @@ export interface SessionState {
   queuedInput: string | null;
   updatedAt: string;
   permissionLevel?: string;
+  compacting?: boolean;
 }
 
 export const appState = $state({
@@ -177,6 +178,7 @@ export function addUserMessage(sessionId: string, text: string) {
     ],
     updatedAt: now,
     alias: session.alias ?? text.slice(0, 20),
+    streaming: true,
   });
 }
 
@@ -413,6 +415,7 @@ interface ModelChunk {
   ToolCallDelta?: { tool_id: string; tool_name: string; arguments_delta?: string };
   Completed?: Record<string, never>;
   Error?: { message: string };
+  Compacting?: { active: boolean };
 }
 
 interface ToolStart {
@@ -557,6 +560,16 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     }
     streamingMessages[session.id] = buf;
     if (!session.streaming) session.streaming = true;
+    return true;
+  } else if (event.Compacting) {
+    const active = event.Compacting.active;
+    session.compacting = active;
+    if (!active) {
+      // Compaction finished — reload messages to reflect compacted history
+      api.getMessages(session.id).then((msgs) => {
+        loadSessionMessages(session.id, msgs);
+      }).catch((e: Error) => console.error("Failed to reload messages after compaction:", e));
+    }
     return true;
   } else if (event.Completed || event.Error) {
     if (session.streaming) {

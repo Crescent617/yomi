@@ -176,6 +176,7 @@
       return;
     }
     try {
+      await api.renameSession(sessionId, name);
       const session = sessionState.sessions.find((s) => s.id === sessionId);
       if (session) session.alias = name;
       showNotification("Session renamed", "success", 2000);

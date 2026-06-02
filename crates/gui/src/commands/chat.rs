@@ -253,3 +253,18 @@ pub async fn stop_goal(
         .map_err(GuiError::kernel)?;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn rename_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    title: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .rename_session(&sid, title)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}

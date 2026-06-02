@@ -514,6 +514,13 @@ impl KernelServer {
                 "get_todos_failed",
                 self.coordinator.get_todos(&SessionId(session_id)).await,
             ),
+            RequestMethod::RenameSession { session_id, title } => rpc_body(
+                "rename_session_failed",
+                self.coordinator
+                    .rename_session(&SessionId(session_id), title)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
             RequestMethod::ShutdownSession { session_id } => rpc_body(
                 "shutdown_failed",
                 self.coordinator

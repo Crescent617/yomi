@@ -46,6 +46,7 @@ pub fn run() {
             commands::chat::get_todos,
             commands::chat::set_permission_level,
             commands::chat::start_goal,
+            commands::chat::rename_session,
             commands::chat::stop_goal,
             commands::checkpoint::get_checkpoints,
             commands::checkpoint::rewind,

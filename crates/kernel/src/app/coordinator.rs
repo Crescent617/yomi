@@ -252,6 +252,11 @@ impl Coordinator {
         self.project_store.update_name(id, &name).await
     }
 
+    /// Rename a session (update title in storage)
+    pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
+        self.session_store().update_title(id, &title).await
+    }
+
     /// Delete a project (only if it has no sessions)
     pub async fn delete_project(&self, id: &ProjectId) -> Result<()> {
         let (sessions, _) = self.session_store().list(Some(id), None, 1).await?;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, CheckCircle2 } from "lucide-svelte";
+  import { Loader2, CheckCircle2, Database } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import { getDisplayMessages } from "../../state.svelte";
   import { formatElapsed, formatTokens } from "../../utils";
@@ -117,12 +117,14 @@
   });
 </script>
 
-{#if session?.streaming || streamingTokens > 0 || totalTokens > 0}
+{#if session?.streaming || session?.compacting || streamingTokens > 0 || totalTokens > 0}
   <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-[28px] font-mono">
     <!-- Left: streaming status -->
     <div class="flex items-center gap-1.5 min-w-0">
       {#if session?.streaming}
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
+      {:else if session?.compacting}
+        <Database size={12} class="animate-spin text-amber-500 shrink-0" />
       {:else if streamingTokens > 0}
         <CheckCircle2 size={12} class="text-green-500 shrink-0" />
       {/if}
@@ -133,6 +135,10 @@
 
       {#if session?.streaming && elapsedMs > 0}
         <span class="text-muted-foreground/70 shrink-0">· {formatElapsed(elapsedMs)}</span>
+      {/if}
+
+      {#if session?.compacting}
+        <span class="text-amber-500/80 shrink-0">· compacting</span>
       {/if}
 
       {#if currentTool}

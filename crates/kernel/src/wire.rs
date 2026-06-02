@@ -74,6 +74,10 @@ pub enum RequestMethod {
     GetTodos {
         session_id: String,
     },
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
     ShutdownSession {
         session_id: String,
     },

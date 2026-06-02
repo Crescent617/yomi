@@ -1,7 +1,7 @@
 <script lang="ts">
 import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
 import * as api from "../../api";
-import { sessionState, addUserMessage, getActiveSession, showNotification } from "../../state.svelte";
+import { sessionState, addUserMessage, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
 import { fsProvider } from "../../fs/factory";
 import type { FileEntry } from "../../fs/provider";
@@ -175,6 +175,23 @@ async function handleCommand(text: string) {
         await api.setPermissionLevel(sessionId, "dangerous");
         showNotification("YOLO mode enabled — all tools will be auto-approved", "info", 5000);
         break;
+      case "/undo":
+        {
+          const checkpoints = await api.getCheckpoints(sessionId) as any[];
+          if (!Array.isArray(checkpoints) || checkpoints.length < 2) {
+            showNotification("No checkpoint to undo", "error", 3000);
+            return;
+          }
+          const sorted = [...checkpoints].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0));
+          const target = sorted[sorted.length - 2] as any;
+          if (!target?.message_id) {
+            showNotification("No checkpoint to undo", "error", 3000);
+            return;
+          }
+          await api.rewind(sessionId, target.message_id as string);
+          showNotification("Undo last turn", "info", 3000);
+        }
+        break;
       case "/safe":
         await api.setPermissionLevel(sessionId, "safe");
         showNotification("Permission level set to Safe", "info", 3000);
@@ -185,7 +202,13 @@ async function handleCommand(text: string) {
         break;
       case "/compact":
         await api.compactSession(sessionId);
-        showNotification("Session compacted", "info", 3000);
+        showNotification("Session compaction requested", "info", 3000);
+        // Reload messages after a short delay to reflect compacted state
+        setTimeout(() => {
+          api.getMessages(sessionId).then((msgs) => {
+            loadSessionMessages(sessionId, msgs);
+          }).catch((e: Error) => console.error("Failed to reload after compact:", e));
+        }, 2000);
         break;
       case "/reload":
         await api.reloadConfig();

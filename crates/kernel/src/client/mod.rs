@@ -85,6 +85,7 @@ pub trait CoordinatorApi: Send + Sync {
         message_id: MessageId,
         target: RewindTarget,
     ) -> Result<()>;
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()>;
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
@@ -202,6 +203,10 @@ impl CoordinatorApi for Coordinator {
         target: RewindTarget,
     ) -> Result<()> {
         self.rewind_session(session_id, message_id, target).await
+    }
+
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
+        self.rename_session(session_id, title).await
     }
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
@@ -885,6 +890,15 @@ impl CoordinatorApi for RemoteCoordinator {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
             cmd: ControlCommand::Rewind { message_id, target },
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
+        self.call(RequestMethod::RenameSession {
+            session_id: session_id.0.clone(),
+            title,
         })
         .await?;
         Ok(())
