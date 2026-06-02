@@ -225,6 +225,7 @@ export async function getConfig(): Promise<{
   context_window: number;
   provider: string;
   auto_approve: string;
+  full_config: string;
 }> {
   return invokeCmd("get_config");
 }

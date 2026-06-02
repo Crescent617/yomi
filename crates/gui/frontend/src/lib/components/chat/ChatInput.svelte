@@ -1,5 +1,6 @@
 <script lang="ts">
 import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
+import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
 import { sessionState, addUserMessage, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
@@ -24,7 +25,7 @@ let commandListRef: HTMLDivElement | null = $state(null);
 let showFilePicker = $state(false);
 let filePickerAnchor = $state(0);
 let fileEntries = $state<FileEntry[]>([]);
-let fileExpanded = $state<Set<string>>(new Set());
+let fileExpanded = new SvelteSet<string>();
 let selectedFileIdx = $state(0);
 let filePickerRoot = $state("");
 let fileListRef: HTMLDivElement | null = $state(null);
@@ -336,10 +337,8 @@ function handleKeydown(e: KeyboardEvent) {
       if (entry) {
         if (entry.isDirectory) {
           // toggle expand
-          const next = new Set(fileExpanded);
-          if (next.has(entry.path)) next.delete(entry.path);
-          else next.add(entry.path);
-          fileExpanded = next;
+          if (fileExpanded.has(entry.path)) fileExpanded.delete(entry.path);
+          else fileExpanded.add(entry.path);
         } else {
           acceptFile(entry.path);
         }
@@ -406,10 +405,8 @@ $effect(() => {
 });
 
 function toggleDir(path: string) {
-  const next = new Set(fileExpanded);
-  if (next.has(path)) next.delete(path);
-  else next.add(path);
-  fileExpanded = next;
+  if (fileExpanded.has(path)) fileExpanded.delete(path);
+  else fileExpanded.add(path);
 }
 
 function getSession(sessionId: string) {
@@ -535,19 +532,27 @@ function getSession(sessionId: string) {
       </button>
     {/if}
   </div>
-  {#if activeSession?.permissionLevel}
-    <div class="flex items-center justify-end gap-2 mt-1.5 px-1">
-      <button
-        type="button"
-        onclick={handlePermissionClick}
-        class="text-[10px] uppercase tracking-wider font-medium rounded px-1.5 py-0.5 transition-colors
-               {activeSession.permissionLevel === 'dangerous' ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20'
-                 : activeSession.permissionLevel === 'caution' ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20'
-                 : 'text-green-500 bg-green-500/10 hover:bg-green-500/20'}"
-        title="Click to cycle permission level"
-      >
-        {activeSession.permissionLevel}
-      </button>
+  {#if activeSession}
+    <div class="flex items-center justify-between mt-1.5 px-1">
+      <div class="flex items-center gap-1.5">
+        <span class="text-[10px] text-muted-foreground uppercase tracking-wider">Permission</span>
+        <button
+          type="button"
+          onclick={handlePermissionClick}
+          class="text-[10px] uppercase tracking-wider font-medium rounded px-1.5 py-0.5 transition-colors
+                 {activeSession.permissionLevel === 'dangerous' ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20'
+                   : activeSession.permissionLevel === 'caution' ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20'
+                   : 'text-green-500 bg-green-500/10 hover:bg-green-500/20'}"
+          title="Click to cycle: safe → caution → dangerous"
+        >
+          {activeSession.permissionLevel ?? 'safe'}
+        </button>
+      </div>
+      <span class="text-[10px] text-muted-foreground">
+        {activeSession.permissionLevel === 'dangerous' ? 'Most tools auto-approved'
+          : activeSession.permissionLevel === 'caution' ? 'Safe tools auto-approved'
+          : 'All tools require approval'}
+      </span>
     </div>
   {/if}
 </div>

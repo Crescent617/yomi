@@ -16,7 +16,7 @@
   } = $props();
 
   let entries = $state<FileEntry[]>([]);
-  let expanded = $state<Set<string>>(new Set());
+  let expanded = $state<Record<string, boolean>>({});
   let loaded = $state(false);
 
   async function load() {
@@ -34,26 +34,19 @@
     }
   }
 
-  async function init() {
-    await load();
-    if (depth === 0 && expanded.size === 0) {
-      const firstDir = entries.find(e => e.isDirectory);
-      if (firstDir) {
-        expanded = new Set([firstDir.path]);
-      }
-    }
-  }
-
   onMount(() => {
-    if (depth === 0) init();
+    load().then(() => {
+      if (depth === 0 && Object.keys(expanded).length === 0) {
+        const firstDir = entries.find(e => e.isDirectory);
+        if (firstDir) {
+          expanded = { [firstDir.path]: true };
+        }
+      }
+    });
   });
 
   function toggleDir(entryPath: string) {
-    load();
-    const next = new Set(expanded);
-    if (next.has(entryPath)) next.delete(entryPath);
-    else next.add(entryPath);
-    expanded = next;
+    expanded = { ...expanded, [entryPath]: !expanded[entryPath] };
   }
 
   function getFileIcon(entry: FileEntry) {
@@ -77,7 +70,6 @@
 {#if depth === 0 || loaded}
   <div class="flex flex-col gap-0.5 {depth > 0 ? 'ml-3 border-l border-border pl-1' : ''}">
     {#each entries as entry (entry.path)}
-      {@const isExpanded = expanded.has(entry.path)}
       {@const Icon = getFileIcon(entry)}
       <div class="flex flex-col">
         <button
@@ -86,7 +78,7 @@
           onclick={() => handleClick(entry)}
         >
           {#if entry.isDirectory}
-            {#if isExpanded}
+            {#if !!expanded[entry.path]}
               <ChevronDown size={14} class="shrink-0 text-muted-foreground" />
             {:else}
               <ChevronRight size={14} class="shrink-0 text-muted-foreground" />
@@ -103,7 +95,7 @@
           <span class="truncate {entry.isDirectory ? 'font-medium' : ''}">{entry.name}</span>
         </button>
 
-        {#if entry.isDirectory && isExpanded}
+        {#if entry.isDirectory && !!expanded[entry.path]}
           <FileTree path={entry.path} {onFileClick} depth={depth + 1} />
         {/if}
       </div>

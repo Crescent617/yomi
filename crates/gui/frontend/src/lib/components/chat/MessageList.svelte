@@ -66,7 +66,7 @@
 </script>
 
 {#if activeSession}
-  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4" style="scrollbar-width: thin;">
+  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4">
     {#each displayMessages as message, index (message.id)}
       {@const isLastMessage = index === displayMessages.length - 1}
       {@const isStreaming = activeSession.streaming && isLastMessage}

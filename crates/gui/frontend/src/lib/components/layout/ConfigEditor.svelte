@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Save, FileCode, RotateCcw, Check } from "lucide-svelte";
+  import { Save, FileCode, RotateCcw, Check, Zap } from "lucide-svelte";
   import * as api from "../../api";
   import { showNotification } from "../../state.svelte";
 
@@ -10,13 +10,18 @@
   let saving = $state(false);
   let dirty = $state(false);
   let saved = $state(false);
+  let fullConfig = $state("");
 
   async function load() {
     loading = true;
     try {
-      const result = await api.getConfigToml();
-      content = result.content;
-      filePath = result.path;
+      const [toml, config] = await Promise.all([
+        api.getConfigToml(),
+        api.getConfig().catch(() => null),
+      ]);
+      content = toml.content;
+      filePath = toml.path;
+      fullConfig = config?.full_config ?? "";
       dirty = false;
     } catch (e: any) {
       console.error("Failed to load config:", e);
@@ -35,6 +40,9 @@
       saved = true;
       setTimeout(() => saved = false, 2000);
       showNotification("Config saved", "success", 2000);
+      // Refresh runtime config after save
+      const c = await api.getConfig().catch(() => null);
+      fullConfig = c?.full_config ?? "";
     } catch (e: any) {
       console.error("Failed to save config:", e);
       showNotification(`Failed to save: ${e?.message ?? ""}`, "error", 4000);
@@ -94,20 +102,42 @@
     </div>
   </div>
 
-  <!-- Editor -->
-  <div class="flex-1 min-h-0 p-4">
-    {#if loading}
-      <div class="flex items-center justify-center h-full">
-        <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+  <!-- Two-column layout: runtime config (left) + editor (right) -->
+  <div class="flex-1 flex min-h-0">
+    <!-- Left: Full runtime config (read-only) -->
+    <div class="flex-1 min-w-0 border-r border-border overflow-hidden flex flex-col">
+      <div class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border">
+        <Zap class="w-4 h-4 text-muted-foreground" />
+        <span class="text-sm font-medium">Runtime Config</span>
       </div>
-    {:else}
-      <textarea
-        bind:value={content}
-        oninput={() => { dirty = true; saved = false; }}
-        onkeydown={handleKeydown}
-        class="w-full h-full resize-none rounded-lg border border-border bg-background p-4 font-mono text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        spellcheck={false}
-      ></textarea>
-    {/if}
+      <div class="flex-1 overflow-y-auto p-3">
+        {#if loading}
+          <div class="flex items-center justify-center py-8">
+            <div class="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+          </div>
+        {:else if fullConfig}
+          <pre class="text-xs font-mono text-muted-foreground leading-relaxed whitespace-pre-wrap">{fullConfig}</pre>
+        {:else}
+          <div class="text-sm text-muted-foreground">Failed to load runtime config</div>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Right: Editor -->
+    <div class="flex-1 min-h-0 p-4">
+      {#if loading}
+        <div class="flex items-center justify-center h-full">
+          <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      {:else}
+        <textarea
+          bind:value={content}
+          oninput={() => { dirty = true; saved = false; }}
+          onkeydown={handleKeydown}
+          class="w-full h-full resize-none rounded-lg border border-border bg-background p-4 font-mono text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          spellcheck={false}
+        ></textarea>
+      {/if}
+    </div>
   </div>
 </div>

@@ -85,12 +85,15 @@ pub async fn get_config(
     let provider = config.agent.model.provider.to_string();
 
     let auto_approve = config.auto_approve.to_string().to_lowercase();
+    let full_config = toml::to_string_pretty(&config)
+        .map_err(|e| GuiError::unknown(format!("Failed to serialize config: {e}")))?;
 
     Ok(serde_json::json!({
         "model": model,
         "context_window": context_window,
         "provider": provider,
         "auto_approve": auto_approve,
+        "full_config": full_config,
     }))
 }
 

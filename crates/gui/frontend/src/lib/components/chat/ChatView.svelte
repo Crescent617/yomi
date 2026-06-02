@@ -212,6 +212,28 @@
     closeTab(activeSession, id);
   }
 
+  let editingTitle = $state(false);
+  let titleValue = $state("");
+
+  async function confirmRenameTitle() {
+    if (!activeSession) return;
+    const name = titleValue.trim();
+    if (!name || name === (activeSession.alias ?? activeSession.id.slice(-8))) {
+      editingTitle = false;
+      return;
+    }
+    try {
+      await api.renameSession(activeSession.id, name);
+      activeSession.alias = name;
+      showNotification("Session renamed", "success", 2000);
+    } catch (e: any) {
+      console.error("Failed to rename session:", e?.message ?? e);
+      showNotification("Failed to rename session", "error", 3000);
+    } finally {
+      editingTitle = false;
+    }
+  }
+
   function levelLabel(level: string): string {
     switch (level) {
       case "safe": return "Safe";
@@ -273,9 +295,30 @@
   {#if activeSession}
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
-    <div class="flex items-center gap-2">
-      <span class="font-medium truncate" title={activeSession.alias ?? activeSession.id.slice(0, 8)}>{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
-      <span class="text-xs text-muted-foreground">{activeSession.projectPath}</span>
+    <div class="flex items-center gap-2 min-w-0">
+      {#if editingTitle}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          type="text"
+          bind:value={titleValue}
+          onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') confirmRenameTitle(); if (e.key === 'Escape') editingTitle = false; }}
+          onblur={() => confirmRenameTitle()}
+          class="flex-1 min-w-0 bg-background border border-border rounded px-2 py-0.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
+          autofocus
+        />
+      {:else}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span
+          class="font-medium truncate cursor-pointer hover:text-primary transition-colors"
+          title={activeSession.alias ?? activeSession.id.slice(-8)}
+          ondblclick={() => { editingTitle = true; titleValue = activeSession.alias ?? activeSession.id.slice(-8); }}
+          role="button"
+          tabindex="0"
+        >
+          {activeSession.alias ?? activeSession.id.slice(-8)}
+        </span>
+      {/if}
+      <span class="text-xs text-muted-foreground truncate">{activeSession.projectPath}</span>
     </div>
     <button
       type="button"

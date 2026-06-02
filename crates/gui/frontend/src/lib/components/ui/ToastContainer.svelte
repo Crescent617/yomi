@@ -24,7 +24,7 @@
   };
 </script>
 
-<div class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+<div class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
   {#each toasts as toast (toast.id)}
     {@const Icon = iconMap[toast.type]}
     <div

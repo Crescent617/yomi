@@ -43,16 +43,13 @@
   });
 
   // ===== expand/collapse =====
-  let expanded = $state(new Set<string>());
-  // always include the active project, and the most-recent project when no active session
-  const allExpanded = $derived.by(() => {
+  let expanded = $state<Record<string, boolean>>({});
+
+  function isExpanded(key: string): boolean {
     const active = getSession(sessionState.activeSessionId ?? "");
     const activeKey = active?.projectId ?? "";
-    const next = new Set(expanded);
-    if (activeKey) {
-      next.add(activeKey);
-    } else {
-      // No active session: auto-expand the project with the most recent session
+    if (activeKey && activeKey === key) return true;
+    if (!activeKey) {
       let latestProjectId = "";
       let latestTime = "";
       for (const s of sessionState.sessions) {
@@ -63,20 +60,16 @@
           latestProjectId = s.projectId;
         }
       }
-      if (latestProjectId) next.add(latestProjectId);
+      if (latestProjectId === key) return true;
     }
-    return next;
-  });
+    return !!expanded[key];
+  }
 
   function toggleGroup(key: string) {
-    const next = new Set(expanded);
-    if (next.has(key)) next.delete(key);
-    else {
-      next.add(key);
-      // Load sessions for this project when expanding
+    expanded = { ...expanded, [key]: !expanded[key] };
+    if (expanded[key]) {
       loadMoreSessions(key);
     }
-    expanded = next;
   }
 
   // ===== helpers =====
@@ -88,7 +81,7 @@
   }
 
   function formatShortId(id: string) {
-    return id.slice(0, 8);
+    return id.slice(-8);
   }
 
   // ===== per-project session loading =====
@@ -343,7 +336,6 @@
       {#each groups as [key, group] (key)}
         {@const isActiveProject =
           key === (getSession(sessionState.activeSessionId ?? "")?.projectId ?? "")}
-        {@const isExpanded = allExpanded.has(key)}
 
         <div class="rounded-md mb-0.5">
           <!-- project header -->
@@ -359,7 +351,7 @@
               onclick={() => toggleGroup(key)}
               title={group.name}
             >
-              {#if isExpanded}
+              {#if isExpanded(key)}
                 <FolderOpen size={13} class="shrink-0 opacity-70" />
               {:else}
                 <Folder size={13} class="shrink-0 opacity-70" />
@@ -424,7 +416,7 @@
             </button>
           </div>
 
-          {#if isExpanded}
+          {#if isExpanded(key)}
             <div class="ml-4 pl-2 border-l border-border/40 space-y-0.5 pb-1">
               {#each group.sessions as session (session.id)}
                 <div

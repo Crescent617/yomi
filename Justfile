@@ -43,6 +43,10 @@ gui-dev:
     cd crates/gui/frontend && npm install
     cd crates/gui && npx tauri dev
 
+gui-build:
+    cd crates/gui/frontend && npm install
+    cd crates/gui && npx tauri build
+
 build-release:
     cargo build --release
 

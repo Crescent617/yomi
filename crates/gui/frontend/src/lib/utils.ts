@@ -1,5 +1,5 @@
 export function formatShortId(id: string): string {
-  return id.slice(0, 8);
+  return id.slice(-8);
 }
 
 export function formatTimeAgo(date: Date | string): string {
