@@ -422,6 +422,7 @@ function getSession(sessionId: string) {
         <div class="px-3 py-4 text-sm text-muted-foreground text-center">No files found</div>
       {:else}
         {#each fileEntries as entry, i (entry.path)}
+          {@const Icon = getFileIcon(entry)}
           <button
             class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm transition-colors {i === selectedFileIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
             onclick={() => {
@@ -441,8 +442,7 @@ function getSession(sessionId: string) {
             {:else}
               <span class="w-3.5 shrink-0"></span>
             {/if}
-            <svelte:component
-              this={getFileIcon(entry)}
+            <Icon
               size={14}
               class="shrink-0 {entry.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
             />
@@ -453,14 +453,14 @@ function getSession(sessionId: string) {
           {#if entry.isDirectory && fileExpanded.has(entry.path)}
             {#await loadDir(entry.path) then children}
               {#each children as child (child.path)}
+                {@const ChildIcon = child.isDirectory ? Folder : File}
                 <button
                   class="flex items-center gap-2 w-full pl-8 pr-3 py-1 text-left text-xs transition-colors hover:bg-secondary/50"
                   onclick={() => {
                     if (!child.isDirectory) acceptFile(child.path);
                   }}
                 >
-                  <svelte:component
-                    this={child.isDirectory ? Folder : File}
+                  <ChildIcon
                     size={12}
                     class="shrink-0 {child.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
                   />
@@ -490,7 +490,7 @@ function getSession(sessionId: string) {
       }}
       placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file)"}
       rows={1}
-      class="flex-1 resize-none rounded-lg bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[40px] max-h-[200px]"
+      class="flex-1 resize-none rounded-lg bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px]"
     ></textarea>
     {#if isStreaming}
       <button

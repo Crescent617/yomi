@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../../api";
-  import { sessionState, projectState, sessionCursors, appState } from "../../state.svelte";
+  import { sessionState, projectState, sessionCursors, appState, getActiveSession } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
   import ChatView from "../chat/ChatView.svelte";
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
+  import ConfigEditor from "./ConfigEditor.svelte";
+  import RightPanel from "./RightPanel.svelte";
 
   let isDesktop = $state(false);
 
@@ -70,32 +72,40 @@
       console.error("Failed to load sessions for project:", projectId, e);
     }
   }
+
+  const activeSession = $derived(getActiveSession());
 </script>
 
-<div class="h-screen w-screen flex bg-background text-foreground overflow-hidden">
+<div class="fixed inset-0 flex bg-background text-foreground overflow-hidden">
   {#if isDesktop}
     <ActivityBar />
   {/if}
 
   <div class="flex-1 flex min-h-0 overflow-hidden">
-    {#if isDesktop && appState.activePanel !== "usage"}
-      <aside
-        class="flex flex-col border-r border-border transition-all {appState.sidebarCollapsed
-          ? 'w-16'
-          : 'w-64'} h-full"
-      >
-        <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
+    {#if appState.activePanel === "chat"}
+      {#if isDesktop}
+        <aside
+          class="flex flex-col border-r border-border shrink-0 {appState.sidebarCollapsed
+            ? 'w-16'
+            : 'w-64'}"
+        >
           <SessionBand collapsed={appState.sidebarCollapsed} />
-        </div>
-      </aside>
-    {/if}
-
-    <main class="flex-1 flex flex-col min-w-0 overflow-hidden">
-      {#if appState.activePanel === "chat"}
-        <ChatView />
-      {:else if appState.activePanel === "usage"}
-        <UsagePanel />
+        </aside>
       {/if}
-    </main>
+
+      <!-- ChatView directly as flex item -->
+      <ChatView
+        rightPanelCollapsed={appState.rightPanelCollapsed}
+        onToggleRightPanel={() => appState.rightPanelCollapsed = !appState.rightPanelCollapsed}
+      />
+
+      {#if isDesktop && !appState.rightPanelCollapsed}
+        <RightPanel session={activeSession} />
+      {/if}
+    {:else if appState.activePanel === "usage"}
+      <UsagePanel />
+    {:else if appState.activePanel === "config"}
+      <ConfigEditor />
+    {/if}
   </div>
 </div>

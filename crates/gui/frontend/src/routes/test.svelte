@@ -1,4 +1,5 @@
 <script lang="ts">
+  // @ts-ignore
   import { sessionState, getActiveSession } from "$lib/state.svelte";
 
   const activeSession = $derived(getActiveSession());

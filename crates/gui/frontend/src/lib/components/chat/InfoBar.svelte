@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Loader2, CheckCircle2, Info, AlertTriangle, XCircle, Check } from "lucide-svelte";
+  import { Loader2, CheckCircle2 } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
-  import { uiState, getDisplayMessages } from "../../state.svelte";
+  import { getDisplayMessages } from "../../state.svelte";
   import { formatElapsed, formatTokens } from "../../utils";
   import * as api from "../../api";
   import { onMount } from "svelte";
@@ -53,7 +53,7 @@
       if (msg.thinking) chars += msg.thinking.content.length;
       for (const tool of msg.tools ?? []) {
         chars += (tool.arguments ?? "").length;
-        chars += (tool.result ?? "").length;
+        chars += (tool.output ?? "").length;
       }
     }
     return Math.round(chars / 4);
@@ -83,6 +83,28 @@
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
     if (!session?.streaming) return null;
+
+    // Find latest assistant message with content/thinking
+    // If model is already outputting text/thinking, don't show "calling"
+    let latestOutputMsg: (typeof displayMessages[0]) | null = null;
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      const msg = displayMessages[i];
+      if (msg.role === "assistant") {
+        if (msg.content || msg.thinking) {
+          latestOutputMsg = msg;
+          break;
+        }
+      }
+    }
+
+    // If latest output message has content/thinking, suppress calling indicator
+    if (latestOutputMsg && (latestOutputMsg.content || latestOutputMsg.thinking)) {
+      // But still check if it's the *same* message that contains the running tool
+      // Only suppress if the latest message is a pure output (no running tools in it)
+      const hasRunningToolInLatest = latestOutputMsg.tools?.some(t => t.status === "running");
+      if (!hasRunningToolInLatest) return null;
+    }
+
     for (let i = displayMessages.length - 1; i >= 0; i--) {
       const msg = displayMessages[i];
       if (msg.role === "assistant" && msg.tools) {
@@ -95,7 +117,7 @@
   });
 </script>
 
-{#if session?.streaming || streamingTokens > 0 || uiState.notification || totalTokens > 0}
+{#if session?.streaming || streamingTokens > 0 || totalTokens > 0}
   <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-[28px] font-mono">
     <!-- Left: streaming status -->
     <div class="flex items-center gap-1.5 min-w-0">
@@ -121,7 +143,7 @@
       {/if}
     </div>
 
-    <!-- Right: model + ctx + notification -->
+    <!-- Right: model + ctx -->
     <div class="flex items-center gap-2 shrink-0">
       {#if config}
         <span class="text-muted-foreground/60">{config.model}</span>
@@ -129,23 +151,6 @@
         <span class="text-muted-foreground/60" class:text-amber-500={totalTokens > config.context_window * 0.8}>
           {formatTokens(totalTokens)} / {formatTokens(config.context_window)}
         </span>
-      {/if}
-
-      {#if uiState.notification}
-        <div class="flex items-center gap-1">
-          {#if uiState.notification.level === "info"}
-            <Info size={12} class="text-blue-500" />
-          {:else if uiState.notification.level === "warn"}
-            <AlertTriangle size={12} class="text-amber-500" />
-          {:else if uiState.notification.level === "error"}
-            <XCircle size={12} class="text-red-500" />
-          {:else}
-            <Check size={12} class="text-green-500" />
-          {/if}
-          <span class={uiState.notification.level === "error" ? "text-red-600" : uiState.notification.level === "warn" ? "text-amber-600" : "text-muted-foreground"}>
-            {uiState.notification.text}
-          </span>
-        </div>
       {/if}
     </div>
   </div>

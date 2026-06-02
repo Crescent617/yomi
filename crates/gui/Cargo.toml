@@ -21,6 +21,9 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 
+# Config TOML editing
+toml = { workspace = true }
+
 # Daemon lifecycle (shared with CLI)
 directories = { workspace = true }
 

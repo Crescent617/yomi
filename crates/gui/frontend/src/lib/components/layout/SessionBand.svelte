@@ -364,6 +364,7 @@
                 <Folder size={13} class="shrink-0 opacity-70" />
               {/if}
               {#if renamingProjectId === key}
+                <!-- svelte-ignore a11y_autofocus -->
                 <input
                   type="text"
                   bind:value={renameValue}
@@ -374,6 +375,9 @@
                 />
               {:else}
                 <span class="truncate font-medium">{group.name}</span>
+              {/if}
+              {#if group.sessions.some((s) => s.streaming)}
+                <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0"></span>
               {/if}
             </button>
 
@@ -404,8 +408,8 @@
                       Delete
                     </button>
                   </div>
-                  <!-- click outside to close -->
-                  <div class="fixed inset-0 z-10" onclick={() => showProjectMenu = null}></div>
+                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                  <div class="fixed inset-0 z-10" role="presentation" tabindex="-1" onclick={() => showProjectMenu = null}></div>
                 {/if}
               </div>
             {/if}
@@ -433,6 +437,7 @@
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') activateSession(session.id); }}
                 >
                   {#if renamingSessionId === session.id}
+                    <!-- svelte-ignore a11y_autofocus -->
                     <input
                       type="text"
                       bind:value={renameValue}
@@ -442,11 +447,12 @@
                       autofocus
                     />
                   {:else}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)} ondblclick={() => { renamingSessionId = session.id; renameValue = session.alias ?? formatShortId(session.id); }}>
                       {session.alias ?? formatShortId(session.id)}
                     </span>
                   {/if}
-                  <div class="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div class="flex items-center gap-1.5 shrink-0">
                     {#if session.streaming}
                       <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
                     {/if}
@@ -460,7 +466,7 @@
                     {/if}
                     <button
                       type="button"
-                      class="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                      class="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
                       onclick={(e: Event) => { e.stopPropagation(); deleteSession(session.id); }}
                       title="Delete session"
                     >

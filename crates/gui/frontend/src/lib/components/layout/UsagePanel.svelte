@@ -99,7 +99,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col overflow-y-auto">
+<div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
   <!-- Header -->
   <div class="shrink-0 px-6 py-4 border-b border-border">
     <div class="flex items-center justify-between">
@@ -195,25 +195,37 @@
           <div class="flex items-end gap-1 h-32 px-2">
             {#each daily as day (day.date)}
               {@const maxTokens = Math.max(...daily.map(d => d.prompt_tokens + d.completion_tokens + d.cached_tokens)) || 1}
-              <div class="flex-1 flex flex-col items-center gap-1 min-w-0" title={formatTokens(day)}>
+              {@const dayCache = day.prompt_tokens > 0 ? Math.round((day.cached_tokens / day.prompt_tokens) * 100) : 0}
+              <div class="flex-1 flex flex-col items-center gap-1 min-w-0 relative group" role="presentation" aria-hidden="true" style="--tip-x: 50%;" onmousemove={(e) => { e.currentTarget.style.setProperty('--tip-x', `${e.offsetX}px`); }}>
+                <!-- Hover tooltip -->
+                <div class="absolute bottom-full mb-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 w-max whitespace-nowrap" style="left: var(--tip-x); transform: translateX(-50%);">
+                  <div class="rounded-lg border border-border bg-popover shadow-md px-2.5 py-1.5 text-xs text-foreground">
+                    <div class="font-medium mb-1">{formatDate(day.date)}</div>
+                    <div class="text-muted-foreground">Prompt: <span class="text-foreground">{formatNumber(day.prompt_tokens)}</span></div>
+                    <div class="text-muted-foreground">Cached: <span class="text-green-500">{formatNumber(day.cached_tokens)}</span> ({dayCache}%)</div>
+                    <div class="text-muted-foreground">Completion: <span class="text-foreground">{formatNumber(day.completion_tokens)}</span></div>
+                    <div class="text-muted-foreground">Total: <span class="text-foreground">{formatNumber(day.prompt_tokens + day.cached_tokens + day.completion_tokens)}</span></div>
+                    <div class="text-muted-foreground">Requests: <span class="text-foreground">{formatNumber(day.request_count)}</span></div>
+                    {#if day.models.length > 0}
+                      <div class="text-muted-foreground mt-1">{day.models.join(', ')}</div>
+                    {/if}
+                  </div>
+                </div>
                 <div class="w-full flex gap-0.5 h-24 items-end">
                   <!-- Cached bar -->
                   <div
                     class="flex-1 bg-green-500/60 rounded-t-sm"
                     style="height: {barHeight(day.cached_tokens, maxTokens)}"
-                    title="Cached: {formatNumber(day.cached_tokens)}"
                   ></div>
                   <!-- Prompt bar -->
                   <div
                     class="flex-1 bg-primary/60 rounded-t-sm"
                     style="height: {barHeight(day.prompt_tokens, maxTokens)}"
-                    title="Prompt: {formatNumber(day.prompt_tokens)}"
                   ></div>
                   <!-- Completion bar -->
                   <div
                     class="flex-1 bg-primary rounded-t-sm"
                     style="height: {barHeight(day.completion_tokens, maxTokens)}"
-                    title="Completion: {formatNumber(day.completion_tokens)}"
                   ></div>
                 </div>
                 <span class="text-[10px] text-muted-foreground truncate w-full text-center">{formatDate(day.date)}</span>

@@ -3,6 +3,7 @@
   import { fsProvider } from "../../fs/factory";
   import type { FileEntry } from "../../fs/provider";
   import { onMount } from "svelte";
+  import FileTree from "./FileTree.svelte";
 
   let {
     path,
@@ -15,6 +16,7 @@
   } = $props();
 
   let entries = $state<FileEntry[]>([]);
+  // svelte-ignore state_referenced_locally
   let expanded = $state(depth === 0);
   let loaded = $state(false);
 
@@ -63,38 +65,38 @@
 
 {#if depth === 0 || (expanded && loaded)}
   <div class="flex flex-col gap-0.5 {depth > 0 ? 'ml-3 border-l border-border pl-1' : ''}">
-    {#each entries as entry (entry.path)}
-      <div class="flex flex-col">
-        <button
-          class="flex items-center gap-1.5 px-2 py-1 rounded text-sm hover:bg-secondary transition-colors text-left"
-          style="padding-left: {depth * 12 + 8}px"
-          onclick={() => handleClick(entry)}
-        >
+      {#each entries as entry (entry.path)}
+        {@const Icon = getFileIcon(entry)}
+        <div class="flex flex-col">
+          <button
+            class="flex items-center gap-1.5 px-2 py-1 rounded text-sm hover:bg-secondary transition-colors text-left"
+            style="padding-left: {depth * 12 + 8}px"
+            onclick={() => handleClick(entry)}
+          >
+            {#if entry.isDirectory}
+              {#if expanded}
+                <ChevronDown size={14} class="shrink-0 text-muted-foreground" />
+              {:else}
+                <ChevronRight size={14} class="shrink-0 text-muted-foreground" />
+              {/if}
+            {:else}
+              <span class="w-3.5 shrink-0"></span>
+            {/if}
+
+            <Icon
+              size={14}
+              class="shrink-0 {entry.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
+            />
+
+            <span class="truncate {entry.isDirectory ? 'font-medium' : ''}">{entry.name}</span>
+          </button>
+
           {#if entry.isDirectory}
             {#if expanded}
-              <ChevronDown size={14} class="shrink-0 text-muted-foreground" />
-            {:else}
-              <ChevronRight size={14} class="shrink-0 text-muted-foreground" />
+              <FileTree path={entry.path} {onFileClick} depth={depth + 1} />
             {/if}
-          {:else}
-            <span class="w-3.5 shrink-0"></span>
           {/if}
-
-          <svelte:component
-            this={getFileIcon(entry)}
-            size={14}
-            class="shrink-0 {entry.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
-          />
-
-          <span class="truncate {entry.isDirectory ? 'font-medium' : ''}">{entry.name}</span>
-        </button>
-
-        {#if entry.isDirectory}
-          {#if expanded}
-            <svelte:self path={entry.path} {onFileClick} depth={depth + 1} />
-          {/if}
-        {/if}
-      </div>
-    {/each}
+        </div>
+      {/each}
   </div>
 {/if}

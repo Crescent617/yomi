@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { MessageSquare, BarChart3 } from "lucide-svelte";
+  import { MessageSquare, BarChart3, Settings } from "lucide-svelte";
   import { appState } from "../../state.svelte";
 
   const tabs = [
     { id: "chat", icon: MessageSquare, label: "Chat" },
     { id: "usage", icon: BarChart3, label: "Usage" },
+    { id: "config", icon: Settings, label: "Config" },
   ] as const;
 </script>
 

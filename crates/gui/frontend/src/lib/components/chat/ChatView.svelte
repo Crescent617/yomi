@@ -2,7 +2,6 @@
   import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, addUserMessage, streamingMessages } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
-  import RightPanel from "../layout/RightPanel.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
@@ -11,12 +10,14 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown, Send } from "lucide-svelte";
+  import { FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
+
+  let { rightPanelCollapsed, onToggleRightPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void } = $props();
 
   const activeSession = $derived(getActiveSession());
 
-  const hasNonChatTabs = $derived(activeSession?.tabs.some(t => t.type !== "chat") ?? false);
+  const hasNonChatTabs = $derived(activeSession?.tabs.some((t: any) => t.type !== "chat") ?? false);
 
   let selectedProjectId = $state<string | "new">("");
   let newProjectPath = $state("");
@@ -268,7 +269,7 @@
   }
 </script>
 
-<div class="flex flex-col h-full">
+<div class="flex-1 flex flex-col min-w-0 overflow-hidden">
   {#if activeSession}
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
@@ -276,6 +277,18 @@
       <span class="font-medium truncate" title={activeSession.alias ?? activeSession.id.slice(0, 8)}>{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
       <span class="text-xs text-muted-foreground">{activeSession.projectPath}</span>
     </div>
+    <button
+      type="button"
+      onclick={() => onToggleRightPanel?.()}
+      class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+      title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
+    >
+      {#if rightPanelCollapsed}
+        <PanelRightOpen size={16} />
+      {:else}
+        <PanelRightClose size={16} />
+      {/if}
+    </button>
   </div>
   {/if}
 
@@ -437,18 +450,16 @@
             <button
               type="button"
               onclick={scrollToBottom}
-              class="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+              class="absolute bottom-20 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
             >
               <ArrowDown class="w-3 h-3" />
               Bottom
             </button>
           {/if}
         </div>
-        <!-- Right side panel -->
-        <RightPanel session={activeSession} />
       </div>
     {:else if activeSession}
-      {@const activeTab = activeSession.tabs.find(t => t.id === activeSession.activeTabId)}
+      {@const activeTab = activeSession.tabs.find((t: any) => t.id === activeSession.activeTabId)}
       {#if activeTab?.type === "preview" && activeTab.entry}
         <div class="flex h-full relative">
           <div class="flex-1 min-w-0">
@@ -458,14 +469,12 @@
               onAskAI={(_path) => { /* TODO: send to chat */ }}
             />
           </div>
-          <RightPanel session={activeSession} />
         </div>
       {:else if activeTab?.type === "edit" && activeTab.entry}
         <div class="flex h-full relative">
           <div class="flex-1 min-w-0">
             <FileEditor entry={activeTab.entry} />
           </div>
-          <RightPanel session={activeSession} />
         </div>
       {/if}
     {:else}

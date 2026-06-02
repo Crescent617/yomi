@@ -77,10 +77,11 @@
 </script>
 
 {#if open}
-<!-- Modal backdrop -->
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
   onclick={(e) => { if (e.target === e.currentTarget) close(); }}
+  role="presentation"
 >
   <div class="bg-background rounded-xl shadow-xl max-w-4xl w-[90vw] h-[80vh] flex flex-col mx-4">
     <!-- Header -->
@@ -97,6 +98,7 @@
     <!-- File tabs -->
     <div class="flex items-center gap-1 border-b border-border mt-4 overflow-x-auto px-2">
       {#each diffsProp as diff, i (diff.path)}
+        {@const s = stats(diff)}
         <button
           class="px-3 py-1.5 text-xs rounded-t-lg transition-colors {i === activeFileIndex
             ? 'bg-primary/10 text-primary border-b-2 border-primary'
@@ -104,7 +106,6 @@
           onclick={() => activeFileIndex = i}
         >
           {diff.path.split("/").pop()}
-          {@const s = stats(diff)}
           <span class="text-green-600 ml-1">+{s.added}</span>
           <span class="text-red-600">-{s.removed}</span>
         </button>

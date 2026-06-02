@@ -95,7 +95,7 @@ export const appState = $state({
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
-  activePanel: "chat" as "chat" | "usage",
+  activePanel: "chat" as "chat" | "usage" | "config",
 });
 
 export const projectState = $state({
@@ -106,25 +106,20 @@ export const projectState = $state({
 // Per-project session cursors for pagination
 export const sessionCursors = $state(new Map<string, string | null>());
 
-// ── UI notification state (for InfoBar inline notifications) ──
-export const uiState = $state<{
-  notification: { text: string; level: "info" | "warn" | "error" | "success" } | null;
-}>({
-  notification: null,
-});
-
-let _notificationTimeout: ReturnType<typeof setTimeout> | null = null;
+import { pushToast } from "./toast.svelte";
 
 export function showNotification(
   text: string,
   level: "info" | "warn" | "error" | "success" = "info",
   durationMs = 4000
 ) {
-  uiState.notification = { text, level };
-  if (_notificationTimeout) clearTimeout(_notificationTimeout);
-  _notificationTimeout = setTimeout(() => {
-    uiState.notification = null;
-  }, durationMs);
+  const typeMap: Record<string, "info" | "success" | "warning" | "error"> = {
+    info: "info",
+    success: "success",
+    warn: "warning",
+    error: "error",
+  };
+  pushToast(text, typeMap[level] ?? "info", durationMs);
 }
 
 export const sessionState = $state({
@@ -516,6 +511,9 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
   if (event.Chunk) {
     const chunk = event.Chunk;
     const content = chunk.content;
+    // Any chunk from the model means streaming is active
+    if (!session.streaming) session.streaming = true;
+
     if (content?.Text) {
       const text = content.Text;
       const buf = streamingMessages[session.id] ?? [];
@@ -526,7 +524,6 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
         buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [] });
       }
       streamingMessages[session.id] = buf;
-      if (!session.streaming) session.streaming = true;
       return true;
     } else if (content?.Thinking) {
       const buf = streamingMessages[session.id] ?? [];
@@ -538,9 +535,9 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
         buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] });
       }
       streamingMessages[session.id] = buf;
-      if (!session.streaming) session.streaming = true;
       return true;
     }
+    return true;
   } else if (event.ToolCallDelta) {
     const delta = event.ToolCallDelta;
     const buf = streamingMessages[session.id] ?? [];

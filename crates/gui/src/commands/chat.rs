@@ -118,6 +118,23 @@ pub async fn get_messages(
     Ok(values)
 }
 
+#[tauri::command]
+pub async fn get_todos(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    match coord.get_todos(&sid).await.map_err(GuiError::kernel)? {
+        Some(json_str) => {
+            let parsed: serde_json::Value = serde_json::from_str(&json_str)
+                .map_err(|e| GuiError::unknown(format!("Invalid todo JSON: {e}")))?;
+            Ok(parsed)
+        }
+        None => Ok(serde_json::json!({ "todos": [] })),
+    }
+}
+
 // ── Cancel ───────────────────────────────────────────────────────────────
 
 #[tauri::command]

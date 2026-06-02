@@ -16,6 +16,55 @@ pub fn get_cwd() -> Result<String, GuiError> {
 }
 
 #[tauri::command]
+pub async fn get_config_toml(
+    _state: State<'_, AppState>,
+) -> Result<serde_json::Value, GuiError> {
+    let path = kernel::config::Config::discover_file();
+    let (content, file_path) = match &path {
+        Some(p) => {
+            let c = std::fs::read_to_string(p)
+                .map_err(|e| GuiError::unknown(format!("Failed to read config: {e}")))?;
+            (c, p.to_string_lossy().to_string())
+        }
+        None => {
+            let default_path = kernel::expand_tilde(kernel::DEFAULT_DATA_DIR).join("config.toml");
+            (String::new(), default_path.to_string_lossy().to_string())
+        }
+    };
+    Ok(serde_json::json!({
+        "content": content,
+        "path": file_path,
+    }))
+}
+
+#[tauri::command]
+pub async fn save_config_toml(
+    _state: State<'_, AppState>,
+    content: String,
+) -> Result<(), GuiError> {
+    let path = kernel::config::Config::discover_file();
+    let file_path = match path {
+        Some(p) => p,
+        None => {
+            let default_path = kernel::expand_tilde(kernel::DEFAULT_DATA_DIR).join("config.toml");
+            if let Some(parent) = default_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| GuiError::unknown(format!("Failed to create config dir: {e}")))?;
+            }
+            default_path
+        }
+    };
+
+    let _: toml::Value = toml::from_str(&content)
+        .map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
+
+    std::fs::write(&file_path, content)
+        .map_err(|e| GuiError::unknown(format!("Failed to write config: {e}")))?;
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_config(
     _state: State<'_, AppState>,
 ) -> Result<serde_json::Value, GuiError> {

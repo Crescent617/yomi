@@ -25,18 +25,23 @@
 
 <div class="flex items-center gap-0.5 px-2 border-b border-border bg-muted/30 overflow-x-auto">
   {#each tabs.filter(t => t.type !== "chat") as tab (tab.id)}
+    {@const Icon = getIcon(tab)}
     <button
       class="group flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors min-w-0 {tab.id === activeTabId
         ? 'border-primary bg-background text-foreground'
         : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary'}"
       onclick={() => onSwitch(tab.id)}
     >
-      <svelte:component this={getIcon(tab)} size={14} class="shrink-0" />
+      <Icon size={14} class="shrink-0" />
       <span class="truncate max-w-[120px]">{tab.label}</span>
       {#if !tab.pinned}
         <span
-          class="opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+          role="button"
+          tabindex="0"
+          class="opacity-0 group-hover:opacity-100 transition-opacity ml-1 p-0.5 rounded hover:bg-secondary cursor-pointer"
           onclick={(e) => { e.stopPropagation(); onClose(tab.id); }}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onClose(tab.id); } }}
+          aria-label="Close tab"
         >
           <X size={12} />
         </span>

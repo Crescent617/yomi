@@ -296,6 +296,14 @@ export async function stopGoal(sessionId: string): Promise<void> {
   );
 }
 
+export async function getConfigToml(): Promise<{ content: string; path: string }> {
+  return withTimeout(invoke("get_config_toml"), DEFAULT_TIMEOUT, "get_config_toml");
+}
+
+export async function saveConfigToml(content: string): Promise<void> {
+  return withTimeout(invoke("save_config_toml", { content }), DEFAULT_TIMEOUT, "save_config_toml");
+}
+
 export async function getConfig(): Promise<{ model: string; context_window: number; provider: string; auto_approve: string }> {
   return withTimeout(invoke("get_config"), DEFAULT_TIMEOUT, "get_config");
 }
@@ -332,6 +340,10 @@ export async function getSessionUsage(sessionId: string): Promise<{
   request_count: number;
 }> {
   return withTimeout(invoke("get_session_usage", { sessionId }), DEFAULT_TIMEOUT, "get_session_usage");
+}
+
+export async function getTodos(sessionId: string): Promise<{ todos: { id: string; content: string; status: string }[] }> {
+  return withTimeout(invoke("get_todos", { sessionId }), DEFAULT_TIMEOUT, "get_todos");
 }
 
 export async function ping(): Promise<boolean> {

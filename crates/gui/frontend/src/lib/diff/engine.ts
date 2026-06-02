@@ -157,7 +157,7 @@ function computeIntraLineDiff(oldText: string, newText: string): IntraSegment[] 
   const diffs = dmp.diff_main(oldText, newText);
   dmp.diff_cleanupSemantic(diffs);
 
-  return diffs.map(([type, text]) => {
+  return diffs.map(([type, text]: [number, string]) => {
     const typeStr = type === -1 ? "remove" : type === 1 ? "add" : "equal";
     return { type: typeStr as IntraSegment["type"], text };
   });
