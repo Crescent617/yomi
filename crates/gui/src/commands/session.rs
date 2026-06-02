@@ -1,4 +1,3 @@
-use kernel::client::CoordinatorApi;
 use kernel::permissions::Level;
 use kernel::types::SessionId;
 use tauri::State;
@@ -33,7 +32,7 @@ pub async fn list_sessions(
     before: Option<String>,
     limit: Option<usize>,
 ) -> Result<PaginatedSessions, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
 
     let pid = project_id.map(kernel::types::ProjectId);
     let before_dt = match before {
@@ -77,7 +76,7 @@ pub async fn create_session(
     working_dir: Option<String>,
     auto_approve_level: String,
 ) -> Result<String, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let level = parse_level(&auto_approve_level)?;
     let input = kernel::CreateSessionInput {
         project_id: project_id.map(kernel::types::ProjectId),
@@ -97,7 +96,7 @@ pub async fn restore_session(
     session_id: String,
     auto_approve_level: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let level = parse_level(&auto_approve_level)?;
     let sid = SessionId(session_id);
     coord
@@ -113,7 +112,7 @@ pub async fn fork_session(
     parent_id: String,
     auto_approve_level: String,
 ) -> Result<String, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let level = parse_level(&auto_approve_level)?;
     let pid = SessionId(parent_id);
     let new_id = coord
@@ -125,7 +124,7 @@ pub async fn fork_session(
 
 #[tauri::command]
 pub async fn delete_session(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     coord
         .delete_session(&sid)
@@ -139,7 +138,7 @@ pub async fn shutdown_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     coord
         .shutdown_session(&sid)

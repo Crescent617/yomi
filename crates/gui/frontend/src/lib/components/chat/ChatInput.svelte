@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
   import * as api from "../../api";
-  import { sessionState, addUserMessage, getActiveSession } from "../../state.svelte";
+  import { sessionState, addUserMessage, getActiveSession, showNotification } from "../../state.svelte";
   import { SLASH_COMMANDS } from "../../commands";
   import { fsProvider } from "../../fs/factory";
   import type { FileEntry } from "../../fs/provider";
@@ -155,6 +155,65 @@
     requestAnimationFrame(autoResize);
   }
 
+  async function handleCommand(text: string) {
+    const sessionId = sessionState.activeSessionId;
+    if (!sessionId) return;
+
+    const lower = text.toLowerCase();
+    const parts = text.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+
+    try {
+      switch (cmd) {
+        case "/cancel":
+          await api.cancelSession(sessionId);
+          showNotification("Session cancelled", "info", 3000);
+          break;
+        case "/yolo":
+          await api.setPermissionLevel(sessionId, "dangerous");
+          showNotification("YOLO mode enabled — all tools will be auto-approved", "info", 5000);
+          break;
+        case "/safe":
+          await api.setPermissionLevel(sessionId, "safe");
+          showNotification("Permission level set to Safe", "info", 3000);
+          break;
+        case "/caution":
+          await api.setPermissionLevel(sessionId, "caution");
+          showNotification("Permission level set to Caution", "info", 3000);
+          break;
+        case "/compact":
+          await api.compactSession(sessionId);
+          showNotification("Session compacted", "info", 3000);
+          break;
+        case "/reload":
+          await api.reloadConfig();
+          showNotification("Skills and hooks reloaded", "info", 3000);
+          break;
+        case "/goal:stop":
+          await api.stopGoal(sessionId);
+          showNotification("Goal mode stopped", "info", 3000);
+          break;
+        case "/goal":
+          {
+            const description = parts.slice(1).join(" ").trim();
+            if (!description) {
+              showNotification("Please provide a goal description: /goal <description>", "error", 5000);
+              return;
+            }
+            await api.startGoal(sessionId, description);
+            showNotification("Goal mode activated — agent will work autonomously", "info", 5000);
+          }
+          break;
+        default:
+          // Unknown command — treat as normal message
+          await api.sendMessage(sessionId, text);
+      }
+    } catch (e: any) {
+      console.error(`Failed to execute command ${cmd}:`, e?.message ?? e);
+      showNotification(`Command failed: ${e?.message ?? ""}`, "error", 5000);
+    }
+  }
+
   async function handleSubmit() {
     if (!content.trim() || !sessionState.activeSessionId) return;
 
@@ -163,12 +222,15 @@
     content = "";
     autoResize();
 
-    addUserMessage(sessionId, text);
-
-    try {
-      await api.sendMessage(sessionId, text);
-    } catch (e: any) {
-      console.error("Failed to send message:", e?.message ?? e);
+    if (text.startsWith("/")) {
+      await handleCommand(text);
+    } else {
+      addUserMessage(sessionId, text);
+      try {
+        await api.sendMessage(sessionId, text);
+      } catch (e: any) {
+        console.error("Failed to send message:", e?.message ?? e);
+      }
     }
   }
 

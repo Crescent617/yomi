@@ -1,4 +1,3 @@
-use kernel::client::CoordinatorApi;
 use tauri::State;
 
 use crate::error::GuiError;
@@ -13,7 +12,7 @@ pub async fn list_skills(_state: State<'_, AppState>) -> Result<Vec<serde_json::
 
 #[tauri::command]
 pub async fn reload_config(state: State<'_, AppState>) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     coord
         .reload_agent_config()
         .await

@@ -4,7 +4,7 @@
   import { sessionState, projectState, sessionCursors, appState } from "../../state.svelte";
   import SessionBand from "./SessionBand.svelte";
   import ChatView from "../chat/ChatView.svelte";
-  import StatusBar from "./StatusBar.svelte";
+  import ActivityBar from "./ActivityBar.svelte";
 
   let isDesktop = $state(false);
 
@@ -28,7 +28,6 @@
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
       }));
-      // Load sessions for each project
       for (const project of projectState.projects) {
         await loadSessionsForProject(project.id);
       }
@@ -72,8 +71,11 @@
   }
 </script>
 
-<div class="h-screen w-screen flex flex-col bg-background text-foreground overflow-hidden">
-  <!-- Main content area -->
+<div class="h-screen w-screen flex bg-background text-foreground overflow-hidden">
+  {#if isDesktop}
+    <ActivityBar />
+  {/if}
+
   <div class="flex-1 flex min-h-0 overflow-hidden">
     {#if isDesktop}
       <aside
@@ -81,9 +83,6 @@
           ? 'w-16'
           : 'w-64'} h-full"
       >
-        <div class="p-3 border-b border-border shrink-0">
-          <h1 class="font-bold text-lg truncate">Yomi</h1>
-        </div>
         <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
           <SessionBand collapsed={appState.sidebarCollapsed} />
         </div>
@@ -94,7 +93,4 @@
       <ChatView />
     </main>
   </div>
-
-  <!-- Status bar at bottom -->
-  <StatusBar />
 </div>

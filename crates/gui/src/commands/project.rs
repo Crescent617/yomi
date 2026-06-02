@@ -1,4 +1,3 @@
-use kernel::client::CoordinatorApi;
 use kernel::types::ProjectId;
 use tauri::State;
 
@@ -16,7 +15,7 @@ pub struct ProjectInfo {
 
 #[tauri::command]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectInfo>, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let projects = coord
         .list_projects()
         .await
@@ -39,7 +38,7 @@ pub async fn create_project(
     dir: String,
     name: Option<String>,
 ) -> Result<ProjectInfo, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let project = coord
         .create_project(dir.into(), name)
         .await
@@ -58,7 +57,7 @@ pub async fn get_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<Option<ProjectInfo>, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let project = coord
         .get_project(&ProjectId(project_id))
         .await
@@ -78,7 +77,7 @@ pub async fn rename_project(
     project_id: String,
     name: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     coord
         .rename_project(&ProjectId(project_id), name)
         .await
@@ -91,7 +90,7 @@ pub async fn delete_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     coord
         .delete_project(&ProjectId(project_id))
         .await

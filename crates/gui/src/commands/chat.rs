@@ -1,4 +1,3 @@
-use kernel::client::CoordinatorApi;
 use kernel::permissions::Level;
 use kernel::types::{ContentBlock, SessionId};
 use tauri::{AppHandle, Emitter, State};
@@ -21,7 +20,7 @@ pub async fn send_message(
     session_id: String,
     content: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     let block = ContentBlock::Text { text: content };
     coord
@@ -38,13 +37,25 @@ pub async fn subscribe(
     session_id: String,
     auto_approve_level: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id.clone());
     let level = parse_level(&auto_approve_level)?;
-    let mut rx = coord
+    let mut rx = match coord
         .subscribe_session_events(&sid, level)
         .await
-        .map_err(GuiError::kernel)?;
+    {
+        Ok(rx) => rx,
+        Err(_) => {
+            coord
+                .restore_session(&sid, level)
+                .await
+                .map_err(GuiError::kernel)?;
+            coord
+                .subscribe_session_events(&sid, level)
+                .await
+                .map_err(GuiError::kernel)?
+        }
+    };
 
     // Stop any existing event task BEFORE spawning the new one to avoid
     // stale tasks racing with the insert.
@@ -90,7 +101,7 @@ pub async fn get_messages(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<serde_json::Value>, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     let messages = coord
         .get_session_messages(&sid)
@@ -110,7 +121,7 @@ pub async fn cancel_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     coord.cancel(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
@@ -126,7 +137,7 @@ pub async fn respond_permission(
     approved: bool,
     remember: bool,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     coord
         .send_permission_response(&sid, &req_id, approved, remember)
@@ -144,13 +155,79 @@ pub async fn respond_ask_user(
     req_id: String,
     answers: Vec<(String, String)>,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     let response = kernel::tools::AskUserResponse {
         answers: answers.into_iter().collect(),
     };
     coord
         .send_ask_user_response(&sid, &req_id, response)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+// ── Compact session ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn compact_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .compact_session(&sid)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+// ── Set permission level ─────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn set_permission_level(
+    state: State<'_, AppState>,
+    session_id: String,
+    level: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    let level = parse_level(&level)?;
+    coord
+        .set_permission_level(&sid, level)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+// ── Goal mode ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn start_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+    description: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    let goal_state = kernel::goal::GoalState::new(description);
+    coord
+        .start_goal(&sid, goal_state)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .stop_goal(&sid)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

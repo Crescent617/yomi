@@ -87,6 +87,7 @@ export const appState = $state({
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
+  activePanel: "chat" as "chat" | "usage",
 });
 
 export const projectState = $state({

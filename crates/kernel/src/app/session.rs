@@ -183,7 +183,7 @@ impl Session {
     async fn update_title(&self, blocks: &[crate::types::ContentBlock]) {
         if let Some(session_store) = &self.agent_shared.session_store {
             let text: String = blocks.iter().filter_map(|b| b.as_text()).take(1).collect();
-            let title = text.chars().take(100).collect::<String>();
+            let title = text.chars().take(20).collect::<String>();
             if !title.is_empty() {
                 let _ = session_store.update_title(&self.id, &title).await;
             }

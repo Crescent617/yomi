@@ -1,5 +1,4 @@
 use kernel::checkpoint::RewindTarget;
-use kernel::client::CoordinatorApi;
 use kernel::types::MessageId;
 use kernel::types::SessionId;
 use tauri::State;
@@ -12,7 +11,7 @@ pub async fn get_checkpoints(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<serde_json::Value>, GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     let checkpoints = coord
         .get_checkpoints(&sid)
@@ -31,7 +30,7 @@ pub async fn rewind(
     session_id: String,
     message_id: String,
 ) -> Result<(), GuiError> {
-    let coord = state.get_or_connect().await?;
+    let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     let mid = MessageId::from_string(message_id);
     coord

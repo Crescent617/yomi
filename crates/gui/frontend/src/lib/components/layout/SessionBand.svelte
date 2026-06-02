@@ -33,15 +33,8 @@
       group.sessions.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
     }
     const entries = Array.from(map.entries());
-    // active project first, then by most-recent session updatedAt desc
-    const active = getSession(sessionState.activeSessionId ?? "");
-    const activeProjectId = active?.projectId ?? "";
+    // Sort projects by most-recent session updatedAt desc (stable: does not change on click)
     entries.sort((a, b) => {
-      const aIsActive = a[0] === activeProjectId;
-      const bIsActive = b[0] === activeProjectId;
-      if (aIsActive && !bIsActive) return -1;
-      if (bIsActive && !aIsActive) return 1;
-      // Most recently updated project first
       const aLatest = a[1].sessions[0]?.updatedAt ?? "";
       const bLatest = b[1].sessions[0]?.updatedAt ?? "";
       return bLatest.localeCompare(aLatest);
@@ -418,7 +411,7 @@
                   tabindex="0"
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') activateSession(session.id); }}
                 >
-                  <span class="flex-1 truncate text-sm font-medium">
+                  <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)}>
                     {session.alias ?? formatShortId(session.id)}
                   </span>
                   <div class="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">

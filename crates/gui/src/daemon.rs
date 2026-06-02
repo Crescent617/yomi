@@ -2,6 +2,9 @@
 //!
 //! Directly starts the kernel server inside the GUI process so the GUI and CLI
 //! share a single kernel. Sessions and state survive GUI restarts.
+//!
+//! Also provides `init_coordinator` for embedding the kernel directly in-process
+//! without any IPC, useful for a single-tenant GUI build.
 
 use anyhow::{Context, Result};
 use kernel::transport::SocketAddr;
@@ -11,7 +14,9 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 
+#[allow(dead_code)]
 const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
+#[allow(dead_code)]
 const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Global shutdown token for the in-process daemon server.
@@ -52,14 +57,14 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     }
 }
 
-/// Start the kernel server directly in a background tokio task.
-/// If a daemon is already accepting connections, returns Ok immediately.
-pub async fn spawn_daemon() -> Result<()> {
-    if try_connect().await.is_some() {
-        tracing::info!("daemon already running, skipping spawn");
-        return Ok(());
-    }
-
+/// Initialise a `Coordinator` in-process without any IPC.
+///
+/// Opens storage, loads config, and builds the agent. The caller can use the
+/// returned `Arc` directly as a `dyn CoordinatorApi`.
+///
+/// This is the zero-overhead path for a single-tenant GUI. To support
+/// remote connections or multiple clients, use `spawn_daemon()` instead.
+pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
     let working_dir = std::env::current_dir()?;
     let config_file = kernel::config::Config::discover_file();
     let mut config = if let Some(ref path) = config_file {
@@ -72,12 +77,6 @@ pub async fn spawn_daemon() -> Result<()> {
     config.finalize(&working_dir);
 
     tokio::fs::create_dir_all(&config.data_dir).await?;
-
-    let addr = socket_addr();
-    let listener = kernel::transport::bind(&addr)
-        .await
-        .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
-    tracing::info!("Daemon listening on {addr}");
 
     let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
         || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
@@ -115,6 +114,31 @@ pub async fn spawn_daemon() -> Result<()> {
             .hooks
             .then(|| kernel::hooks::build_registry(&config.hooks)),
     ));
+
+    Ok(coordinator)
+}
+
+/// Start the kernel server directly in a background tokio task.
+/// If a daemon is already accepting connections, returns Ok immediately.
+#[allow(dead_code)]
+pub async fn spawn_daemon() -> Result<()> {
+    if try_connect().await.is_some() {
+        tracing::info!("daemon already running, skipping spawn");
+        return Ok(());
+    }
+
+    let coordinator = init_coordinator().await?;
+    let config_file = kernel::config::Config::discover_file();
+    let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
+        || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
+        PathBuf::from,
+    );
+
+    let addr = socket_addr();
+    let listener = kernel::transport::bind(&addr)
+        .await
+        .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
+    tracing::info!("Daemon listening on {addr}");
 
     let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
     let shutdown = CancellationToken::new();

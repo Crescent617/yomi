@@ -5,7 +5,10 @@ mod error;
 mod state;
 mod terminal;
 
+use std::sync::Arc;
+
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,17 +16,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
-            // Spawn the yomi daemon inside Tauri's async runtime so the
-            // background server task survives the whole app lifetime.
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = daemon::spawn_daemon().await {
-                    tracing::warn!("failed to spawn daemon: {e}");
-                }
-            });
+        .setup(|app| {
+            let coordinator = tauri::async_runtime::block_on(daemon::init_coordinator())
+                .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
+            let coordinator: Arc<dyn kernel::client::CoordinatorApi> = coordinator;
+            app.manage(AppState::new(coordinator));
             Ok(())
         })
-        .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::project::list_projects,
             commands::project::create_project,
@@ -43,12 +42,17 @@ pub fn run() {
             commands::chat::cancel_session,
             commands::chat::respond_permission,
             commands::chat::respond_ask_user,
+            commands::chat::compact_session,
+            commands::chat::set_permission_level,
+            commands::chat::start_goal,
+            commands::chat::stop_goal,
             commands::checkpoint::get_checkpoints,
             commands::checkpoint::rewind,
             commands::skill::list_skills,
             commands::skill::reload_config,
             commands::system::ping,
             commands::system::get_cwd,
+            commands::system::get_config,
             commands::terminal::terminal_spawn,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,

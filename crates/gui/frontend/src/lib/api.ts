@@ -244,6 +244,42 @@ export async function reloadConfig(): Promise<void> {
   return withTimeout(invoke("reload_config"), DEFAULT_TIMEOUT, "reload_config");
 }
 
+export async function compactSession(sessionId: string): Promise<void> {
+  return withTimeout(
+    invoke("compact_session", { sessionId }),
+    DEFAULT_TIMEOUT,
+    "compact_session",
+  );
+}
+
+export async function setPermissionLevel(sessionId: string, level: string): Promise<void> {
+  return withTimeout(
+    invoke("set_permission_level", { sessionId, level }),
+    DEFAULT_TIMEOUT,
+    "set_permission_level",
+  );
+}
+
+export async function startGoal(sessionId: string, description: string): Promise<void> {
+  return withTimeout(
+    invoke("start_goal", { sessionId, description }),
+    DEFAULT_TIMEOUT,
+    "start_goal",
+  );
+}
+
+export async function stopGoal(sessionId: string): Promise<void> {
+  return withTimeout(
+    invoke("stop_goal", { sessionId }),
+    DEFAULT_TIMEOUT,
+    "stop_goal",
+  );
+}
+
+export async function getConfig(): Promise<{ model: string; context_window: number }> {
+  return withTimeout(invoke("get_config"), DEFAULT_TIMEOUT, "get_config");
+}
+
 export async function ping(): Promise<boolean> {
   return withTimeout(invoke("ping"), PING_TIMEOUT, "ping");
 }

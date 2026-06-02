@@ -240,7 +240,7 @@
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
     <div class="flex items-center gap-2">
-      <span class="font-medium truncate">{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
+      <span class="font-medium truncate" title={activeSession.alias ?? activeSession.id.slice(0, 8)}>{activeSession.alias ?? activeSession.id.slice(0, 8)}</span>
       <span class="text-xs text-muted-foreground">{activeSession.projectPath}</span>
     </div>
   </div>
