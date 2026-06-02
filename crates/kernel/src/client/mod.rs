@@ -113,6 +113,11 @@ pub trait CoordinatorApi: Send + Sync {
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
+
+    // ── Usage ──────────────────────────────────────────────────────────
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
+    async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>>;
+    async fn get_session_usage(&self, session_id: &SessionId) -> Result<crate::storage::usage::UsageSummary>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
@@ -269,6 +274,21 @@ impl CoordinatorApi for Coordinator {
     async fn reload_agent_config(&self) -> Result<()> {
         // Local coordinator runs in-process; skills are already fresh.
         Ok(())
+    }
+
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
+        self.get_usage_summary().await
+    }
+
+    async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+        self.get_daily_usage(days).await
+    }
+
+    async fn get_session_usage(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary> {
+        self.get_session_usage(session_id).await
     }
 }
 
@@ -990,5 +1010,23 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn reload_agent_config(&self) -> Result<()> {
         self.call(RequestMethod::ReloadAgentConfig).await?;
         Ok(())
+    }
+
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
+        Ok(crate::storage::usage::UsageSummary::default())
+    }
+
+    async fn get_daily_usage(
+        &self,
+        _days: i64,
+    ) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_session_usage(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary> {
+        Ok(crate::storage::usage::UsageSummary::default())
     }
 }

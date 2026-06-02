@@ -243,6 +243,24 @@
     }
   }
 
+  async function handlePermissionClick() {
+    const sessionId = sessionState.activeSessionId;
+    if (!sessionId) return;
+    const session = getSession(sessionId);
+    if (!session) return;
+    const levels = ["safe", "caution", "dangerous"];
+    const current = levels.indexOf(session.permissionLevel ?? "safe");
+    const next = levels[(current + 1) % levels.length];
+    try {
+      await api.setPermissionLevel(sessionId, next);
+      session.permissionLevel = next;
+      showNotification(`Permission level: ${next}`, "info", 2000);
+    } catch (e: any) {
+      console.error("Failed to set permission level:", e?.message ?? e);
+      showNotification("Failed to set permission level", "error", 3000);
+    }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     // Command picker navigation
     if (showCommands) {
@@ -471,4 +489,19 @@
       </button>
     {/if}
   </div>
+  {#if activeSession?.permissionLevel}
+    <div class="flex items-center justify-end gap-2 mt-1.5 px-1">
+      <button
+        type="button"
+        onclick={handlePermissionClick}
+        class="text-[10px] uppercase tracking-wider font-medium rounded px-1.5 py-0.5 transition-colors
+               {activeSession.permissionLevel === 'dangerous' ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20'
+                 : activeSession.permissionLevel === 'caution' ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20'
+                 : 'text-green-500 bg-green-500/10 hover:bg-green-500/20'}"
+        title="Click to cycle permission level"
+      >
+        {activeSession.permissionLevel}
+      </button>
+    </div>
+  {/if}
 </div>

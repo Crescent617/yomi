@@ -280,6 +280,40 @@ export async function getConfig(): Promise<{ model: string; context_window: numb
   return withTimeout(invoke("get_config"), DEFAULT_TIMEOUT, "get_config");
 }
 
+export async function getUsageSummary(): Promise<{
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  request_count: number;
+}> {
+  return withTimeout(invoke("get_usage_summary"), DEFAULT_TIMEOUT, "get_usage_summary");
+}
+
+export async function getDailyUsage(days: number): Promise<
+  {
+    date: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens: number;
+    total_tokens: number;
+    request_count: number;
+    models: string[];
+  }[]
+> {
+  return withTimeout(invoke("get_daily_usage", { days }), DEFAULT_TIMEOUT, "get_daily_usage");
+}
+
+export async function getSessionUsage(sessionId: string): Promise<{
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  request_count: number;
+}> {
+  return withTimeout(invoke("get_session_usage", { sessionId }), DEFAULT_TIMEOUT, "get_session_usage");
+}
+
 export async function ping(): Promise<boolean> {
   return withTimeout(invoke("ping"), PING_TIMEOUT, "ping");
 }

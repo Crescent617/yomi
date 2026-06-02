@@ -80,6 +80,7 @@ export interface SessionState {
   pendingAskUser: PendingAskUser | null;
   queuedInput: string | null;
   updatedAt: string;
+  permissionLevel?: string;
 }
 
 export const appState = $state({

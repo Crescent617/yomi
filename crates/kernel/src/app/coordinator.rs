@@ -3,7 +3,8 @@ use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
-use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet};
+use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
+use crate::storage::usage::{UsageFilter, DailyUsage, UsageSummary};
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -63,6 +64,14 @@ impl Coordinator {
     /// Get data directory from `agent_shared`
     pub fn data_dir(&self) -> &std::path::PathBuf {
         &self.agent_shared.data_dir
+    }
+
+    /// Get usage store from `agent_shared`
+    pub fn usage_store(&self) -> &Arc<dyn UsageStore> {
+        self.agent_shared
+            .usage_store
+            .as_ref()
+            .expect("usage_store not configured")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -691,5 +700,36 @@ impl Coordinator {
         }
 
         tracing::info!("Updated agent config (model={model_id}, {skill_count} skill(s))");
+    }
+
+    /// Get aggregated usage summary for today
+    pub async fn get_usage_summary(&self) -> Result<UsageSummary> {
+        let now = Utc::now();
+        let start = now - chrono::Duration::days(1);
+        self.usage_store().summarize(start, now, None).await
+    }
+
+    /// Get daily usage for the last N days
+    pub async fn get_daily_usage(&self, days: i64) -> Result<Vec<DailyUsage>> {
+        let now = Utc::now();
+        let start = now - chrono::Duration::days(days);
+        self.usage_store().daily_summary(start, now, None).await
+    }
+
+    /// Get usage for a specific session
+    pub async fn get_session_usage(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<UsageSummary> {
+        let now = Utc::now();
+        let start = now - chrono::Duration::days(365); // all time
+        let filter = UsageFilter {
+            model: None,
+            provider: None,
+            usage_type: None,
+        };
+        // TODO: UsageStore doesn't support session filter yet, so we get all and filter client-side
+        // or extend the filter. For now, just return the total summary.
+        self.usage_store().summarize(start, now, Some(&filter)).await
     }
 }

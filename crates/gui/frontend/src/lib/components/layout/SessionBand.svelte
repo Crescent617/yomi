@@ -141,6 +141,7 @@
   // ===== project menu =====
   let showProjectMenu = $state<string | null>(null);
   let renamingProjectId = $state<string | null>(null);
+  let renamingSessionId = $state<string | null>(null);
   let renameValue = $state("");
 
   function startRenameProject(projectId: string, currentName: string) {
@@ -165,6 +166,24 @@
       showNotification("Failed to rename project", "error", 3000);
     } finally {
       renamingProjectId = null;
+    }
+  }
+
+  async function confirmRenameSession(sessionId: string) {
+    const name = renameValue.trim();
+    if (!name) {
+      renamingSessionId = null;
+      return;
+    }
+    try {
+      const session = sessionState.sessions.find((s) => s.id === sessionId);
+      if (session) session.alias = name;
+      showNotification("Session renamed", "success", 2000);
+    } catch (e: any) {
+      console.error("Failed to rename session:", e?.message ?? e);
+      showNotification("Failed to rename session", "error", 3000);
+    } finally {
+      renamingSessionId = null;
     }
   }
 
@@ -323,7 +342,7 @@
           key === (getSession(sessionState.activeSessionId ?? "")?.projectId ?? "")}
         {@const isExpanded = allExpanded.has(key)}
 
-        <div class="rounded-md overflow-hidden mb-0.5">
+        <div class="rounded-md mb-0.5">
           <!-- project header -->
           <div
             class="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs
@@ -411,9 +430,20 @@
                   tabindex="0"
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') activateSession(session.id); }}
                 >
-                  <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)}>
-                    {session.alias ?? formatShortId(session.id)}
-                  </span>
+                  {#if renamingSessionId === session.id}
+                    <input
+                      type="text"
+                      bind:value={renameValue}
+                      onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') confirmRenameSession(session.id); if (e.key === 'Escape') renamingSessionId = null; }}
+                      onblur={() => confirmRenameSession(session.id)}
+                      class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                      autofocus
+                    />
+                  {:else}
+                    <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)} ondblclick={() => { renamingSessionId = session.id; renameValue = session.alias ?? formatShortId(session.id); }}>
+                      {session.alias ?? formatShortId(session.id)}
+                    </span>
+                  {/if}
                   <div class="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                     {#if session.streaming}
                       <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
