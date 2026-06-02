@@ -216,7 +216,9 @@
         showNotification("Project not found", "error", 3000);
         return;
       }
-      const id = await api.createSession(project.dir, "safe", targetProjectId);
+      const config = await api.getConfig();
+      const autoApprove = config?.auto_approve ?? "caution";
+      const id = await api.createSession(project.dir, autoApprove, targetProjectId);
       // refresh sessions for this project
       await loadMoreSessions(targetProjectId);
       await activateSession(id);

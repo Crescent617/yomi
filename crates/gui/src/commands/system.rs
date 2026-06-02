@@ -35,10 +35,13 @@ pub async fn get_config(
     let context_window = config.agent.compactor.context_window;
     let provider = config.agent.model.provider.to_string();
 
+    let auto_approve = config.auto_approve.to_string().to_lowercase();
+
     Ok(serde_json::json!({
         "model": model,
         "context_window": context_window,
         "provider": provider,
+        "auto_approve": auto_approve,
     }))
 }
 

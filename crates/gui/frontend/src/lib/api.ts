@@ -296,7 +296,7 @@ export async function stopGoal(sessionId: string): Promise<void> {
   );
 }
 
-export async function getConfig(): Promise<{ model: string; context_window: number }> {
+export async function getConfig(): Promise<{ model: string; context_window: number; provider: string; auto_approve: string }> {
   return withTimeout(invoke("get_config"), DEFAULT_TIMEOUT, "get_config");
 }
 

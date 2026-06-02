@@ -21,7 +21,8 @@
   let selectedProjectId = $state<string | "new">("");
   let newProjectPath = $state("");
   let newProjectName = $state("");
-  let permissionLevel = $state("safe");
+  let permissionLevel = $state("");
+  let permissionLevelReady = $state(false);
   let listRef: any = $state(null);
   let isNearBottom = $state(true);
   let chatInputRef: any = $state(null);
@@ -65,11 +66,34 @@
         updatedAt: p.updatedAt,
       }));
     }).catch(() => {});
+    api.getConfig().then(c => {
+      if (cancelled) return;
+      if (c?.auto_approve) {
+        permissionLevel = c.auto_approve;
+      } else {
+        permissionLevel = "caution";
+      }
+      permissionLevelReady = true;
+    }).catch(() => {
+      if (cancelled) return;
+      permissionLevel = "caution";
+      permissionLevelReady = true;
+    });
     return () => { cancelled = true; };
   });
 
   async function handleHomeSubmit() {
     if (submitting || !homeInput.trim()) return;
+
+    let level = permissionLevel;
+    if (!level) {
+      try {
+        const c = await api.getConfig();
+        level = c.auto_approve || "caution";
+      } catch {
+        level = "caution";
+      }
+    }
 
     let projectId: string | undefined;
     let workingDir: string;
@@ -115,7 +139,7 @@
     }
 
     try {
-      const id = await api.createSession(workingDir, permissionLevel, projectId);
+      const id = await api.createSession(workingDir, level, projectId);
       const result = await api.listSessions(projectId, undefined, 20);
       for (const s of result.sessions) {
         if (!sessionState.sessions.find(sess => sess.id === s.id)) {

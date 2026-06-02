@@ -78,7 +78,7 @@
   {/if}
 
   <div class="flex-1 flex min-h-0 overflow-hidden">
-    {#if isDesktop}
+    {#if isDesktop && appState.activePanel !== "usage"}
       <aside
         class="flex flex-col border-r border-border transition-all {appState.sidebarCollapsed
           ? 'w-16'
