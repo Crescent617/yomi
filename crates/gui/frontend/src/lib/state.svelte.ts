@@ -1,10 +1,17 @@
 import * as api from "./api";
 
+export interface TabEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isFile: boolean;
+}
+
 export interface Tab {
   id: string;
   type: "chat" | "preview" | "edit";
   label: string;
-  entry?: { name: string; path: string; isDirectory: boolean; isFile: boolean };
+  entry?: TabEntry;
   pinned?: boolean;
 }
 
@@ -13,7 +20,7 @@ export interface ToolCall {
   toolName: string;
   status: "running" | "completed" | "failed" | "cancelled";
   arguments?: string;
-  parsedArgs?: Record<string, any>;
+  parsedArgs?: Record<string, unknown>;
   output?: string;
   error?: string;
   progress?: string;
@@ -180,7 +187,7 @@ export function addUserMessage(sessionId: string, text: string) {
 
 export function openFileTab(
   session: SessionState,
-  entry: any,
+  entry: TabEntry,
   type: "preview" | "edit"
 ) {
   const existing = session.tabs.find(
@@ -210,33 +217,61 @@ export function closeTab(session: SessionState, tabId: string) {
   }
 }
 
-function extractId(raw: any): string {
+function extractId(raw: unknown): string {
   if (Array.isArray(raw) && raw.length > 0) raw = raw[0];
-  else if (typeof raw === "object" && raw !== null) raw = raw["0"] ?? raw[0] ?? null;
+  else if (typeof raw === "object" && raw !== null) {
+    const obj = raw as Record<string, unknown>;
+    raw = obj["0"] ?? obj[0] ?? null;
+  }
   return typeof raw === "string" && raw.length > 0 ? raw : crypto.randomUUID();
 }
 
-function normalizeRole(role: any): "user" | "tool" | "system" | "assistant" {
+function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" {
   if (role === "User" || role === "user") return "user";
   if (role === "tool" || role === "Tool") return "tool";
   if (role === "system" || role === "System") return "system";
   return "assistant";
 }
 
-export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
+// Helper for content blocks coming from the Rust backend
+interface ContentBlock {
+  Text?: string;
+  text?: string;
+  type?: string;
+  thinking?: string;
+  Thinking?: { thinking?: string };
+}
+
+// Raw message shape from the Rust backend
+interface RawMessage {
+  id?: unknown;
+  role: unknown;
+  content?: string | ContentBlock[];
+  tool_call_id?: string;
+  tool_calls?: RawToolCall[];
+}
+
+interface RawToolCall {
+  id?: string;
+  name?: string;
+  tool_name?: string;
+  arguments?: string | Record<string, unknown>;
+}
+
+export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
   const session = getSession(sessionId);
   if (!session) return;
 
   // First pass: collect all tool outputs from tool result messages
   const toolOutputs: Record<string, string> = {};
   const toolOutputByName: Record<string, string> = {};
-  for (const m of rawMessages) {
+  for (const m of rawMessages as RawMessage[]) {
     const role = normalizeRole(m.role);
     if (role !== "tool") continue;
 
     let output = "";
     if (Array.isArray(m.content)) {
-      output = m.content.map((block: any) => {
+      output = m.content.map((block: ContentBlock) => {
         if (typeof block === "string") return block;
         if (block.Text) return block.Text;
         if (block.text) return block.text;
@@ -247,7 +282,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
     }
     if (m.tool_call_id) {
       toolOutputs[m.tool_call_id] = output;
-      const cleanId = m.tool_call_id.replace(/^functions\./, '');
+      const cleanId = m.tool_call_id.replace(/^functions\./, "");
       if (cleanId !== m.tool_call_id) {
         toolOutputs[cleanId] = output;
       }
@@ -263,7 +298,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
 
   // Second pass: build all messages with correct tool statuses
   const parsedMessages: ChatMessage[] = [];
-  for (const m of rawMessages) {
+  for (const m of rawMessages as RawMessage[]) {
     const role = normalizeRole(m.role);
 
     if (role === "tool") {
@@ -274,7 +309,11 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
       parsedMessages.push({
         id: extractId(m.id),
         role: "user",
-        content: typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((b: any) => b.Text || b.text || "").join("") : "",
+        content: typeof m.content === "string"
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content.map((b: ContentBlock) => b.Text || b.text || "").join("")
+            : "",
         thinking: null,
         tools: [],
       });
@@ -302,7 +341,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
       // Assistant message
       let text = "";
       let thinking: { content: string; elapsedMs: number } | null = null;
-      
+
       if (Array.isArray(m.content)) {
         for (const block of m.content) {
           if (typeof block === "string") {
@@ -310,7 +349,10 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
           } else if (block.type === "text" || block.Text || block.text) {
             text += block.text || block.Text || "";
           } else if (block.type === "thinking" || block.Thinking) {
-            thinking = { content: block.thinking || block.Thinking?.thinking || "", elapsedMs: 0 };
+            thinking = {
+              content: block.thinking || block.Thinking?.thinking || "",
+              elapsedMs: 0,
+            };
           }
         }
       } else if (typeof m.content === "string") {
@@ -327,8 +369,16 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
           if (tc.arguments) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
           }
-          const output = toolOutputs[toolId] || toolOutputs[toolId.replace(/^functions\./, '')] || toolOutputByName[toolName.toLowerCase()] || "";
-          const hasOutput = output !== "" || toolId in toolOutputs || toolId.replace(/^functions\./, '') in toolOutputs || toolName.toLowerCase() in toolOutputByName;
+          const output =
+            toolOutputs[toolId]
+            || toolOutputs[toolId.replace(/^functions\./, "")]
+            || toolOutputByName[toolName.toLowerCase()]
+            || "";
+          const hasOutput =
+            output !== ""
+            || toolId in toolOutputs
+            || toolId.replace(/^functions\./, "") in toolOutputs
+            || toolName.toLowerCase() in toolOutputByName;
           tools.push({
             id: toolId,
             toolName,
@@ -356,19 +406,92 @@ export function loadSessionMessages(sessionId: string, rawMessages: any[]) {
   });
 }
 
-// Handle raw kernel events (serialized Event enum)
-export function handleEvent(sessionId: string, rawEvent: any) {
+// ── Kernel event types (deserialized from Rust Event enum) ─────────────────
+
+interface ChunkContent {
+  Text?: string;
+  Thinking?: { thinking?: string };
+}
+
+interface ModelChunk {
+  Chunk?: { content: ChunkContent };
+  ToolCallDelta?: { tool_id: string; tool_name: string; arguments_delta?: string };
+  Completed?: Record<string, never>;
+  Error?: { message: string };
+}
+
+interface ToolStart {
+  tool_id: string;
+  tool_name: string;
+  arguments?: string;
+}
+
+interface ToolEnd {
+  tool_id: string;
+  tool_name: string;
+  is_error: boolean;
+  elapsed_ms: number;
+  content_blocks?: ContentBlock[];
+}
+
+interface ToolProgress {
+  tool_id: string;
+  message?: string;
+  tokens?: number;
+}
+
+interface ToolEvent {
+  Start?: ToolStart;
+  End?: ToolEnd;
+  Progress?: ToolProgress;
+}
+
+interface AgentLifecycle {
+  state: string | { TurnCompleted?: true; Stopped?: true };
+}
+
+interface AgentEvent {
+  Lifecycle?: AgentLifecycle;
+  Error?: { message?: string };
+  PermissionRequest?: {
+    req_id: string;
+    tool_name: string;
+    tool_args?: string;
+    tool_level?: string;
+    reason?: string;
+  };
+  AskUser?: {
+    req_id: string;
+    agent_id: string;
+    questions: AskQuestion[];
+  };
+}
+
+interface SystemEvent {
+  Connected?: Record<string, never>;
+  Disconnected?: Record<string, never>;
+  SessionSwitched?: { session_id: string };
+}
+
+type KernelEvent =
+  | { Model: ModelChunk }
+  | { Agent: AgentEvent }
+  | { System: SystemEvent }
+  | { Tool: ToolEvent };
+
+export function handleEvent(sessionId: string, rawEvent: unknown) {
   const session = getSession(sessionId);
   if (!session) return;
 
-  if (rawEvent.Model) {
-    handleModelEvent(session, rawEvent.Model);
-  } else if (rawEvent.Agent) {
-    handleAgentEvent(session, rawEvent.Agent);
-  } else if (rawEvent.System) {
-    handleSystemEvent(session, rawEvent.System);
-  } else if (rawEvent.Tool) {
-    handleToolEvent(session, rawEvent.Tool);
+  const ev = rawEvent as KernelEvent;
+  if ("Model" in ev) {
+    handleModelEvent(session, ev.Model);
+  } else if ("Agent" in ev) {
+    handleAgentEvent(session, ev.Agent);
+  } else if ("System" in ev) {
+    handleSystemEvent(session, ev.System);
+  } else if ("Tool" in ev) {
+    handleToolEvent(session, ev.Tool);
   }
 
   if (sessionState.activeSessionId !== sessionId) {
@@ -389,7 +512,7 @@ function findToolById(session: SessionState, toolId: string): { msg: ChatMessage
   return null;
 }
 
-function handleModelEvent(session: SessionState, event: any): boolean {
+function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
   if (event.Chunk) {
     const chunk = event.Chunk;
     const content = chunk.content;
@@ -453,7 +576,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
         const text = session.queuedInput;
         session.queuedInput = null;
         session.messages = [...session.messages, { id: crypto.randomUUID(), role: "user", content: text, thinking: null, tools: [] }];
-        api.sendMessage(session.id, text).catch((e) => console.error("Failed to send queued message:", e));
+        api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
       }
       return true;
     }
@@ -461,7 +584,7 @@ function handleModelEvent(session: SessionState, event: any): boolean {
   return false;
 }
 
-function handleToolEvent(session: SessionState, event: any): boolean {
+function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.Start) {
     const start = event.Start;
     const found = findToolById(session, start.tool_id);
@@ -501,7 +624,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
       found.tool.status = end.is_error ? "failed" : "completed";
       found.tool.elapsedMs = end.elapsed_ms;
       found.tool.output = end.content_blocks
-        ?.map((b: any) => {
+        ?.map((b: ContentBlock) => {
           if (typeof b === "string") return b;
           if (b.Text) return b.Text;
           if (b.text) return b.text;
@@ -535,7 +658,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
     tool.status = end.is_error ? "failed" : "completed";
     tool.elapsedMs = end.elapsed_ms;
     tool.output = end.content_blocks
-      ?.map((b: any) => {
+      ?.map((b: ContentBlock) => {
         if (typeof b === "string") return b;
         if (b.Text) return b.Text;
         if (b.text) return b.text;
@@ -581,7 +704,7 @@ function handleToolEvent(session: SessionState, event: any): boolean {
   return false;
 }
 
-function handleAgentEvent(session: SessionState, event: any): boolean {
+function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.Lifecycle) {
     const state = event.Lifecycle.state;
     if (state === "Running" && !session.streaming) {
@@ -619,29 +742,32 @@ function handleAgentEvent(session: SessionState, event: any): boolean {
     });
     showNotification(`${req.tool_name} needs approval`, "warn", 5000);
     return true;
-  } else if (event.AskUserQuestion) {
-    const q = event.AskUserQuestion;
+  } else if (event.AskUser) {
+    const req = event.AskUser;
     session.pendingAskUser = {
-      reqId: q.req_id,
-      agentId: q.agent_id,
-      questions: q.questions ?? [],
+      reqId: req.req_id,
+      agentId: req.agent_id,
+      questions: req.questions,
     };
-    showNotification("AI has a question for you", "info", 5000);
+    showNotification("Agent has a question for you", "info", 5000);
     return true;
   }
   return false;
 }
 
-function handleSystemEvent(session: SessionState, event: any): boolean {
-  if (event.Shutdown && session.streaming) {
-    session.streaming = false;
-    const buf = streamingMessages[session.id] ?? [];
-    if (buf.length > 0) {
-      session.messages = [...session.messages, ...buf];
-      streamingMessages[session.id] = [];
-    }
-    showNotification("Session ended", "info", 3000);
+function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
+  if (event.Connected) {
+    showNotification("Connected", "success", 2000);
+    return true;
+  } else if (event.Disconnected) {
+    showNotification("Disconnected", "error", 3000);
+    return true;
+  } else if (event.SessionSwitched) {
     return true;
   }
   return false;
+}
+
+export function updateConnectionStatus(status: "connected" | "disconnected" | "connecting") {
+  appState.connectionStatus = status;
 }

@@ -110,6 +110,7 @@ impl Coordinator {
         )
         .with_message_interceptor(todo_interceptor);
         let agent_shared = agent_shared.with_tool_blocklist(agent_config.tool_blocklist.clone());
+        let agent_shared = agent_shared.with_allow_command_hooks(agent_config.allow_command_hooks);
         let agent_shared = match hook_registry {
             Some(registry) => {
                 agent_shared.with_hook_registry(Arc::new(tokio::sync::RwLock::new(registry)))

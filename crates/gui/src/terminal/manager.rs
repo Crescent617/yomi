@@ -1,4 +1,4 @@
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{Child, CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -11,6 +11,8 @@ pub struct TerminalSession {
     pub id: String,
     pub pty_pair: portable_pty::PtyPair,
     pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
+    #[allow(dead_code)]
+    pub child: Box<dyn Child + Send + Sync>,
     pub reader_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -45,37 +47,51 @@ impl TerminalManager {
 
         let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(cwd);
-        let _child = pair.slave.spawn_command(cmd).map_err(GuiError::unknown)?;
+        let child = pair.slave.spawn_command(cmd).map_err(GuiError::unknown)?;
 
         let mut reader = pair.master.try_clone_reader().map_err(GuiError::unknown)?;
         let writer = pair.master.take_writer().map_err(GuiError::unknown)?;
 
         let id_clone = id.clone();
-        // NOTE: portable_pty readers are synchronous blocking I/O.
-        // In production with heavy terminal traffic, consider wrapping
-        // the read loop in `tokio::task::spawn_blocking`.
-        let read_handle = tokio::spawn(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Spawn the blocking reader loop on the blocking pool so it does not
+        // pin a Tokio worker thread.
+        let _read_handle = tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match std::io::Read::read(&mut reader, &mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]);
-                        let payload = serde_json::json!({
-                            "id": id_clone,
-                            "data": data.to_string(),
-                        });
-                        let _ = app_handle.emit("terminal:data", payload);
+                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        if tx.send(data).is_err() {
+                            break;
+                        }
                     }
                 }
             }
         });
 
+        // Async forwarder from the channel to the frontend.
+        let forward_handle = tokio::spawn(async move {
+            while let Some(data) = rx.recv().await {
+                let payload = serde_json::json!({
+                    "id": id_clone,
+                    "data": data,
+                });
+                let _ = app_handle.emit("terminal:data", payload);
+            }
+        });
+
+        // read_handle is spawn_blocking; when it ends, tx drops, rx returns None,
+        // and forward_handle exits naturally — no need for an explicit abort task.
+
         let session = TerminalSession {
             id: id.clone(),
             pty_pair: pair,
             writer: Arc::new(Mutex::new(writer)),
-            reader_handle: read_handle,
+            child,
+            reader_handle: forward_handle,
         };
 
         let mut sessions = self.sessions.lock().await;
@@ -112,7 +128,10 @@ impl TerminalManager {
 
     pub async fn kill(&self, id: &str) -> Result<(), GuiError> {
         let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.remove(id) {
+        if let Some(mut session) = sessions.remove(id) {
+            // Kill the shell child first so it does not outlive the panel.
+            let _ = session.child.kill();
+            // Abort the async forwarder task.
             session.reader_handle.abort();
         }
         Ok(())

@@ -257,7 +257,7 @@ pub struct HookEntry {
 }
 
 /// Build a `HookRegistry` from global configuration entries.
-pub fn build_registry(entries: &[HookEntry]) -> HookRegistry {
+pub fn build_registry(entries: &[HookEntry], allow_commands: bool) -> HookRegistry {
     let mut registry = HookRegistry::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -271,6 +271,13 @@ pub fn build_registry(entries: &[HookEntry]) -> HookRegistry {
         }
         match entry.handler_type.as_str() {
             "command" | "" => {
+                if !allow_commands {
+                    tracing::warn!(
+                        "Command hook '{}' blocked: allow_command_hooks is disabled",
+                        entry.name
+                    );
+                    continue;
+                }
                 let Ok(handler) = CommandHookHandler::new(
                     &entry.name,
                     entry.event,
@@ -299,6 +306,7 @@ pub fn build_registry(entries: &[HookEntry]) -> HookRegistry {
 pub async fn build_hook_registry_with_skills(
     base: Option<&tokio::sync::RwLock<HookRegistry>>,
     skills: &[std::sync::Arc<crate::skill::Skill>],
+    allow_commands: bool,
 ) -> HookRegistry {
     let mut registry = match base {
         Some(arc) => arc.read().await.clone(),
@@ -312,6 +320,7 @@ pub async fn build_hook_registry_with_skills(
                     &skill.name,
                     hooks_value,
                     &mut registry,
+                    allow_commands,
                 ) {
                     tracing::warn!("Failed to load hooks for skill '{}': {}", skill.name, e);
                 }

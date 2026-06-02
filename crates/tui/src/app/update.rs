@@ -2,6 +2,7 @@
 
 use tuirealm::{
     props::{AttrValue, Attribute},
+    state::{State, StateValue},
     terminal::TerminalAdapter,
 };
 
@@ -379,25 +380,52 @@ impl Model {
                     None
                 }
                 Msg::CommandReload => {
-                    // Reload skills and hooks from disk via daemon
                     let coord = Arc::clone(&self.coordinator);
-                    match coord.reload_agent_config().await {
-                        Ok(()) => {
-                            self.show_notification(&Notification::info("Reloaded", 3000));
-                        }
-                        Err(e) => {
-                            self.show_notification(&Notification::error(
+                    let tx = self.cmd_tx.clone();
+                    tokio::spawn(async move {
+                        let msg = match coord.reload_agent_config().await {
+                            Ok(()) => Msg::Notification(Notification::info("Reloaded", 3000)),
+                            Err(e) => Msg::Notification(Notification::error(
                                 format!("Reload failed: {e}"),
                                 5000,
-                            ));
+                            )),
+                        };
+                        if let Err(e) = tx.send(msg) {
+                            tracing::debug!("cmd channel closed, dropping async result: {e}");
                         }
-                    }
+                    });
                     None
                 }
                 Msg::Suspend => {
                     // Suspend process to background (Ctrl-Z)
                     self.suspend_process();
                     None
+                }
+                Msg::ReadClipboard => {
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let handle = tokio::task::spawn_blocking(|| {
+                            use arboard::Clipboard;
+                            Clipboard::new()
+                                .ok()
+                                .and_then(|mut c| c.get_text().ok())
+                        });
+                        self.clipboard_handle = Some(handle);
+                    }
+                    None
+                }
+                Msg::ClipboardText(text) => {
+                    let _ = self.app.attr(
+                        &Id::InputBox,
+                        Attribute::Custom(attr::CLIPBOARD_PASTE),
+                        AttrValue::String(text),
+                    );
+                    // Trigger InputChanged so completion updates
+                    let content = match self.app.state(&Id::InputBox) {
+                        Ok(State::Single(StateValue::String(c))) => c,
+                        _ => String::new(),
+                    };
+                    Some(Msg::InputChanged(content))
                 }
                 // History picker messages
                 Msg::ShowHistoryPicker => {
@@ -461,45 +489,49 @@ impl Model {
                     None
                 }
                 Msg::CommandSessions => {
-                    // Load sessions for current working dir and show picker
+                    let coord = Arc::clone(&self.coordinator);
+                    let tx = self.cmd_tx.clone();
                     let working_dir = self.working_dir.to_string_lossy().to_string();
-                    let result = self
-                        .coordinator
-                        .list_sessions(None, None, 200)
-                        .await;
-                    let sessions: Vec<_> = match result {
-                        Ok(paginated) => paginated
-                            .sessions
+                    tokio::spawn(async move {
+                        let result = coord.list_sessions(None, None, 200).await;
+                        let sessions: Vec<_> = match result {
+                            Ok(paginated) => paginated
+                                .sessions
+                                .into_iter()
+                                .filter(|s| {
+                                    s.working_dir
+                                        .as_ref()
+                                        .is_some_and(|wd| wd == &working_dir)
+                                })
+                                .take(50)
+                                .collect(),
+                            Err(e) => {
+                                tracing::warn!("Failed to list sessions: {e}");
+                                Vec::new()
+                            }
+                        };
+
+                        let items: Vec<PickerItem> = sessions
                             .into_iter()
-                            .filter(|s| {
-                                s.working_dir
-                                    .as_ref()
-                                    .is_some_and(|wd| wd == &working_dir)
+                            .map(|s| {
+                                let age_str = s.format_age();
+                                let preview = s
+                                    .title
+                                    .unwrap_or_else(|| "(no user message)".to_string())
+                                    .replace('\n', " ");
+                                let id_str = s.id.0;
+                                let short_id = super::types::format_short_id(&id_str);
+                                let label = format!("{short_id} - {age_str}");
+                                PickerItem::new(id_str, label).with_meta(preview)
                             })
-                            .take(50)
-                            .collect(),
-                        Err(e) => {
-                            tracing::warn!("Failed to list sessions: {e}");
-                            Vec::new()
+                            .collect();
+                        if let Err(e) = tx.send(Msg::SessionList(items)) {
+                            tracing::debug!("cmd channel closed, dropping session list: {e}");
                         }
-                    };
-
-                    let items: Vec<PickerItem> = sessions
-                        .into_iter()
-                        .map(|s| {
-                            let age_str = s.format_age();
-                            let preview = s
-                                .title
-                                .unwrap_or_else(|| "(no user message)".to_string())
-                                .replace('\n', " ");
-                            let id_str = s.id.0;
-                            let short_id = super::types::format_short_id(&id_str);
-                            let label = format!("{short_id} - {age_str}");
-                            PickerItem::new(id_str, label).with_meta(preview)
-                        })
-                        .collect();
-
-                    // Show the session picker
+                    });
+                    None
+                }
+                Msg::SessionList(items) => {
                     if let Err(e) = self.app.attr(
                         &Id::SessionPicker,
                         Attribute::Custom(attr::PICKER_ITEMS),
@@ -514,7 +546,6 @@ impl Model {
                     ) {
                         tracing::warn!("Failed to show session picker: {}", e);
                     }
-                    // Give focus to session picker
                     self.set_focus(&Id::SessionPicker);
                     self.state.should_redraw = true;
                     None
@@ -542,14 +573,21 @@ impl Model {
                     None
                 }
                 Msg::CommandRewind => {
-                    // Load checkpoints for current session and show picker
+                    let coord = Arc::clone(&self.coordinator);
+                    let tx = self.cmd_tx.clone();
                     let session_id = self.session_id.clone();
-                    let checkpoints = self
-                        .coordinator
-                        .get_checkpoints(&kernel::types::SessionId(session_id))
-                        .await
-                        .unwrap_or_default();
-
+                    tokio::spawn(async move {
+                        let checkpoints = coord
+                            .get_checkpoints(&kernel::types::SessionId(session_id))
+                            .await
+                            .unwrap_or_default();
+                        if let Err(e) = tx.send(Msg::CheckpointList(checkpoints)) {
+                            tracing::debug!("cmd channel closed, dropping checkpoint list: {e}");
+                        }
+                    });
+                    None
+                }
+                Msg::CheckpointList(checkpoints) => {
                     if checkpoints.is_empty() {
                         self.show_notification(&Notification::info(
                             "No checkpoints found for this session",
@@ -575,7 +613,6 @@ impl Model {
                         })
                         .collect();
 
-                    // Show the checkpoint picker (like CommandSessions does)
                     let _ = self.app.attr(
                         &Id::CheckpointPicker,
                         Attribute::Custom(attr::PICKER_ITEMS),
@@ -586,42 +623,45 @@ impl Model {
                         Attribute::Custom(attr::DIALOG_SHOW),
                         AttrValue::Flag(true),
                     );
-                    // Give focus to checkpoint picker
                     self.set_focus(&Id::CheckpointPicker);
                     self.state.should_redraw = true;
                     None
                 }
                 Msg::CommandUndo => {
-                    // Undo last turn: rewind to the latest checkpoint
+                    let coord = Arc::clone(&self.coordinator);
+                    let tx = self.cmd_tx.clone();
+                    let ctrl_tx = self.ctrl_tx.clone();
                     let session_id = self.session_id.clone();
-                    let checkpoints = self
-                        .coordinator
-                        .get_checkpoints(&kernel::types::SessionId(session_id))
-                        .await
-                        .unwrap_or_default();
+                    tokio::spawn(async move {
+                        let checkpoints = coord
+                            .get_checkpoints(&kernel::types::SessionId(session_id))
+                            .await
+                            .unwrap_or_default();
 
-                    if checkpoints.is_empty() {
-                        self.show_notification(&Notification::error(
-                            "No checkpoints to undo",
-                            3000,
-                        ));
-                        return None;
-                    }
+                        if checkpoints.is_empty() {
+                            if let Err(e) = tx.send(Msg::Notification(Notification::error(
+                                "No checkpoints to undo",
+                                3000,
+                            ))) {
+                                tracing::debug!("cmd channel closed, dropping notification: {e}");
+                            }
+                            return;
+                        }
 
-                    // Find the latest checkpoint (highest sequence)
-                    let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
-
-                    if let Some(cp) = latest {
-                        // Send rewind command to coordinator (Both = conversation + files)
-                        let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
-                            message_id: kernel::types::MessageId::from_string(cp.message_id),
-                            target: kernel::checkpoint::RewindTarget::Both,
-                        });
-                        self.show_notification(&Notification::info(
-                            format!("Undoing: {}", cp.summary),
-                            3000,
-                        ));
-                    }
+                        let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
+                        if let Some(cp) = latest {
+                            let _ = ctrl_tx.try_send(ControlCommand::Rewind {
+                                message_id: kernel::types::MessageId::from_string(cp.message_id.clone()),
+                                target: kernel::checkpoint::RewindTarget::Both,
+                            });
+                            if let Err(e) = tx.send(Msg::Notification(Notification::info(
+                                format!("Undoing: {}", cp.summary),
+                                3000,
+                            ))) {
+                                tracing::debug!("cmd channel closed, dropping notification: {e}");
+                            }
+                        }
+                    });
                     None
                 }
                 Msg::CheckpointSelected(message_id, target) => {

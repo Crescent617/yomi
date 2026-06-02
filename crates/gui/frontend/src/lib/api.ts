@@ -3,14 +3,31 @@ import { invoke } from "@tauri-apps/api/core";
 const DEFAULT_TIMEOUT = 30000; // 30s
 const PING_TIMEOUT = 5000;     // 5s
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
-  const result = await Promise.race([promise, timeout]);
+
+  // If an external signal is provided, race against it as well so the caller
+  // can drop the request on component unmount or navigation.
+  const result = signal
+    ? await Promise.race([
+        promise,
+        timeout,
+        new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(new Error(`${label} aborted`)), { once: true });
+        }),
+      ])
+    : await Promise.race([promise, timeout]);
+
   clearTimeout(timeoutId!);
-  return result;
+  return result as T;
 }
 
 // ── Project API ──────────────────────────────────────────────────────────
@@ -86,14 +103,17 @@ export async function listSessions(
     "list_sessions",
   );
   return {
-    sessions: result.sessions.map((s: any) => ({
-      id: s.id,
-      projectPath: s.workingDir ?? "",
-      createdAt: s.created_at,
-      endedAt: s.updated_at,
-      title: s.title,
-      projectId: s.projectId,
-    })),
+    sessions: result.sessions.map((s: unknown) => {
+      const session = s as Record<string, unknown>;
+      return {
+        id: String(session.id ?? ""),
+        projectPath: String(session.workingDir ?? ""),
+        createdAt: String(session.created_at ?? ""),
+        endedAt: session.updated_at ? String(session.updated_at) : undefined,
+        title: session.title ? String(session.title) : undefined,
+        projectId: session.projectId ? String(session.projectId) : undefined,
+      };
+    }),
     hasMore: result.has_more,
   };
 }

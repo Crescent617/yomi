@@ -29,4 +29,10 @@ impl AppState {
             handle.abort();
         }
     }
+
+    #[allow(dead_code)]
+    pub async fn remove_event_task(&self, session_id: &str) {
+        let mut tasks = self.event_tasks.lock().await;
+        tasks.remove(session_id);
+    }
 }

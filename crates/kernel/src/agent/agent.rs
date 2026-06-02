@@ -181,6 +181,7 @@ impl Agent {
         let hook_registry = crate::hooks::build_hook_registry_with_skills(
             shared.hook_registry.as_deref(),
             &args.skills,
+            shared.allow_command_hooks,
         )
         .await;
 
@@ -835,6 +836,7 @@ impl Agent {
         self.hook_registry = crate::hooks::build_hook_registry_with_skills(
             self.shared.hook_registry.as_deref(),
             &skills,
+            self.shared.allow_command_hooks,
         )
         .await;
         tracing::info!("Agent {} refreshed {} skill(s)", self.id, skills.len());

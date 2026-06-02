@@ -61,7 +61,8 @@ pub async fn subscribe(
     // stale tasks racing with the insert.
     state.stop_event_task(&session_id).await;
 
-    let sid = session_id.clone();
+    let sid_cleanup = session_id.clone();
+    let tasks_cleanup = state.event_tasks.clone();
     let handle = tauri::async_runtime::spawn(async move {
         while let Ok(event) = rx.recv().await {
             let payload = serde_json::json!({
@@ -70,6 +71,9 @@ pub async fn subscribe(
             });
             let _ = app_handle.emit("kernel:event", payload);
         }
+        // Remove our handle from the map when the channel closes so we don't leak.
+        let mut map = tasks_cleanup.lock().await;
+        map.remove(&sid_cleanup);
     });
 
     {

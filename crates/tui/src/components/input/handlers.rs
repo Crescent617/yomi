@@ -162,19 +162,15 @@ impl InputComponent {
                     self.update_completion();
                     return Some(Msg::InputChanged(self.component.content().to_string()));
                 }
-                // Fall back to reading text from clipboard
+                // Fall back to async clipboard read
                 #[cfg(not(target_os = "macos"))]
                 {
-                    use arboard::Clipboard;
-                    match Clipboard::new() {
-                        Ok(mut clipboard) => match clipboard.get_text() {
-                            Ok(text) => return Some(self.handle_text_paste(&text)),
-                            Err(e) => tracing::debug!("No text in clipboard: {}", e),
-                        },
-                        Err(e) => tracing::debug!("Failed to create clipboard: {}", e),
-                    }
+                    Some(Msg::ReadClipboard)
                 }
-                None
+                #[cfg(target_os = "macos")]
+                {
+                    return None;
+                }
             }
             // @: start file completion (must be before generic Char handler)
             Event::Keyboard(KeyEvent {

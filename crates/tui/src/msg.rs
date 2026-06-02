@@ -1,6 +1,8 @@
 //! Messages for TUI application
 
+use crate::components::fuzzy_picker::PickerItem;
 use crate::components::info_bar::Notification;
+use kernel::checkpoint::Checkpoint;
 use kernel::event::Event as AppEvent;
 use kernel::types::ContentBlock;
 
@@ -83,6 +85,10 @@ pub enum Msg {
     // Suspend process to background (Ctrl-Z)
     Suspend,
 
+    // Async clipboard read
+    ReadClipboard,
+    ClipboardText(String),
+
     // History: raw submitted text + the actual message to process.
     // Emitted whenever the user presses Enter; the raw text goes into input history.
     InputEntry(String, Box<Msg>),
@@ -100,6 +106,10 @@ pub enum Msg {
     CommandUndo, // /undo - undo last turn (rewind to latest checkpoint)
     CheckpointSelected(String, RewindTarget), // message_id, target (Conversation/Files/Both)
     CloseCheckpointPicker, // Close checkpoint picker without selection
+
+    // Async command results
+    SessionList(Vec<PickerItem>),
+    CheckpointList(Vec<Checkpoint>),
 }
 
 /// Target for rewinding (mirrors `kernel::checkpoint::RewindTarget`)

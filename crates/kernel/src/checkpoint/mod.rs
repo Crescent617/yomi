@@ -35,7 +35,7 @@ pub struct TrackedFileInfo {
 }
 
 /// Checkpoint information
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Checkpoint {
     /// Checkpoint ID: `{message_id}`
     pub id: String,

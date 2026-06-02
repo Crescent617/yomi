@@ -268,7 +268,7 @@ async fn create_local_coordinator(
         config
             .features
             .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks)),
+            .then(|| kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
     ))
 }
 

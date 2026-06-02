@@ -112,7 +112,7 @@ pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
         config
             .features
             .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks)),
+            .then(|| kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
     ));
 
     Ok(coordinator)

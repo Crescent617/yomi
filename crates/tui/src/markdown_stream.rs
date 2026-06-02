@@ -65,7 +65,7 @@ impl Default for ParseState {
 }
 
 /// Streaming markdown renderer that supports incremental updates
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamingMarkdownRenderer {
     content: String,
     lines: Vec<Line<'static>>,
@@ -74,6 +74,14 @@ pub struct StreamingMarkdownRenderer {
     dirty: bool,
     /// Track code blocks for copy functionality
     code_blocks: Vec<CodeBlockInfo>,
+    /// Throttle full re-parsing during streaming to avoid O(n²) behaviour.
+    last_render_at: std::time::Instant,
+}
+
+impl Default for StreamingMarkdownRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamingMarkdownRenderer {
@@ -85,6 +93,7 @@ impl StreamingMarkdownRenderer {
             table_renderer: None,
             dirty: false,
             code_blocks: Vec::new(),
+            last_render_at: std::time::Instant::now(),
         }
     }
 
@@ -93,7 +102,7 @@ impl StreamingMarkdownRenderer {
         &self.code_blocks
     }
 
-    /// Append new text and re-render
+    /// Append new text and re-render (throttled to avoid O(n²) re-parsing).
     pub fn append(&mut self, text: &str) -> &[Line<'static>] {
         if text.is_empty() {
             return &self.lines;
@@ -101,7 +110,12 @@ impl StreamingMarkdownRenderer {
 
         self.content.push_str(text);
         self.dirty = true;
-        self.render()
+        // Only re-parse if >50ms since last render. The caller polls
+        // `lines()` regularly, so any trailing content is flushed there.
+        if self.last_render_at.elapsed() > std::time::Duration::from_millis(50) {
+            self.render();
+        }
+        &self.lines
     }
 
     /// Set content and re-render
@@ -530,6 +544,7 @@ impl StreamingMarkdownRenderer {
             in_table_head,
         };
         self.dirty = false;
+        self.last_render_at = std::time::Instant::now();
 
         &self.lines
     }

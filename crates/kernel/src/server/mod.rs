@@ -40,6 +40,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
 
     let mut agent = config.agent.clone();
     agent.skills = skills;
+    agent.allow_command_hooks = config.features.allow_command_hooks;
     agent
 }
 
@@ -107,7 +108,7 @@ impl KernelServer {
             let hooks = config
                 .features
                 .hooks
-                .then(|| crate::hooks::build_registry(&config.hooks));
+                .then(|| crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks));
             (agent, hooks)
         })
         .await

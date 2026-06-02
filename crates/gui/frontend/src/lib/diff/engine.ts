@@ -171,13 +171,14 @@ export function filterAppliedHunks(diff: FileDiff): FileDiff {
 }
 
 export function reconstructContent(diff: FileDiff): string {
+  const oldLines = diff.oldContent.split("\n");
   const lines: string[] = [];
   let lineIdx = 0;
 
   for (const hunk of diff.hunks) {
     // Skip to hunk start
     while (lineIdx < hunk.newStart - 1) {
-      lines.push(diff.oldContent.split("\n")[lineIdx] ?? "");
+      lines.push(oldLines[lineIdx] ?? "");
       lineIdx++;
     }
 

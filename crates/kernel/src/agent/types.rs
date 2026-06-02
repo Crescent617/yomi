@@ -21,6 +21,8 @@ pub struct AgentConfig {
     pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
     pub compactor: Compactor,
+    /// Allow command hooks to execute (default false for security)
+    pub allow_command_hooks: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -161,6 +163,7 @@ impl Default for AgentConfig {
             skills: Vec::new(),
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
+            allow_command_hooks: false,
         }
     }
 }
@@ -304,6 +307,8 @@ pub struct AgentShared {
     pub hook_registry: Option<Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>>,
     /// Tool blocklist (regex patterns) inherited from config
     pub tool_blocklist: Vec<String>,
+    /// Allow command hooks to execute (default false for security)
+    pub allow_command_hooks: bool,
 }
 
 impl AgentShared {
@@ -372,6 +377,7 @@ impl AgentShared {
             message_interceptor: None,
             hook_registry: None,
             tool_blocklist: Vec::new(),
+            allow_command_hooks: false,
         }
     }
 
@@ -415,6 +421,13 @@ impl AgentShared {
     #[must_use]
     pub fn with_tool_blocklist(mut self, blocklist: Vec<String>) -> Self {
         self.tool_blocklist = blocklist;
+        self
+    }
+
+    /// Set whether command hooks are allowed to execute
+    #[must_use]
+    pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
+        self.allow_command_hooks = allow;
         self
     }
 }

@@ -54,7 +54,9 @@
 
   // Refresh project list on mount
   $effect(() => {
+    let cancelled = false;
     api.listProjects().then(list => {
+      if (cancelled) return;
       projectState.projects = list.map(p => ({
         id: p.id,
         name: p.name,
@@ -63,6 +65,7 @@
         updatedAt: p.updatedAt,
       }));
     }).catch(() => {});
+    return () => { cancelled = true; };
   });
 
   async function handleHomeSubmit() {

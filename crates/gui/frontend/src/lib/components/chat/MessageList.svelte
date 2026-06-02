@@ -43,8 +43,13 @@
 
   // Auto-scroll to bottom only when user is already near bottom
   $effect(() => {
+    // Capture the fingerprint before anything else — this is the reactive read.
     const fp = getFingerprint();
+    // If nothing changed, skip.
     if (fp === lastFingerprint) return;
+    // Update the tracked value.  Because we return immediately after, Svelte
+    // will not re-run this effect in the same tick (the dependency changed,
+    // but there are no further reactive reads after this point).
     lastFingerprint = fp;
 
     if (scrollContainer && isNearBottom) {

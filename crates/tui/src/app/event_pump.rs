@@ -80,13 +80,9 @@ impl EventPump {
                     result = r.recv() => {
                         match result {
                             Ok(ev) => {
-                                if let Err(e) = tx.try_send(ev) {
-                                    match e {
-                                        mpsc::error::TrySendError::Full(_) => {
-                                            tracing::warn!("EventPump mpsc full");
-                                        }
-                                        mpsc::error::TrySendError::Closed(_) => break 'outer,
-                                    }
+                                if let Err(e) = tx.send(ev).await {
+                                    tracing::warn!("EventPump mpsc closed: {e}");
+                                    break 'outer;
                                 }
                             }
                             Err(broadcast::error::RecvError::Closed) => {
@@ -94,7 +90,8 @@ impl EventPump {
                                 current_rx = None;
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("EventPump lagged by {n} events");
+                                tracing::warn!("EventPump lagged by {n} events, forcing resubscribe");
+                                current_rx = None;
                             }
                         }
                     }

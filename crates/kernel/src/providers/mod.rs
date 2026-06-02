@@ -110,6 +110,7 @@ pub struct ModelConfig {
     pub provider: crate::config::ModelProvider,
     pub model_id: String,
     pub endpoint: String,
+    #[serde(skip)]
     pub api_key: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,

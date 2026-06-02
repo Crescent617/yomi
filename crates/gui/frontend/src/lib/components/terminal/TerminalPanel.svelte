@@ -20,6 +20,8 @@
   let term: Terminal;
   let fitAddon: FitAddon;
   let unlisten: (() => void) | null = null;
+  let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+  let resizeObserver: ResizeObserver | null = null;
 
   onMount(async () => {
     const isDark = document.documentElement.classList.contains("dark");
@@ -59,8 +61,7 @@
     unlisten = l;
 
     // Resize handling (debounced)
-    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
-    const resizeObserver = new ResizeObserver(() => {
+    resizeObserver = new ResizeObserver(() => {
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => {
         fitAddon.fit();
@@ -72,14 +73,11 @@
       }, 150);
     });
     resizeObserver.observe(container);
-
-    return () => {
-      if (resizeTimeout) clearTimeout(resizeTimeout);
-      resizeObserver.disconnect();
-    };
   });
 
   onDestroy(() => {
+    if (resizeTimeout) clearTimeout(resizeTimeout);
+    resizeObserver?.disconnect();
     unlisten?.();
     term?.dispose();
     invoke("terminal_kill", { id }).catch(console.error);

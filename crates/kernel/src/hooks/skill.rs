@@ -105,10 +105,11 @@ impl SkillHookHandler {
         skill_name: &str,
         yaml: &str,
         registry: &mut HookRegistry,
+        allow_commands: bool,
     ) -> Result<()> {
         let value: serde_yaml::Value = serde_yaml::from_str(yaml)
             .map_err(|e| crate::types::KernelError::skill(format!("Invalid hooks YAML: {e}")))?;
-        Self::load_and_register_from_value(skill_name, &value, registry)
+        Self::load_and_register_from_value(skill_name, &value, registry, allow_commands)
     }
 
     /// Parse hooks from a YAML value and register them into a registry.
@@ -116,10 +117,18 @@ impl SkillHookHandler {
         skill_name: &str,
         value: &serde_yaml::Value,
         registry: &mut HookRegistry,
+        allow_commands: bool,
     ) -> Result<()> {
         let configs: Vec<SkillHookConfig> = serde_yaml::from_value(value.clone())
             .map_err(|e| crate::types::KernelError::skill(format!("Invalid hooks YAML: {e}")))?;
         for (idx, cfg) in configs.into_iter().enumerate() {
+            if cfg.handler_type == "command" && !allow_commands {
+                tracing::warn!(
+                    "Skill '{}' command hook blocked: allow_command_hooks is disabled",
+                    skill_name
+                );
+                continue;
+            }
             let handler = Self::from_config(skill_name, idx, cfg)?;
             registry.register(Arc::new(handler));
         }

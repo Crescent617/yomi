@@ -4,7 +4,7 @@
   import { X } from "lucide-svelte";
 
   let {
-    diffs,
+    diffs: diffsProp,
     onApprove,
     onReject,
     onPartial,
@@ -19,14 +19,24 @@
 
   let activeFileIndex = $state(0);
   let viewMode = $state<"unified" | "split">("unified");
+  // Local override map: hunk id -> applied state.  When absent, default to true.
+  let appliedMap = $state<Record<string, boolean>>({});
 
-  const activeFile = $derived(diffs[activeFileIndex]);
+  // Reset state when a new diff set arrives.
+  $effect(() => {
+    diffsProp; // reactive dependency
+    appliedMap = {};
+    activeFileIndex = 0;
+  });
+
+  const activeFile = $derived(diffsProp[activeFileIndex]);
+
+  function isHunkApplied(hunkId: string): boolean {
+    return appliedMap[hunkId] ?? true;
+  }
 
   function toggleHunk(hunkId: string) {
-    const file = diffs[activeFileIndex];
-    if (!file) return;
-    const hunk = file.hunks.find((h) => h.id === hunkId);
-    if (hunk) hunk.applied = !hunk.applied;
+    appliedMap[hunkId] = !isHunkApplied(hunkId);
   }
 
   function handleApproveAll() {
@@ -35,7 +45,10 @@
   }
 
   function handleApproveSelected() {
-    const filtered = diffs.map((d) => filterAppliedHunks(d));
+    const filtered = diffsProp.map((d) => ({
+      ...d,
+      hunks: d.hunks.filter((h) => isHunkApplied(h.id)),
+    }));
     onPartial(filtered);
     open = false;
   }
@@ -46,11 +59,12 @@
   }
 
   function stats(diff: FileDiff) {
-    const added = diff.hunks.reduce(
+    const activeHunks = diff.hunks.filter((h) => isHunkApplied(h.id));
+    const added = activeHunks.reduce(
       (sum, h) => sum + h.lines.filter((l) => l.type === "add").length,
       0
     );
-    const removed = diff.hunks.reduce(
+    const removed = activeHunks.reduce(
       (sum, h) => sum + h.lines.filter((l) => l.type === "remove").length,
       0
     );
@@ -71,7 +85,7 @@
   <div class="bg-background rounded-xl shadow-xl max-w-4xl w-[90vw] h-[80vh] flex flex-col mx-4">
     <!-- Header -->
     <div class="px-6 py-4 border-b border-border flex items-center justify-between">
-      <h2 class="text-lg font-semibold">Diff Preview — {diffs.length} file{diffs.length > 1 ? 's' : ''}</h2>
+      <h2 class="text-lg font-semibold">Diff Preview — {diffsProp.length} file{diffsProp.length > 1 ? 's' : ''}</h2>
       <button
         onclick={close}
         class="p-1 rounded-lg hover:bg-secondary transition-colors"
@@ -82,7 +96,7 @@
 
     <!-- File tabs -->
     <div class="flex items-center gap-1 border-b border-border mt-4 overflow-x-auto px-2">
-      {#each diffs as diff, i (diff.path)}
+      {#each diffsProp as diff, i (diff.path)}
         <button
           class="px-3 py-1.5 text-xs rounded-t-lg transition-colors {i === activeFileIndex
             ? 'bg-primary/10 text-primary border-b-2 border-primary'
@@ -121,12 +135,12 @@
       {#if activeFile}
         {#if viewMode === 'unified'}
           {#each activeFile.hunks as hunk (hunk.id)}
-            <div class="border-l-2 {hunk.applied ? 'border-primary' : 'border-muted'} my-2">
+            <div class="border-l-2 {isHunkApplied(hunk.id) ? 'border-primary' : 'border-muted'} my-2">
               <!-- Hunk header -->
               <div class="flex items-center gap-2 px-2 py-1 bg-muted/50 sticky top-0">
                 <input
                   type="checkbox"
-                  checked={hunk.applied}
+                  checked={isHunkApplied(hunk.id)}
                   onclick={() => toggleHunk(hunk.id)}
                   class="rounded"
                 />
@@ -136,7 +150,7 @@
               </div>
 
               <!-- Lines -->
-              {#each hunk.lines as line (line)}
+              {#each hunk.lines as line, lineIdx (`${line.oldLineNum}-${line.newLineNum}-${lineIdx}`)}
                 <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add'
                   ? 'bg-emerald-500/10'
                   : line.type === 'remove'
@@ -182,7 +196,7 @@
             <div class="flex-1 border-r border-border">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">Old</div>
               {#each activeFile.hunks as hunk (hunk.id)}
-                {#each hunk.lines as line (line)}
+                {#each hunk.lines as line, lineIdx (`old-${line.oldLineNum}-${lineIdx}`)}
                   {#if line.type !== 'add'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'remove' ? 'bg-red-500/10' : ''}">
                       <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.oldLineNum ?? ''}</span>
@@ -196,7 +210,7 @@
             <div class="flex-1">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">New</div>
               {#each activeFile.hunks as hunk (hunk.id)}
-                {#each hunk.lines as line (line)}
+                {#each hunk.lines as line, lineIdx (`new-${line.newLineNum}-${lineIdx}`)}
                   {#if line.type !== 'remove'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add' ? 'bg-emerald-500/10' : ''}">
                       <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.newLineNum ?? ''}</span>
@@ -223,7 +237,7 @@
     <!-- Action bar -->
     <div class="flex items-center justify-between border-t border-border pt-3 px-2 pb-3">
       <div class="text-xs text-muted-foreground">
-        {activeFile?.hunks.filter(h => h.applied).length ?? 0} / {activeFile?.hunks.length ?? 0} hunks applied
+        {activeFile?.hunks.filter(h => isHunkApplied(h.id)).length ?? 0} / {activeFile?.hunks.length ?? 0} hunks applied
       </div>
       <div class="flex gap-2">
         <button

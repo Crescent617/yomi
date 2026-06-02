@@ -61,6 +61,8 @@ pub mod env_names {
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
     /// Tool blocklist (comma-separated regex patterns)
     pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
+    /// Allow command hooks to execute (default false for security)
+    pub const ALLOW_COMMAND_HOOKS: &str = env_name!("ALLOW_COMMAND_HOOKS");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
 }
@@ -141,6 +143,9 @@ impl std::fmt::Display for ModelProvider {
 pub struct FeaturesConfig {
     /// Enable `PreToolUse` / `PostToolUse` lifecycle hooks.
     pub hooks: bool,
+    /// Allow command hooks (`sh -c` / `cmd /C`) to execute.
+    /// Disabled by default for security — must be explicitly enabled.
+    pub allow_command_hooks: bool,
 }
 
 /// Complete yomi configuration from environment
@@ -374,6 +379,11 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+        }
+
+        // Allow command hooks (security flag, default false)
+        if let Some(val) = env_bool_opt(env_names::ALLOW_COMMAND_HOOKS) {
+            self.features.allow_command_hooks = val;
         }
     }
 
