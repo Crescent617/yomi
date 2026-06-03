@@ -1,13 +1,13 @@
+use crate::event::{Event, SystemEvent};
 use crate::goal::JsonGoalStore;
 use crate::permissions::{Level, PermissionState};
 use crate::storage::file_state::JsonlFileStateStore;
 use crate::types::{AgentId, KernelError, Result, SessionError, SessionId};
 use crate::{
     agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
-    event::Event,
 };
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 pub struct Session {
     id: SessionId,
@@ -18,6 +18,8 @@ pub struct Session {
     goal_store: Arc<dyn crate::goal::GoalStore>,
     /// Session store for title updates
     session_store: Option<Arc<dyn crate::storage::SessionStore>>,
+    /// Event broadcast sender for emitting session-level events (e.g. title updates)
+    event_tx: Option<broadcast::Sender<Event>>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +65,7 @@ impl Session {
             permission_state,
             goal_store,
             session_store,
+            event_tx: None,
         };
         Ok((session, event_rx))
     }
@@ -197,10 +200,30 @@ impl Session {
                     .and_then(|info| info.title)
                     .is_some_and(|t| !t.trim().is_empty());
                 if !has_existing {
-                    let _ = session_store.update_title(&self.id, &title).await;
+                    match session_store.update_title(&self.id, &title).await {
+                        Ok(()) => {
+                            if let Some(ref tx) = self.event_tx {
+                                let _ = tx.send(Event::System(SystemEvent::TitleUpdated {
+                                    session_id: self.id.clone(),
+                                    title: title.clone(),
+                                }));
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to update title for session {}: {}",
+                                self.id.0, e
+                            );
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Set the event broadcast sender so the session can emit events.
+    pub fn set_event_sender(&mut self, tx: broadcast::Sender<Event>) {
+        self.event_tx = Some(tx);
     }
 
     pub fn cancel(&self) {

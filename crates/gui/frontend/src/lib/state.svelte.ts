@@ -479,6 +479,7 @@ interface SystemEvent {
   Connected?: Record<string, never>;
   Disconnected?: Record<string, never>;
   SessionSwitched?: { session_id: string };
+  TitleUpdated?: { session_id: string; title: string };
 }
 
 interface UserEvent {
@@ -840,6 +841,10 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     showNotification("Disconnected", "error", 3000);
     return true;
   } else if (event.SessionSwitched) {
+    return true;
+  } else if (event.TitleUpdated) {
+    if (event.TitleUpdated.session_id !== session.id) return false;
+    session.alias = event.TitleUpdated.title;
     return true;
   }
   return false;

@@ -245,4 +245,9 @@ pub enum SystemEvent {
     Connected { session_id: SessionId },
     /// Connection to daemon was lost (reader/heartbeat detected an error)
     ConnectionLost { session_id: SessionId },
+    /// Session title was updated (e.g. from first user message)
+    TitleUpdated {
+        session_id: SessionId,
+        title: String,
+    },
 }

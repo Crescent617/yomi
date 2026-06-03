@@ -335,11 +335,13 @@ impl Coordinator {
             .into());
         }
 
-        let (session, event_rx) =
+        let (mut session, event_rx) =
             Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared)).await?;
 
-        let session_arc = Arc::new(RwLock::new(session));
         let (broadcast_tx, _) = broadcast::channel::<Event>(256);
+        session.set_event_sender(broadcast_tx.clone());
+
+        let session_arc = Arc::new(RwLock::new(session));
 
         if self
             .sessions
