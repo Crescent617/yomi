@@ -1,4 +1,5 @@
 use crate::agent::AgentInput;
+use crate::const_concat;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;
@@ -75,11 +76,20 @@ impl Tool for ShellTool {
     }
 
     fn desc(&self) -> &'static str {
-        if cfg!(target_os = "windows") {
-            "Execute a shell command using cmd.exe. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
-        } else {
-            "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. Supports background=true for async execution. DO NOT use for git push or dangerous operations without explicit user request."
-        }
+        const BG_GUIDE: &str = r"
+## What is background mode
+- When `background` is true, the command runs at background and will not block the agent. The tool returns immediately with a `task_id`, `pid`, and output file path. When the command completes, the agent receives a message with the `task_id` and command output automatically.
+- The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
+## When to using background mode
+For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary.";
+        const_concat!(
+            if cfg!(target_os = "windows") {
+                "Execute a shell command using cmd.exe. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
+            } else {
+                "Execute a bash command. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
+            },
+            BG_GUIDE
+        )
     }
 
     fn schema(&self) -> Value {
@@ -92,12 +102,12 @@ impl Tool for ShellTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds. For synchronous mode (default), default is 60s. For background mode, no timeout if not specified.",
+                    "description": "Timeout in seconds. For synchronous mode (default), default is 60s. For background mode, run forever if not specified.",
                     "minimum": 1
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete. Do NOT use the reminder tool to track this task — you will be notified automatically.",
+                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete.",
                     "default": false
                 }
             },

@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -77,6 +77,11 @@ const MIGRATIONS: &[Migration] = &[
             r"ALTER TABLE sessions ADD COLUMN project_id TEXT;",
             r"CREATE INDEX idx_sessions_project_id ON sessions(project_id);",
         ],
+    },
+    Migration {
+        version: 5,
+        name: "add_auto_approve_level",
+        sqls: &[r"ALTER TABLE sessions ADD COLUMN auto_approve_level TEXT;"],
     },
 ];
 

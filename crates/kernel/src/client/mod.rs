@@ -58,11 +58,7 @@ pub trait CoordinatorApi: Send + Sync {
 
     // ── Session ──────────────────────────────────────────────────────────
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId>;
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId>;
     async fn fork_session(
         &self,
         parent: &SessionId,
@@ -93,7 +89,6 @@ pub trait CoordinatorApi: Send + Sync {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>>;
     async fn list_sessions(
         &self,
@@ -153,12 +148,8 @@ impl CoordinatorApi for Coordinator {
         self.create_session(input).await
     }
 
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
-        self.restore_session(id, auto_approve_level).await
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
+        self.restore_session(id).await
     }
 
     async fn fork_session(
@@ -228,7 +219,6 @@ impl CoordinatorApi for Coordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-        _auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
         self.subscribe_session_events(session_id).ok_or_else(|| {
             SessionError::NotFound {
@@ -584,7 +574,6 @@ impl RemoteCoordinator {
         for sid in sessions_to_resub {
             if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe {
                 session_id: sid,
-                auto_approve_level: Level::Safe,
             }))
             .await
             {
@@ -701,7 +690,6 @@ impl RemoteCoordinator {
     async fn subscribe_events_internal(
         &self,
         session_id: &SessionId,
-        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
         use dashmap::mapref::entry::Entry;
 
@@ -717,7 +705,6 @@ impl RemoteCoordinator {
         let result = self
             .call(RequestMethod::Subscribe {
                 session_id: session_id.0.clone(),
-                auto_approve_level,
             })
             .await;
         if let Err(ref e) = result {
@@ -796,15 +783,10 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(SessionId(sid))
     }
 
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::RestoreSession {
                 session_id: id.0.clone(),
-                auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -943,9 +925,8 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-        auto_approve_level: Level,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_events_internal(session_id, auto_approve_level)
+        self.subscribe_events_internal(session_id)
             .await
     }
 

@@ -21,7 +21,6 @@ async fn send_with_retry(
     coordinator: &dyn CoordinatorApi,
     session_id: &SessionId,
     blocks: Vec<ContentBlock>,
-    auto_approve: Level,
     max_retries: u32,
 ) -> Result<()> {
     let mut retries = 0;
@@ -34,7 +33,7 @@ async fn send_with_retry(
                     "Session {} missing on daemon, attempting restore...",
                     session_id.0
                 );
-                match coordinator.restore_session(session_id, auto_approve).await {
+                match coordinator.restore_session(session_id).await {
                     Ok(_) => {
                         tracing::info!("Session restored successfully");
                         restored = true;
@@ -122,7 +121,7 @@ pub async fn resolve_session(
             println!("Restoring session: {}", session_id.0);
 
             match coordinator
-                .restore_session(&session_id, auto_approve_level)
+                .restore_session(&session_id)
                 .await
             {
                 Ok(_) => Ok(session_id),
@@ -145,7 +144,7 @@ pub async fn resolve_session(
                 println!("Restoring previous session: {}", session_id.0);
 
                 match coordinator
-                    .restore_session(&session_id, auto_approve_level)
+                    .restore_session(&session_id)
                     .await
                 {
                     Ok(_) => Ok(session_id),
@@ -248,7 +247,7 @@ pub async fn run_session_loop(
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
-    let auto_approve_for_restore = auto_approve;
+    let _auto_approve_for_restore = auto_approve;
     let input_handle = tokio::spawn(async move {
         let mut has_saved = false;
         while let Some(blocks) = input_rx.recv().await {
@@ -263,7 +262,6 @@ pub async fn run_session_loop(
                 &*coord_for_input,
                 &session_id_for_input,
                 blocks,
-                auto_approve_for_restore,
                 MAX_RETRIES,
             )
             .await
@@ -351,7 +349,7 @@ pub async fn run_session_loop(
     });
 
     // Subscribe to session events (broadcast channel - TUI can lag but won't block)
-    let event_rx = coordinator.subscribe_session_events(&session_id, auto_approve).await?;
+    let event_rx = coordinator.subscribe_session_events(&session_id).await?;
 
     let tui_result = run_tui(
         event_rx,

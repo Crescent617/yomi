@@ -343,13 +343,12 @@ impl KernelServer {
             }
             RequestMethod::RestoreSession {
                 session_id,
-                auto_approve_level,
             } => {
                 let sid = SessionId(session_id);
                 rpc_body(
                     "restore_session_failed",
                     self.coordinator
-                        .restore_session(&sid, auto_approve_level)
+                        .restore_session(&sid)
                         .await
                         .map(|sid| sid.0),
                 )
@@ -385,16 +384,14 @@ impl KernelServer {
             }
             RequestMethod::Subscribe {
                 session_id,
-                auto_approve_level,
             } => {
                 let sid = SessionId(session_id.clone());
-                let level = auto_approve_level;
 
                 // Try to subscribe directly first
                 let mut rx = self.coordinator.subscribe_session_events(&sid);
                 if rx.is_none() {
                     // Session not in memory - try to restore from storage
-                    match self.coordinator.restore_session(&sid, level).await {
+                    match self.coordinator.restore_session(&sid).await {
                         Ok(_) => {
                             rx = self.coordinator.subscribe_session_events(&sid);
                         }

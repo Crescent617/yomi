@@ -94,13 +94,11 @@ pub async fn create_session(
 pub async fn restore_session(
     state: State<'_, AppState>,
     session_id: String,
-    auto_approve_level: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let level = parse_level(&auto_approve_level)?;
     let sid = SessionId(session_id);
     coord
-        .restore_session(&sid, level)
+        .restore_session(&sid)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

@@ -15,6 +15,7 @@ pub struct SessionInfo {
     pub message_count: i64,
     pub working_dir: Option<String>,
     pub project_id: Option<crate::types::ProjectId>,
+    pub auto_approve_level: Option<String>,
 }
 
 impl SessionInfo {
@@ -71,15 +72,17 @@ impl Default for ListArgs {
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// Create a new session with the given ID, optional `project_id`, and optional working directory
+    /// Create a new session with the given ID, optional `project_id`, optional working directory,
+    /// and optional `auto_approve_level`
     async fn create(
         &self,
         id: &SessionId,
         project_id: Option<&crate::types::ProjectId>,
         working_dir: Option<&str>,
+        auto_approve_level: Option<&str>,
     ) -> Result<()>;
 
-    /// Fork a session, copying its metadata
+    /// Fork a session, copying its metadata (including auto_approve_level)
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;
 
     /// Get session metadata by ID
@@ -103,6 +106,9 @@ pub trait SessionStore: Send + Sync {
 
     /// Update session title
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()>;
+
+    /// Update session auto_approve_level
+    async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<()>;
 
     /// Delete sessions older than the given number of days
     ///

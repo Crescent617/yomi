@@ -293,7 +293,12 @@ impl Coordinator {
 
         let id = SessionId::new();
         self.session_store()
-            .create(&id, input.project_id.as_ref(), working_dir.as_deref())
+            .create(
+                &id,
+                input.project_id.as_ref(),
+                working_dir.as_deref(),
+                Some(input.auto_approve_level.as_str()),
+            )
             .await?;
 
         let config = SessionConfig {
@@ -404,11 +409,7 @@ impl Coordinator {
     }
 
     /// Restore a session from storage by its ID.
-    pub async fn restore_session(
-        &self,
-        session_id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
+    pub async fn restore_session(&self, session_id: &SessionId) -> Result<SessionId> {
         let live = self.get_session(session_id).is_some();
         tracing::info!("restore_session: {} live={}", session_id.0, live);
 
@@ -422,6 +423,12 @@ impl Coordinator {
                 session_id: session_id.0.clone(),
             })
         })?;
+
+        let auto_approve_level = info
+            .auto_approve_level
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(Level::Safe);
 
         let project = match &info.project_id {
             Some(pid) => self.project_store.get(pid).await?,
@@ -451,7 +458,8 @@ impl Coordinator {
         Ok(info.id)
     }
 
-    /// Fork a session: create new session with copied history from parent
+    /// Fork a session: create new session with copied history from parent.
+    /// `auto_approve_level` overrides the parent's level for the new session.
     pub async fn fork_session(
         &self,
         parent_id: &SessionId,
@@ -464,6 +472,10 @@ impl Coordinator {
         })?;
 
         let new_id = self.session_store().fork(parent_id).await?;
+        // Override the copied level with the requested one
+        self.session_store()
+            .update_auto_approve_level(&new_id, auto_approve_level.as_str())
+            .await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
 
         let project = match &parent_info.project_id {
@@ -587,6 +599,9 @@ impl Coordinator {
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.set_permission_level(level).await;
+        self.session_store()
+            .update_auto_approve_level(session_id, level.as_str())
+            .await?;
         tracing::info!(
             "Permission level set to {:?} for session {}",
             level,

@@ -110,19 +110,16 @@
 
   async function activateSession(id: string) {
     const prev = sessionState.activeSessionId;
-    const session = getSession(id);
-    const level = session?.permissionLevel ?? "caution";
     try {
       if (prev && prev !== id) await api.unsubscribe(prev);
-      await api.subscribe(id, level);
+      await api.subscribe(id);
       setActiveSession(id);
       const msgs = await api.getMessages(id);
       if (getSession(id)) loadSessionMessages(id, msgs);
     } catch (e: any) {
       console.error("Failed to activate session:", e?.message ?? e);
       if (prev && prev !== id) {
-        const prevLevel = getSession(prev)?.permissionLevel ?? "caution";
-        try { await api.subscribe(prev, prevLevel); setActiveSession(prev); } catch { setActiveSession(null); }
+        try { await api.subscribe(prev); setActiveSession(prev); } catch { setActiveSession(null); }
       } else {
         setActiveSession(null);
       }

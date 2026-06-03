@@ -35,20 +35,18 @@ pub async fn subscribe(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     session_id: String,
-    auto_approve_level: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id.clone());
-    let level = parse_level(&auto_approve_level)?;
-    let mut rx = match coord.subscribe_session_events(&sid, level).await {
+    let mut rx = match coord.subscribe_session_events(&sid).await {
         Ok(rx) => rx,
         Err(_) => {
             coord
-                .restore_session(&sid, level)
+                .restore_session(&sid)
                 .await
                 .map_err(GuiError::kernel)?;
             coord
-                .subscribe_session_events(&sid, level)
+                .subscribe_session_events(&sid)
                 .await
                 .map_err(GuiError::kernel)?
         }

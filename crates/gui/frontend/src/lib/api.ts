@@ -142,11 +142,8 @@ export async function createSession(
   return invokeCmd("create_session", { projectId, workingDir, autoApproveLevel: level });
 }
 
-export async function restoreSession(
-  sessionId: string,
-  level: string = "safe",
-): Promise<void> {
-  return invokeCmd("restore_session", { sessionId, autoApproveLevel: level });
+export async function restoreSession(sessionId: string): Promise<void> {
+  return invokeCmd("restore_session", { sessionId });
 }
 
 export async function forkSession(
@@ -168,8 +165,8 @@ export async function sendMessage(sessionId: string, content: string): Promise<v
   return invokeCmd("send_message", { sessionId, content });
 }
 
-export async function subscribe(sessionId: string, level: string = "safe"): Promise<void> {
-  return invokeCmd("subscribe", { sessionId, autoApproveLevel: level });
+export async function subscribe(sessionId: string): Promise<void> {
+  return invokeCmd("subscribe", { sessionId });
 }
 
 export async function unsubscribe(sessionId: string): Promise<void> {

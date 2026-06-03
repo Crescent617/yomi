@@ -30,7 +30,7 @@ impl EventPump {
         initial_rx: broadcast::Receiver<Event>,
         coordinator: Arc<dyn CoordinatorApi>,
         session_id: String,
-        auto_approve: Level,
+        _auto_approve: Level,
     ) -> (Self, mpsc::Receiver<Event>) {
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -50,7 +50,7 @@ impl EventPump {
             'outer: loop {
                 // When broadcast is closed, resubscribe (infinite retry).
                 if current_rx.is_none() {
-                    match Self::resubscribe(&coordinator, &sid, auto_approve, &cancel_for_task)
+                    match Self::resubscribe(&coordinator, &sid, _auto_approve, &cancel_for_task)
                         .await
                     {
                         Some(new_rx) => {
@@ -109,7 +109,7 @@ impl EventPump {
     async fn resubscribe(
         coordinator: &Arc<dyn CoordinatorApi>,
         session_id: &SessionId,
-        auto_approve: Level,
+        _auto_approve: Level,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Option<broadcast::Receiver<Event>> {
         let mut retries: u32 = 0;
@@ -119,7 +119,7 @@ impl EventPump {
             }
             match tokio::time::timeout(
                 Duration::from_secs(5),
-                coordinator.subscribe_session_events(session_id, auto_approve),
+                coordinator.subscribe_session_events(session_id),
             )
             .await
             {
@@ -130,7 +130,7 @@ impl EventPump {
                             "Session {} missing on daemon, attempting restore…",
                             session_id.0
                         );
-                        match coordinator.restore_session(session_id, auto_approve).await {
+                        match coordinator.restore_session(session_id).await {
                             Ok(_) => {
                                 // Session restored — immediately retry subscribe.
                                 continue;

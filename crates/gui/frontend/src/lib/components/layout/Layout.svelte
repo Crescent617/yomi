@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import { projectState, appState, getActiveSession } from "../../state.svelte";
-  import SessionBand from "./SessionBand.svelte";
+  import ProjectSidebar from "./ProjectSidebar.svelte";
   import ChatView from "../chat/ChatView.svelte";
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
@@ -52,7 +52,7 @@
             ? 'w-16'
             : 'w-64'}"
         >
-          <SessionBand collapsed={appState.sidebarCollapsed} />
+          <ProjectSidebar collapsed={appState.sidebarCollapsed} />
         </aside>
       {/if}
 
