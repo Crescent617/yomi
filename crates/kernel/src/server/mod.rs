@@ -105,10 +105,9 @@ impl KernelServer {
         let (new_agent, hook_registry) = match tokio::task::spawn_blocking(move || {
             let config = reload_config(file_path.as_ref(), &base_dir);
             let agent = build_agent_config(&config, &base_dir);
-            let hooks = config
-                .features
-                .hooks
-                .then(|| crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks));
+            let hooks = config.features.hooks.then(|| {
+                crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+            });
             (agent, hooks)
         })
         .await
@@ -341,9 +340,7 @@ impl KernelServer {
                         .map(|sid| sid.0),
                 )
             }
-            RequestMethod::RestoreSession {
-                session_id,
-            } => {
+            RequestMethod::RestoreSession { session_id } => {
                 let sid = SessionId(session_id);
                 rpc_body(
                     "restore_session_failed",
@@ -382,9 +379,7 @@ impl KernelServer {
                         .map(|()| serde_json::Value::Null),
                 )
             }
-            RequestMethod::Subscribe {
-                session_id,
-            } => {
+            RequestMethod::Subscribe { session_id } => {
                 let sid = SessionId(session_id.clone());
 
                 // Try to subscribe directly first

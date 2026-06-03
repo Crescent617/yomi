@@ -9,16 +9,10 @@
   import ConfigEditor from "./ConfigEditor.svelte";
   import RightPanel from "./RightPanel.svelte";
 
-  let isDesktop = $state(false);
+  let mobileSidebarOpen = $state(false);
 
   onMount(() => {
-    isDesktop = window.innerWidth >= 1024;
-    const onResize = () => {
-      isDesktop = window.innerWidth >= 1024;
-    };
-    window.addEventListener("resize", onResize);
     loadProjects();
-    return () => window.removeEventListener("resize", onResize);
   });
 
   async function loadProjects() {
@@ -37,38 +31,72 @@
   }
 
   const activeSession = $derived(getActiveSession());
+
+  function closeMobileSidebar() {
+    mobileSidebarOpen = false;
+  }
+
+  function toggleMobileSidebar() {
+    mobileSidebarOpen = !mobileSidebarOpen;
+  }
 </script>
 
 <div class="fixed inset-0 flex bg-background text-foreground overflow-hidden">
-  {#if isDesktop}
+  <!-- Desktop ActivityBar — always visible on lg+ -->
+  <div class="hidden lg:flex shrink-0">
     <ActivityBar />
-  {/if}
+  </div>
 
-  <div class="flex-1 flex min-h-0 overflow-hidden">
+  <div class="flex-1 flex min-h-0 overflow-hidden relative">
     {#if appState.activePanel === "chat"}
-      {#if isDesktop}
-        <aside
-          class="flex flex-col border-r border-border shrink-0 {appState.sidebarCollapsed
-            ? 'w-16'
-            : 'w-64'}"
-        >
-          <ProjectSidebar collapsed={appState.sidebarCollapsed} />
-        </aside>
-      {/if}
+      <!-- Desktop inline sidebar -->
+      <aside
+        class="hidden lg:flex flex-col border-r border-border shrink-0 transition-[width] duration-300 ease-out
+               {appState.sidebarCollapsed ? 'w-16' : 'w-64'}"
+      >
+        <ProjectSidebar collapsed={appState.sidebarCollapsed} />
+      </aside>
 
-      <!-- ChatView directly as flex item -->
+      <!-- Mobile overlay sidebar -->
+      <!-- Backdrop: always rendered for smooth fade-out -->
+      <div
+        class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
+               transition-opacity duration-200
+               {mobileSidebarOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}"
+        onclick={closeMobileSidebar}
+        role="presentation"
+      ></div>
+
+      <!-- Mobile drawer (always rendered for animation, controlled by transform) -->
+      <div
+        class="fixed left-0 top-0 bottom-0 z-50 flex border-r border-border bg-background shadow-xl
+               transition-transform duration-300 ease-out lg:hidden
+               {mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}"
+        style="max-width: 85vw;"
+      >
+        <ActivityBar />
+        <div class="flex-1 flex flex-col min-w-0 overflow-hidden w-64">
+          <ProjectSidebar collapsed={false} />
+        </div>
+      </div>
+
       <ChatView
         rightPanelCollapsed={appState.rightPanelCollapsed}
         onToggleRightPanel={() => appState.rightPanelCollapsed = !appState.rightPanelCollapsed}
+        onToggleLeftPanel={toggleMobileSidebar}
       />
 
-      {#if isDesktop && !appState.rightPanelCollapsed}
-        <RightPanel session={activeSession} />
+      {#if !appState.rightPanelCollapsed}
+        <aside
+          class="hidden lg:flex flex-col border-l border-border shrink-0 w-72 transition-all duration-300 ease-out"
+        >
+          <RightPanel session={activeSession} />
+        </aside>
       {/if}
     {:else if appState.activePanel === "usage"}
-      <UsagePanel />
+      <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />
     {:else if appState.activePanel === "config"}
-      <ConfigEditor />
+      <ConfigEditor onToggleLeftPanel={toggleMobileSidebar} />
     {/if}
   </div>
 </div>

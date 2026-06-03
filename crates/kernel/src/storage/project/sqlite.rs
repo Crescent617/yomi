@@ -68,14 +68,12 @@ impl ProjectStore for SqliteProjectStore {
     }
 
     async fn update_name(&self, id: &ProjectId, name: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .bind(name)
-        .bind(&id.0)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to update project name: {e}")))?;
+        sqlx::query("UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(name)
+            .bind(&id.0)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to update project name: {e}")))?;
         Ok(())
     }
 

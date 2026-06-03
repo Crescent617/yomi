@@ -67,10 +67,12 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 Some(task_store),
                 Some(config.agent.compactor.clone()),
                 skill_folders,
-                config
-                    .features
-                    .hooks
-                    .then(|| kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
+                config.features.hooks.then(|| {
+                    kernel::hooks::build_registry(
+                        &config.hooks,
+                        config.features.allow_command_hooks,
+                    )
+                }),
             ));
 
             let server =

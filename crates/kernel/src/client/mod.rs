@@ -113,7 +113,10 @@ pub trait CoordinatorApi: Send + Sync {
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>>;
-    async fn get_session_usage(&self, session_id: &SessionId) -> Result<crate::storage::usage::UsageSummary>;
+    async fn get_session_usage(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
@@ -235,10 +238,7 @@ impl CoordinatorApi for Coordinator {
         limit: usize,
     ) -> Result<PaginatedSessions> {
         let (sessions, has_more) = self.list_sessions(project_id, before, limit).await?;
-        Ok(PaginatedSessions {
-            sessions,
-            has_more,
-        })
+        Ok(PaginatedSessions { sessions, has_more })
     }
 
     async fn get_checkpoints(
@@ -572,10 +572,7 @@ impl RemoteCoordinator {
         // gone when subsequent `send_message` calls return
         // `session_not_found`.
         for sid in sessions_to_resub {
-            if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe {
-                session_id: sid,
-            }))
-            .await
+            if let Err(e) = Box::pin(self.call(RequestMethod::Subscribe { session_id: sid })).await
             {
                 tracing::warn!("Re-subscribe failed: {e}");
             }
@@ -926,8 +923,7 @@ impl CoordinatorApi for RemoteCoordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_events_internal(session_id)
-            .await
+        self.subscribe_events_internal(session_id).await
     }
 
     async fn list_sessions(
@@ -948,10 +944,7 @@ impl CoordinatorApi for RemoteCoordinator {
         // we infer from the result length.
         let has_more = sessions.len() > limit;
         let sessions = sessions.into_iter().take(limit).collect();
-        Ok(PaginatedSessions {
-            sessions,
-            has_more,
-        })
+        Ok(PaginatedSessions { sessions, has_more })
     }
 
     async fn get_checkpoints(
@@ -1011,10 +1004,7 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(crate::storage::usage::UsageSummary::default())
     }
 
-    async fn get_daily_usage(
-        &self,
-        _days: i64,
-    ) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+    async fn get_daily_usage(&self, _days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
         Ok(Vec::new())
     }
 

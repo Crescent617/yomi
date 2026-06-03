@@ -192,7 +192,10 @@ impl ToolRegistryFactory {
                     tracing::info!("Tool '{}' blocked by blocklist pattern", name);
                 }
             } else {
-                tracing::warn!("Invalid regex in tool_blocklist: {:?}", config.tool_blocklist);
+                tracing::warn!(
+                    "Invalid regex in tool_blocklist: {:?}",
+                    config.tool_blocklist
+                );
             }
         }
 

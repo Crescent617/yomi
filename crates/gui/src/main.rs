@@ -60,6 +60,7 @@ pub fn run() {
             commands::system::get_usage_summary,
             commands::system::get_daily_usage,
             commands::system::get_session_usage,
+            commands::system::open_in_editor,
             commands::terminal::terminal_spawn,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,

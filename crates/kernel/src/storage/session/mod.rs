@@ -39,7 +39,10 @@ const DEFAULT_LIST_LIMIT: usize = 1000;
 
 /// Arguments for listing sessions with various filters
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[deprecated(since = "0.2.0", note = "Use cursor-based list(project_id, before, limit) instead")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use cursor-based list(project_id, before, limit) instead"
+)]
 pub struct ListArgs {
     /// Filter: sessions with `updated_at` < before
     pub before: Option<chrono::DateTime<chrono::Utc>>,
@@ -82,7 +85,7 @@ pub trait SessionStore: Send + Sync {
         auto_approve_level: Option<&str>,
     ) -> Result<()>;
 
-    /// Fork a session, copying its metadata (including auto_approve_level)
+    /// Fork a session, copying its metadata (including `auto_approve_level`)
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;
 
     /// Get session metadata by ID
@@ -107,7 +110,7 @@ pub trait SessionStore: Send + Sync {
     /// Update session title
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()>;
 
-    /// Update session auto_approve_level
+    /// Update session `auto_approve_level`
     async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<()>;
 
     /// Delete sessions older than the given number of days

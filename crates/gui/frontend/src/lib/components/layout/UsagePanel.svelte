@@ -10,7 +10,14 @@
     Clock,
     TrendingUp,
     Calendar,
+    PanelLeftOpen,
   } from "lucide-svelte";
+
+  let {
+    onToggleLeftPanel,
+  }: {
+    onToggleLeftPanel?: () => void;
+  } = $props();
 
   let config = $state<{ model: string; context_window: number; provider: string } | null>(null);
   let summary = $state<{ prompt_tokens: number; completion_tokens: number; cached_tokens: number; total_tokens: number; request_count: number } | null>(null);
@@ -104,6 +111,16 @@
   <div class="shrink-0 px-6 py-4 border-b border-border">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
+        {#if onToggleLeftPanel}
+          <button
+            type="button"
+            onclick={() => onToggleLeftPanel()}
+            class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+            title="Toggle sidebar"
+          >
+            <PanelLeftOpen size={18} />
+          </button>
+        {/if}
         <TrendingUp class="w-5 h-5 text-primary" />
         <h2 class="text-lg font-semibold">Usage</h2>
       </div>

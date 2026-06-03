@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Plus, Folder, FolderOpen, MoreVertical, Pencil, Trash2, X } from "lucide-svelte";
+  import { Plus, Folder, FolderOpen, MoreVertical, Pencil, Trash2, X, Copy } from "lucide-svelte";
   import * as api from "../../api";
   import {
     sessionState,
@@ -17,6 +17,7 @@
   let expanded = $state<Record<string, boolean>>({});
   let loading = $state<Record<string, boolean>>({});
   let showMenu = $state<string | null>(null);
+  let showSessionMenu = $state<string | null>(null);
   let renamingProjectId = $state<string | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let renameValue = $state("");
@@ -90,6 +91,7 @@
             pendingAskUser: null,
             queuedInput: null,
             updatedAt: s.endedAt ?? s.createdAt,
+            permissionLevel: s.autoApproveLevel ?? "safe",
           });
         }
       }
@@ -176,6 +178,7 @@
         pendingAskUser: null,
         queuedInput: null,
         updatedAt: new Date().toISOString(),
+        permissionLevel: config?.auto_approve ?? "caution",
       });
       await activateSession(id);
     } catch (e: any) {
@@ -216,6 +219,15 @@
 
   function formatShortId(id: string) {
     return id.slice(-8);
+  }
+
+  async function copySessionId(id: string) {
+    try {
+      await navigator.clipboard.writeText(id);
+      showNotification("Session ID copied", "success", 1500);
+    } catch {
+      showNotification("Failed to copy", "error", 1500);
+    }
   }
 </script>
 
@@ -320,7 +332,7 @@
                       autofocus
                     />
                   {:else}
-                    <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)} ondblclick={() => { renamingSessionId = session.id; renameValue = session.alias ?? formatShortId(session.id); }}>
+                    <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)}>
                       {session.alias ?? formatShortId(session.id)}
                     </span>
                   {/if}
@@ -331,9 +343,25 @@
                     {#if session.unread > 0}
                       <span class="min-w-[1.1rem] h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center">{session.unread > 99 ? "99+" : session.unread}</span>
                     {/if}
-                    <button class="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100" onclick={(e: Event) => { e.stopPropagation(); deleteSession(session.id); }}>
-                      <X size={12} />
-                    </button>
+                    <div class="relative">
+                      <button class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100" onclick={(e: Event) => { e.stopPropagation(); showSessionMenu = showSessionMenu === session.id ? null : session.id; }}>
+                        <MoreVertical size={12} />
+                      </button>
+                      {#if showSessionMenu === session.id}
+                        <div class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1">
+                          <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={(e: Event) => { e.stopPropagation(); renamingSessionId = session.id; renameValue = session.alias ?? formatShortId(session.id); showSessionMenu = null; }}>
+                            <Pencil size={12} /> Rename
+                          </button>
+                          <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={(e: Event) => { e.stopPropagation(); copySessionId(session.id); showSessionMenu = null; }}>
+                            <Copy size={12} /> Copy ID
+                          </button>
+                          <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left" onclick={(e: Event) => { e.stopPropagation(); deleteSession(session.id); showSessionMenu = null; }}>
+                            <Trash2 size={12} /> Delete
+                          </button>
+                        </div>
+                        <div class="fixed inset-0 z-10" onclick={() => showSessionMenu = null}></div>
+                      {/if}
+                    </div>
                   </div>
                 </div>
               {/each}

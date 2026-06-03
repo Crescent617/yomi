@@ -152,3 +152,10 @@ pub async fn get_session_usage(
         "request_count": usage.request_count,
     }))
 }
+
+#[tauri::command]
+pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;
+    Ok(())
+}

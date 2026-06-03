@@ -67,7 +67,6 @@ pub mod env_names {
     pub const CONFIG: &str = env_name!("CONFIG");
 }
 
-
 /// Provider type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

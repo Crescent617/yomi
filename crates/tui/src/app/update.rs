@@ -406,9 +406,7 @@ impl Model {
                     {
                         let handle = tokio::task::spawn_blocking(|| {
                             use arboard::Clipboard;
-                            Clipboard::new()
-                                .ok()
-                                .and_then(|mut c| c.get_text().ok())
+                            Clipboard::new().ok().and_then(|mut c| c.get_text().ok())
                         });
                         self.clipboard_handle = Some(handle);
                     }
@@ -499,9 +497,7 @@ impl Model {
                                 .sessions
                                 .into_iter()
                                 .filter(|s| {
-                                    s.working_dir
-                                        .as_ref()
-                                        .is_some_and(|wd| wd == &working_dir)
+                                    s.working_dir.as_ref().is_some_and(|wd| wd == &working_dir)
                                 })
                                 .take(50)
                                 .collect(),
@@ -651,7 +647,9 @@ impl Model {
                         let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
                         if let Some(cp) = latest {
                             let _ = ctrl_tx.try_send(ControlCommand::Rewind {
-                                message_id: kernel::types::MessageId::from_string(cp.message_id.clone()),
+                                message_id: kernel::types::MessageId::from_string(
+                                    cp.message_id.clone(),
+                                ),
                                 target: kernel::checkpoint::RewindTarget::Both,
                             });
                             if let Err(e) = tx.send(Msg::Notification(Notification::info(

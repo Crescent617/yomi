@@ -221,11 +221,15 @@ impl Model {
                                 match finish_reason {
                                     Some(FinishReason::MaxTokens) => {
                                         self.stop_streaming(StreamingStatus::Failed);
-                                        self.show_error_message("Response truncated: max tokens reached");
+                                        self.show_error_message(
+                                            "Response truncated: max tokens reached",
+                                        );
                                     }
                                     Some(FinishReason::ContentFilter) => {
                                         self.stop_streaming(StreamingStatus::Failed);
-                                        self.show_error_message("Response blocked: content filter triggered");
+                                        self.show_error_message(
+                                            "Response blocked: content filter triggered",
+                                        );
                                     }
                                     _ => {
                                         if self.state.is_streaming {
@@ -289,9 +293,9 @@ impl Model {
                         // Non-recoverable error: show notification only.
                         // Streaming ends only when AgentStatus::Stopped arrives.
                         let message = format!("{phase_str} error: {error}");
-                        self.show_notification(
-                            &crate::components::info_bar::Notification::error(message, 5000),
-                        );
+                        self.show_notification(&crate::components::info_bar::Notification::error(
+                            message, 5000,
+                        ));
                         self.state.should_redraw = true;
                     }
                 }

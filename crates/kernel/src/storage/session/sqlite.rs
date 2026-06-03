@@ -263,7 +263,10 @@ mod tests {
         let store = create_test_store().await;
 
         let id = SessionId::new();
-        store.create(&id, None, Some("/test/dir"), None).await.unwrap();
+        store
+            .create(&id, None, Some("/test/dir"), None)
+            .await
+            .unwrap();
         let info = store.get(&id).await.unwrap().unwrap();
 
         assert_eq!(info.working_dir, Some("/test/dir".to_string()));
@@ -274,7 +277,10 @@ mod tests {
         let store = create_test_store().await;
 
         let parent = SessionId::new();
-        store.create(&parent, None, Some("/parent/dir"), None).await.unwrap();
+        store
+            .create(&parent, None, Some("/parent/dir"), None)
+            .await
+            .unwrap();
         let child = store.fork(&parent).await.unwrap();
 
         let child_info = store.get(&child).await.unwrap().unwrap();
@@ -305,11 +311,20 @@ mod tests {
 
         let pid = crate::types::ProjectId::new();
         let id1 = SessionId::new();
-        store.create(&id1, Some(&pid), Some("/foo/bar"), None).await.unwrap();
+        store
+            .create(&id1, Some(&pid), Some("/foo/bar"), None)
+            .await
+            .unwrap();
         let id2 = SessionId::new();
-        store.create(&id2, None, Some("/baz/qux"), None).await.unwrap();
+        store
+            .create(&id2, None, Some("/baz/qux"), None)
+            .await
+            .unwrap();
         let id3 = SessionId::new();
-        store.create(&id3, Some(&pid), Some("/foo/bar"), None).await.unwrap();
+        store
+            .create(&id3, Some(&pid), Some("/foo/bar"), None)
+            .await
+            .unwrap();
 
         let (list, _) = store.list(Some(&pid), None, 100).await.unwrap();
         assert_eq!(list.len(), 2);
@@ -362,7 +377,10 @@ mod tests {
 
         // Create a session and manually set its updated_at to 10 days ago
         let old_id = SessionId::new();
-        store.create(&old_id, None, Some("/test"), None).await.unwrap();
+        store
+            .create(&old_id, None, Some("/test"), None)
+            .await
+            .unwrap();
         sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
             .bind(&old_id.0)
             .execute(&store.pool)
@@ -371,7 +389,10 @@ mod tests {
 
         // Create a recent session
         let recent_id = SessionId::new();
-        store.create(&recent_id, None, Some("/test"), None).await.unwrap();
+        store
+            .create(&recent_id, None, Some("/test"), None)
+            .await
+            .unwrap();
 
         // Cleanup sessions older than 7 days
         let deleted = store.cleanup(7).await.unwrap();

@@ -17,34 +17,22 @@ struct TerminalGuard;
 
 impl TerminalGuard {
     fn new() -> Self {
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::EnableBracketedPaste
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::event::PushKeyboardEnhancementFlags(
                 crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
             )
         );
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::EnableMouseCapture
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
         Self
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableMouseCapture
-        );
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableBracketedPaste
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::event::PopKeyboardEnhancementFlags
@@ -68,14 +56,10 @@ impl Model {
         let signal_task = tokio::spawn(async move {
             #[cfg(unix)]
             {
-                let mut sigterm = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate(),
-                )
-                .ok();
-                let mut sigint = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::interrupt(),
-                )
-                .ok();
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
                 tokio::select! {
                     _ = async { sigterm.as_mut()?.recv().await } => {},
                     _ = async { sigint.as_mut()?.recv().await } => {},
@@ -120,11 +104,7 @@ impl Model {
             }
         }
 
-        while !self.state.quit
-            && !self
-                .signal_quit
-                .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        while !self.state.quit && !self.signal_quit.load(std::sync::atomic::Ordering::Relaxed) {
             self.process_kernel_event().await;
 
             // Poll tuirealm events (blocking up to 10ms)

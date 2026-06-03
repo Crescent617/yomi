@@ -444,10 +444,7 @@ impl Agent {
     }
 
     /// Emit `Stopped` lifecycle event with completed reason.
-    fn emit_stopped_completed(
-        &self,
-        finish_reason: Option<crate::types::FinishReason>,
-    ) {
+    fn emit_stopped_completed(&self, finish_reason: Option<crate::types::FinishReason>) {
         if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
             agent_id: self.id.clone(),
             state: AgentStatus::Stopped {

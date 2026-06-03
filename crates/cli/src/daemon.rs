@@ -1,7 +1,7 @@
 //! Daemon lifecycle management for yomi.
 
 use anyhow::{Context, Result};
-pub use kernel::transport::{socket_addr, pid_file_path};
+pub use kernel::transport::{pid_file_path, socket_addr};
 use tokio::time::{sleep, Duration};
 
 /// How long to wait for graceful shutdown before falling back to kill.

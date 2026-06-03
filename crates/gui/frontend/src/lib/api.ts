@@ -77,6 +77,7 @@ export interface SessionInfo {
   endedAt?: string;
   title?: string;
   projectId?: string;
+  autoApproveLevel?: string;
 }
 
 export interface PaginatedSessions {
@@ -103,6 +104,9 @@ export async function listSessions(
         endedAt: session.updated_at ? String(session.updated_at) : undefined,
         title: session.title ? String(session.title) : undefined,
         projectId: session.projectId ? String(session.projectId) : undefined,
+        autoApproveLevel: session.auto_approve_level
+          ? String(session.auto_approve_level)
+          : undefined,
       };
     }),
     hasMore: result.has_more,
@@ -273,4 +277,7 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 
 export async function ping(): Promise<boolean> {
   return withTimeout(invoke("ping"), PING_TIMEOUT, "ping");
+}
+export async function openInEditor(path: string): Promise<void> {
+  return invokeCmd("open_in_editor", { path });
 }

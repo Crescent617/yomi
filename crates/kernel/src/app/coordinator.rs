@@ -3,8 +3,8 @@ use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
+use crate::storage::usage::{DailyUsage, UsageFilter, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
-use crate::storage::usage::{UsageFilter, DailyUsage, UsageSummary};
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -211,9 +211,9 @@ impl Coordinator {
         name: Option<String>,
     ) -> Result<Project> {
         let abs = std::fs::canonicalize(&dir).unwrap_or(dir);
-        let dir_str = abs.to_str().ok_or_else(|| {
-            SessionError::Other("Invalid project directory path".to_string())
-        })?;
+        let dir_str = abs
+            .to_str()
+            .ok_or_else(|| SessionError::Other("Invalid project directory path".to_string()))?;
 
         // Check for existing project by directory
         if let Some(existing) = self.project_store.get_by_dir(dir_str).await? {
@@ -711,7 +711,11 @@ impl Coordinator {
         }
 
         // Propagate skill refresh to all live sessions.
-        let handles: Vec<_> = self.sessions.iter().map(|e| Arc::clone(e.value())).collect();
+        let handles: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|e| Arc::clone(e.value()))
+            .collect();
         for session in handles {
             let session = session.read().await;
             if let Err(e) = session.refresh_skills(skills.clone()).await {
@@ -738,10 +742,7 @@ impl Coordinator {
     }
 
     /// Get usage for a specific session
-    pub async fn get_session_usage(
-        &self,
-        _session_id: &SessionId,
-    ) -> Result<UsageSummary> {
+    pub async fn get_session_usage(&self, _session_id: &SessionId) -> Result<UsageSummary> {
         let now = Utc::now();
         let start = now - chrono::Duration::days(365); // all time
         let filter = UsageFilter {
@@ -751,6 +752,8 @@ impl Coordinator {
         };
         // TODO: UsageStore doesn't support session filter yet, so we get all and filter client-side
         // or extend the filter. For now, just return the total summary.
-        self.usage_store().summarize(start, now, Some(&filter)).await
+        self.usage_store()
+            .summarize(start, now, Some(&filter))
+            .await
     }
 }

@@ -120,10 +120,7 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator
-                .restore_session(&session_id)
-                .await
-            {
+            match coordinator.restore_session(&session_id).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
@@ -143,10 +140,7 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator
-                    .restore_session(&session_id)
-                    .await
-                {
+                match coordinator.restore_session(&session_id).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");

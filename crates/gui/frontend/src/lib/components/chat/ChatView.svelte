@@ -10,10 +10,10 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose } from "lucide-svelte";
+  import { FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
 
-  let { rightPanelCollapsed, onToggleRightPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void } = $props();
+  let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
 
   const activeSession = $derived(getActiveSession());
 
@@ -295,6 +295,17 @@
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
     <div class="flex items-center gap-2 min-w-0">
+      <!-- Mobile sidebar toggle -->
+      {#if onToggleLeftPanel}
+        <button
+          type="button"
+          onclick={() => onToggleLeftPanel()}
+          class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+          title="Toggle sidebar"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+      {/if}
       {#if editingTitle}
         <!-- svelte-ignore a11y_autofocus -->
         <input
@@ -319,6 +330,16 @@
       {/if}
       <span class="text-xs text-muted-foreground truncate">{activeSession.projectPath}</span>
     </div>
+    {#if activeSession.projectPath}
+      <button
+        type="button"
+        onclick={() => api.openInEditor(activeSession.projectPath)}
+        class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+        title="Open project in editor"
+      >
+        <ExternalLink size={16} />
+      </button>
+    {/if}
     <button
       type="button"
       onclick={() => onToggleRightPanel?.()}

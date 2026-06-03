@@ -1,8 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Save, FileCode, RotateCcw, Check, Zap } from "lucide-svelte";
+  import { Save, FileCode, RotateCcw, Check, Zap, PanelLeftOpen } from "lucide-svelte";
   import * as api from "../../api";
   import { showNotification } from "../../state.svelte";
+
+  let {
+    onToggleLeftPanel,
+  }: {
+    onToggleLeftPanel?: () => void;
+  } = $props();
 
   let content = $state("");
   let filePath = $state("");
@@ -67,6 +73,16 @@
   <!-- Header -->
   <div class="shrink-0 flex items-center justify-between px-4 py-2 border-b border-border">
     <div class="flex items-center gap-2">
+      {#if onToggleLeftPanel}
+        <button
+          type="button"
+          onclick={() => onToggleLeftPanel()}
+          class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+          title="Toggle sidebar"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+      {/if}
       <FileCode class="w-4 h-4 text-muted-foreground" />
       <span class="text-sm font-medium">Config</span>
       <span class="text-xs text-muted-foreground truncate max-w-[300px]">{filePath}</span>

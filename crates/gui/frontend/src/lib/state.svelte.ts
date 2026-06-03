@@ -431,9 +431,23 @@ interface ToolEvent {
   Progress?: ToolProgress;
 }
 
-interface AgentLifecycle {
-  state: string | { Stopped?: true };
+interface AgentLifecycleStopped {
+  state: {
+    Stopped: {
+      reason:
+        | { Cancelled: { operation?: string } }
+        | { Failed: { error: string } }
+        | { MaxIterations: { reached: number } }
+        | { Completed: true };
+    };
+  };
 }
+
+interface AgentLifecycleRunning {
+  state: "Running";
+}
+
+type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
   Lifecycle?: AgentLifecycle;
@@ -722,6 +736,35 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           session.messages = [...session.messages, ...buf];
           streamingMessages[session.id] = [];
         }
+        const stopReason = state.Stopped.reason;
+        if ("Cancelled" in stopReason) {
+          const op = stopReason.Cancelled.operation;
+          const msg = op ? `Cancelled: ${op}` : "Cancelled";
+          session.messages = [...session.messages, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: msg,
+            thinking: null,
+            tools: [],
+          }];
+          showNotification(msg, "warning", 3000);
+          return true;
+        } else if ("Failed" in stopReason) {
+          showNotification(
+            "Task failed: " + (stopReason.Failed.error ?? "Unknown"),
+            "error",
+            5000,
+          );
+          return true;
+        } else if ("MaxIterations" in stopReason) {
+          showNotification(
+            `Max iterations reached (${stopReason.MaxIterations.reached})`,
+            "warning",
+            5000,
+          );
+          return true;
+        }
+        // Completed: normal end, no notification needed
         return true;
       }
     }

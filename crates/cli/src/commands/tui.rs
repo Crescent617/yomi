@@ -265,10 +265,9 @@ async fn create_local_coordinator(
         Some(task_store),
         Some(config.agent.compactor.clone()),
         skill_folders,
-        config
-            .features
-            .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
+        config.features.hooks.then(|| {
+            kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+        }),
     ))
 }
 
