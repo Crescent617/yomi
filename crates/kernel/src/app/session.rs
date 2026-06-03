@@ -87,11 +87,8 @@ impl Session {
 
     /// Create permission state if needed based on config
     fn create_permission_state(config: &SessionConfig) -> Option<PermissionState> {
-        if config.auto_approve_level == Level::Dangerous {
-            None
-        } else {
-            Some(PermissionState::new(config.auto_approve_level).0)
-        }
+        // Always create PermissionState so runtime level changes work
+        Some(PermissionState::new(config.auto_approve_level).0)
     }
 
     /// Spawn the main agent for this session

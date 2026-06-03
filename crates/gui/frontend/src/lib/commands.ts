@@ -11,5 +11,6 @@ export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
   ["/undo", "Undo last turn"],
   ["/compact", "Force message compaction"],
   ["/reload", "Reload skills and hooks from disk"],
+  ["/history", "Search and reuse a previous message"],
   ["/help", "Show keyboard shortcuts help"],
 ] as const;

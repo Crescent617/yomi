@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Edit3, X, Send } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
+  import { showNotification } from "../../state.svelte";
 
   let { session, onEdit }: { session: SessionState; onEdit: (text: string) => void } = $props();
 
@@ -12,6 +13,7 @@
 
   function handleCancel() {
     session.queuedInput = null;
+    showNotification("Queued message cancelled", "info", 2000);
   }
 </script>
 

@@ -17,6 +17,8 @@ pub struct SessionInfo {
     pub project_id: Option<String>,
     #[serde(rename = "workingDir")]
     pub working_dir: Option<String>,
+    #[serde(rename = "autoApproveLevel")]
+    pub auto_approve_level: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -63,6 +65,7 @@ pub async fn list_sessions(
                 message_count: s.message_count,
                 project_id: s.project_id.map(|p| p.0),
                 working_dir: s.working_dir,
+                auto_approve_level: s.auto_approve_level,
             })
             .collect(),
         has_more: result.has_more,

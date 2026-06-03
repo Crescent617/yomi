@@ -112,10 +112,12 @@ pub async fn get_daily_usage(
     days: i64,
 ) -> Result<serde_json::Value, GuiError> {
     let coord = state.coordinator.clone();
+    tracing::info!("get_daily_usage called with days={}", days);
     let daily = coord
         .get_daily_usage(days)
         .await
         .map_err(GuiError::kernel)?;
+    tracing::info!("get_daily_usage returned {} days", daily.len());
     let items: Vec<_> = daily
         .into_iter()
         .map(|d| {

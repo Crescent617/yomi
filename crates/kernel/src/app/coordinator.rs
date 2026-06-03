@@ -602,16 +602,29 @@ impl Coordinator {
     }
 
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        session.read().await.set_permission_level(level).await;
-        self.session_store().await
+        // Update in-memory state if session is currently live
+        if let Some(session) = self.get_session(session_id) {
+            session.read().await.set_permission_level(level).await;
+        }
+        // Always persist to database regardless of whether session is in memory
+        let rows = self
+            .session_store()
+            .await
             .update_auto_approve_level(session_id, level.as_str())
             .await?;
-        tracing::info!(
-            "Permission level set to {:?} for session {}",
-            level,
-            session_id.0
-        );
+        if rows == 0 {
+            tracing::warn!(
+                "set_permission_level: no rows updated for session {} — session may not exist in DB",
+                session_id.0
+            );
+        } else {
+            tracing::info!(
+                "Permission level persisted to DB as {:?} for session {} ({} row(s) affected)",
+                level,
+                session_id.0,
+                rows
+            );
+        }
         Ok(())
     }
 

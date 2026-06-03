@@ -148,7 +148,7 @@ impl SessionStore for SqliteSessionStore {
         Ok(())
     }
 
-    async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<()> {
+    async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<u64> {
         let result = sqlx::query(
             "UPDATE sessions SET auto_approve_level = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         )
@@ -164,7 +164,7 @@ impl SessionStore for SqliteSessionStore {
             level,
             result.rows_affected()
         );
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>> {

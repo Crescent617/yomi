@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
+import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square, Clock } from "lucide-svelte";
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
@@ -31,12 +31,19 @@ let selectedFileIdx = $state(0);
 let filePickerRoot = $state("");
 let fileListRef: HTMLDivElement | null = $state(null);
 
+// ── history picker ──
+let showHistory = $state(false);
+let selectedHistoryIdx = $state(0);
+let historyListRef: HTMLDivElement | null = $state(null);
+let prevSessionId = $state<string | null>(null);
+
 const activeSession = $derived(getActiveSession());
 const isStreaming = $derived(activeSession?.streaming ?? false);
 
 // detect completion triggers
 function detectCompletion() {
   if (!textareaRef) return;
+  if (showHistory) return; // Don't interfere with history search
   const cursorPos = textareaRef.selectionStart;
   const beforeCursor = content.slice(0, cursorPos);
 
@@ -128,6 +135,29 @@ const filteredCommands = $derived.by(() => {
   );
 });
 
+const historyEntries = $derived.by(() => {
+  if (!showHistory) return [];
+  const session = activeSession;
+  if (!session) return [];
+  const userMsgs = session.messages
+    .filter(m => m.role === "user")
+    .map(m => m.content)
+    .filter(c => c.trim());
+  // Deduplicate and reverse (newest first)
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (let i = userMsgs.length - 1; i >= 0; i--) {
+    const c = userMsgs[i].trim();
+    if (!seen.has(c)) {
+      seen.add(c);
+      unique.push(c);
+    }
+  }
+  const q = content.toLowerCase();
+  if (!q) return unique;
+  return unique.filter(c => c.toLowerCase().includes(q));
+});
+
 // ── actions ──
 export function setContent(text: string) {
   content = text;
@@ -143,6 +173,15 @@ function queueInput() {
 }
 
 function acceptCommand(cmd: string) {
+  if (cmd === "/history") {
+    showHistory = true;
+    selectedHistoryIdx = 0;
+    content = "";
+    showCommands = false;
+    textareaRef?.focus();
+    requestAnimationFrame(autoResize);
+    return;
+  }
   content = cmd + " ";
   showCommands = false;
   textareaRef?.focus();
@@ -229,6 +268,14 @@ async function handleCommand(text: string) {
           }
           await api.startGoal(sessionId, description);
           showNotification("Goal mode activated — agent will work autonomously", "info", 5000);
+        }
+        break;
+      case "/history":
+        {
+          showHistory = true;
+          selectedHistoryIdx = 0;
+          content = "";
+          autoResize();
         }
         break;
       default:
@@ -348,6 +395,39 @@ function handleKeydown(e: KeyboardEvent) {
     }
   }
 
+  // History picker navigation
+  if (showHistory) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyEntries.length === 0) return;
+      selectedHistoryIdx = (selectedHistoryIdx + 1) % historyEntries.length;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (historyEntries.length === 0) return;
+      selectedHistoryIdx = (selectedHistoryIdx - 1 + historyEntries.length) % historyEntries.length;
+      return;
+    }
+    if (e.key === "Tab" || e.key === "Enter") {
+      e.preventDefault();
+      const entry = historyEntries[selectedHistoryIdx];
+      if (entry) {
+        content = entry;
+        showHistory = false;
+        textareaRef?.focus();
+        requestAnimationFrame(autoResize);
+      } else {
+        showHistory = false;
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      showHistory = false;
+      return;
+    }
+  }
+
   // Normal input
   if (e.key === "Enter" && !e.shiftKey) {
     // If this Enter is right after IME composition ends, ignore it
@@ -357,6 +437,14 @@ function handleKeydown(e: KeyboardEvent) {
       return;
     }
     e.preventDefault();
+    const text = content.trim();
+    if (text === "/history" || text.startsWith("/history ")) {
+      showHistory = true;
+      selectedHistoryIdx = 0;
+      content = "";
+      autoResize();
+      return;
+    }
     if (isStreaming) {
       queueInput();
     } else {
@@ -398,6 +486,24 @@ $effect(() => {
     if (selected) {
       selected.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+  }
+});
+
+$effect(() => {
+  if (showHistory && historyListRef) {
+    const buttons = historyListRef.querySelectorAll("button");
+    const selected = buttons[selectedHistoryIdx];
+    if (selected) {
+      selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+});
+
+$effect(() => {
+  const currentId = activeSession?.id ?? null;
+  if (prevSessionId !== currentId) {
+    showHistory = false;
+    prevSessionId = currentId;
   }
 });
 
@@ -486,6 +592,26 @@ function getSession(sessionId: string) {
               {/each}
             {/await}
           {/if}
+        {/each}
+      {/if}
+    </div>
+  {/if}
+
+  <!-- History picker -->
+  {#if showHistory}
+    <div bind:this={historyListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
+      {#if historyEntries.length === 0}
+        <div class="px-3 py-4 text-sm text-muted-foreground text-center">No matching history</div>
+      {:else}
+        {#each historyEntries as entry, i (entry)}
+          <button
+            class="flex items-start gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i === selectedHistoryIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
+            onclick={() => { content = entry; showHistory = false; textareaRef?.focus(); requestAnimationFrame(autoResize); }}
+            title={entry}
+          >
+            <Clock size={14} class="text-muted-foreground shrink-0 mt-0.5" />
+            <span class="truncate">{entry.length > 80 ? entry.slice(0, 80) + "..." : entry}</span>
+          </button>
         {/each}
       {/if}
     </div>

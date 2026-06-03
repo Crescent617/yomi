@@ -111,7 +111,7 @@ pub trait SessionStore: Send + Sync {
     async fn update_title(&self, id: &SessionId, title: &str) -> Result<()>;
 
     /// Update session `auto_approve_level`
-    async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<()>;
+    async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<u64>;
 
     /// Delete sessions older than the given number of days
     ///

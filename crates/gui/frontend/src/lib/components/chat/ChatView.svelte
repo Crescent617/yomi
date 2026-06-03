@@ -161,6 +161,7 @@
             pendingAskUser: null,
             queuedInput: null,
             updatedAt: s.endedAt ?? s.createdAt,
+            permissionLevel: s.autoApproveLevel ?? level ?? "caution",
           });
         }
       }

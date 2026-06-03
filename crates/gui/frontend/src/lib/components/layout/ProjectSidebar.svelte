@@ -75,7 +75,8 @@
     try {
       const result = await api.listSessions(projectId, cursor, 20);
       for (const s of result.sessions) {
-        if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
+        const existing = sessionState.sessions.find((sess) => sess.id === s.id);
+        if (!existing) {
           sessionState.sessions.push({
             id: s.id,
             projectPath: s.projectPath ?? "",
@@ -91,8 +92,12 @@
             pendingAskUser: null,
             queuedInput: null,
             updatedAt: s.endedAt ?? s.createdAt,
-            permissionLevel: s.autoApproveLevel ?? "safe",
+            permissionLevel: s.autoApproveLevel ?? "caution",
           });
+        } else {
+          existing.alias = s.title ?? existing.alias;
+          existing.permissionLevel = s.autoApproveLevel ?? existing.permissionLevel;
+          existing.updatedAt = s.endedAt ?? s.createdAt ?? existing.updatedAt;
         }
       }
       const last = result.sessions[result.sessions.length - 1];
