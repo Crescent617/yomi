@@ -10,8 +10,9 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, Shield, AlertTriangle, Skull, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink } from "lucide-svelte";
+  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { levelLabel, levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
   let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
 
@@ -233,42 +234,6 @@
     }
   }
 
-  function levelLabel(level: string): string {
-    switch (level) {
-      case "safe": return "Safe";
-      case "caution": return "Caution";
-      case "dangerous": return "Dangerous";
-      default: return level;
-    }
-  }
-
-  function levelDescription(level: string): string {
-    switch (level) {
-      case "safe": return "All tools require approval";
-      case "caution": return "Safe tools auto-approved";
-      case "dangerous": return "Most tools auto-approved";
-      default: return "";
-    }
-  }
-
-  function levelIcon(level: string) {
-    switch (level) {
-      case "safe": return Shield;
-      case "caution": return AlertTriangle;
-      case "dangerous": return Skull;
-      default: return Shield;
-    }
-  }
-
-  function levelColor(level: string): string {
-    switch (level) {
-      case "safe": return "text-green-600 border-green-600 bg-green-600/10";
-      case "caution": return "text-amber-600 border-amber-600 bg-amber-600/10";
-      case "dangerous": return "text-red-600 border-red-600 bg-red-600/10";
-      default: return "";
-    }
-  }
-
   function closeProjectDropdown(e: MouseEvent) {
     if (projectDropdownRef && !projectDropdownRef.contains(e.target as Node)) {
       projectDropdownOpen = false;
@@ -375,7 +340,8 @@
         <div class="w-full max-w-2xl">
           <!-- Title -->
           <div class="text-center mb-8">
-            <h1 class="text-4xl font-bold tracking-tight mb-2">Yomi</h1>
+            <img src="/yomi-dark.png" alt="Yomi" class="w-24 h-24 mx-auto mb-3 object-contain hidden dark:block" />
+            <img src="/yomi-light.png" alt="Yomi" class="w-24 h-24 mx-auto mb-3 object-contain dark:hidden" />
             <p class="text-muted-foreground text-lg">What can I help you with today?</p>
           </div>
 
@@ -438,7 +404,7 @@
 
                 <!-- Permission level -->
                 <div class="flex items-center gap-1">
-                  {#each ["safe", "caution", "dangerous"] as level (level)}
+                  {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}
                     {@const Icon = levelIcon(level)}
                     <button
                       type="button"

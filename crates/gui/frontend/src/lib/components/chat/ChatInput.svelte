@@ -1,5 +1,6 @@
 <script lang="ts">
 import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square } from "lucide-svelte";
+import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
 import { sessionState, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
@@ -268,18 +269,15 @@ async function handleCancel() {
   }
 }
 
-async function handlePermissionClick() {
+async function handlePermissionSet(level: string) {
   const sessionId = sessionState.activeSessionId;
   if (!sessionId) return;
   const session = getSession(sessionId);
   if (!session) return;
-  const levels = ["safe", "caution", "dangerous"];
-  const current = levels.indexOf(session.permissionLevel ?? "safe");
-  const next = levels[(current + 1) % levels.length];
   try {
-    await api.setPermissionLevel(sessionId, next);
-    session.permissionLevel = next;
-    showNotification(`Permission level: ${next}`, "info", 2000);
+    await api.setPermissionLevel(sessionId, level);
+    session.permissionLevel = level;
+    showNotification(`Permission level: ${level}`, "info", 2000);
   } catch (e: any) {
     console.error("Failed to set permission level:", e?.message ?? e);
     showNotification("Failed to set permission level", "error", 3000);
@@ -532,26 +530,21 @@ function getSession(sessionId: string) {
     {/if}
   </div>
   {#if activeSession}
-    <div class="flex items-center justify-between mt-1.5 px-1">
-      <div class="flex items-center gap-1.5">
-        <span class="text-[10px] text-muted-foreground uppercase tracking-wider">Permission</span>
-        <button
-          type="button"
-          onclick={handlePermissionClick}
-          class="text-[10px] uppercase tracking-wider font-medium rounded px-1.5 py-0.5 transition-colors
-                 {activeSession.permissionLevel === 'dangerous' ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20'
-                   : activeSession.permissionLevel === 'caution' ? 'text-amber-500 bg-amber-500/10 hover:bg-amber-500/20'
-                   : 'text-green-500 bg-green-500/10 hover:bg-green-500/20'}"
-          title="Click to cycle: safe → caution → dangerous"
-        >
-          {activeSession.permissionLevel ?? 'safe'}
-        </button>
+    <div class="flex items-center mt-1.5 px-1">
+      <!-- Permission level -->
+      <div class="flex items-center gap-1">
+        {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}
+          {@const Icon = levelIcon(level)}
+          <button
+            type="button"
+            onclick={() => handlePermissionSet(level)}
+            class="p-1 rounded transition-colors {activeSession.permissionLevel === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
+            title={levelDescription(level)}
+          >
+            <Icon class="w-4 h-4" />
+          </button>
+        {/each}
       </div>
-      <span class="text-[10px] text-muted-foreground">
-        {activeSession.permissionLevel === 'dangerous' ? 'Most tools auto-approved'
-          : activeSession.permissionLevel === 'caution' ? 'Safe tools auto-approved'
-          : 'All tools require approval'}
-      </span>
     </div>
   {/if}
 </div>
