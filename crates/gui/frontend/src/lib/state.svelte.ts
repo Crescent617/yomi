@@ -815,6 +815,8 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
       { id: msg.message_id, role: "user", content, thinking: null, tools: [] },
     ];
     session.updatedAt = new Date().toISOString();
+    // User message received → show streaming indicator immediately
+    session.streaming = true;
     return true;
   }
   return false;

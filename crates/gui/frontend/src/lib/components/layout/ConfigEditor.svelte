@@ -37,6 +37,20 @@
     }
   }
 
+  async function reload() {
+    loading = true;
+    try {
+      await api.reloadConfig();
+      showNotification("Config reloaded", "success", 2000);
+      await load();
+    } catch (e: any) {
+      console.error("Failed to reload config:", e);
+      showNotification(`Failed to reload: ${e?.message ?? ""}`, "error", 4000);
+    } finally {
+      loading = false;
+    }
+  }
+
   async function save() {
     if (!dirty) return;
     saving = true;
@@ -99,7 +113,7 @@
       {/if}
       <button
         type="button"
-        onclick={load}
+        onclick={reload}
         disabled={loading}
         class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-border hover:bg-secondary transition-colors disabled:opacity-50"
       >

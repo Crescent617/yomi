@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc, RwLock};
+use crate::providers::ModelConfig;
 
 /// Input for creating a new session
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ pub struct CreateSessionInput {
 }
 
 pub struct Coordinator {
-    agent_shared: Arc<AgentShared>,
+    agent_shared: Arc<tokio::sync::RwLock<AgentShared>>,
     sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
     /// Broadcast channels for session events (for forwarding and cleanup)
     session_event_senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
@@ -38,39 +39,43 @@ pub struct Coordinator {
 
 impl Coordinator {
     /// Get session store from `agent_shared`
-    pub fn session_store(&self) -> &Arc<dyn SessionStore> {
+    pub async fn session_store(&self) -> Arc<dyn SessionStore> {
         self.agent_shared
+            .read().await
             .session_store
-            .as_ref()
+            .clone()
             .expect("session_store not configured")
     }
 
     /// Get message store from `agent_shared`
-    pub fn message_store(&self) -> &Arc<dyn MessageStore> {
+    pub async fn message_store(&self) -> Arc<dyn MessageStore> {
         self.agent_shared
+            .read().await
             .message_store
-            .as_ref()
+            .clone()
             .expect("message_store not configured")
     }
 
     /// Get checkpoint store from `agent_shared`
-    pub fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
+    pub async fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
         self.agent_shared
+            .read().await
             .checkpoint_store
             .clone()
             .expect("checkpoint_store not configured")
     }
 
     /// Get data directory from `agent_shared`
-    pub fn data_dir(&self) -> &std::path::PathBuf {
-        &self.agent_shared.data_dir
+    pub async fn data_dir(&self) -> std::path::PathBuf {
+        self.agent_shared.read().await.data_dir.clone()
     }
 
     /// Get usage store from `agent_shared`
-    pub fn usage_store(&self) -> &Arc<dyn UsageStore> {
+    pub async fn usage_store(&self) -> Arc<dyn UsageStore> {
         self.agent_shared
+            .read().await
             .usage_store
-            .as_ref()
+            .clone()
             .expect("usage_store not configured")
     }
 
@@ -118,7 +123,7 @@ impl Coordinator {
             None => agent_shared,
         };
 
-        let agent_shared = Arc::new(agent_shared);
+        let agent_shared = Arc::new(tokio::sync::RwLock::new(agent_shared));
         let sessions = Arc::new(DashMap::new());
         let session_event_senders = Arc::new(DashMap::new());
         let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
@@ -254,12 +259,12 @@ impl Coordinator {
 
     /// Rename a session (update title in storage)
     pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
-        self.session_store().update_title(id, &title).await
+        self.session_store().await.update_title(id, &title).await
     }
 
     /// Delete a project (only if it has no sessions)
     pub async fn delete_project(&self, id: &ProjectId) -> Result<()> {
-        let (sessions, _) = self.session_store().list(Some(id), None, 1).await?;
+        let (sessions, _) = self.session_store().await.list(Some(id), None, 1).await?;
         if !sessions.is_empty() {
             return Err(SessionError::Other(format!(
                 "Project {} has sessions, remove or reassign them first",
@@ -292,7 +297,7 @@ impl Coordinator {
         });
 
         let id = SessionId::new();
-        self.session_store()
+        self.session_store().await
             .create(
                 &id,
                 input.project_id.as_ref(),
@@ -306,11 +311,11 @@ impl Coordinator {
             project,
             working_dir: working_dir.map(std::path::PathBuf::from),
             auto_approve_level: input.auto_approve_level,
-            data_dir: self.data_dir().clone(),
+            data_dir: self.data_dir().await.clone(),
         };
 
         if let Err(e) = self.init_session(id.clone(), config).await {
-            let _ = self.session_store().delete(&id).await;
+            let _ = self.session_store().await.delete(&id).await;
             return Err(e);
         }
 
@@ -418,7 +423,7 @@ impl Coordinator {
             return Ok(session_id.clone());
         }
 
-        let info = self.session_store().get(session_id).await?.ok_or_else(|| {
+        let info = self.session_store().await.get(session_id).await?.ok_or_else(|| {
             KernelError::from(SessionError::NotFound {
                 session_id: session_id.0.clone(),
             })
@@ -441,7 +446,7 @@ impl Coordinator {
             project,
             working_dir,
             auto_approve_level,
-            data_dir: self.data_dir().clone(),
+            data_dir: self.data_dir().await.clone(),
         };
         tracing::info!("Restoring session {} from storage", session_id.0);
         if let Err(e) = self.init_session(info.id.clone(), config).await {
@@ -465,15 +470,15 @@ impl Coordinator {
         parent_id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId> {
-        let parent_info = self.session_store().get(parent_id).await?.ok_or_else(|| {
+        let parent_info = self.session_store().await.get(parent_id).await?.ok_or_else(|| {
             KernelError::from(SessionError::NotFound {
                 session_id: parent_id.0.clone(),
             })
         })?;
 
-        let new_id = self.session_store().fork(parent_id).await?;
+        let new_id = self.session_store().await.fork(parent_id).await?;
         // Override the copied level with the requested one
-        self.session_store()
+        self.session_store().await
             .update_auto_approve_level(&new_id, auto_approve_level.as_str())
             .await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
@@ -488,11 +493,11 @@ impl Coordinator {
             project,
             working_dir: parent_info.working_dir.map(std::path::PathBuf::from),
             auto_approve_level,
-            data_dir: self.data_dir().clone(),
+            data_dir: self.data_dir().await.clone(),
         };
 
         if let Err(e) = self.init_session(new_id.clone(), config).await {
-            let _ = self.session_store().delete(&new_id).await;
+            let _ = self.session_store().await.delete(&new_id).await;
             return Err(e);
         }
         tracing::info!("Forked session {} initialized", new_id.0);
@@ -506,7 +511,7 @@ impl Coordinator {
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<(Vec<crate::storage::session::SessionInfo>, bool)> {
-        self.session_store().list(project_id, before, limit).await
+        self.session_store().await.list(project_id, before, limit).await
     }
 
     pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
@@ -599,7 +604,7 @@ impl Coordinator {
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.set_permission_level(level).await;
-        self.session_store()
+        self.session_store().await
             .update_auto_approve_level(session_id, level.as_str())
             .await?;
         tracing::info!(
@@ -659,7 +664,7 @@ impl Coordinator {
 
     /// Delete a session from storage
     pub async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
-        self.session_store().delete(session_id).await
+        self.session_store().await.delete(session_id).await
     }
 
     /// Get messages for a session from storage
@@ -667,7 +672,7 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::types::Message>> {
-        self.message_store().get(&session_id.0).await
+        self.message_store().await.get(&session_id.0).await
     }
 
     /// Get checkpoints for a session.
@@ -675,14 +680,14 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::checkpoint::Checkpoint>> {
-        self.checkpoint_store()
+        self.checkpoint_store().await
             .get_session_checkpoints(&session_id.0)
             .await
     }
 
     /// Get todo JSON for a session.
     pub async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
-        match &self.agent_shared.todo_storage {
+        match &self.agent_shared.read().await.todo_storage {
             Some(store) => store.load(&session_id.0).await,
             None => Ok(None),
         }
@@ -693,15 +698,30 @@ impl Coordinator {
         &self,
         agent_config: AgentConfig,
         hook_registry: Option<crate::hooks::HookRegistry>,
+        provider: Option<Arc<dyn Provider>>,
+        model_config: Option<Arc<ModelConfig>>,
     ) {
         let model_id = agent_config.model.model_id.clone();
         let skills = agent_config.skills.clone();
         let skill_count = skills.len();
         *self.agent_config.write().await = agent_config;
 
+        // Hot-reload shared provider and model config if provided
+        if provider.is_some() || model_config.is_some() {
+            let mut guard = self.agent_shared.write().await;
+            let mut updated = guard.clone();
+            if let Some(p) = provider {
+                updated = updated.with_provider(p);
+            }
+            if let Some(m) = model_config {
+                updated = updated.with_model_config(m);
+            }
+            *guard = updated;
+        }
+
         // Hot-reload shared hook registry if it was originally enabled
         if let Some(registry) = hook_registry {
-            if let Some(ref existing) = self.agent_shared.hook_registry {
+            if let Some(ref existing) = self.agent_shared.read().await.hook_registry {
                 let mut guard = existing.write().await;
                 *guard = registry;
                 tracing::info!("Hot-reloaded shared hook registry");
@@ -727,18 +747,81 @@ impl Coordinator {
         tracing::info!("Updated agent config (model={model_id}, {skill_count} skill(s))");
     }
 
+    /// Reload agent configuration from disk and environment.
+    pub async fn reload(
+        &self,
+        config_file: Option<&std::path::PathBuf>,
+        base_dir: &std::path::Path,
+    ) -> Result<()> {
+        let mut config = match config_file {
+            Some(path) => crate::config::Config::from_file(path)
+                .map_err(|e| crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+                    "Failed to load config from {}: {e}",
+                    path.display()
+                ))))?,
+            None => match crate::config::Config::discover_file() {
+                Some(path) => crate::config::Config::from_file(&path)
+                    .map_err(|e| crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+                        "Failed to load discovered config from {}: {e}",
+                        path.display()
+                    ))))?,
+                None => crate::config::Config::default(),
+            },
+        };
+        config.apply_env_overrides();
+        config.finalize(base_dir);
+
+        let provider: Arc<dyn crate::providers::Provider> = if !config.has_api_key() {
+            tracing::warn!("No API key configured — using NoKeyProvider");
+            Arc::new(crate::providers::NoKeyProvider)
+        } else {
+            match config.agent.model.provider {
+                crate::config::ModelProvider::OpenAI => {
+                    Arc::new(crate::providers::OpenAIProvider::new().map_err(|e| {
+                        crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+                            "Failed to create OpenAI provider: {e}"
+                        )))
+                    })?)
+                }
+                crate::config::ModelProvider::Anthropic => {
+                    Arc::new(crate::providers::AnthropicProvider::new().map_err(|e| {
+                        crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+                            "Failed to create Anthropic provider: {e}"
+                        )))
+                    })?)
+                }
+            }
+        };
+
+        let _skill_folders: Vec<std::path::PathBuf> = config
+            .skill_folders()
+            .iter()
+            .map(std::path::PathBuf::from)
+            .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
+            .collect();
+
+        let agent_config = crate::server::build_agent_config(&config, base_dir);
+        let hook_registry = config.features.hooks.then(|| {
+            crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+        });
+
+        self.update_agent_config(agent_config, hook_registry, Some(provider), Some(Arc::new(config.agent.model))).await;
+        tracing::info!("Reloaded agent configuration from disk");
+        Ok(())
+    }
+
     /// Get aggregated usage summary for today
     pub async fn get_usage_summary(&self) -> Result<UsageSummary> {
         let now = Utc::now();
         let start = now - chrono::Duration::days(1);
-        self.usage_store().summarize(start, now, None).await
+        self.usage_store().await.summarize(start, now, None).await
     }
 
     /// Get daily usage for the last N days
     pub async fn get_daily_usage(&self, days: i64) -> Result<Vec<DailyUsage>> {
         let now = Utc::now();
         let start = now - chrono::Duration::days(days);
-        self.usage_store().daily_summary(start, now, None).await
+        self.usage_store().await.daily_summary(start, now, None).await
     }
 
     /// Get usage for a specific session
@@ -752,7 +835,7 @@ impl Coordinator {
         };
         // TODO: UsageStore doesn't support session filter yet, so we get all and filter client-side
         // or extend the filter. For now, just return the total summary.
-        self.usage_store()
+        self.usage_store().await
             .summarize(start, now, Some(&filter))
             .await
     }

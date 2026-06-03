@@ -11,12 +11,13 @@ use tokio::sync::mpsc;
 
 pub struct Session {
     id: SessionId,
-    agent_shared: Arc<AgentShared>,
     main_agent: Option<AgentHandle>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
     /// Goal store for persisting active goal state
     goal_store: Arc<dyn crate::goal::GoalStore>,
+    /// Session store for title updates
+    session_store: Option<Arc<dyn crate::storage::SessionStore>>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ impl Session {
     pub(crate) async fn init(
         id: SessionId,
         config: SessionConfig,
-        agent_shared: Arc<AgentShared>,
+        agent_shared: Arc<tokio::sync::RwLock<AgentShared>>,
     ) -> Result<(Self, mpsc::Receiver<Event>)> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
         let goal_store: Arc<dyn crate::goal::GoalStore> =
@@ -53,12 +54,15 @@ impl Session {
         )
         .await?;
 
+        let base = agent_shared.read().await;
+        let session_store = base.session_store.clone();
+        
         let session = Self {
             id,
-            agent_shared,
             main_agent: Some(main_agent),
             permission_state,
             goal_store,
+            session_store,
         };
         Ok((session, event_rx))
     }
@@ -94,12 +98,13 @@ impl Session {
     async fn spawn_main_agent(
         id: &SessionId,
         config: &SessionConfig,
-        agent_shared: &Arc<AgentShared>,
+        agent_shared: &Arc<tokio::sync::RwLock<AgentShared>>,
         file_state_store: &Arc<crate::tools::helper::FileStateStore>,
         goal_store: &Arc<dyn crate::goal::GoalStore>,
         permission_state: Option<PermissionState>,
     ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
-        let history = agent_shared
+        let base = agent_shared.read().await;
+        let history = base
             .message_store
             .as_ref()
             .ok_or_else(|| KernelError::from(SessionError::StoreNotConfigured))?
@@ -134,8 +139,8 @@ impl Session {
             spawn_args = spawn_args.with_goal_ctx(ctx);
         }
 
-        let checkpoint_store = agent_shared.checkpoint_store.clone();
-        let shared = Arc::new(agent_shared.with_per_session(
+        let checkpoint_store = base.checkpoint_store.clone();
+        let shared = Arc::new(base.with_per_session(
             permission_state,
             Some(Arc::clone(file_state_store)),
             checkpoint_store,
@@ -182,7 +187,7 @@ impl Session {
     /// Update session title from user message content (first 20 chars of first line).
     /// Only updates if the session does not yet have a title.
     async fn update_title(&self, blocks: &[crate::types::ContentBlock]) {
-        if let Some(session_store) = &self.agent_shared.session_store {
+        if let Some(session_store) = &self.session_store {
             let text: String = blocks.iter().filter_map(|b| b.as_text()).take(1).collect();
             let title = text.chars().take(20).collect::<String>();
             if !title.is_empty() {

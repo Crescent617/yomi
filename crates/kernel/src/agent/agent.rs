@@ -327,6 +327,14 @@ impl Agent {
                     // Start new turn when entering Streaming
                     self.start_turn_if_needed().await;
                     tracing::debug!("Agent {} starting streaming", self.id);
+                    // Notify UI that streaming has started
+                    let _ = self
+                        .event_tx
+                        .send(Event::Agent(AgentEvent::Lifecycle {
+                            agent_id: self.id.clone(),
+                            state: AgentStatus::Running,
+                        }))
+                        .await;
                     self.handle_streaming_with_retry().await
                 }
                 AgentState::ExecutingTool => {

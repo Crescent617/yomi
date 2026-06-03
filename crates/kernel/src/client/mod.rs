@@ -267,8 +267,9 @@ impl CoordinatorApi for Coordinator {
     }
 
     async fn reload_agent_config(&self) -> Result<()> {
-        // Local coordinator runs in-process; skills are already fresh.
-        Ok(())
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let config_file = crate::config::Config::discover_file();
+        self.reload(config_file.as_ref(), &working_dir).await
     }
 
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {

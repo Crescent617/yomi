@@ -154,6 +154,32 @@ pub async fn get_session_usage(
 }
 
 #[tauri::command]
+pub async fn open_in_explorer(path: String) -> Result<(), GuiError> {
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| GuiError::unknown(format!("Failed to open explorer: {e}")))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Visual Studio Code", &path])
+            .spawn()
+            .map_err(|e| GuiError::unknown(format!("Failed to open VS Code: {e}")))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::process::Command::new("code")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| GuiError::unknown(format!("Failed to open VS Code: {e}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;

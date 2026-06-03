@@ -340,9 +340,6 @@
                     {#if session.streaming}
                       <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
                     {/if}
-                    {#if session.unread > 0}
-                      <span class="min-w-[1.1rem] h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center">{session.unread > 99 ? "99+" : session.unread}</span>
-                    {/if}
                     <div class="relative">
                       <button class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100" onclick={(e: Event) => { e.stopPropagation(); showSessionMenu = showSessionMenu === session.id ? null : session.id; }}>
                         <MoreVertical size={12} />

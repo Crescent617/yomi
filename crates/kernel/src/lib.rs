@@ -75,7 +75,7 @@ pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 // Re-exports for providers
-pub use providers::{AnthropicProvider, OpenAIProvider};
+pub use providers::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
 pub use tools::{
     execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
     SubagentTool, WriteTool,

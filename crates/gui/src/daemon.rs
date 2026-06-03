@@ -332,7 +332,8 @@ fn resolve_skill_folders(
 
 fn create_provider(config: &kernel::config::Config) -> Result<Arc<dyn kernel::Provider>> {
     if !config.has_api_key() {
-        anyhow::bail!("API key not configured. Please set it via config or environment variable.");
+        tracing::warn!("No API key configured — using NoKeyProvider (sessions will fail to send messages)");
+        return Ok(Arc::new(kernel::NoKeyProvider));
     }
 
     let provider: Arc<dyn kernel::Provider> = match config.agent.model.provider {

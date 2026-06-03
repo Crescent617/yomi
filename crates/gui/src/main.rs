@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use state::AppState;
 use tauri::Manager;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +61,8 @@ pub fn run() {
             commands::system::get_usage_summary,
             commands::system::get_daily_usage,
             commands::system::get_session_usage,
+            commands::system::open_in_explorer,
+            commands::system::open_in_vscode,
             commands::system::open_in_editor,
             commands::terminal::terminal_spawn,
             commands::terminal::terminal_write,
@@ -78,7 +81,72 @@ pub fn run() {
 }
 
 fn main() {
-    // 先初始化简单日志，确保 spawn_daemon 的错误能输出
-    let _ = tracing_subscriber::fmt::try_init();
+    let _guard = init_logging();
     run();
+}
+
+/// Initialise rolling-file logging to `~/.yomi/logs/app.log`.
+/// Falls back to stderr-only if the log directory cannot be created.
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let config_file = kernel::config::Config::discover_file();
+    let mut config = config_file
+        .as_ref()
+        .and_then(|p| kernel::config::Config::from_file(p).ok())
+        .unwrap_or_default();
+
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    config.finalize(&working_dir);
+
+    let log_dir = config.log_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "Failed to create log directory '{}': {e}. Logging to stderr only.",
+            log_dir.display()
+        );
+        let _ = tracing_subscriber::fmt::try_init();
+        return None;
+    }
+
+    let log_path = log_dir.join("gui-app.log");
+    let file_appender = match tracing_rolling_file::RollingFileAppenderBase::builder()
+        .filename(log_path.to_string_lossy().to_string())
+        .condition_max_file_size(10 * 1024 * 1024)
+        .max_filecount(5)
+        .build()
+    {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!(
+                "Failed to create rolling file appender for '{}': {e}. Logging to stderr only.",
+                log_path.display()
+            );
+            let _ = tracing_subscriber::fmt::try_init();
+            return None;
+        }
+    };
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_target(true)
+                .with_thread_ids(true),
+        )
+        .try_init()
+        .is_ok()
+    {
+        tracing::info!("Logging initialised. Log directory: {}", log_dir.display());
+        Some(guard)
+    } else {
+        drop(guard);
+        None
+    }
 }

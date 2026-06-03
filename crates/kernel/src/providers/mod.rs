@@ -110,7 +110,6 @@ pub struct ModelConfig {
     pub provider: crate::config::ModelProvider,
     pub model_id: String,
     pub endpoint: String,
-    #[serde(skip)]
     pub api_key: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
@@ -217,6 +216,30 @@ pub trait Provider: Send + Sync {
     }
 
     fn name(&self) -> &str;
+}
+
+/// A provider that always returns a configuration error (no API key).
+/// Used so the GUI can start even when the API key is missing.
+#[derive(Debug)]
+pub struct NoKeyProvider;
+
+#[async_trait]
+impl Provider for NoKeyProvider {
+    async fn stream(
+        &self,
+        _messages: &[Arc<Message>],
+        _tools: &[Arc<ToolDefinition>],
+        _config: &ModelConfig,
+    ) -> Result<ModelStream, ProviderError> {
+        tracing::error!("NoKeyProvider.stream called — API key not configured");
+        Err(ProviderError::Config(
+            "API key not configured. Please set it via the config editor or environment variable.".into(),
+        ))
+    }
+
+    fn name(&self) -> &str {
+        "no-key"
+    }
 }
 
 /// Wrapper that adds rate limit retry with exponential backoff

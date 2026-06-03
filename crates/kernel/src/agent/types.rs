@@ -430,6 +430,20 @@ impl AgentShared {
         self.allow_command_hooks = allow;
         self
     }
+
+    /// Set the provider
+    #[must_use]
+    pub fn with_provider(mut self, provider: Arc<dyn crate::providers::Provider>) -> Self {
+        self.provider = provider;
+        self
+    }
+
+    /// Set the model config
+    #[must_use]
+    pub fn with_model_config(mut self, model_config: Arc<crate::providers::ModelConfig>) -> Self {
+        self.model_config = model_config;
+        self
+    }
 }
 
 /// Agent error type using thiserror

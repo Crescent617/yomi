@@ -169,7 +169,7 @@ impl InputComponent {
                 }
                 #[cfg(target_os = "macos")]
                 {
-                    return None;
+                    None
                 }
             }
             // @: start file completion (must be before generic Char handler)

@@ -29,6 +29,7 @@
   let isNearBottom = $state(true);
   let chatInputRef: any = $state(null);
   let projectDropdownOpen = $state(false);
+  let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
   let homeInput = $state("");
   let submitting = $state(false);
@@ -295,28 +296,43 @@
       {/if}
       <span class="text-xs text-muted-foreground truncate">{activeSession.projectPath}</span>
     </div>
-    {#if activeSession.projectPath}
+    <div class="flex items-center gap-2">
+      {#if activeSession.projectPath}
+        <div class="relative">
+          <button
+            type="button"
+            onclick={() => openDropdownOpen = !openDropdownOpen}
+            class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+            title="Open project"
+          >
+            <ExternalLink size={16} />
+          </button>
+          {#if openDropdownOpen}
+            <div class="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-popover shadow-md py-1">
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInExplorer(activeSession.projectPath); openDropdownOpen = false; }}>
+                <ExternalLink size={12} /> Open in Explorer
+              </button>
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.projectPath); openDropdownOpen = false; }}>
+                <ExternalLink size={12} /> Open in VS Code
+              </button>
+            </div>
+            <div class="fixed inset-0 z-10" onclick={() => openDropdownOpen = false}></div>
+          {/if}
+        </div>
+      {/if}
       <button
         type="button"
-        onclick={() => api.openInEditor(activeSession.projectPath)}
+        onclick={() => onToggleRightPanel?.()}
         class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-        title="Open project in editor"
+        title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
       >
-        <ExternalLink size={16} />
+        {#if rightPanelCollapsed}
+          <PanelRightOpen size={16} />
+        {:else}
+          <PanelRightClose size={16} />
+        {/if}
       </button>
-    {/if}
-    <button
-      type="button"
-      onclick={() => onToggleRightPanel?.()}
-      class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-      title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
-    >
-      {#if rightPanelCollapsed}
-        <PanelRightOpen size={16} />
-      {:else}
-        <PanelRightClose size={16} />
-      {/if}
-    </button>
+    </div>
   </div>
   {/if}
 

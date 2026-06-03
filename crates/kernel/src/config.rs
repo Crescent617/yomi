@@ -3,7 +3,7 @@ use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::types::KernelError;
 use crate::utils::env::{
-    env_bool, env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit,
+    env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit,
 };
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
@@ -32,7 +32,6 @@ pub mod env_names {
     pub const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 
     /// Application settings
-    pub const YOLO: &str = env_name!("YOLO");
     pub const DATA_DIR: &str = env_name!("DATA_DIR");
     pub const MAX_ITERATIONS: &str = env_name!("MAX_ITERATIONS");
     pub const ENABLE_SUB_AGENTS: &str = env_name!("ENABLE_SUB_AGENTS");
@@ -152,7 +151,6 @@ pub struct FeaturesConfig {
 #[serde(default)]
 pub struct Config {
     pub agent: AgentConfig,
-    pub yolo: bool,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,7 +215,6 @@ impl Default for Config {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
             agent: AgentConfig::default(),
-            yolo: false,
             auto_approve: Level::default(),
             data_dir,
             log_dir: None,
@@ -320,7 +317,6 @@ impl Config {
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
             self.agent.model.thinking.effort = Some(effort);
         }
-        self.yolo = env_bool(env_names::YOLO);
 
         // Enable sub-agents (default true unless explicitly set to "false")
         if let Some(val) = env_var(env_names::ENABLE_SUB_AGENTS) {
@@ -347,11 +343,6 @@ impl Config {
             if let Ok(l) = Level::from_str(&level) {
                 self.auto_approve = l;
             }
-        }
-
-        // If yolo mode is enabled, auto-approve level should be Dangerous
-        if self.yolo {
-            self.auto_approve = Level::Dangerous;
         }
 
         // Context window size (supports formats like "131072", "128k", "200k", "200000")
@@ -499,7 +490,6 @@ mod tests {
 
         // Verify key fields are preserved
         assert_eq!(parsed.agent.model.provider, config.agent.model.provider);
-        assert_eq!(parsed.yolo, config.yolo);
         assert_eq!(parsed.data_dir, config.data_dir);
         assert_eq!(parsed.hooks.len(), 1);
         assert_eq!(parsed.hooks[0].name, "test-hook");

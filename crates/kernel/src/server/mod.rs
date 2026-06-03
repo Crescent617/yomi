@@ -102,17 +102,44 @@ impl KernelServer {
         let _guard = self.reload_lock.lock().await;
         let file_path = self.config_file_path.clone();
         let base_dir = self.base_dir.clone();
-        let (new_agent, hook_registry) = match tokio::task::spawn_blocking(move || {
+        let (new_agent, hook_registry, provider, model_config) = match tokio::task::spawn_blocking(move || {
             let config = reload_config(file_path.as_ref(), &base_dir);
             let agent = build_agent_config(&config, &base_dir);
             let hooks = config.features.hooks.then(|| {
                 crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
             });
-            (agent, hooks)
+            let provider: Arc<dyn crate::providers::Provider> = if !config.has_api_key() {
+                tracing::warn!("No API key configured — using NoKeyProvider");
+                Arc::new(crate::providers::NoKeyProvider)
+            } else {
+                match config.agent.model.provider {
+                    crate::config::ModelProvider::OpenAI => {
+                        match crate::providers::OpenAIProvider::new() {
+                            Ok(p) => Arc::new(p),
+                            Err(e) => {
+                                tracing::error!("Failed to create OpenAI provider: {e}");
+                                return None;
+                            }
+                        }
+                    }
+                    crate::config::ModelProvider::Anthropic => {
+                        match crate::providers::AnthropicProvider::new() {
+                            Ok(p) => Arc::new(p),
+                            Err(e) => {
+                                tracing::error!("Failed to create Anthropic provider: {e}");
+                                return None;
+                            }
+                        }
+                    }
+                }
+            };
+            let model_config = Arc::new(config.agent.model.clone());
+            Some((agent, hooks, provider, model_config))
         })
         .await
         {
-            Ok(pair) => pair,
+            Ok(Some(pair)) => pair,
+            Ok(None) => return false,
             Err(e) => {
                 tracing::error!("Reload task panicked: {e}");
                 return false;
@@ -121,7 +148,7 @@ impl KernelServer {
         let model_id = new_agent.model.model_id.clone();
         let skill_count = new_agent.skills.len();
         self.coordinator
-            .update_agent_config(new_agent, hook_registry)
+            .update_agent_config(new_agent, hook_registry, Some(provider), Some(model_config))
             .await;
         tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
         true

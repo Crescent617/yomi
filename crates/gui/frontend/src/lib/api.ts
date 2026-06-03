@@ -278,6 +278,14 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 export async function ping(): Promise<boolean> {
   return withTimeout(invoke("ping"), PING_TIMEOUT, "ping");
 }
+export async function openInExplorer(path: string): Promise<void> {
+  return invokeCmd("open_in_explorer", { path });
+}
+
+export async function openInVscode(path: string): Promise<void> {
+  return invokeCmd("open_in_vscode", { path });
+}
+
 export async function openInEditor(path: string): Promise<void> {
   return invokeCmd("open_in_editor", { path });
 }
