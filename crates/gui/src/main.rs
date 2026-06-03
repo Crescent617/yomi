@@ -37,6 +37,7 @@ pub fn run() {
             commands::session::delete_session,
             commands::session::shutdown_session,
             commands::chat::send_message,
+            commands::chat::send_message_blocks,
             commands::chat::subscribe,
             commands::chat::unsubscribe,
             commands::chat::get_messages,

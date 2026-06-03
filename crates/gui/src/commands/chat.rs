@@ -31,6 +31,21 @@ pub async fn send_message(
 }
 
 #[tauri::command]
+pub async fn send_message_blocks(
+    state: State<'_, AppState>,
+    session_id: String,
+    blocks: Vec<ContentBlock>,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .send_message(&sid, blocks)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn subscribe(
     state: State<'_, AppState>,
     app_handle: AppHandle,

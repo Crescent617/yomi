@@ -41,7 +41,7 @@
   let chartDiv: HTMLDivElement | null = $state(null);
   let chartInstance: echarts.ECharts | null = $state(null);
 
-  const DAYS_RANGE = 90;
+  const DAYS_RANGE = 365;
 
   // ── derived stats ──
 
@@ -146,7 +146,7 @@
     return date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric", weekday: "long" });
   }
 
-  /** Fill 90 days back from today so the heatmap has a fixed width */
+  /** Fill 365 days back from today so the heatmap has a fixed width */
   const filledDaily = $derived.by(() => {
     const map = new Map<string, DayData>();
     for (const d of daily) map.set(d.date, d);
@@ -175,19 +175,29 @@
   // ── echarts ──
 
   function isDarkMode() {
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return document.documentElement.classList.contains("dark");
   }
 
   function getHeatColors(dark: boolean): string[] {
+    // GitHub contribution graph colors
     if (dark) {
-      return ["#1e293b", "#064e3b", "#059669", "#34d399", "#6ee7b7"];
+      return ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"];
     }
-    return ["#f1f5f9", "#d1fae5", "#6ee7b7", "#34d399", "#059669"];
+    return ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"];
+  }
+
+  function getBorderColor(dark: boolean): string {
+    return dark ? "#0f172a" : "#ffffff";
+  }
+
+  function getTooltipCacheColor(dark: boolean): string {
+    return dark ? "#39d353" : "#216e39";
   }
 
   function buildChartOption(data: DayData[]): echarts.EChartsOption {
     const dark = isDarkMode();
     const colors = getHeatColors(dark);
+    const borderColor = getBorderColor(dark);
     const textColor = dark ? "#94a3b8" : "#64748b";
 
     const maxTokens = Math.max(...data.map((d) => d.total_tokens), 1);
@@ -210,7 +220,7 @@
           let html = `<div style="font-weight:600;margin-bottom:4px;">${formatFullDate(day.date)}</div>`;
           if (total > 0) {
             html += `<div>Prompt: <b>${formatNumber(day.prompt_tokens)}</b></div>`;
-            html += `<div>Cached: <b style="color:${dark ? "#34d399" : "#059669"}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
+            html += `<div>Cached: <b style="color:${getTooltipCacheColor(dark)}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
             html += `<div>Completion: <b>${formatNumber(day.completion_tokens)}</b></div>`;
             html += `<div>Total: <b>${formatNumber(total)}</b></div>`;
             html += `<div>Requests: <b>${formatNumber(day.request_count)}</b></div>`;
@@ -239,12 +249,12 @@
         left: 32,
         right: 4,
         bottom: 4,
-        cellSize: [11, 11],
+        cellSize: [10, 10],
         range: [start, end],
         itemStyle: {
           color: colors[0],
-          borderWidth: 2,
-          borderColor: dark ? "#0f172a" : "#ffffff",
+          borderWidth: 3,
+          borderColor: borderColor,
           borderRadius: 2,
         },
         splitLine: { show: false },
@@ -285,8 +295,8 @@
     const lastDay = last.getDay();
     const sundayOffset = lastDay === 0 ? 0 : 7 - lastDay;
     const totalWeeks = Math.ceil((mondayOffset + data.length + sundayOffset) / 7);
-    const cellW = 11;
-    const gap = 2; // borderWidth
+    const cellW = 10;
+    const gap = 3; // borderWidth
     const labelW = 32; // dayLabel space on left
     const rightPad = 4;
     return labelW + totalWeeks * (cellW + gap) + rightPad;
@@ -316,17 +326,16 @@
     const resize = () => chartInstance?.resize();
     window.addEventListener("resize", resize);
 
-    const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const onTheme = () => {
       if (chartInstance && filledDaily.length > 0) {
         chartInstance.setOption(buildChartOption(filledDaily), true);
       }
     };
-    darkQuery.addEventListener("change", onTheme);
+    window.addEventListener("theme-changed", onTheme);
 
     return () => {
       window.removeEventListener("resize", resize);
-      darkQuery.removeEventListener("change", onTheme);
+      window.removeEventListener("theme-changed", onTheme);
       disposeChart();
     };
   });
@@ -362,241 +371,243 @@
 </script>
 
 <div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
-  <!-- Header -->
-  <div class="shrink-0 px-6 py-4 border-b border-border">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        {#if onToggleLeftPanel}
-          <button
-            type="button"
-            onclick={() => onToggleLeftPanel?.()}
-            class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
-            title="Toggle sidebar"
-          >
-            <PanelLeftOpen size={18} />
-          </button>
+  <div class="container mx-auto px-4 lg:px-6">
+    <!-- Header -->
+    <div class="shrink-0 py-4 border-b border-border">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          {#if onToggleLeftPanel}
+            <button
+              type="button"
+              onclick={() => onToggleLeftPanel?.()}
+              class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+              title="Toggle sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          {/if}
+          <TrendingUp class="w-5 h-5 text-primary" />
+          <h2 class="text-lg font-semibold">Usage</h2>
+          <span class="text-xs text-muted-foreground ml-1">· last 365 days</span>
+        </div>
+      </div>
+    </div>
+
+    {#if loading}
+      <div class="flex-1 flex items-center justify-center">
+        <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    {:else if !config}
+      <div class="flex-1 flex items-center justify-center text-muted-foreground">
+        Failed to load usage data
+      </div>
+    {:else}
+      <div class="flex-1 py-6 space-y-6">
+        <!-- Summary Cards -->
+        {#if filteredSummary}
+          <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
+            <!-- Model tag -->
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1 col-span-2 lg:col-span-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Cpu class="w-3.5 h-3.5" />
+                Model
+              </div>
+              <div class="text-sm font-semibold truncate" title={config.model}>{config.model}</div>
+              <div class="text-[10px] text-muted-foreground">{config.provider}</div>
+            </div>
+
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Zap class="w-3.5 h-3.5" />
+                Total
+              </div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.total_tokens)}</div>
+              <div class="text-[10px] text-muted-foreground">tokens</div>
+            </div>
+
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Hash class="w-3.5 h-3.5" />
+                Requests
+              </div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.request_count)}</div>
+              <div class="text-[10px] text-muted-foreground">calls</div>
+            </div>
+
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <ArrowUpRight class="w-3.5 h-3.5" />
+                Prompt
+              </div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.prompt_tokens)}</div>
+              <div class="text-[10px] text-muted-foreground">
+                {cacheRate(filteredSummary)} cache
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <ArrowDownLeft class="w-3.5 h-3.5" />
+                Completion
+              </div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.completion_tokens)}</div>
+              <div class="text-[10px] text-muted-foreground">tokens</div>
+            </div>
+
+            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Activity class="w-3.5 h-3.5" />
+                Active
+              </div>
+              <div class="text-lg font-semibold font-mono">{activeDays}<span class="text-sm text-muted-foreground font-normal">/{daily.length}</span></div>
+              <div class="text-[10px] text-muted-foreground">days</div>
+            </div>
+          </div>
         {/if}
-        <TrendingUp class="w-5 h-5 text-primary" />
-        <h2 class="text-lg font-semibold">Usage</h2>
-        <span class="text-xs text-muted-foreground ml-1">· last {DAYS_RANGE} days</span>
-      </div>
-    </div>
-  </div>
 
-  {#if loading}
-    <div class="flex-1 flex items-center justify-center">
-      <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-    </div>
-  {:else if !config}
-    <div class="flex-1 flex items-center justify-center text-muted-foreground">
-      Failed to load usage data
-    </div>
-  {:else}
-    <div class="flex-1 p-6 space-y-6">
-      <!-- Summary Cards -->
-      {#if filteredSummary}
-        <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <!-- Model tag -->
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1 col-span-2 lg:col-span-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Cpu class="w-3.5 h-3.5" />
-              Model
+        <!-- ECharts Heatmap (square cells) -->
+        {#if filledDaily.length > 0}
+          <div class="rounded-xl border border-border bg-card p-4 space-y-2">
+            <div class="flex items-center gap-2">
+              <Calendar class="w-4 h-4 text-muted-foreground" />
+              <span class="text-sm font-medium">Activity Heatmap</span>
+              <span class="text-xs text-muted-foreground ml-auto">
+                {activeDays} active · {daily.length} days
+              </span>
             </div>
-            <div class="text-sm font-semibold truncate" title={config.model}>{config.model}</div>
-            <div class="text-[10px] text-muted-foreground">{config.provider}</div>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Zap class="w-3.5 h-3.5" />
-              Total
-            </div>
-            <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.total_tokens)}</div>
-            <div class="text-[10px] text-muted-foreground">tokens</div>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Hash class="w-3.5 h-3.5" />
-              Requests
-            </div>
-            <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.request_count)}</div>
-            <div class="text-[10px] text-muted-foreground">calls</div>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <ArrowUpRight class="w-3.5 h-3.5" />
-              Prompt
-            </div>
-            <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.prompt_tokens)}</div>
-            <div class="text-[10px] text-muted-foreground">
-              {cacheRate(filteredSummary)} cache
+            <div class="flex justify-end overflow-x-auto">
+              <div bind:this={chartDiv} style="height: 128px;"></div>
             </div>
           </div>
-
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <ArrowDownLeft class="w-3.5 h-3.5" />
-              Completion
-            </div>
-            <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.completion_tokens)}</div>
-            <div class="text-[10px] text-muted-foreground">tokens</div>
+        {:else}
+          <div class="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+            No activity data for the last {DAYS_RANGE} days
           </div>
+        {/if}
 
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Activity class="w-3.5 h-3.5" />
-              Active
-            </div>
-            <div class="text-lg font-semibold font-mono">{activeDays}<span class="text-sm text-muted-foreground font-normal">/{daily.length}</span></div>
-            <div class="text-[10px] text-muted-foreground">days</div>
-          </div>
-        </div>
-      {/if}
-
-      <!-- ECharts Heatmap (square cells) -->
-      {#if filledDaily.length > 0}
-        <div class="rounded-xl border border-border bg-card p-4 space-y-2">
-          <div class="flex items-center gap-2">
-            <Calendar class="w-4 h-4 text-muted-foreground" />
-            <span class="text-sm font-medium">Activity Heatmap</span>
-            <span class="text-xs text-muted-foreground ml-auto">
-              {activeDays} active · {daily.length} days
-            </span>
-          </div>
-          <div class="flex justify-end overflow-x-auto">
-            <div bind:this={chartDiv} style="height: 128px;"></div>
-          </div>
-        </div>
-      {:else}
-        <div class="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
-          No activity data for the last {DAYS_RANGE} days
-        </div>
-      {/if}
-
-      <!-- Streak + Highlights row -->
-      {#if daily.length > 0}
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Flame class="w-3.5 h-3.5 text-orange-500" />
-              Current Streak
-            </div>
-            <div class="text-2xl font-bold font-mono">{streaks.current}<span class="text-sm font-normal text-muted-foreground">d</span></div>
-            <div class="text-[10px] text-muted-foreground">consecutive days</div>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
-            <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Award class="w-3.5 h-3.5 text-amber-500" />
-              Longest Streak
-            </div>
-            <div class="text-2xl font-bold font-mono">{streaks.longest}<span class="text-sm font-normal text-muted-foreground">d</span></div>
-            <div class="text-[10px] text-muted-foreground">best ever</div>
-          </div>
-
-          {#if busiestDay && busiestDay.total_tokens > 0}
+        <!-- Streak + Highlights row -->
+        {#if daily.length > 0}
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
               <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Zap class="w-3.5 h-3.5 text-primary" />
-                Busiest Day
+                <Flame class="w-3.5 h-3.5 text-orange-500" />
+                Current Streak
               </div>
-              <div class="text-sm font-medium">{formatDateLabel(busiestDay.date)}</div>
-              <div class="text-xs text-muted-foreground">
-                {formatNumber(busiestDay.total_tokens)} tokens · {formatNumber(busiestDay.request_count)} req
-              </div>
+              <div class="text-2xl font-bold font-mono">{streaks.current}<span class="text-sm font-normal text-muted-foreground">d</span></div>
+              <div class="text-[10px] text-muted-foreground">consecutive days</div>
             </div>
-          {/if}
 
-          {#if mostRequestsDay && mostRequestsDay.request_count > 0}
             <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
               <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Hash class="w-3.5 h-3.5 text-blue-500" />
-                Most Requests
+                <Award class="w-3.5 h-3.5 text-amber-500" />
+                Longest Streak
               </div>
-              <div class="text-sm font-medium">{formatDateLabel(mostRequestsDay.date)}</div>
-              <div class="text-xs text-muted-foreground">
-                {formatNumber(mostRequestsDay.request_count)} req · {formatNumber(mostRequestsDay.total_tokens)} tok
-              </div>
+              <div class="text-2xl font-bold font-mono">{streaks.longest}<span class="text-sm font-normal text-muted-foreground">d</span></div>
+              <div class="text-[10px] text-muted-foreground">best ever</div>
             </div>
-          {/if}
-        </div>
-      {/if}
 
-      <!-- Top Days Table -->
-      {#if topDays.length > 0}
-        <div class="rounded-xl border border-border bg-card overflow-hidden">
-          <div class="flex items-center gap-2 px-4 py-3 border-b border-border">
-            <BarChart3 class="w-4 h-4 text-muted-foreground" />
-            <span class="text-sm font-medium">Top Days by Volume</span>
-            <span class="text-xs text-muted-foreground ml-auto">{topDays.length} of {daily.length} days</span>
+            {#if busiestDay && busiestDay.total_tokens > 0}
+              <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
+                <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Zap class="w-3.5 h-3.5 text-primary" />
+                  Busiest Day
+                </div>
+                <div class="text-sm font-medium">{formatDateLabel(busiestDay.date)}</div>
+                <div class="text-xs text-muted-foreground">
+                  {formatNumber(busiestDay.total_tokens)} tokens · {formatNumber(busiestDay.request_count)} req
+                </div>
+              </div>
+            {/if}
+
+            {#if mostRequestsDay && mostRequestsDay.request_count > 0}
+              <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
+                <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Hash class="w-3.5 h-3.5 text-blue-500" />
+                  Most Requests
+                </div>
+                <div class="text-sm font-medium">{formatDateLabel(mostRequestsDay.date)}</div>
+                <div class="text-xs text-muted-foreground">
+                  {formatNumber(mostRequestsDay.request_count)} req · {formatNumber(mostRequestsDay.total_tokens)} tok
+                </div>
+              </div>
+            {/if}
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="border-b border-border bg-muted/30">
-                  <th class="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Date</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Requests</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Prompt</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Cached</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Completion</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Total</th>
-                  <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Cache</th>
-                  <th class="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Models</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each topDays as day, i (day.date)}
-                  <tr class="border-b border-border last:border-0 {i % 2 === 0 ? 'bg-background' : 'bg-muted/20'} hover:bg-muted/40 transition-colors">
-                    <td class="px-4 py-2 whitespace-nowrap">
-                      <div class="text-sm font-medium">{formatDateLabel(day.date)}</div>
-                      <div class="text-[10px] text-muted-foreground">{day.date}</div>
-                    </td>
-                    <td class="px-4 py-2 text-right font-mono">{formatNumber(day.request_count)}</td>
-                    <td class="px-4 py-2 text-right font-mono">{formatNumber(day.prompt_tokens)}</td>
-                    <td class="px-4 py-2 text-right font-mono text-green-600">{formatNumber(day.cached_tokens)}</td>
-                    <td class="px-4 py-2 text-right font-mono">{formatNumber(day.completion_tokens)}</td>
-                    <td class="px-4 py-2 text-right font-mono font-medium">{formatNumber(day.total_tokens)}</td>
-                    <td class="px-4 py-2 text-right">
-                      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {day.prompt_tokens > 0 && day.cached_tokens / day.prompt_tokens > 0.5 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-muted text-muted-foreground'}">
-                        {cacheRate(day)}
-                      </span>
-                    </td>
-                    <td class="px-4 py-2">
-                      <div class="flex flex-wrap gap-1">
-                        {#each day.models as model}
-                          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-secondary text-secondary-foreground">{model}</span>
-                        {/each}
-                      </div>
-                    </td>
+        {/if}
+
+        <!-- Top Days Table -->
+        {#if topDays.length > 0}
+          <div class="rounded-xl border border-border bg-card overflow-hidden">
+            <div class="flex items-center gap-2 px-4 py-3 border-b border-border">
+              <BarChart3 class="w-4 h-4 text-muted-foreground" />
+              <span class="text-sm font-medium">Top Days by Volume</span>
+              <span class="text-xs text-muted-foreground ml-auto">{topDays.length} of {daily.length} days</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-muted/30">
+                    <th class="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Date</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Requests</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Prompt</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Cached</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Completion</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Total</th>
+                    <th class="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Cache</th>
+                    <th class="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Models</th>
                   </tr>
-                {/each}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {#each topDays as day, i (day.date)}
+                    <tr class="border-b border-border last:border-0 {i % 2 === 0 ? 'bg-background' : 'bg-muted/20'} hover:bg-muted/40 transition-colors">
+                      <td class="px-4 py-2 whitespace-nowrap">
+                        <div class="text-sm font-medium">{formatDateLabel(day.date)}</div>
+                        <div class="text-[10px] text-muted-foreground">{day.date}</div>
+                      </td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.request_count)}</td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.prompt_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono text-green-600">{formatNumber(day.cached_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.completion_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono font-medium">{formatNumber(day.total_tokens)}</td>
+                      <td class="px-4 py-2 text-right">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {day.prompt_tokens > 0 && day.cached_tokens / day.prompt_tokens > 0.5 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-muted text-muted-foreground'}">
+                          {cacheRate(day)}
+                        </span>
+                      </td>
+                      <td class="px-4 py-2">
+                        <div class="flex flex-wrap gap-1">
+                          {#each day.models as model}
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-secondary text-secondary-foreground">{model}</span>
+                          {/each}
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Model Info -->
+        <div class="rounded-xl border border-border bg-card p-4">
+          <div class="flex items-center gap-2 mb-3">
+            <Cpu class="w-4 h-4 text-muted-foreground" />
+            <span class="text-sm font-medium">Model</span>
+          </div>
+          <div class="flex items-center justify-between py-2 border-b border-border">
+            <span class="text-sm text-muted-foreground">Provider</span>
+            <span class="text-sm font-medium">{config.provider}</span>
+          </div>
+          <div class="flex items-center justify-between py-2 border-b border-border">
+            <span class="text-sm text-muted-foreground">Model</span>
+            <span class="text-sm font-medium">{config.model}</span>
+          </div>
+          <div class="flex items-center justify-between py-2">
+            <span class="text-sm text-muted-foreground">Context Window</span>
+            <span class="text-sm font-medium">{formatNumber(config.context_window)}</span>
           </div>
         </div>
-      {/if}
-
-      <!-- Model Info -->
-      <div class="rounded-xl border border-border bg-card p-4">
-        <div class="flex items-center gap-2 mb-3">
-          <Cpu class="w-4 h-4 text-muted-foreground" />
-          <span class="text-sm font-medium">Model</span>
-        </div>
-        <div class="flex items-center justify-between py-2 border-b border-border">
-          <span class="text-sm text-muted-foreground">Provider</span>
-          <span class="text-sm font-medium">{config.provider}</span>
-        </div>
-        <div class="flex items-center justify-between py-2 border-b border-border">
-          <span class="text-sm text-muted-foreground">Model</span>
-          <span class="text-sm font-medium">{config.model}</span>
-        </div>
-        <div class="flex items-center justify-between py-2">
-          <span class="text-sm text-muted-foreground">Context Window</span>
-          <span class="text-sm font-medium">{formatNumber(config.context_window)}</span>
-        </div>
       </div>
-    </div>
-  {/if}
+    {/if}
+  </div>
 </div>

@@ -56,6 +56,8 @@ export function applyTheme(theme: AppSettings["theme"]) {
       root.classList.remove("dark");
     }
   }
+  // Notify components that depend on the resolved dark/light state
+  window.dispatchEvent(new CustomEvent("theme-changed", { detail: { theme } }));
 }
 
 let mediaQuery: MediaQueryList | null = null;

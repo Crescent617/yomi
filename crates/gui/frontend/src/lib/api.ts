@@ -169,6 +169,10 @@ export async function sendMessage(sessionId: string, content: string): Promise<v
   return invokeCmd("send_message", { sessionId, content });
 }
 
+export async function sendMessageBlocks(sessionId: string, blocks: unknown[]): Promise<void> {
+  return invokeCmd("send_message_blocks", { sessionId, blocks });
+}
+
 export async function subscribe(sessionId: string): Promise<void> {
   return invokeCmd("subscribe", { sessionId });
 }

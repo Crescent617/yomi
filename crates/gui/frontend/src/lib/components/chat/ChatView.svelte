@@ -490,11 +490,15 @@
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
-          <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} />
-          <InfoBar session={activeSession} />
-          <PermissionBar />
-          <AskUserBar />
-          <ChatInput bind:this={chatInputRef} />
+          <div class="shrink-0 w-full">
+            <div class="container mx-auto px-4 lg:px-6">
+              <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} />
+              <InfoBar session={activeSession} />
+              <PermissionBar />
+              <AskUserBar />
+              <ChatInput bind:this={chatInputRef} />
+            </div>
+          </div>
           {#if !isNearBottom}
             <button
               type="button"
@@ -510,7 +514,7 @@
     {:else if activeSession}
       {@const activeTab = activeSession.tabs.find((t: any) => t.id === activeSession.activeTabId)}
       {#if activeTab?.type === "preview" && activeTab.entry}
-        <div class="flex h-full relative">
+        <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">
             <FilePreview
               entry={activeTab.entry}
@@ -520,7 +524,7 @@
           </div>
         </div>
       {:else if activeTab?.type === "edit" && activeTab.entry}
-        <div class="flex h-full relative">
+        <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">
             <FileEditor entry={activeTab.entry} />
           </div>

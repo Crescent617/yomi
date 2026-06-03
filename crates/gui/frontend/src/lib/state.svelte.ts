@@ -33,6 +33,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  contentBlocks?: TaggedContentBlock[];
   thinking?: { content: string; elapsedMs: number } | null;
   tools?: ToolCall[];
 }
@@ -290,14 +291,22 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
     }
 
     if (role === "user") {
+      let textContent = "";
+      let blocks: TaggedContentBlock[] | undefined;
+      if (Array.isArray(m.content)) {
+        textContent = m.content.map((b: TaggedContentBlock) => b.type === "text" && b.text ? b.text : "").join("");
+        // Keep blocks if there's any non-text content (e.g., images)
+        if (m.content.some((b: TaggedContentBlock) => b.type !== "text")) {
+          blocks = m.content;
+        }
+      } else if (typeof m.content === "string") {
+        textContent = m.content;
+      }
       parsedMessages.push({
         id: extractId(m.id),
         role: "user",
-        content: typeof m.content === "string"
-          ? m.content
-          : Array.isArray(m.content)
-            ? m.content.map((b: TaggedContentBlock) => b.type === "text" && b.text ? b.text : "").join("")
-            : "",
+        content: textContent,
+        contentBlocks: blocks,
         thinking: null,
         tools: [],
       });
@@ -810,9 +819,10 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
         return b.type === "text" && b.text ? b.text : "";
       })
       .join("") ?? "";
+    const hasNonText = Array.isArray(msg.content) && msg.content.some((b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text");
     session.messages = [
       ...session.messages,
-      { id: msg.message_id, role: "user", content, thinking: null, tools: [] },
+      { id: msg.message_id, role: "user", content, contentBlocks: hasNonText ? msg.content : undefined, thinking: null, tools: [] },
     ];
     session.updatedAt = new Date().toISOString();
     // User message received → show streaming indicator immediately

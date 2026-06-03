@@ -66,18 +66,20 @@
 </script>
 
 {#if activeSession}
-  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto px-4 py-4 space-y-4">
-    {#each displayMessages as message, index (message.id)}
-      {@const isLastMessage = index === displayMessages.length - 1}
-      {@const isStreaming = activeSession.streaming && isLastMessage}
-      {#if message.role === "user"}
-        <UserBubble {message} />
-      {:else if message.role === "system"}
-        <SystemBubble {message} />
-      {:else}
-        <AssistantBubble {message} {isStreaming} />
-      {/if}
-    {/each}
+  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto">
+    <div class="container mx-auto px-4 lg:px-6 py-4 space-y-4">
+      {#each displayMessages as message, index (message.id)}
+        {@const isLastMessage = index === displayMessages.length - 1}
+        {@const isStreaming = activeSession.streaming && isLastMessage}
+        {#if message.role === "user"}
+          <UserBubble {message} />
+        {:else if message.role === "system"}
+          <SystemBubble {message} />
+        {:else}
+          <AssistantBubble {message} {isStreaming} />
+        {/if}
+      {/each}
+    </div>
   </div>
 {:else}
   <div class="flex items-center justify-center h-full text-muted-foreground">

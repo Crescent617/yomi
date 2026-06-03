@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square, Clock } from "lucide-svelte";
+import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square, Clock, Paperclip, Image, X } from "lucide-svelte";
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
@@ -36,6 +36,11 @@ let showHistory = $state(false);
 let selectedHistoryIdx = $state(0);
 let historyListRef: HTMLDivElement | null = $state(null);
 let prevSessionId = $state<string | null>(null);
+
+// ── image attachments ──
+let imagePlaceholders = $state<Map<string, string>>(new Map());
+let imageCounter = $state(0);
+let fileInputRef: HTMLInputElement | null = $state(null);
 
 const activeSession = $derived(getActiveSession());
 const isStreaming = $derived(activeSession?.streaming ?? false);
@@ -161,6 +166,7 @@ const historyEntries = $derived.by(() => {
 // ── actions ──
 export function setContent(text: string) {
   content = text;
+  clearImages();
   requestAnimationFrame(autoResize);
 }
 
@@ -169,6 +175,7 @@ function queueInput() {
   if (!session || !content.trim()) return;
   session.queuedInput = content.trim();
   content = "";
+  clearImages();
   autoResize();
 }
 
@@ -298,6 +305,16 @@ async function handleSubmit() {
 
   if (text.startsWith("/")) {
     await handleCommand(text);
+  } else if (imagePlaceholders.size > 0) {
+    // Message with images: build content blocks
+    try {
+      const blocks = buildContentBlocks(text);
+      await api.sendMessageBlocks(sessionId, blocks);
+      clearImages();
+    } catch (e: any) {
+      console.error("Failed to send message with images:", e?.message ?? e);
+      showNotification("Failed to send message", "error", 3000);
+    }
   } else {
     try {
       await api.sendMessage(sessionId, text);
@@ -329,6 +346,144 @@ async function handlePermissionSet(level: string) {
     console.error("Failed to set permission level:", e?.message ?? e);
     showNotification("Failed to set permission level", "error", 3000);
   }
+}
+
+// ── image helpers ──
+
+function insertImagePlaceholder(base64Url: string): string {
+  imageCounter += 1;
+  const placeholder = `[Image #${imageCounter}]`;
+  imagePlaceholders.set(placeholder, base64Url);
+
+  // Insert at cursor position
+  const cursorPos = textareaRef?.selectionStart ?? content.length;
+  const before = content.slice(0, cursorPos);
+  const after = content.slice(cursorPos);
+  const prefix = before.length > 0 && !before.endsWith(" ") ? " " : "";
+  const suffix = after.length > 0 && !after.startsWith(" ") ? " " : "";
+  content = before + prefix + placeholder + suffix + after;
+  requestAnimationFrame(autoResize);
+  return placeholder;
+}
+
+async function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageFile(file: File) {
+  if (!file.type.startsWith("image/")) {
+    showNotification("Only image files are supported", "error", 3000);
+    return;
+  }
+  try {
+    const base64Url = await readFileAsBase64(file);
+    insertImagePlaceholder(base64Url);
+    textareaRef?.focus();
+  } catch (e) {
+    console.error("Failed to read image:", e);
+    showNotification("Failed to read image", "error", 3000);
+  }
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files) return;
+  for (const file of files) {
+    handleImageFile(file);
+  }
+  input.value = ""; // reset so same file can be selected again
+}
+
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  let hasImage = false;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      hasImage = true;
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        await handleImageFile(file);
+      }
+    }
+  }
+}
+
+function removeImagePlaceholder(placeholder: string) {
+  imagePlaceholders.delete(placeholder);
+  content = content.replace(new RegExp(`\\s?${placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s?`, "g"), " ");
+  content = content.replace(/\s{2,}/g, " ").trim();
+  requestAnimationFrame(autoResize);
+}
+
+function buildContentBlocks(text: string): unknown[] {
+  const blocks: unknown[] = [];
+  let currentText = "";
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    let earliestIdx = -1;
+    let earliestPlaceholder = "";
+    for (const [ph] of imagePlaceholders) {
+      const idx = remaining.indexOf(ph);
+      if (idx >= 0 && (earliestIdx === -1 || idx < earliestIdx)) {
+        earliestIdx = idx;
+        earliestPlaceholder = ph;
+      }
+    }
+
+    if (earliestIdx === -1) {
+      currentText += remaining;
+      break;
+    }
+
+    currentText += remaining.slice(0, earliestIdx);
+    remaining = remaining.slice(earliestIdx + earliestPlaceholder.length);
+
+    // Flush text block
+    const trimmed = currentText.trim();
+    if (trimmed) {
+      blocks.push({ type: "text", text: trimmed });
+    }
+    currentText = "";
+
+    // Add image block
+    const base64Url = imagePlaceholders.get(earliestPlaceholder);
+    if (base64Url) {
+      blocks.push({
+        type: "image_url",
+        image_url: { url: base64Url, detail: "auto" },
+      });
+    }
+  }
+
+  const trimmed = currentText.trim();
+  if (trimmed) {
+    blocks.push({ type: "text", text: trimmed });
+  }
+
+  // If no blocks at all, return a single text block
+  if (blocks.length === 0) {
+    blocks.push({ type: "text", text: text.trim() });
+  }
+
+  return blocks;
+}
+
+function clearImages() {
+  imagePlaceholders = new Map();
+  imageCounter = 0;
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -618,6 +773,24 @@ function getSession(sessionId: string) {
   {/if}
 
   <div class="flex items-end gap-2">
+    <!-- Hidden file input -->
+    <input
+      type="file"
+      accept="image/*"
+      multiple
+      bind:this={fileInputRef}
+      onchange={handleFileSelect}
+      class="hidden"
+    />
+    <!-- Attach button -->
+    <button
+      type="button"
+      onclick={() => fileInputRef?.click()}
+      class="inline-flex items-center justify-center rounded-lg border border-border text-muted-foreground h-9 w-9 hover:bg-secondary hover:text-foreground shrink-0 transition-colors"
+      title="Attach image"
+    >
+      <Paperclip size={16} />
+    </button>
     <textarea
       bind:this={textareaRef}
       bind:value={content}
@@ -631,7 +804,8 @@ function getSession(sessionId: string) {
         ignoreNextEnter = true;
         setTimeout(() => ignoreNextEnter = false, 100);
       }}
-      placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file)"}
+      onpaste={handlePaste}
+      placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file, paste image)"}
       rows={1}
       class="flex-1 resize-none rounded-lg bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px]"
     ></textarea>
@@ -656,6 +830,25 @@ function getSession(sessionId: string) {
     {/if}
   </div>
   {#if activeSession}
+    <!-- Image attachments -->
+    {#if imagePlaceholders.size > 0}
+      <div class="flex items-center gap-2 mt-1.5 px-1 flex-wrap">
+        {#each [...imagePlaceholders.entries()] as [placeholder, base64Url] (placeholder)}
+          <div class="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2 py-1">
+            <img src={base64Url} alt="" class="w-6 h-6 rounded object-cover" />
+            <span class="text-xs text-muted-foreground">{placeholder}</span>
+            <button
+              type="button"
+              onclick={() => removeImagePlaceholder(placeholder)}
+              class="text-muted-foreground hover:text-destructive transition-colors"
+              title="Remove"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
     <div class="flex items-center mt-1.5 px-1">
       <!-- Permission level -->
       <div class="flex items-center gap-1">

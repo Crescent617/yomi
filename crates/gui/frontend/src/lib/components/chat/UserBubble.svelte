@@ -16,6 +16,10 @@
     (message.content || "").length > 400 ||
     (message.content || "").includes("```")
   );
+
+  const hasImages = $derived(
+    message.contentBlocks?.some((b) => b.type === "image_url" && b.image_url?.url) ?? false
+  );
 </script>
 
 <style>
@@ -46,18 +50,37 @@
 </style>
 
 <div class="flex justify-end">
-  <div class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm user-text">
-    <div class:truncate={isLong && !expanded}>
-      {@html rendered}
-    </div>
-    {#if isLong}
-      <button
-        type="button"
-        class="mt-1 text-xs text-primary hover:underline cursor-pointer"
-        onclick={() => expanded = !expanded}
-      >
-        {expanded ? "less" : "more"}
-      </button>
+  <div class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm user-text space-y-2">
+    <!-- Images -->
+    {#if hasImages}
+      <div class="flex flex-wrap gap-2">
+        {#each message.contentBlocks ?? [] as block}
+          {#if block.type === "image_url" && block.image_url?.url}
+            <img
+              src={block.image_url.url}
+              alt="Uploaded image"
+              class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+              onclick={() => window.open(block.image_url!.url, "_blank")}
+            />
+          {/if}
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Text content -->
+    {#if message.content?.trim()}
+      <div class:truncate={isLong && !expanded}>
+        {@html rendered}
+      </div>
+      {#if isLong}
+        <button
+          type="button"
+          class="mt-1 text-xs text-primary hover:underline cursor-pointer"
+          onclick={() => expanded = !expanded}
+        >
+          {expanded ? "less" : "more"}
+        </button>
+      {/if}
     {/if}
   </div>
 </div>

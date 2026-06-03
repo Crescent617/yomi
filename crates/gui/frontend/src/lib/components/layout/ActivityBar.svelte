@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquare, BarChart3, Settings, Sun, Moon } from "lucide-svelte";
+  import { MessageSquare, BarChart3, Settings, Sun, Moon, Monitor } from "lucide-svelte";
   import { appState } from "../../state.svelte";
   import { settings, applyTheme, persistSettings } from "../../settings.svelte";
 
@@ -10,13 +10,18 @@
   ] as const;
 
   function toggleTheme() {
-    const next = settings.theme === "dark" ? "light" : "dark";
+    const order = ["light", "dark", "system"] as const;
+    const idx = order.indexOf(settings.theme);
+    const next = order[(idx + 1) % 3];
     settings.theme = next;
     applyTheme(next);
     persistSettings(settings);
   }
 
-  const ThemeIcon = $derived(settings.theme === "dark" ? Sun : Moon);
+  const ThemeIcon = $derived.by(() => {
+    if (settings.theme === "system") return Monitor;
+    return settings.theme === "dark" ? Sun : Moon;
+  });
 </script>
 
 <div class="shrink-0 w-12 border-r border-border bg-muted/30 flex flex-col items-center py-2 gap-1">
