@@ -2,7 +2,7 @@
   import { Loader2, CheckCircle2, Database } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import { getDisplayMessages } from "../../state.svelte";
-  import { formatElapsed, formatTokens } from "../../utils";
+  import { formatElapsed, formatTokens, utf8ByteLength } from "../../utils";
   import * as api from "../../api";
   import { onMount } from "svelte";
 
@@ -47,16 +47,16 @@
   // ── Total token estimate: all messages ──
   const totalTokens = $derived.by(() => {
     if (!session) return 0;
-    let chars = 0;
+    let bytes = 0;
     for (const msg of displayMessages) {
-      chars += msg.content.length;
-      if (msg.thinking) chars += msg.thinking.content.length;
+      bytes += utf8ByteLength(msg.content);
+      if (msg.thinking) bytes += utf8ByteLength(msg.thinking.content);
       for (const tool of msg.tools ?? []) {
-        chars += (tool.arguments ?? "").length;
-        chars += (tool.output ?? "").length;
+        bytes += utf8ByteLength(tool.arguments ?? "");
+        bytes += utf8ByteLength(tool.output ?? "");
       }
     }
-    return Math.round(chars / 4);
+    return Math.round(bytes / 4);
   });
 
   // ── Token estimate: last assistant message only ──
@@ -70,14 +70,14 @@
       }
     }
     if (!lastAssistant) return 0;
-    let chars = lastAssistant.content.length;
+    let bytes = utf8ByteLength(lastAssistant.content);
     if (lastAssistant.thinking) {
-      chars += lastAssistant.thinking.content.length;
+      bytes += utf8ByteLength(lastAssistant.thinking.content);
     }
     for (const tool of lastAssistant.tools ?? []) {
-      chars += (tool.arguments ?? "").length;
+      bytes += utf8ByteLength(tool.arguments ?? "");
     }
-    return Math.round(chars / 4);
+    return Math.round(bytes / 4);
   });
 
   // ── Current running tool ──

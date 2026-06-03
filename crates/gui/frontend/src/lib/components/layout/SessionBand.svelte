@@ -25,7 +25,18 @@
     if (projectState.projects.length === 0) {
       api.listProjects().then((list) => {
         projectState.projects = list.map((p) => ({ ...p }));
+        // Auto-expand first project and load its sessions
+        if (list.length > 0) {
+          const first = list[0].id;
+          expanded = { [first]: true };
+          loadSessions(first);
+        }
       }).catch(console.error);
+    } else if (projectState.projects.length > 0) {
+      // Projects already loaded (e.g. HMR), expand first
+      const first = projectState.projects[0].id;
+      expanded = { [first]: true };
+      loadSessions(first);
     }
   });
 
@@ -36,7 +47,12 @@
   }
 
   function hasMore(projectId: string) {
-    return sessionCursors.get(projectId) !== null;
+    // Only show "Load more" when we have an actual page token (cursor is a string).
+    // Cursor lifecycle:
+    //   undefined = not loaded yet (initial load triggered by expand)
+    //   string    = has next page
+    //   null      = no more pages
+    return typeof sessionCursors.get(projectId) === "string";
   }
 
   async function toggle(projectId: string) {
@@ -50,10 +66,13 @@
   async function loadSessions(projectId: string) {
     if (loading[projectId]) return;
     const cursor = sessionCursors.get(projectId);
+    // cursor === null  → already reached end, skip
+    // cursor === undefined → first load (triggered by expand), load page 1
     if (cursor === null) return;
+
     loading = { ...loading, [projectId]: true };
     try {
-      const result = await api.listSessions(projectId, cursor ?? undefined, 20);
+      const result = await api.listSessions(projectId, cursor, 20);
       for (const s of result.sessions) {
         if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
           sessionState.sessions.push({
@@ -75,9 +94,15 @@
         }
       }
       const last = result.sessions[result.sessions.length - 1];
-      sessionCursors.set(projectId, result.hasMore && last ? last.endedAt ?? last.createdAt : null);
+      if (result.hasMore && last) {
+        sessionCursors.set(projectId, last.endedAt ?? last.createdAt);
+      } else {
+        sessionCursors.set(projectId, null);
+      }
     } catch (e: any) {
       console.error("Failed to load sessions:", e?.message ?? e);
+      // Keep cursor as-is so user can retry. If this was the first load,
+      // cursor is still undefined and expand will retry on next toggle.
     } finally {
       loading = { ...loading, [projectId]: false };
     }
@@ -85,16 +110,19 @@
 
   async function activateSession(id: string) {
     const prev = sessionState.activeSessionId;
+    const session = getSession(id);
+    const level = session?.permissionLevel ?? "caution";
     try {
       if (prev && prev !== id) await api.unsubscribe(prev);
-      await api.subscribe(id);
+      await api.subscribe(id, level);
       setActiveSession(id);
       const msgs = await api.getMessages(id);
       if (getSession(id)) loadSessionMessages(id, msgs);
     } catch (e: any) {
       console.error("Failed to activate session:", e?.message ?? e);
       if (prev && prev !== id) {
-        try { await api.subscribe(prev); setActiveSession(prev); } catch { setActiveSession(null); }
+        const prevLevel = getSession(prev)?.permissionLevel ?? "caution";
+        try { await api.subscribe(prev, prevLevel); setActiveSession(prev); } catch { setActiveSession(null); }
       } else {
         setActiveSession(null);
       }

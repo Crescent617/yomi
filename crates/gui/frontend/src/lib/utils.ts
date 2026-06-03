@@ -52,7 +52,7 @@ export function formatElapsed(ms: number): string {
 }
 
 export function tokenEstimate(text: string): string {
-  const n = Math.round(text.length / 4);
+  const n = Math.round(utf8ByteLength(text) / 4);
   if (n >= 1000) return `~${(n / 1000).toFixed(1)}k`;
   return `~${n}`;
 }
@@ -60,4 +60,9 @@ export function tokenEstimate(text: string): string {
 export function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return `${n}`;
+}
+
+// Count UTF-8 bytes to match Rust's text.len() for token estimation.
+export function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
