@@ -3,6 +3,7 @@
 //! Provides a simple way to initialize all storage backends with a single call.
 //! Handles directory creation, database pool setup, migrations, and store instantiation.
 
+use crate::cron::SqliteCronStore;
 use crate::types::{KernelError, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,8 @@ pub struct StorageSet {
     checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
     /// Project metadata store
     project_store: Arc<dyn super::ProjectStore>,
+    /// Cron job store
+    cron_store: Arc<dyn crate::cron::CronStore>,
 }
 
 impl std::fmt::Debug for StorageSet {
@@ -45,6 +48,7 @@ impl std::fmt::Debug for StorageSet {
             .field("todo_store", &"<dyn TodoStore>")
             .field("checkpoint_store", &"<dyn CheckpointStore>")
             .field("project_store", &"<dyn ProjectStore>")
+            .field("cron_store", &"<dyn CronStore>")
             .finish()
     }
 }
@@ -128,6 +132,8 @@ impl StorageSet {
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));
         let project_store: Arc<dyn super::ProjectStore> =
             Arc::new(super::SqliteProjectStore::new(pool.clone()));
+        let cron_store: Arc<dyn crate::cron::CronStore> =
+            Arc::new(SqliteCronStore::new(pool.clone()));
 
         // Ensure default workspace project exists
         let default_project_id = crate::types::ProjectId::default_workspace();
@@ -160,6 +166,7 @@ impl StorageSet {
             todo_store,
             checkpoint_store,
             project_store,
+            cron_store,
         })
     }
 
@@ -216,6 +223,11 @@ impl StorageSet {
     /// Get the data directory path
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Get the cron store
+    pub fn cron_store(&self) -> Arc<dyn crate::cron::CronStore> {
+        self.cron_store.clone()
     }
 
     /// Get a file state store for a specific session

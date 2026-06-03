@@ -1,11 +1,9 @@
+use crate::agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState};
 use crate::event::{Event, SystemEvent};
 use crate::goal::JsonGoalStore;
 use crate::permissions::{Level, PermissionState};
 use crate::storage::file_state::JsonlFileStateStore;
 use crate::types::{AgentId, KernelError, Result, SessionError, SessionId};
-use crate::{
-    agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState},
-};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
@@ -58,7 +56,7 @@ impl Session {
 
         let base = agent_shared.read().await;
         let session_store = base.session_store.clone();
-        
+
         let session = Self {
             id,
             main_agent: Some(main_agent),
@@ -212,7 +210,8 @@ impl Session {
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to update title for session {}: {}",
-                                self.id.0, e
+                                self.id.0,
+                                e
                             );
                         }
                     }

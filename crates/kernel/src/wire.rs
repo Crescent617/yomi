@@ -83,6 +83,34 @@ pub enum RequestMethod {
         session_id: String,
     },
     ReloadAgentConfig,
+
+    // ── Cron Job ─────────────────────────────────────────────────────────
+    CreateCronJob {
+        name: String,
+        schedule: String,
+        action: crate::cron::CronAction,
+        max_runs: Option<u32>,
+        expires_at: Option<DateTime<Utc>>,
+    },
+    ListCronJobs {
+        status: Option<String>,
+        limit: usize,
+    },
+    GetCronJob {
+        job_id: String,
+    },
+    UpdateCronJob {
+        job_id: String,
+        name: Option<String>,
+        schedule: Option<String>,
+        action: Option<crate::cron::CronAction>,
+        status: Option<String>,
+        max_runs: Option<u32>,
+        expires_at: Option<DateTime<Utc>>,
+    },
+    DeleteCronJob {
+        job_id: String,
+    },
 }
 
 /// Response body — tagged union, no serde magic.

@@ -233,7 +233,8 @@ impl Provider for NoKeyProvider {
     ) -> Result<ModelStream, ProviderError> {
         tracing::error!("NoKeyProvider.stream called — API key not configured");
         Err(ProviderError::Config(
-            "API key not configured. Please set it via the config editor or environment variable.".into(),
+            "API key not configured. Please set it via the config editor or environment variable."
+                .into(),
         ))
     }
 

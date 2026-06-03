@@ -332,7 +332,9 @@ fn resolve_skill_folders(
 
 fn create_provider(config: &kernel::config::Config) -> Result<Arc<dyn kernel::Provider>> {
     if !config.has_api_key() {
-        tracing::warn!("No API key configured — using NoKeyProvider (sessions will fail to send messages)");
+        tracing::warn!(
+            "No API key configured — using NoKeyProvider (sessions will fail to send messages)"
+        );
         return Ok(Arc::new(kernel::NoKeyProvider));
     }
 

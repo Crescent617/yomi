@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -82,6 +82,29 @@ const MIGRATIONS: &[Migration] = &[
         version: 5,
         name: "add_auto_approve_level",
         sqls: &[r"ALTER TABLE sessions ADD COLUMN auto_approve_level TEXT;"],
+    },
+    Migration {
+        version: 6,
+        name: "add_cron_jobs",
+        sqls: &[
+            r"CREATE TABLE cron_jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                schedule TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'completed', 'failed')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                next_run_at TEXT,
+                last_run_at TEXT,
+                run_count INTEGER NOT NULL DEFAULT 0,
+                max_runs INTEGER,
+                expires_at TEXT,
+                last_error TEXT
+            );",
+            r"CREATE INDEX idx_cron_jobs_status_next_run ON cron_jobs(status, next_run_at);",
+            r"CREATE INDEX idx_cron_jobs_next_run_active ON cron_jobs(next_run_at) WHERE status = 'active';",
+        ],
     },
 ];
 

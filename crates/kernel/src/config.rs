@@ -2,9 +2,7 @@ use crate::agent::AgentConfig;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::types::KernelError;
-use crate::utils::env::{
-    env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit,
-};
+use crate::utils::env::{env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit};
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};

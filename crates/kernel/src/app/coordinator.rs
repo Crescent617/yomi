@@ -2,6 +2,7 @@ use crate::agent::{AgentConfig, AgentShared, AgentState};
 use crate::app::session::{Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
+use crate::providers::ModelConfig;
 use crate::providers::Provider;
 use crate::storage::usage::{DailyUsage, UsageFilter, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
@@ -12,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc, RwLock};
-use crate::providers::ModelConfig;
 
 /// Input for creating a new session
 #[derive(Debug, Clone)]
@@ -41,7 +41,8 @@ impl Coordinator {
     /// Get session store from `agent_shared`
     pub async fn session_store(&self) -> Arc<dyn SessionStore> {
         self.agent_shared
-            .read().await
+            .read()
+            .await
             .session_store
             .clone()
             .expect("session_store not configured")
@@ -50,7 +51,8 @@ impl Coordinator {
     /// Get message store from `agent_shared`
     pub async fn message_store(&self) -> Arc<dyn MessageStore> {
         self.agent_shared
-            .read().await
+            .read()
+            .await
             .message_store
             .clone()
             .expect("message_store not configured")
@@ -59,7 +61,8 @@ impl Coordinator {
     /// Get checkpoint store from `agent_shared`
     pub async fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
         self.agent_shared
-            .read().await
+            .read()
+            .await
             .checkpoint_store
             .clone()
             .expect("checkpoint_store not configured")
@@ -73,7 +76,8 @@ impl Coordinator {
     /// Get usage store from `agent_shared`
     pub async fn usage_store(&self) -> Arc<dyn UsageStore> {
         self.agent_shared
-            .read().await
+            .read()
+            .await
             .usage_store
             .clone()
             .expect("usage_store not configured")
@@ -297,7 +301,8 @@ impl Coordinator {
         });
 
         let id = SessionId::new();
-        self.session_store().await
+        self.session_store()
+            .await
             .create(
                 &id,
                 input.project_id.as_ref(),
@@ -425,11 +430,16 @@ impl Coordinator {
             return Ok(session_id.clone());
         }
 
-        let info = self.session_store().await.get(session_id).await?.ok_or_else(|| {
-            KernelError::from(SessionError::NotFound {
-                session_id: session_id.0.clone(),
-            })
-        })?;
+        let info = self
+            .session_store()
+            .await
+            .get(session_id)
+            .await?
+            .ok_or_else(|| {
+                KernelError::from(SessionError::NotFound {
+                    session_id: session_id.0.clone(),
+                })
+            })?;
 
         let auto_approve_level = info
             .auto_approve_level
@@ -472,15 +482,21 @@ impl Coordinator {
         parent_id: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId> {
-        let parent_info = self.session_store().await.get(parent_id).await?.ok_or_else(|| {
-            KernelError::from(SessionError::NotFound {
-                session_id: parent_id.0.clone(),
-            })
-        })?;
+        let parent_info = self
+            .session_store()
+            .await
+            .get(parent_id)
+            .await?
+            .ok_or_else(|| {
+                KernelError::from(SessionError::NotFound {
+                    session_id: parent_id.0.clone(),
+                })
+            })?;
 
         let new_id = self.session_store().await.fork(parent_id).await?;
         // Override the copied level with the requested one
-        self.session_store().await
+        self.session_store()
+            .await
             .update_auto_approve_level(&new_id, auto_approve_level.as_str())
             .await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
@@ -513,7 +529,10 @@ impl Coordinator {
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<(Vec<crate::storage::session::SessionInfo>, bool)> {
-        self.session_store().await.list(project_id, before, limit).await
+        self.session_store()
+            .await
+            .list(project_id, before, limit)
+            .await
     }
 
     pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
@@ -695,7 +714,8 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::checkpoint::Checkpoint>> {
-        self.checkpoint_store().await
+        self.checkpoint_store()
+            .await
             .get_session_checkpoints(&session_id.0)
             .await
     }
@@ -769,17 +789,19 @@ impl Coordinator {
         base_dir: &std::path::Path,
     ) -> Result<()> {
         let mut config = match config_file {
-            Some(path) => crate::config::Config::from_file(path)
-                .map_err(|e| crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+            Some(path) => crate::config::Config::from_file(path).map_err(|e| {
+                crate::types::KernelError::from(crate::types::SessionError::Other(format!(
                     "Failed to load config from {}: {e}",
                     path.display()
-                ))))?,
+                )))
+            })?,
             None => match crate::config::Config::discover_file() {
-                Some(path) => crate::config::Config::from_file(&path)
-                    .map_err(|e| crate::types::KernelError::from(crate::types::SessionError::Other(format!(
+                Some(path) => crate::config::Config::from_file(&path).map_err(|e| {
+                    crate::types::KernelError::from(crate::types::SessionError::Other(format!(
                         "Failed to load discovered config from {}: {e}",
                         path.display()
-                    ))))?,
+                    )))
+                })?,
                 None => crate::config::Config::default(),
             },
         };
@@ -820,7 +842,13 @@ impl Coordinator {
             crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
         });
 
-        self.update_agent_config(agent_config, hook_registry, Some(provider), Some(Arc::new(config.agent.model))).await;
+        self.update_agent_config(
+            agent_config,
+            hook_registry,
+            Some(provider),
+            Some(Arc::new(config.agent.model)),
+        )
+        .await;
         tracing::info!("Reloaded agent configuration from disk");
         Ok(())
     }
@@ -836,7 +864,10 @@ impl Coordinator {
     pub async fn get_daily_usage(&self, days: i64) -> Result<Vec<DailyUsage>> {
         let now = Utc::now();
         let start = now - chrono::Duration::days(days);
-        self.usage_store().await.daily_summary(start, now, None).await
+        self.usage_store()
+            .await
+            .daily_summary(start, now, None)
+            .await
     }
 
     /// Get usage for a specific session
@@ -850,7 +881,8 @@ impl Coordinator {
         };
         // TODO: UsageStore doesn't support session filter yet, so we get all and filter client-side
         // or extend the filter. For now, just return the total summary.
-        self.usage_store().await
+        self.usage_store()
+            .await
             .summarize(start, now, Some(&filter))
             .await
     }

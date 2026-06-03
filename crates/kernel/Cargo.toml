@@ -44,6 +44,7 @@ directories = { workspace = true }
 dashmap = { workspace = true }
 
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
+cron = { workspace = true }
 
 [lints]
 workspace = true

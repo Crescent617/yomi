@@ -25,6 +25,7 @@ pub mod event;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
+pub mod cron;
 pub mod memory;
 pub mod permissions;
 pub mod prompt;
@@ -79,6 +80,12 @@ pub use providers::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
 pub use tools::{
     execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
     SubagentTool, WriteTool,
+};
+
+// Cron system re-exports
+pub use cron::{
+    CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
+    CronScheduler, CronStore, CronWorker, SqliteCronStore, UpdateCronJobInput,
 };
 
 // Task system re-exports
