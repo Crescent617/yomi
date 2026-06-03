@@ -286,6 +286,10 @@ export async function openInVscode(path: string): Promise<void> {
   return invokeCmd("open_in_vscode", { path });
 }
 
+export async function openInZed(path: string): Promise<void> {
+  return invokeCmd("open_in_zed", { path });
+}
+
 export async function openInEditor(path: string): Promise<void> {
   return invokeCmd("open_in_editor", { path });
 }

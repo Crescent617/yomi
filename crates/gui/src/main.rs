@@ -63,6 +63,7 @@ pub fn run() {
             commands::system::get_session_usage,
             commands::system::open_in_explorer,
             commands::system::open_in_vscode,
+            commands::system::open_in_zed,
             commands::system::open_in_editor,
             commands::terminal::terminal_spawn,
             commands::terminal::terminal_write,

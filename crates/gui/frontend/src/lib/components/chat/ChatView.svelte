@@ -315,6 +315,9 @@
               <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.projectPath); openDropdownOpen = false; }}>
                 <ExternalLink size={12} /> Open in VS Code
               </button>
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInZed(activeSession.projectPath); openDropdownOpen = false; }}>
+                <ExternalLink size={12} /> Open in Zed
+              </button>
             </div>
             <div class="fixed inset-0 z-10" onclick={() => openDropdownOpen = false}></div>
           {/if}

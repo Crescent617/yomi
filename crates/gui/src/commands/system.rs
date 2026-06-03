@@ -180,6 +180,25 @@ pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
 }
 
 #[tauri::command]
+pub async fn open_in_zed(path: String) -> Result<(), GuiError> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Zed", &path])
+            .spawn()
+            .map_err(|e| GuiError::unknown(format!("Failed to open Zed: {e}")))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::process::Command::new("zed")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| GuiError::unknown(format!("Failed to open Zed: {e}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;
