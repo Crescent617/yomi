@@ -3,16 +3,11 @@
   import { onMount } from "svelte";
   import { handleEvent, getSession } from "../lib/state.svelte";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
-  import { applyTheme, settings, startThemeListener } from "../lib/settings.svelte";
+  import { settings, applyTheme, startThemeListener, stopThemeListener, initSettings } from "../lib/settings.svelte";
   import "../app.css";
 
-  // Client-side only — avoid SSR crash
-  if (typeof document !== "undefined") {
-    applyTheme(settings.theme);
-  }
-
-  onMount(() => {
-    applyTheme(settings.theme);
+  onMount(async () => {
+    await initSettings();
     startThemeListener();
     const unlisten = listen("kernel:event", (e: any) => {
       const { sessionId, event } = e.payload;
@@ -23,6 +18,7 @@
     });
     return () => {
       unlisten.then((fn: any) => fn());
+      stopThemeListener();
     };
   });
 </script>

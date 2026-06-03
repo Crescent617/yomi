@@ -41,6 +41,7 @@
             "fs:read-dirs",
             "fs:allow-read-text-file",
             "fs:allow-write-text-file",
+            "store:default",
             "pilot:default"
           ]
         }

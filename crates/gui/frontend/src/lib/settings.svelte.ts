@@ -1,11 +1,13 @@
+import { Store } from "@tauri-apps/plugin-store";
+
+const STORAGE_KEY = "yomi-gui-settings";
+
 export interface AppSettings {
   theme: "light" | "dark" | "system";
   sidebarCollapsed: boolean;
   fontSize: "sm" | "base" | "lg";
   notificationsEnabled: boolean;
 }
-
-const STORAGE_KEY = "yomi-gui-settings";
 
 const defaults: AppSettings = {
   theme: "system",
@@ -14,33 +16,49 @@ const defaults: AppSettings = {
   notificationsEnabled: true,
 };
 
-function load(): AppSettings {
-  if (typeof window === "undefined") return { ...defaults };
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return { ...defaults, ...parsed };
-    }
-  } catch {
-    // ignore
-  }
-  return { ...defaults };
+let store: Store | null = null;
+
+async function getStore(): Promise<Store> {
+  if (store) return store;
+  store = await Store.load(STORAGE_KEY);
+  return store;
 }
 
-function save(settings: AppSettings) {
-  if (typeof window === "undefined") return;
+async function loadSettings(): Promise<AppSettings> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // ignore
+    const s = await getStore();
+    const data = await s.get<Partial<AppSettings>>("settings");
+    return { ...defaults, ...data };
+  } catch (e) {
+    console.error("[Settings] Failed to load from store:", e);
+    return { ...defaults };
   }
 }
 
-export const settings = $state<AppSettings>(load());
+async function saveSettings(settings: AppSettings): Promise<void> {
+  try {
+    const s = await getStore();
+    await s.set("settings", settings);
+    await s.save();
+  } catch (e) {
+    console.error("[Settings] Failed to save to store:", e);
+  }
+}
 
-// Auto-save on mutation (deep watch would be complex, so we expose save explicitly)
-export { save as persistSettings, defaults as defaultSettings };
+export const settings = $state<AppSettings>({ ...defaults });
+
+let loaded = false;
+
+export async function initSettings(): Promise<void> {
+  if (loaded) return;
+  const data = await loadSettings();
+  settings.theme = data.theme;
+  settings.sidebarCollapsed = data.sidebarCollapsed;
+  settings.fontSize = data.fontSize;
+  settings.notificationsEnabled = data.notificationsEnabled;
+  applyTheme(data.theme);
+  loaded = true;
+}
 
 export function applyTheme(theme: AppSettings["theme"]) {
   if (typeof document === "undefined") return;
@@ -80,4 +98,8 @@ export function stopThemeListener() {
     mediaQuery = null;
     mediaListener = null;
   }
+}
+
+export function persistSettings(s: AppSettings) {
+  saveSettings(s);
 }

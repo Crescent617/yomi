@@ -27,6 +27,7 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-store": "^2.4.3",
     "@types/marked": "^5.0.2",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.0.0",

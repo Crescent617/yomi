@@ -17,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             let coordinator = tauri::async_runtime::block_on(daemon::init_coordinator())
                 .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
