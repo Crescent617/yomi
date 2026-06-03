@@ -17,11 +17,6 @@
     applyTheme(next);
     persistSettings(settings);
   }
-
-  const ThemeIcon = $derived.by(() => {
-    if (settings.theme === "system") return Monitor;
-    return settings.theme === "dark" ? Sun : Moon;
-  });
 </script>
 
 <div class="shrink-0 w-12 border-r border-border bg-muted/30 flex flex-col items-center py-2 gap-1">
@@ -49,6 +44,12 @@
            text-muted-foreground hover:text-foreground hover:bg-secondary/50"
     title="Toggle theme"
   >
-    <ThemeIcon class="w-5 h-5" />
+    {#if settings.theme === "system"}
+      <Monitor class="w-5 h-5" />
+    {:else if settings.theme === "dark"}
+      <Sun class="w-5 h-5" />
+    {:else}
+      <Moon class="w-5 h-5" />
+    {/if}
   </button>
 </div>

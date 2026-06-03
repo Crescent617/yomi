@@ -7,6 +7,7 @@ import { sessionState, getActiveSession, showNotification, loadSessionMessages }
 import { SLASH_COMMANDS } from "../../commands";
 import { fsProvider } from "../../fs/factory";
 import type { FileEntry } from "../../fs/provider";
+import { open } from "@tauri-apps/plugin-dialog";
 
 let content = $state("");
 let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -37,10 +38,13 @@ let selectedHistoryIdx = $state(0);
 let historyListRef: HTMLDivElement | null = $state(null);
 let prevSessionId = $state<string | null>(null);
 
-// ── image attachments ──
-let imagePlaceholders = $state<Map<string, string>>(new Map());
-let imageCounter = $state(0);
-let fileInputRef: HTMLInputElement | null = $state(null);
+// ── inline image attachments (paste / drop) ──
+interface InlineImage {
+  id: number;
+  url: string; // base64 data URL
+}
+let inlineImages = $state<InlineImage[]>([]);
+let inlineImageCounter = $state(0);
 
 const activeSession = $derived(getActiveSession());
 const isStreaming = $derived(activeSession?.streaming ?? false);
@@ -166,7 +170,8 @@ const historyEntries = $derived.by(() => {
 // ── actions ──
 export function setContent(text: string) {
   content = text;
-  clearImages();
+  clearInlineImages();
+  fileAttachments = [];
   requestAnimationFrame(autoResize);
 }
 
@@ -175,7 +180,8 @@ function queueInput() {
   if (!session || !content.trim()) return;
   session.queuedInput = content.trim();
   content = "";
-  clearImages();
+  clearInlineImages();
+  fileAttachments = [];
   autoResize();
 }
 
@@ -305,12 +311,12 @@ async function handleSubmit() {
 
   if (text.startsWith("/")) {
     await handleCommand(text);
-  } else if (imagePlaceholders.size > 0) {
-    // Message with images: build content blocks
+  } else if (inlineImages.length > 0) {
+    // Message with inline images: build content blocks
     try {
       const blocks = buildContentBlocks(text);
       await api.sendMessageBlocks(sessionId, blocks);
-      clearImages();
+      clearInlineImages();
     } catch (e: any) {
       console.error("Failed to send message with images:", e?.message ?? e);
       showNotification("Failed to send message", "error", 3000);
@@ -348,22 +354,20 @@ async function handlePermissionSet(level: string) {
   }
 }
 
-// ── image helpers ──
+// ── inline image helpers ──
 
-function insertImagePlaceholder(base64Url: string): string {
-  imageCounter += 1;
-  const placeholder = `[Image #${imageCounter}]`;
-  imagePlaceholders.set(placeholder, base64Url);
+function addInlineImage(base64Url: string) {
+  inlineImageCounter += 1;
+  inlineImages = [...inlineImages, { id: inlineImageCounter, url: base64Url }];
+}
 
-  // Insert at cursor position
-  const cursorPos = textareaRef?.selectionStart ?? content.length;
-  const before = content.slice(0, cursorPos);
-  const after = content.slice(cursorPos);
-  const prefix = before.length > 0 && !before.endsWith(" ") ? " " : "";
-  const suffix = after.length > 0 && !after.startsWith(" ") ? " " : "";
-  content = before + prefix + placeholder + suffix + after;
-  requestAnimationFrame(autoResize);
-  return placeholder;
+function removeInlineImage(id: number) {
+  inlineImages = inlineImages.filter((img) => img.id !== id);
+}
+
+function clearInlineImages() {
+  inlineImages = [];
+  inlineImageCounter = 0;
 }
 
 async function readFileAsBase64(file: File): Promise<string> {
@@ -378,14 +382,14 @@ async function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-async function handleImageFile(file: File) {
+async function handleClipboardImage(file: File) {
   if (!file.type.startsWith("image/")) {
     showNotification("Only image files are supported", "error", 3000);
     return;
   }
   try {
     const base64Url = await readFileAsBase64(file);
-    insertImagePlaceholder(base64Url);
+    addInlineImage(base64Url);
     textareaRef?.focus();
   } catch (e) {
     console.error("Failed to read image:", e);
@@ -393,14 +397,34 @@ async function handleImageFile(file: File) {
   }
 }
 
-function handleFileSelect(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const files = input.files;
-  if (!files) return;
-  for (const file of files) {
-    handleImageFile(file);
+// ── file attachments (any type, paths appended to prompt) ──
+let fileAttachments = $state<string[]>([]);
+
+async function attachFiles() {
+  try {
+    const selected = await open({ multiple: true });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    const newPaths = paths.filter((p) => !fileAttachments.includes(p));
+    if (newPaths.length === 0) return;
+    fileAttachments = [...fileAttachments, ...newPaths];
+    const sep = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
+    const additions = newPaths.map((p) => `[File: ${p}]`).join("\n");
+    content += `${sep}${additions}\n`;
+    requestAnimationFrame(autoResize);
+    textareaRef?.focus();
+  } catch (e) {
+    console.error("Failed to attach files:", e);
   }
-  input.value = ""; // reset so same file can be selected again
+}
+
+function removeFileAttachment(path: string) {
+  fileAttachments = fileAttachments.filter((p) => p !== path);
+  const marker = `[File: ${path}]`;
+  const lines = content.split("\n");
+  const filtered = lines.filter((line) => line.trim() !== marker);
+  content = filtered.join("\n");
+  requestAnimationFrame(autoResize);
 }
 
 async function handlePaste(e: ClipboardEvent) {
@@ -414,76 +438,35 @@ async function handlePaste(e: ClipboardEvent) {
       e.preventDefault();
       const file = item.getAsFile();
       if (file) {
-        await handleImageFile(file);
+        await handleClipboardImage(file);
       }
     }
   }
-}
-
-function removeImagePlaceholder(placeholder: string) {
-  imagePlaceholders.delete(placeholder);
-  content = content.replace(new RegExp(`\\s?${placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s?`, "g"), " ");
-  content = content.replace(/\s{2,}/g, " ").trim();
-  requestAnimationFrame(autoResize);
 }
 
 function buildContentBlocks(text: string): unknown[] {
   const blocks: unknown[] = [];
-  let currentText = "";
-  let remaining = text;
 
-  while (remaining.length > 0) {
-    let earliestIdx = -1;
-    let earliestPlaceholder = "";
-    for (const [ph] of imagePlaceholders) {
-      const idx = remaining.indexOf(ph);
-      if (idx >= 0 && (earliestIdx === -1 || idx < earliestIdx)) {
-        earliestIdx = idx;
-        earliestPlaceholder = ph;
-      }
-    }
-
-    if (earliestIdx === -1) {
-      currentText += remaining;
-      break;
-    }
-
-    currentText += remaining.slice(0, earliestIdx);
-    remaining = remaining.slice(earliestIdx + earliestPlaceholder.length);
-
-    // Flush text block
-    const trimmed = currentText.trim();
-    if (trimmed) {
-      blocks.push({ type: "text", text: trimmed });
-    }
-    currentText = "";
-
-    // Add image block
-    const base64Url = imagePlaceholders.get(earliestPlaceholder);
-    if (base64Url) {
-      blocks.push({
-        type: "image_url",
-        image_url: { url: base64Url, detail: "auto" },
-      });
-    }
+  // First add all inline images
+  for (const img of inlineImages) {
+    blocks.push({
+      type: "image_url",
+      image_url: { url: img.url, detail: "auto" },
+    });
   }
 
-  const trimmed = currentText.trim();
+  // Then add text block if there's any text
+  const trimmed = text.trim();
   if (trimmed) {
     blocks.push({ type: "text", text: trimmed });
   }
 
-  // If no blocks at all, return a single text block
+  // If absolutely nothing, add empty text block
   if (blocks.length === 0) {
-    blocks.push({ type: "text", text: text.trim() });
+    blocks.push({ type: "text", text: "" });
   }
 
   return blocks;
-}
-
-function clearImages() {
-  imagePlaceholders = new Map();
-  imageCounter = 0;
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -772,74 +755,78 @@ function getSession(sessionId: string) {
     </div>
   {/if}
 
-  <div class="flex items-end gap-2">
-    <!-- Hidden file input -->
-    <input
-      type="file"
-      accept="image/*"
-      multiple
-      bind:this={fileInputRef}
-      onchange={handleFileSelect}
-      class="hidden"
-    />
-    <!-- Attach button -->
-    <button
-      type="button"
-      onclick={() => fileInputRef?.click()}
-      class="inline-flex items-center justify-center rounded-lg border border-border text-muted-foreground h-9 w-9 hover:bg-secondary hover:text-foreground shrink-0 transition-colors"
-      title="Attach image"
-    >
-      <Paperclip size={16} />
-    </button>
-    <textarea
-      bind:this={textareaRef}
-      bind:value={content}
-      oninput={() => { detectCompletion(); autoResize(); }}
-      onkeydown={handleKeydown}
-      onfocus={detectCompletion}
-      onblur={() => { /* dropdowns close via item clicks or Escape */ }}
-      oncompositionstart={() => composing = true}
-      oncompositionend={() => {
-        composing = false;
-        ignoreNextEnter = true;
-        setTimeout(() => ignoreNextEnter = false, 100);
-      }}
-      onpaste={handlePaste}
-      placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file, paste image)"}
-      rows={1}
-      class="flex-1 resize-none rounded-lg bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px]"
-    ></textarea>
-    {#if isStreaming}
-      <button
-        type="button"
-        onclick={handleCancel}
-        class="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground h-9 w-9 hover:bg-destructive/90 active:scale-95 transition-all shrink-0"
-        title="Cancel"
-      >
-        <Square class="w-4 h-4 fill-current" />
-      </button>
-    {:else}
-      <button
-        type="button"
-        onclick={handleSubmit}
-        disabled={!content.trim() || !sessionState.activeSessionId}
-        class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
-      >
-        <Send size={16} />
-      </button>
-    {/if}
-  </div>
+    <div class="rounded-xl bg-background overflow-hidden">
+      {#if inlineImages.length > 0}
+        <div class="flex flex-wrap gap-2 px-3 pt-3 pb-1">
+          {#each inlineImages as img (img.id)}
+            <div class="relative group shrink-0">
+              <img
+                src={img.url}
+                alt=""
+                class="h-16 w-16 object-cover rounded-lg border border-border"
+              />
+              <button
+                type="button"
+                onclick={() => removeInlineImage(img.id)}
+                class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                title="Remove"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      <div class="flex items-end gap-2 p-3">
+        <textarea
+          bind:this={textareaRef}
+          bind:value={content}
+          oninput={() => { detectCompletion(); autoResize(); }}
+          onkeydown={handleKeydown}
+          onfocus={detectCompletion}
+          onblur={() => { /* dropdowns close via item clicks or Escape */ }}
+          oncompositionstart={() => composing = true}
+          oncompositionend={() => {
+            composing = false;
+            ignoreNextEnter = true;
+            setTimeout(() => ignoreNextEnter = false, 100);
+          }}
+          onpaste={handlePaste}
+          placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file, paste image)"}
+          rows={1}
+          class="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px]"
+        ></textarea>
+        {#if isStreaming}
+          <button
+            type="button"
+            onclick={handleCancel}
+            class="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground h-9 w-9 hover:bg-destructive/90 active:scale-95 transition-all shrink-0"
+            title="Cancel"
+          >
+            <Square class="w-4 h-4 fill-current" />
+          </button>
+        {:else}
+          <button
+            type="button"
+            onclick={handleSubmit}
+            disabled={!content.trim() || !sessionState.activeSessionId}
+            class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
+          >
+            <Send size={16} />
+          </button>
+        {/if}
+      </div>
+    </div>
   {#if activeSession}
-    <!-- Image attachments -->
-    {#if imagePlaceholders.size > 0}
+    <!-- File attachments -->
+    {#if fileAttachments.length > 0}
       <div class="flex items-center gap-2 mt-1.5 px-1 flex-wrap">
-        {#each [...imagePlaceholders.entries()] as [placeholder, base64Url] (placeholder)}
-          <div class="flex items-center gap-1.5 rounded-lg border border-border bg-secondary px-2 py-1">
-            <img src={base64Url} alt="" class="w-6 h-6 rounded object-cover" />
-            <span class="text-xs text-muted-foreground">{placeholder}</span>
+        {#each fileAttachments as path (path)}
+          <div class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5">
+            <span class="text-xs text-muted-foreground truncate max-w-[200px]">{path.split("/").pop()}</span>
             <button
               type="button"
-              onclick={() => removeImagePlaceholder(placeholder)}
+              onclick={() => removeFileAttachment(path)}
               class="text-muted-foreground hover:text-destructive transition-colors"
               title="Remove"
             >
@@ -849,7 +836,17 @@ function getSession(sessionId: string) {
         {/each}
       </div>
     {/if}
+
     <div class="flex items-center mt-1.5 px-1">
+      <button
+        type="button"
+        onclick={attachFiles}
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+        title="Attach files"
+      >
+        <Paperclip size={14} />
+      </button>
+      <div class="flex-1"></div>
       <!-- Permission level -->
       <div class="flex items-center gap-1">
         {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}

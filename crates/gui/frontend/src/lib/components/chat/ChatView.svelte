@@ -10,7 +10,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink } from "lucide-svelte";
+  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { levelLabel, levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
@@ -33,6 +33,99 @@
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
   let homeInput = $state("");
   let submitting = $state(false);
+  let homeFileAttachments = $state<string[]>([]);
+
+  // ── home inline images (clipboard paste) ──
+  interface HomeInlineImage {
+    id: number;
+    url: string;
+  }
+  let homeInlineImages = $state<HomeInlineImage[]>([]);
+  let homeInlineImageCounter = $state(0);
+
+  function addHomeInlineImage(base64Url: string) {
+    homeInlineImageCounter += 1;
+    homeInlineImages = [...homeInlineImages, { id: homeInlineImageCounter, url: base64Url }];
+  }
+
+  function removeHomeInlineImage(id: number) {
+    homeInlineImages = homeInlineImages.filter((img) => img.id !== id);
+  }
+
+  function clearHomeInlineImages() {
+    homeInlineImages = [];
+    homeInlineImageCounter = 0;
+  }
+
+  async function readHomeFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleHomePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) {
+          try {
+            const base64Url = await readHomeFileAsBase64(file);
+            addHomeInlineImage(base64Url);
+          } catch (err) {
+            console.error("Failed to read clipboard image:", err);
+          }
+        }
+      }
+    }
+  }
+
+  function buildHomeContentBlocks(text: string): unknown[] {
+    const blocks: unknown[] = [];
+    for (const img of homeInlineImages) {
+      blocks.push({
+        type: "image_url",
+        image_url: { url: img.url, detail: "auto" },
+      });
+    }
+    const trimmed = text.trim();
+    if (trimmed) {
+      blocks.push({ type: "text", text: trimmed });
+    }
+    if (blocks.length === 0) {
+      blocks.push({ type: "text", text: "" });
+    }
+    return blocks;
+  }
+
+  async function attachHomeFiles() {
+    try {
+      const selected = await open({ multiple: true });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const newPaths = paths.filter((p) => !homeFileAttachments.includes(p));
+      if (newPaths.length === 0) return;
+      homeFileAttachments = [...homeFileAttachments, ...newPaths];
+      const sep = homeInput.length > 0 && !homeInput.endsWith("\n") ? "\n" : "";
+      const additions = newPaths.map((p) => `[File: ${p}]`).join("\n");
+      homeInput += `${sep}${additions}\n`;
+    } catch (e) {
+      console.error("Failed to attach files:", e);
+    }
+  }
+
+  function removeHomeFileAttachment(path: string) {
+    homeFileAttachments = homeFileAttachments.filter((p) => p !== path);
+    const marker = `[File: ${path}]`;
+    const lines = homeInput.split("\n");
+    const filtered = lines.filter((line) => line.trim() !== marker);
+    homeInput = filtered.join("\n");
+  }
 
   const selectedProject = $derived(
     selectedProjectId && selectedProjectId !== "new"
@@ -181,7 +274,16 @@
       // Send the home input
       const text = homeInput.trim();
       homeInput = "";
-      await api.sendMessage(id, text);
+      homeFileAttachments = [];
+      const hasImages = homeInlineImages.length > 0;
+      if (hasImages) {
+        const blocks = buildHomeContentBlocks(text);
+        clearHomeInlineImages();
+        await api.sendMessageBlocks(id, blocks);
+      } else {
+        clearHomeInlineImages();
+        await api.sendMessage(id, text);
+      }
     } catch (e: any) {
       console.error("Failed to create session:", e?.message ?? e);
       showNotification("Failed to create session: " + (e?.message ?? "Unknown error"), "error", 5000);
@@ -371,11 +473,50 @@
               <textarea
                 bind:value={homeInput}
                 onkeydown={handleHomeKeydown}
+                onpaste={handleHomePaste}
                 placeholder="Ask anything..."
                 rows={3}
                 disabled={submitting}
                 class="w-full resize-none bg-transparent text-base placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
               ></textarea>
+              {#if homeInlineImages.length > 0}
+                <div class="flex flex-wrap gap-2 mt-2">
+                  {#each homeInlineImages as img (img.id)}
+                    <div class="relative group shrink-0">
+                      <img
+                        src={img.url}
+                        alt=""
+                        class="h-16 w-16 object-cover rounded-lg border border-border"
+                      />
+                      <button
+                        type="button"
+                        onclick={() => removeHomeInlineImage(img.id)}
+                        class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                        title="Remove"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              {#if homeFileAttachments.length > 0}
+                <div class="flex items-center gap-2 mt-2 flex-wrap">
+                  {#each homeFileAttachments as path (path)}
+                    <div class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5">
+                      <span class="text-xs text-muted-foreground truncate max-w-[200px]">{path.split("/").pop()}</span>
+                      <button
+                        type="button"
+                        onclick={() => removeHomeFileAttachment(path)}
+                        class="text-muted-foreground hover:text-destructive transition-colors"
+                        title="Remove"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
             <div class="px-4 py-3 border-t border-border flex items-center justify-between gap-3">
               <div class="flex items-center gap-3">
@@ -422,6 +563,15 @@
                   {/if}
                 </div>
 
+                <!-- Attach button -->
+                <button
+                  type="button"
+                  onclick={attachHomeFiles}
+                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+                  title="Attach files"
+                >
+                  <Paperclip size={14} />
+                </button>
                 <!-- Permission level -->
                 <div class="flex items-center gap-1">
                   {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}
