@@ -808,10 +808,7 @@ impl Coordinator {
         config.apply_env_overrides();
         config.finalize(base_dir);
 
-        let provider: Arc<dyn crate::providers::Provider> = if !config.has_api_key() {
-            tracing::warn!("No API key configured — using NoKeyProvider");
-            Arc::new(crate::providers::NoKeyProvider)
-        } else {
+        let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
             match config.agent.model.provider {
                 crate::config::ModelProvider::OpenAI => {
                     Arc::new(crate::providers::OpenAIProvider::new().map_err(|e| {
@@ -828,6 +825,9 @@ impl Coordinator {
                     })?)
                 }
             }
+        } else {
+            tracing::warn!("No API key configured — using NoKeyProvider");
+            Arc::new(crate::providers::NoKeyProvider)
         };
 
         let _skill_folders: Vec<std::path::PathBuf> = config

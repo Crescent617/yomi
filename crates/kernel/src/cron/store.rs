@@ -23,7 +23,7 @@ pub trait CronStore: Send + Sync {
     async fn delete(&self, id: &CronJobId) -> Result<bool, CronError>;
     /// 获取所有 active 任务（供 scheduler 加载）
     async fn list_active(&self) -> Result<Vec<CronJob>, CronError>;
-    /// 原子更新执行记录（run_count++, last_run_at, next_run_at, last_error）
+    /// `原子更新执行记录（run_count`++, `last_run_at`, `next_run_at`, `last_error`）
     async fn record_execution(
         &self,
         id: &CronJobId,
@@ -46,7 +46,7 @@ impl SqliteCronStore {
 impl CronStore for SqliteCronStore {
     async fn create(&self, job: &CronJob) -> Result<(), CronError> {
         let action_json = serde_json::to_string(&job.action)
-            .map_err(|e| CronError::Storage(format!("serialize action: {}", e)))?;
+            .map_err(|e| CronError::Storage(format!("serialize action: {e}")))?;
 
         sqlx::query(
             r"INSERT INTO cron_jobs (
@@ -63,8 +63,8 @@ impl CronStore for SqliteCronStore {
         .bind(job.updated_at.to_rfc3339())
         .bind(job.next_run_at.map(|t| t.to_rfc3339()))
         .bind(job.last_run_at.map(|t| t.to_rfc3339()))
-        .bind(job.run_count as i64)
-        .bind(job.max_runs.map(|v| v as i64))
+        .bind(i64::from(job.run_count))
+        .bind(job.max_runs.map(i64::from))
         .bind(job.expires_at.map(|t| t.to_rfc3339()))
         .bind(job.last_error.as_ref())
         .execute(&self.pool)
@@ -127,11 +127,10 @@ impl CronStore for SqliteCronStore {
             input
                 .action
                 .as_ref()
-                .map(|a| serde_json::to_string(a).ok())
-                .flatten(),
+                .and_then(|a| serde_json::to_string(a).ok()),
         )
         .bind(input.status.map(|s| s.as_str().to_string()))
-        .bind(input.max_runs.map(|v| v as i64))
+        .bind(input.max_runs.map(i64::from))
         .bind(input.expires_at.map(|t| t.to_rfc3339()))
         .bind(input.next_run_at.map(|t| t.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())

@@ -600,13 +600,6 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       session.messages = [...session.messages, ...buf];
       streamingMessages[session.id] = [];
     }
-    // Auto-send queued message when this step finishes (kernel will emit
-    // UserEvent::Message when it processes the input).
-    if (session.queuedInput) {
-      const text = session.queuedInput;
-      session.queuedInput = null;
-      api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
-    }
     return true;
   } else if (event.Error) {
     // Model-level streaming error — Stopped::Failed will end streaming
@@ -745,6 +738,12 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         if (buf.length > 0) {
           session.messages = [...session.messages, ...buf];
           streamingMessages[session.id] = [];
+        }
+        // Auto-send queued message when the agent actually stops.
+        if (session.queuedInput) {
+          const text = session.queuedInput;
+          session.queuedInput = null;
+          api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
         }
         const stopReason = state.Stopped.reason;
         if ("Cancelled" in stopReason) {

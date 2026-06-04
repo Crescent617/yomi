@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CronJobId(pub String);
 
+impl Default for CronJobId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CronJobId {
     pub fn new() -> Self {
         Self(uuid::Uuid::new_v4().to_string())
@@ -61,7 +67,7 @@ impl std::str::FromStr for CronJobStatus {
             "paused" => Ok(Self::Paused),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
-            _ => Err(format!("Invalid cron job status: {}", s)),
+            _ => Err(format!("Invalid cron job status: {s}")),
         }
     }
 }
@@ -121,7 +127,7 @@ pub struct UpdateCronJobInput {
     pub status: Option<CronJobStatus>,
     pub max_runs: Option<u32>,
     pub expires_at: Option<DateTime<Utc>>,
-    /// 用于 scheduler 内部更新 next_run_at
+    /// 用于 scheduler 内部更新 `next_run_at`
     #[serde(skip)]
     pub next_run_at: Option<DateTime<Utc>>,
 }

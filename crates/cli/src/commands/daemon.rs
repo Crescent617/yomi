@@ -75,8 +75,12 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 }),
             ));
 
-            let server =
-                kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
+            let server = kernel::server::KernelServer::new(
+                Arc::clone(&coordinator),
+                config_file,
+                base_dir,
+                None,
+            );
             let shutdown = tokio_util::sync::CancellationToken::new();
 
             {

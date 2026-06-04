@@ -496,6 +496,57 @@ mod tests {
     }
 
     #[test]
+    fn test_config_model_headers_roundtrip() {
+        let mut config = Config::default();
+        config
+            .agent
+            .model
+            .headers
+            .insert("X-Custom-Key".to_string(), "my-value".to_string());
+        config
+            .agent
+            .model
+            .headers
+            .insert("Authorization".to_string(), "Bearer override".to_string());
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(
+            parsed.agent.model.headers.get("X-Custom-Key"),
+            Some(&"my-value".to_string())
+        );
+        assert_eq!(
+            parsed.agent.model.headers.get("Authorization"),
+            Some(&"Bearer override".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_model_headers_from_toml() {
+        let toml = r#"
+[agent.model]
+provider = "openai"
+model_id = "gpt-4"
+endpoint = "https://api.example.com/v1"
+api_key = "sk-test"
+
+[agent.model.headers]
+"X-Custom-Key" = "my-value"
+"Authorization" = "Bearer override"
+""#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            parsed.agent.model.headers.get("X-Custom-Key"),
+            Some(&"my-value".to_string())
+        );
+        assert_eq!(
+            parsed.agent.model.headers.get("Authorization"),
+            Some(&"Bearer override".to_string())
+        );
+    }
+
+    #[test]
     fn test_config_model_accessor() {
         let config = Config::default();
         assert_eq!(config.model().provider, config.agent.model.provider);

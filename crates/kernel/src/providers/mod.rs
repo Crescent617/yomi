@@ -2,6 +2,7 @@ use crate::event::ContentChunk;
 use crate::types::{FinishReason, Message, ToolDefinition};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::pin::Pin;
 use thiserror::Error;
 
@@ -116,6 +117,8 @@ pub struct ModelConfig {
     pub fallback_model_id: Option<String>,
     pub sse_timeout_secs: u64,
     pub thinking: ThinkingConfig,
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub headers: HashMap<String, String>,
 }
 
 impl Default for ModelConfig {
@@ -130,6 +133,7 @@ impl Default for ModelConfig {
             fallback_model_id: None,
             sse_timeout_secs: 30,
             thinking: ThinkingConfig::default(),
+            headers: HashMap::new(),
         }
     }
 }
@@ -238,7 +242,7 @@ impl Provider for NoKeyProvider {
         ))
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "no-key"
     }
 }

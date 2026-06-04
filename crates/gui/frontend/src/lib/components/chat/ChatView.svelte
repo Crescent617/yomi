@@ -639,7 +639,9 @@
       <div class="flex h-full relative">
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
-          <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
+          <div class="flex-1 relative min-h-0">
+            <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
+          </div>
           <div class="shrink-0 w-full">
             <div class="container mx-auto px-4 lg:px-6">
               <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} />
@@ -653,7 +655,7 @@
             <button
               type="button"
               onclick={scrollToBottom}
-              class="absolute bottom-20 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+              class="absolute bottom-24 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
             >
               <ArrowDown class="w-3 h-3" />
               Bottom

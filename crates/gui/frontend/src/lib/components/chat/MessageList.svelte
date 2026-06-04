@@ -14,7 +14,7 @@
 
   function checkNearBottom() {
     if (!scrollContainer) return true;
-    const threshold = 20; // px from bottom
+    const threshold = 80; // px from bottom — relaxed to avoid flicker during streaming
     const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
     return scrollHeight - scrollTop - clientHeight <= threshold;
   }

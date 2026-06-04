@@ -130,6 +130,16 @@ impl KernelServer {
         }
     }
 
+    fn require_cron_store(&self) -> std::result::Result<&Arc<dyn CronStore>, ResponseBody> {
+        self.cron_store.as_ref().ok_or_else(|| ResponseBody::Err {
+            error: RpcError {
+                code: "cron_disabled".to_string(),
+                message: "Cron store not configured".to_string(),
+                detail: None,
+            },
+        })
+    }
+
     /// Reload agent configuration from disk.
     /// Returns `true` if reload succeeded, `false` if it fell back to defaults.
     pub async fn reload(&self) -> bool {
@@ -143,10 +153,7 @@ impl KernelServer {
                 let hooks = config.features.hooks.then(|| {
                     crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
                 });
-                let provider: Arc<dyn crate::providers::Provider> = if !config.has_api_key() {
-                    tracing::warn!("No API key configured — using NoKeyProvider");
-                    Arc::new(crate::providers::NoKeyProvider)
-                } else {
+                let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
                     match config.agent.model.provider {
                         crate::config::ModelProvider::OpenAI => {
                             match crate::providers::OpenAIProvider::new() {
@@ -167,6 +174,9 @@ impl KernelServer {
                             }
                         }
                     }
+                } else {
+                    tracing::warn!("No API key configured — using NoKeyProvider");
+                    Arc::new(crate::providers::NoKeyProvider)
                 };
                 let model_config = Arc::new(config.agent.model.clone());
                 Some((agent, hooks, provider, model_config))
@@ -624,17 +634,9 @@ impl KernelServer {
                     }
                 };
 
-                let store = match self.cron_store.as_ref() {
-                    Some(s) => s,
-                    None => {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "cron_disabled".to_string(),
-                                message: "Cron store not configured".to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
+                let store = match self.require_cron_store() {
+                    Ok(s) => s,
+                    Err(e) => return e,
                 };
 
                 let next_run = schedule_parsed.next_after(Utc::now());
@@ -656,7 +658,7 @@ impl KernelServer {
 
                 let job_id = job.id.clone();
                 match store.create(&job).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         if let Some(ref scheduler) = self.cron_scheduler {
                             scheduler.reload();
                         }
@@ -674,17 +676,9 @@ impl KernelServer {
                 }
             }
             RequestMethod::ListCronJobs { status, limit } => {
-                let store = match self.cron_store.as_ref() {
-                    Some(s) => s,
-                    None => {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "cron_disabled".to_string(),
-                                message: "Cron store not configured".to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
+                let store = match self.require_cron_store() {
+                    Ok(s) => s,
+                    Err(e) => return e,
                 };
 
                 let status = status.and_then(|s| s.parse().ok());
@@ -713,17 +707,9 @@ impl KernelServer {
                 }
             }
             RequestMethod::GetCronJob { job_id } => {
-                let store = match self.cron_store.as_ref() {
-                    Some(s) => s,
-                    None => {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "cron_disabled".to_string(),
-                                message: "Cron store not configured".to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
+                let store = match self.require_cron_store() {
+                    Ok(s) => s,
+                    Err(e) => return e,
                 };
 
                 match store.get(&CronJobId(job_id)).await {
@@ -766,18 +752,23 @@ impl KernelServer {
                 max_runs,
                 expires_at,
             } => {
-                let store = match self.cron_store.as_ref() {
-                    Some(s) => s,
-                    None => {
+                let store = match self.require_cron_store() {
+                    Ok(s) => s,
+                    Err(e) => return e,
+                };
+
+                // 如果传入了新的 schedule，先校验合法性
+                if let Some(ref schedule_str) = schedule {
+                    if let Err(e) = CronSchedule::parse(schedule_str) {
                         return ResponseBody::Err {
                             error: RpcError {
-                                code: "cron_disabled".to_string(),
-                                message: "Cron store not configured".to_string(),
+                                code: "invalid_schedule".to_string(),
+                                message: e.to_string(),
                                 detail: None,
                             },
                         };
                     }
-                };
+                }
 
                 let status = status.and_then(|s| s.parse().ok());
                 let input = crate::cron::UpdateCronJobInput {
@@ -816,17 +807,9 @@ impl KernelServer {
                 }
             }
             RequestMethod::DeleteCronJob { job_id } => {
-                let store = match self.cron_store.as_ref() {
-                    Some(s) => s,
-                    None => {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "cron_disabled".to_string(),
-                                message: "Cron store not configured".to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
+                let store = match self.require_cron_store() {
+                    Ok(s) => s,
+                    Err(e) => return e,
                 };
 
                 match store.delete(&CronJobId(job_id)).await {

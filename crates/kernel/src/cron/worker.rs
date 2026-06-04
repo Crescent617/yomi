@@ -42,7 +42,7 @@ impl CronWorker {
                 let elapsed = start.elapsed();
 
                 let error = match &result {
-                    Ok(_) => None,
+                    Ok(()) => None,
                     Err(e) => {
                         tracing::error!("Cron job {} failed: {}", job.id.0, e);
                         Some(e.to_string())

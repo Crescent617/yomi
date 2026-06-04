@@ -262,6 +262,12 @@ impl Provider for AnthropicProvider {
             .header("Content-Type", "application/json")
             .json(&request_body);
 
+        // Inject custom headers from config
+        let request = config
+            .headers
+            .iter()
+            .fold(request, |req, (k, v)| req.header(k, v));
+
         tracing::debug!("Sending request to Anthropic API at {}", url);
         tracing::debug!("Request body: {:?}", request_body);
 

@@ -140,7 +140,8 @@ pub async fn spawn_daemon() -> Result<()> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
+    let server =
+        kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir, None);
     let shutdown = CancellationToken::new();
 
     {

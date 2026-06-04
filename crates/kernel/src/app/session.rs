@@ -42,7 +42,7 @@ impl Session {
         let goal_store: Arc<dyn crate::goal::GoalStore> =
             Arc::new(JsonGoalStore::new(&config.data_dir));
 
-        let permission_state = Self::create_permission_state(&config);
+        let permission_state = Some(Self::create_permission_state(&config));
 
         let (main_agent, event_rx) = Self::spawn_main_agent(
             &id,
@@ -87,9 +87,9 @@ impl Session {
     }
 
     /// Create permission state if needed based on config
-    fn create_permission_state(config: &SessionConfig) -> Option<PermissionState> {
+    fn create_permission_state(config: &SessionConfig) -> PermissionState {
         // Always create PermissionState so runtime level changes work
-        Some(PermissionState::new(config.auto_approve_level).0)
+        PermissionState::new(config.auto_approve_level).0
     }
 
     /// Spawn the main agent for this session

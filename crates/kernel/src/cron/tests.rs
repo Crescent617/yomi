@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::types::{
         CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
