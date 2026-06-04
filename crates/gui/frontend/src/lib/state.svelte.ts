@@ -37,6 +37,7 @@ export interface ChatMessage {
   contentBlocks?: TaggedContentBlock[];
   thinking?: { content: string; elapsedMs: number } | null;
   tools?: ToolCall[];
+  error?: boolean;
 }
 
 export interface ProjectState {
@@ -757,15 +758,21 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             content: msg,
             thinking: null,
             tools: [],
+            error: true,
           }];
           showNotification(msg, "warning", 3000);
           return true;
         } else if ("Failed" in stopReason) {
-          showNotification(
-            "Task failed: " + (stopReason.Failed.error ?? "Unknown"),
-            "error",
-            5000,
-          );
+          const errorMsg = "Task failed: " + (stopReason.Failed.error ?? "Unknown");
+          session.messages = [...session.messages, {
+            id: crypto.randomUUID(),
+            role: "system",
+            content: errorMsg,
+            thinking: null,
+            tools: [],
+            error: true,
+          }];
+          showNotification(errorMsg, "error", 5000);
           return true;
         } else if ("MaxIterations" in stopReason) {
           showNotification(
@@ -786,7 +793,16 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       session.messages = [...session.messages, ...buf];
       streamingMessages[session.id] = [];
     }
-    showNotification("Agent error: " + (event.Error.message ?? "Unknown"), "error", 5000);
+    const errorMsg = "Agent error: " + (event.Error.message ?? "Unknown");
+    session.messages = [...session.messages, {
+      id: crypto.randomUUID(),
+      role: "system",
+      content: errorMsg,
+      thinking: null,
+      tools: [],
+      error: true,
+    }];
+    showNotification(errorMsg, "error", 5000);
     return true;
   } else if (event.PermissionRequest) {
     const req = event.PermissionRequest;

@@ -1,12 +1,11 @@
-//! Desktop notification utilities using OSC escape sequences
+//! Desktop notification utilities using notify-rust
 //!
-//! Supports OSC 9 (iTerm2, `WezTerm`, Windows Terminal) and OSC 777 (kitty, foot).
-//! Works inside tmux with passthrough sequences.
+//! Cross-platform notifications via OS-native APIs:
+//! - macOS: NSUserNotificationCenter
+//! - Linux: D-Bus notification daemon
+//! - Windows: WinRT toast notifications
 //!
-//! # Limitations
-//! - tmux >= 3.3 requires `allow-passthrough on`.
-//! - nvim `:terminal` intercepts all OSC/DCS sequences; notifications silently
-//!   fail there and fall back to TUI info-bar.
+//! Falls back to OSC escape sequences if notify-rust fails.
 
 use std::io::{self, Write};
 
@@ -16,17 +15,11 @@ fn in_tmux() -> bool {
 }
 
 /// Check if running inside neovim (terminal, job, or child process).
-///
-/// nvim's `:terminal` (libvterm) swallows OSC/DCS sequences and never forwards
-/// them to the outer terminal, so OSC-based desktop notifications are impossible.
 fn in_nvim() -> bool {
     std::env::var("NVIM").is_ok() || std::env::var("NVIM_LISTEN_ADDRESS").is_ok()
 }
 
 /// Wrap a sequence for tmux DCS passthrough.
-///
-/// tmux intercepts OSC sequences, so we need to wrap them in DCS passthrough:
-/// `ESC P tmux ; <sequence> ESC \`
 fn tmux_wrap(seq: &str) -> String {
     format!("\x1bPtmux;\x1b{seq}\x1b\\")
 }
@@ -38,20 +31,15 @@ fn send_raw(seq: &str) -> io::Result<()> {
     stdout.flush()
 }
 
-/// Send OSC 9 notification (iTerm2, `WezTerm`, Windows Terminal)
-///
-/// Format: `ESC ] 9 ; <message> BEL`
+/// Send OSC 9 notification (iTerm2, WezTerm, Windows Terminal)
 fn notify_osc9_raw(message: &str) -> io::Result<()> {
     if in_nvim() {
-        // nvim :terminal swallows OSC sequences; rely on TUI info-bar instead.
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "OSC notifications blocked by nvim terminal",
         ));
     }
-
     let osc_seq = format!("\x1b]9;{message}\x07");
-
     if in_tmux() {
         send_raw(&tmux_wrap(&osc_seq))
     } else {
@@ -60,19 +48,14 @@ fn notify_osc9_raw(message: &str) -> io::Result<()> {
 }
 
 /// Send OSC 777 notification (kitty, foot)
-///
-/// Format: `ESC ] 777 ; notify ; <title> ; <message> BEL`
 fn notify_osc777_raw(title: &str, message: &str) -> io::Result<()> {
     if in_nvim() {
-        // nvim :terminal swallows OSC sequences; rely on TUI info-bar instead.
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "OSC notifications blocked by nvim terminal",
         ));
     }
-
     let osc_seq = format!("\x1b]777;notify;{title};{message}\x07");
-
     if in_tmux() {
         send_raw(&tmux_wrap(&osc_seq))
     } else {
@@ -80,33 +63,38 @@ fn notify_osc777_raw(title: &str, message: &str) -> io::Result<()> {
     }
 }
 
-/// Send desktop notification using best available OSC method
-///
-/// Tries OSC 777 first (kitty/foot), then OSC 9 (iTerm2/WezTerm/Windows Terminal)
-pub fn notify_osc(title: &str, message: &str) -> io::Result<()> {
-    // Try OSC 777 first (more features: title support)
+/// Fallback OSC notification
+fn notify_osc(title: &str, message: &str) -> io::Result<()> {
     if notify_osc777_raw(title, message).is_ok() {
         return Ok(());
     }
-
-    // Fallback to OSC 9 (combine title and message)
     let full_message = format!("{title}: {message}");
     notify_osc9_raw(&full_message)
 }
 
-/// Send OSC 9 notification (public API)
-pub fn notify_osc9(message: &str) -> io::Result<()> {
-    notify_osc9_raw(message)
-}
-
-/// Send OSC 777 notification (public API)
-pub fn notify_osc777(title: &str, message: &str) -> io::Result<()> {
-    notify_osc777_raw(title, message)
-}
-
-/// Send desktop notification via OSC
+/// Send desktop notification via OS-native APIs.
 ///
-/// Works over SSH and inside tmux (with `allow-passthrough on`).
+/// Uses notify-rust for cross-platform support (macOS NSUserNotificationCenter,
+/// Linux D-Bus, Windows WinRT). Falls back to OSC escape sequences if the
+/// native notification system is unavailable.
 pub fn send_desktop_notification(title: &str, message: &str) {
+    // Only send if desktop notifications are enabled
+    if !crate::feature_gates().desktop_notify {
+        return;
+    }
+
+    // Try native notification via notify-rust
+    match notify_rust::Notification::new()
+        .summary(title)
+        .body(message)
+        .show()
+    {
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!("notify-rust failed, falling back to OSC: {e}");
+        }
+    }
+
+    // Fallback to OSC for terminals that support it
     let _ = notify_osc(title, message);
 }

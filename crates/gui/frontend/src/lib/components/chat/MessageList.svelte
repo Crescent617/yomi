@@ -3,6 +3,7 @@
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SystemBubble from "./SystemBubble.svelte";
+  import ErrorBubble from "./ErrorBubble.svelte";
 
   const activeSession = $derived(getActiveSession());
   const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
@@ -73,6 +74,8 @@
         {@const isStreaming = activeSession.streaming && isLastMessage}
         {#if message.role === "user"}
           <UserBubble {message} />
+        {:else if message.error}
+          <ErrorBubble {message} />
         {:else if message.role === "system"}
           <SystemBubble {message} />
         {:else}

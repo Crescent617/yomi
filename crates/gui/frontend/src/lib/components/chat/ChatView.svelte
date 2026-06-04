@@ -112,9 +112,6 @@
       const newPaths = paths.filter((p) => !homeFileAttachments.includes(p));
       if (newPaths.length === 0) return;
       homeFileAttachments = [...homeFileAttachments, ...newPaths];
-      const sep = homeInput.length > 0 && !homeInput.endsWith("\n") ? "\n" : "";
-      const additions = newPaths.map((p) => `[File: ${p}]`).join("\n");
-      homeInput += `${sep}${additions}\n`;
     } catch (e) {
       console.error("Failed to attach files:", e);
     }
@@ -122,10 +119,6 @@
 
   function removeHomeFileAttachment(path: string) {
     homeFileAttachments = homeFileAttachments.filter((p) => p !== path);
-    const marker = `[File: ${path}]`;
-    const lines = homeInput.split("\n");
-    const filtered = lines.filter((line) => line.trim() !== marker);
-    homeInput = filtered.join("\n");
   }
 
   const selectedProject = $derived(
@@ -273,16 +266,19 @@
         }
       }
       // Send the home input
-      const text = homeInput.trim();
+      const baseText = homeInput.trim();
       homeInput = "";
+      const filePrefix = homeFileAttachments.length > 0
+        ? homeFileAttachments.map((p) => `[File: ${p}]`).join("\n") + "\n"
+        : "";
+      const text = filePrefix + baseText;
       homeFileAttachments = [];
       const hasImages = homeInlineImages.length > 0;
+      clearHomeInlineImages();
       if (hasImages) {
         const blocks = buildHomeContentBlocks(text);
-        clearHomeInlineImages();
         await api.sendMessageBlocks(id, blocks);
       } else {
-        clearHomeInlineImages();
         await api.sendMessage(id, text);
       }
     } catch (e: any) {

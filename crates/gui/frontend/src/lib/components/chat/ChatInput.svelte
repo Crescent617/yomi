@@ -336,9 +336,17 @@ async function handleSubmit() {
   if (!content.trim() || !sessionState.activeSessionId) return;
 
   const sessionId = sessionState.activeSessionId;
-  const text = content.trim();
+  const baseText = content.trim();
   content = "";
   autoResize();
+
+  // Append file attachments as prefix text
+  const filePrefix = fileAttachments.length > 0
+    ? fileAttachments.map((p) => `[File: ${p}]`).join("\n") + "\n"
+    : "";
+  const text = filePrefix + baseText;
+
+  fileAttachments = [];
 
   if (text.startsWith("/")) {
     await handleCommand(text);
@@ -439,9 +447,6 @@ async function attachFiles() {
     const newPaths = paths.filter((p) => !fileAttachments.includes(p));
     if (newPaths.length === 0) return;
     fileAttachments = [...fileAttachments, ...newPaths];
-    const sep = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
-    const additions = newPaths.map((p) => `[File: ${p}]`).join("\n");
-    content += `${sep}${additions}\n`;
     requestAnimationFrame(autoResize);
     textareaRef?.focus();
   } catch (e) {
@@ -451,11 +456,6 @@ async function attachFiles() {
 
 function removeFileAttachment(path: string) {
   fileAttachments = fileAttachments.filter((p) => p !== path);
-  const marker = `[File: ${path}]`;
-  const lines = content.split("\n");
-  const filtered = lines.filter((line) => line.trim() !== marker);
-  content = filtered.join("\n");
-  requestAnimationFrame(autoResize);
 }
 
 async function handlePaste(e: ClipboardEvent) {

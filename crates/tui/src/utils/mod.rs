@@ -5,7 +5,7 @@ pub mod notification;
 pub mod text;
 
 // Re-export notification functions
-pub use notification::{notify_osc, notify_osc777, notify_osc9, send_desktop_notification};
+pub use notification::send_desktop_notification;
 
 // Re-export from kernel for consistency
 pub use kernel::utils::{strs, tokens};
