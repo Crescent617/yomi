@@ -1,9 +1,9 @@
 //! Desktop notification utilities using notify-rust
 //!
 //! Cross-platform notifications via OS-native APIs:
-//! - macOS: NSUserNotificationCenter
+//! - macOS: `NSUserNotificationCenter`
 //! - Linux: D-Bus notification daemon
-//! - Windows: WinRT toast notifications
+//! - Windows: `WinRT` toast notifications
 //!
 //! Falls back to OSC escape sequences if notify-rust fails.
 
@@ -31,7 +31,7 @@ fn send_raw(seq: &str) -> io::Result<()> {
     stdout.flush()
 }
 
-/// Send OSC 9 notification (iTerm2, WezTerm, Windows Terminal)
+/// Send OSC 9 notification (iTerm2, `WezTerm`, Windows Terminal)
 fn notify_osc9_raw(message: &str) -> io::Result<()> {
     if in_nvim() {
         return Err(io::Error::new(
@@ -74,8 +74,8 @@ fn notify_osc(title: &str, message: &str) -> io::Result<()> {
 
 /// Send desktop notification via OS-native APIs.
 ///
-/// Uses notify-rust for cross-platform support (macOS NSUserNotificationCenter,
-/// Linux D-Bus, Windows WinRT). Falls back to OSC escape sequences if the
+/// Uses notify-rust for cross-platform support (macOS `NSUserNotificationCenter`,
+/// Linux D-Bus, Windows `WinRT`). Falls back to OSC escape sequences if the
 /// native notification system is unavailable.
 pub fn send_desktop_notification(title: &str, message: &str) {
     // Only send if desktop notifications are enabled

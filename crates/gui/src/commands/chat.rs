@@ -1,3 +1,4 @@
+use kernel::event::{Event, SystemEvent};
 use kernel::permissions::Level;
 use kernel::types::{ContentBlock, SessionId};
 use tauri::{AppHandle, Emitter, State};
@@ -5,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::GuiError;
 use crate::state::AppState;
 
-/// GUI-layer camelCase wrappers for Message / ContentBlock
+/// GUI-layer camelCase wrappers for Message / `ContentBlock`
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +36,7 @@ pub enum ContentBlockInfo {
     Text { text: String },
     Thinking { thinking: String, signature: Option<String> },
     RedactedThinking { data: String },
-    ImageUrl { imageUrl: ImageUrlInfo },
+    ImageUrl { image_url: ImageUrlInfo },
     Audio { audio: AudioDataInfo },
 }
 
@@ -59,7 +60,7 @@ pub enum ContentBlockInput {
     Text { text: String },
     Thinking { thinking: String, signature: Option<String> },
     RedactedThinking { data: String },
-    ImageUrl { imageUrl: ImageUrlInput },
+    ImageUrl { image_url: ImageUrlInput },
     Audio { audio: AudioDataInput },
 }
 
@@ -88,7 +89,7 @@ fn content_block_info(cb: &ContentBlock) -> ContentBlockInfo {
             ContentBlockInfo::RedactedThinking { data: data.clone() }
         }
         ContentBlock::ImageUrl { image_url } => ContentBlockInfo::ImageUrl {
-            imageUrl: ImageUrlInfo {
+            image_url: ImageUrlInfo {
                 url: image_url.url.clone(),
                 detail: image_url.detail.clone(),
             },
@@ -109,10 +110,10 @@ fn content_block_input(cb: ContentBlockInput) -> ContentBlock {
             ContentBlock::Thinking { thinking, signature }
         }
         ContentBlockInput::RedactedThinking { data } => ContentBlock::RedactedThinking { data },
-        ContentBlockInput::ImageUrl { imageUrl } => ContentBlock::ImageUrl {
+        ContentBlockInput::ImageUrl { image_url } => ContentBlock::ImageUrl {
             image_url: kernel::types::ImageUrl {
-                url: imageUrl.url,
-                detail: imageUrl.detail,
+                url: image_url.url,
+                detail: image_url.detail,
             },
         },
         ContentBlockInput::Audio { audio } => ContentBlock::Audio {
@@ -193,49 +194,6 @@ pub async fn send_message_blocks(
     Ok(())
 }
 
-/// Recursively convert JSON keys from snake_case / PascalCase to camelCase.
-/// Used for kernel Event serialization so the frontend receives camelCase keys.
-fn to_camel_case_json(v: serde_json::Value) -> serde_json::Value {
-    match v {
-        serde_json::Value::Object(map) => {
-            let mut new = serde_json::Map::new();
-            for (k, v) in map {
-                let key = if k.contains('_') {
-                    snake_to_camel(&k)
-                } else if k.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-                    let mut chars = k.chars();
-                    let first = chars.next().unwrap().to_ascii_lowercase();
-                    format!("{}{}", first, chars.as_str())
-                } else {
-                    k
-                };
-                new.insert(key, to_camel_case_json(v));
-            }
-            serde_json::Value::Object(new)
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(to_camel_case_json).collect())
-        }
-        other => other,
-    }
-}
-
-fn snake_to_camel(s: &str) -> String {
-    let mut result = String::new();
-    let mut uppercase = false;
-    for c in s.chars() {
-        if c == '_' {
-            uppercase = true;
-        } else if uppercase {
-            result.push(c.to_ascii_uppercase());
-            uppercase = false;
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
 #[tauri::command]
 pub async fn subscribe(
     state: State<'_, AppState>,
@@ -266,8 +224,20 @@ pub async fn subscribe(
     let tasks_cleanup = state.event_tasks.clone();
     let handle = tauri::async_runtime::spawn(async move {
         while let Ok(event) = rx.recv().await {
-            let event_value = serde_json::to_value(&event).unwrap_or_default();
-            let event_value = to_camel_case_json(event_value);
+            let mut event_value = serde_json::to_value(&event).unwrap_or_default();
+
+            // SystemEvent::Rewound contains raw Message objects which are still snake_case.
+            // Convert them to MessageInfo so the frontend receives camelCase.
+            if let Event::System(SystemEvent::Rewound { messages, .. }) = event {
+                if let Some(msgs) = event_value.pointer_mut("/system/rewound/messages").and_then(|v| v.as_array_mut()) {
+                    let converted: Vec<serde_json::Value> = messages
+                        .iter()
+                        .map(|m| serde_json::to_value(message_info(m)).unwrap_or_default())
+                        .collect();
+                    *msgs = converted;
+                }
+            }
+
             let payload = serde_json::json!({
                 "sessionId": sid,
                 "event": event_value,

@@ -48,5 +48,5 @@ cargo fmt -- --check
 
 ## GUI / Tauri IPC Pitfalls
 
-- **IPC parameter names must match Rust exactly.** Tauri deserializes the JSON argument object into the Rust command's named parameters by key. If the frontend wrapper uses camelCase (`jobId`) but the Rust parameter is snake_case (`job_id`), the field is silently ignored and the parameter receives its default value. Always verify API wrapper keys against the `#[tauri::command]` function signature.
+- **IPC 数据命名约定：前端收 camelCase，后端写 snake_case，serde 桥接。** 所有传给前端的事件和 API 响应都必须序列化为 camelCase，但 Rust 内部字段和参数保持 snake_case，用 `#[serde(rename_all = "camelCase")]` 自动转换。前端 TypeScript 类型必须与 serde 输出完全一致。内核核心数据结构（如 `Message`、`ContentBlock`）若同时用于数据库存储，不可全局加 `rename_all`，应通过 GUI 层 wrapper 类型做转换。
 - **Cron scheduler reload after mutations.** When adding/updating/deleting cron jobs through direct `CronStore` calls (bypassing `KernelServer`), explicitly call `scheduler.reload()` so the in-process scheduler re-loads its queue from the database.

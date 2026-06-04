@@ -400,16 +400,16 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
 // ── Kernel event types (deserialized from Rust Event enum) ─────────────────
 
 interface ChunkContent {
-  Text?: string;
-  Thinking?: { thinking?: string };
+  text?: string;
+  thinking?: { thinking?: string };
 }
 
 interface ModelChunk {
-  Chunk?: { content: ChunkContent };
-  ToolCallDelta?: { toolId: string; toolName: string; argumentsDelta?: string };
-  Completed?: Record<string, never>;
-  Error?: { message: string };
-  Compacting?: { active: boolean };
+  chunk?: { content: ChunkContent };
+  toolCallDelta?: { toolId: string; toolName: string; argumentsDelta?: string };
+  completed?: Record<string, never>;
+  error?: { message: string };
+  compacting?: { active: boolean };
 }
 
 interface ToolStart {
@@ -433,9 +433,9 @@ interface ToolProgress {
 }
 
 interface ToolEvent {
-  Start?: ToolStart;
-  End?: ToolEnd;
-  Progress?: ToolProgress;
+  start?: ToolStart;
+  end?: ToolEnd;
+  progress?: ToolProgress;
 }
 
 interface AgentLifecycleStopped {
@@ -451,14 +451,14 @@ interface AgentLifecycleStopped {
 }
 
 interface AgentLifecycleRunning {
-  state: "Running";
+  state: "running";
 }
 
 type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
-  Lifecycle?: AgentLifecycle;
-  Error?: { message?: string };
+  lifecycle?: AgentLifecycle;
+  error?: { message?: string };
   permissionRequest?: {
     reqId: string;
     toolName: string;
@@ -466,7 +466,7 @@ interface AgentEvent {
     toolLevel?: string;
     reason?: string;
   };
-  AskUser?: {
+  askUserQuestion?: {
     reqId: string;
     agentId: string;
     questions: AskQuestion[];
@@ -474,11 +474,11 @@ interface AgentEvent {
 }
 
 interface SystemEvent {
-  Connected?: Record<string, never>;
-  Disconnected?: Record<string, never>;
-  SessionSwitched?: { sessionId: string };
-  TitleUpdated?: { sessionId: string; title: string };
-  Rewound?: { sessionId: string; messages: RawMessage[] };
+  connected?: Record<string, never>;
+  disconnected?: Record<string, never>;
+  sessionSwitched?: { sessionId: string };
+  titleUpdated?: { sessionId: string; title: string };
+  rewound?: { sessionId: string; messages: RawMessage[] };
 }
 
 interface UserEvent {
@@ -537,8 +537,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     // Any chunk from the model means streaming is active
     if (!session.streaming) session.streaming = true;
 
-    if (content?.Text) {
-      const text = content.Text;
+    if (content?.text) {
+      const text = content.text;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.thinking && (!lastMsg.tools || lastMsg.tools.length === 0)) {
@@ -548,14 +548,14 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       }
       streamingMessages[session.id] = buf;
       return true;
-    } else if (content?.Thinking) {
+    } else if (content?.thinking) {
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content && (!lastMsg.tools || lastMsg.tools.length === 0)) {
         if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsedMs: 0 };
-        lastMsg.thinking.content += content.Thinking.thinking ?? "";
+        lastMsg.thinking.content += content.thinking.thinking ?? "";
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.Thinking.thinking ?? "", elapsedMs: 0 }, tools: [] });
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsedMs: 0 }, tools: [] });
       }
       streamingMessages[session.id] = buf;
       return true;
@@ -726,7 +726,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
 function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.lifecycle) {
     const state = event.lifecycle.state;
-    if (state === "Running" && !session.streaming) {
+    if (state === "running" && !session.streaming) {
       session.streaming = true;
       showNotification("AI is responding...", "info", 2000);
       return true;
@@ -815,8 +815,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     });
     showNotification(`${req.toolName} needs approval`, "warn", 5000);
     return true;
-  } else if (event.askUser) {
-    const req = event.askUser;
+  } else if (event.askUserQuestion) {
+    const req = event.askUserQuestion;
     session.pendingAskUser = {
       reqId: req.reqId,
       agentId: req.agentId,

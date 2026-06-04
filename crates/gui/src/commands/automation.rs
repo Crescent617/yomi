@@ -27,16 +27,16 @@ struct CronJobInfo {
 #[derive(serde::Serialize)]
 #[serde(tag = "ty", rename_all = "camelCase")]
 enum CronActionInfo {
-    SendMessage { sessionId: String, content: String },
-    Shell { command: String, workingDir: Option<String> },
+    SendMessage { session_id: String, content: String },
+    Shell { command: String, working_dir: Option<String> },
     Internal { endpoint: String, payload: serde_json::Value },
 }
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "ty", rename_all = "camelCase")]
 pub enum CronActionInput {
-    SendMessage { sessionId: String, content: String },
-    Shell { command: String, workingDir: Option<String> },
+    SendMessage { session_id: String, content: String },
+    Shell { command: String, working_dir: Option<String> },
     Internal { endpoint: String, payload: serde_json::Value },
 }
 
@@ -61,12 +61,12 @@ fn cron_job_info(job: &CronJob) -> CronJobInfo {
 fn cron_action_info(action: &CronAction) -> CronActionInfo {
     match action {
         CronAction::SendMessage { session_id, content } => CronActionInfo::SendMessage {
-            sessionId: session_id.clone(),
+            session_id: session_id.clone(),
             content: content.clone(),
         },
         CronAction::Shell { command, working_dir } => CronActionInfo::Shell {
             command: command.clone(),
-            workingDir: working_dir.clone(),
+            working_dir: working_dir.clone(),
         },
         CronAction::Internal { endpoint, payload } => CronActionInfo::Internal {
             endpoint: endpoint.clone(),
@@ -77,13 +77,13 @@ fn cron_action_info(action: &CronAction) -> CronActionInfo {
 
 fn cron_action_input(input: CronActionInput) -> CronAction {
     match input {
-        CronActionInput::SendMessage { sessionId, content } => CronAction::SendMessage {
-            session_id: sessionId,
+        CronActionInput::SendMessage { session_id, content } => CronAction::SendMessage {
+            session_id,
             content,
         },
-        CronActionInput::Shell { command, workingDir } => CronAction::Shell {
+        CronActionInput::Shell { command, working_dir } => CronAction::Shell {
             command,
-            working_dir: workingDir,
+            working_dir,
         },
         CronActionInput::Internal { endpoint, payload } => CronAction::Internal { endpoint, payload },
     }
