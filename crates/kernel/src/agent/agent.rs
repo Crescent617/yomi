@@ -938,7 +938,11 @@ impl Agent {
             steer_blocks.extend(blocks);
         }
         if !steer_blocks.is_empty() {
-            tracing::info!("Agent {} injecting {} steer block(s) before streaming", self.id, steer_blocks.len());
+            tracing::info!(
+                "Agent {} injecting {} steer block(s) before streaming",
+                self.id,
+                steer_blocks.len()
+            );
             let steer_msg = Message::with_blocks(Role::User, steer_blocks);
             let _ = self
                 .event_tx

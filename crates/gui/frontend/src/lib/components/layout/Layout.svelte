@@ -6,6 +6,7 @@
   import ChatView from "../chat/ChatView.svelte";
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
+  import AutomationPanel from "../automation/AutomationPanel.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
   import RightPanel from "./RightPanel.svelte";
 
@@ -95,6 +96,8 @@
       {/if}
     {:else if appState.activePanel === "usage"}
       <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />
+    {:else if appState.activePanel === "automation"}
+      <AutomationPanel onToggleLeftPanel={toggleMobileSidebar} />
     {:else if appState.activePanel === "config"}
       <ConfigEditor onToggleLeftPanel={toggleMobileSidebar} />
     {/if}

@@ -103,7 +103,9 @@ impl InputComponent {
                 if content.trim().is_empty() {
                     None
                 } else {
-                    Some(Msg::CommandSteer(vec![ContentBlock::Text { text: content }]))
+                    Some(Msg::CommandSteer(vec![ContentBlock::Text {
+                        text: content,
+                    }]))
                 }
             }
             _ => None, // Unknown command: treat as regular message

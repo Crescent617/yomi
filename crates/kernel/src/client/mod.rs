@@ -109,11 +109,7 @@ pub trait CoordinatorApi: Send + Sync {
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
-    async fn send_steer(
-        &self,
-        session_id: &SessionId,
-        content: Vec<ContentBlock>,
-    ) -> Result<()>;
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
 
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
@@ -306,11 +302,7 @@ impl CoordinatorApi for Coordinator {
         self.reload(config_file.as_ref(), &working_dir).await
     }
 
-    async fn send_steer(
-        &self,
-        session_id: &SessionId,
-        content: Vec<ContentBlock>,
-    ) -> Result<()> {
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
         self.send_steer(session_id, content).await
     }
 
@@ -1077,11 +1069,7 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(())
     }
 
-    async fn send_steer(
-        &self,
-        session_id: &SessionId,
-        content: Vec<ContentBlock>,
-    ) -> Result<()> {
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
             cmd: ControlCommand::Steer { content },

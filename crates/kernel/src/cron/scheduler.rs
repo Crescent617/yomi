@@ -145,13 +145,17 @@ impl CronScheduler {
         if let Ok(schedule) = CronSchedule::parse(&job.schedule) {
             let next = schedule.next_after(now);
             if let Some(next) = next {
-                if let Err(e) = self.store.update(
-                    job_id,
-                    &crate::cron::types::UpdateCronJobInput {
-                        next_run_at: Some(next),
-                        ..Default::default()
-                    },
-                ).await {
+                if let Err(e) = self
+                    .store
+                    .update(
+                        job_id,
+                        &crate::cron::types::UpdateCronJobInput {
+                            next_run_at: Some(next),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
                     tracing::warn!("Failed to update next_run_at for job {}: {}", job_id.0, e);
                 }
 
@@ -215,11 +219,7 @@ impl CronScheduler {
                         )
                         .await
                     {
-                        tracing::warn!(
-                            "Failed to update next_run_at for job {}: {}",
-                            job.id.0,
-                            e
-                        );
+                        tracing::warn!("Failed to update next_run_at for job {}: {}", job.id.0, e);
                     }
                     next
                 }
@@ -315,7 +315,7 @@ impl CronScheduler {
         jobs.remove(job_id);
     }
 
-/// 从队列中移除指定任务
+    /// 从队列中移除指定任务
     async fn remove_job(&self, job_id: &CronJobId) {
         let next_run = {
             let jobs = self.jobs.read().await;
@@ -384,7 +384,10 @@ mod tests {
             id: &CronJobId,
             input: &UpdateCronJobInput,
         ) -> Result<bool, CronError> {
-            self.updates.lock().unwrap().push((id.0.clone(), input.clone()));
+            self.updates
+                .lock()
+                .unwrap()
+                .push((id.0.clone(), input.clone()));
             let mut jobs = self.jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(&id.0) {
                 if let Some(name) = &input.name {
@@ -558,7 +561,11 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(
+            store.clone(),
+            tx,
+            CancellationToken::new(),
+        ));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -589,7 +596,11 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(
+            store.clone(),
+            tx,
+            CancellationToken::new(),
+        ));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -673,7 +684,11 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(
+            store.clone(),
+            tx,
+            CancellationToken::new(),
+        ));
 
         {
             let mut q = scheduler.queue.write().await;

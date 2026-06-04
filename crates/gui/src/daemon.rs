@@ -67,6 +67,8 @@ pub struct KernelInit {
     pub coordinator: Arc<kernel::Coordinator>,
     /// Shutdown token for the cron subsystem (only present when cron was started).
     pub cron_shutdown: Option<CancellationToken>,
+    /// Handle to the cron scheduler so callers can trigger reloads after mutations.
+    pub cron_scheduler: Option<Arc<kernel::cron::CronScheduler>>,
 }
 
 /// Initialise a `Coordinator` in-process without any IPC.
@@ -128,7 +130,7 @@ pub async fn init_coordinator(enable_cron: bool) -> Result<KernelInit> {
     );
 
     // Start cron subsystem only when requested (GUI in-process mode).
-    let cron_shutdown = if enable_cron {
+    let (cron_shutdown, cron_scheduler) = if enable_cron {
         coordinator
             .cron_store()
             .map(|store| {
@@ -152,15 +154,17 @@ pub async fn init_coordinator(enable_cron: bool) -> Result<KernelInit> {
                 );
                 tokio::spawn(async move { worker.run().await });
 
-                shutdown
+                (shutdown, scheduler)
             })
+            .map_or((None, None), |(s, sched)| (Some(s), Some(sched)))
     } else {
-        None
+        (None, None)
     };
 
     Ok(KernelInit {
         coordinator,
         cron_shutdown,
+        cron_scheduler,
     })
 }
 

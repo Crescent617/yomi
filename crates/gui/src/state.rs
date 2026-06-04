@@ -14,18 +14,20 @@ pub struct AppState {
     pub terminal_manager: Arc<Mutex<TerminalManager>>,
     /// Shutdown token for the cron subsystem (only present in GUI in-process mode).
     cron_shutdown: Option<CancellationToken>,
+    /// Direct access to cron store for automation CRUD commands.
+    /// The GUI is always in-process, so we can hold this directly.
+    pub cron_store: Option<Arc<dyn kernel::CronStore>>,
+    /// Handle to the in-process cron scheduler so mutations can trigger reloads.
+    pub cron_scheduler: Option<Arc<kernel::cron::CronScheduler>>,
 }
 
 impl AppState {
     /// Creates a new `AppState` backed by the given `CoordinatorApi`.
-    ///
-    /// DESIGN PRINCIPLE: The GUI layer never holds storage (e.g. `CronStore`)
-    /// directly. All operations — including cron jobs — go through the
-    /// `coordinator`, so the same code works for both local (in-process) and
-    /// remote (IPC) kernel connections.
     pub fn new(
         coordinator: Arc<dyn CoordinatorApi>,
         cron_shutdown: Option<CancellationToken>,
+        cron_store: Option<Arc<dyn kernel::CronStore>>,
+        cron_scheduler: Option<Arc<kernel::cron::CronScheduler>>,
     ) -> Self {
         Self {
             coordinator,
@@ -33,6 +35,8 @@ impl AppState {
             event_tasks: Arc::new(Mutex::new(HashMap::new())),
             terminal_manager: Arc::new(Mutex::new(TerminalManager::new())),
             cron_shutdown,
+            cron_store,
+            cron_scheduler,
         }
     }
 

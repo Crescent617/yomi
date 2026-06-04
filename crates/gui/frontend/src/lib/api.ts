@@ -302,3 +302,44 @@ export async function openInZed(path: string): Promise<void> {
 export async function openInEditor(path: string): Promise<void> {
   return invokeCmd("open_in_editor", { path });
 }
+
+// ─── Cron / Automation ──────────────────────────────────
+
+export async function listCronJobs(
+  status?: string,
+  limit = 100,
+): Promise<unknown[]> {
+  return invokeCmd("list_cron_jobs", { status, limit });
+}
+
+export async function createCronJob(input: {
+  name: string;
+  schedule: string;
+  action: Record<string, unknown>;
+  maxRuns?: number;
+  expiresAt?: string;
+}): Promise<string> {
+  return invokeCmd("create_cron_job", input);
+}
+
+export async function updateCronJob(
+  jobId: string,
+  input: {
+    name?: string;
+    schedule?: string;
+    action?: Record<string, unknown>;
+    status?: string;
+    maxRuns?: number;
+    expiresAt?: string;
+  },
+): Promise<void> {
+  return invokeCmd("update_cron_job", { jobId, ...input });
+}
+
+export async function deleteCronJob(jobId: string): Promise<void> {
+  return invokeCmd("delete_cron_job", { jobId });
+}
+
+export async function triggerCronJob(jobId: string): Promise<void> {
+  return invokeCmd("trigger_cron_job", { jobId });
+}

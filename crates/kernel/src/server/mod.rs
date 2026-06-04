@@ -2,9 +2,7 @@ use crate::agent::AgentConfig;
 use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::config::Config;
-use crate::cron::{
-    CronJobId,
-};
+use crate::cron::CronJobId;
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
 use crate::types::{KernelError, ProjectId, Result, SessionError, SessionId};
@@ -138,7 +136,6 @@ impl KernelServer {
             cron_shutdown,
         }
     }
-
 
     /// Reload agent configuration from disk.
     /// Returns `true` if reload succeeded, `false` if it fell back to defaults.
@@ -719,7 +716,11 @@ impl KernelServer {
                     expires_at,
                     ..Default::default()
                 };
-                match self.coordinator.update_cron_job(&CronJobId(job_id), input).await {
+                match self
+                    .coordinator
+                    .update_cron_job(&CronJobId(job_id), input)
+                    .await
+                {
                     // Return true/false so the client can distinguish "updated" from "not found".
                     Ok(updated) => {
                         if updated {

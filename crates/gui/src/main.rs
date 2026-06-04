@@ -21,8 +21,14 @@ pub fn run() {
         .setup(|app| {
             let init = tauri::async_runtime::block_on(daemon::init_coordinator(true))
                 .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
-            let coordinator: Arc<dyn kernel::client::CoordinatorApi> = init.coordinator;
-            app.manage(AppState::new(coordinator, init.cron_shutdown));
+            let coordinator: Arc<dyn kernel::client::CoordinatorApi> = init.coordinator.clone();
+            let cron_store = init.coordinator.cron_store();
+            app.manage(AppState::new(
+                coordinator,
+                init.cron_shutdown,
+                cron_store,
+                init.cron_scheduler,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -52,6 +58,11 @@ pub fn run() {
             commands::chat::rename_session,
             commands::chat::send_steer,
             commands::chat::stop_goal,
+            commands::automation::list_cron_jobs,
+            commands::automation::create_cron_job,
+            commands::automation::update_cron_job,
+            commands::automation::delete_cron_job,
+            commands::automation::trigger_cron_job,
             commands::checkpoint::get_checkpoints,
             commands::checkpoint::rewind,
             commands::skill::list_skills,

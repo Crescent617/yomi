@@ -977,10 +977,9 @@ impl Coordinator {
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
-        store
-            .list(status, limit)
-            .await
-            .map_err(|e| crate::types::KernelError::storage(format!("Failed to list cron jobs: {e}")))
+        store.list(status, limit).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to list cron jobs: {e}"))
+        })
     }
 
     /// Get a single cron job by ID.
@@ -1018,10 +1017,9 @@ impl Coordinator {
             input.next_run_at = schedule.next_after(Utc::now());
         }
 
-        store
-            .update(id, &input)
-            .await
-            .map_err(|e| crate::types::KernelError::storage(format!("Failed to update cron job: {e}")))
+        store.update(id, &input).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to update cron job: {e}"))
+        })
     }
 
     /// Delete a cron job.  Returns `true` if the job existed.
@@ -1032,10 +1030,9 @@ impl Coordinator {
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
-        store
-            .delete(id)
-            .await
-            .map_err(|e| crate::types::KernelError::storage(format!("Failed to delete cron job: {e}")))
+        store.delete(id).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to delete cron job: {e}"))
+        })
     }
 }
 
@@ -1055,11 +1052,15 @@ impl crate::cron::CronExecutor for Coordinator {
             } => {
                 let sid = SessionId(session_id.clone());
                 if self.get_session(&sid).is_none() {
-                    self.restore_session(&sid).await.map_err(CronError::Session)?;
+                    self.restore_session(&sid)
+                        .await
+                        .map_err(CronError::Session)?;
                 }
                 let text = render_template(content);
                 let blocks = vec![ContentBlock::Text { text }];
-                self.send_message(&sid, blocks).await.map_err(CronError::Session)?;
+                self.send_message(&sid, blocks)
+                    .await
+                    .map_err(CronError::Session)?;
             }
             CronAction::Shell {
                 command,

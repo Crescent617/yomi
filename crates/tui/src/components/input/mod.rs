@@ -28,7 +28,10 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),
     ("/reload", "Reload skills and hooks from disk"),
-    ("/steer", "<content> Inject message before next streaming turn"),
+    (
+        "/steer",
+        "<content> Inject message before next streaming turn",
+    ),
     ("/help", "Show keyboard shortcuts help"),
 ];
 
