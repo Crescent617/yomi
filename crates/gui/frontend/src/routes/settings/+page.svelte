@@ -78,7 +78,7 @@
       <div class="flex gap-2">
         {#each ["sm", "base", "lg"] as size (size)}
           <button
-            onclick={() => { settings.fontSize = size as any; persistSettings(settings); }}
+            onclick={() => { settings.fontSize = size; persistSettings(settings); }}
             class="px-3 py-2 rounded-lg border text-sm transition-colors {settings.fontSize === size
               ? 'border-primary bg-primary/10'
               : 'border-border hover:bg-secondary'}"

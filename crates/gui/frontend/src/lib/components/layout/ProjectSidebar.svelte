@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Plus, Folder, FolderOpen, MoreVertical, Pencil, Trash2, X, Copy } from "lucide-svelte";
+  import { Plus, Folder, FolderOpen, MoreVertical, Pencil, Trash2, Copy } from "lucide-svelte";
   import * as api from "../../api";
   import {
     sessionState,
@@ -106,8 +106,8 @@
       } else {
         sessionCursors.set(projectId, null);
       }
-    } catch (e: any) {
-      console.error("Failed to load sessions:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to load sessions:", e instanceof Error ? e.message : e);
       // Keep cursor as-is so user can retry. If this was the first load,
       // cursor is still undefined and expand will retry on next toggle.
     } finally {
@@ -126,8 +126,8 @@
       const cps = await api.getCheckpoints(id);
       const session = getSession(id);
       if (session) session.checkpoints = cps ?? [];
-    } catch (e: any) {
-      console.error("Failed to activate session:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to activate session:", e instanceof Error ? e.message : e);
       if (prev && prev !== id) {
         try { await api.subscribe(prev); setActiveSession(prev); } catch { setActiveSession(null); }
       } else {
@@ -143,8 +143,8 @@
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
       if (sessionState.activeSessionId === id) setActiveSession(null);
       showNotification("Session deleted", "success", 2000);
-    } catch (e: any) {
-      console.error("Failed to delete session:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to delete session:", e instanceof Error ? e.message : e);
       showNotification("Failed to delete session", "error", 3000);
     }
   }
@@ -159,8 +159,8 @@
       await api.deleteProject(id);
       projectState.projects = projectState.projects.filter((p) => p.id !== id);
       showNotification("Project deleted", "success", 2000);
-    } catch (e: any) {
-      console.error("Failed to delete project:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to delete project:", e instanceof Error ? e.message : e);
       showNotification("Failed to delete project", "error", 3000);
     }
   }
@@ -189,8 +189,8 @@
         permissionLevel: config?.auto_approve ?? "caution",
       });
       await activateSession(id);
-    } catch (e: any) {
-      console.error("Failed to create session:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to create session:", e instanceof Error ? e.message : e);
       showNotification("Failed to create session", "error", 3000);
     }
   }
@@ -203,8 +203,8 @@
       const p = projectState.projects.find((x) => x.id === projectId);
       if (p) p.name = name;
       showNotification("Project renamed", "success", 2000);
-    } catch (e: any) {
-      console.error("Failed to rename project:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to rename project:", e instanceof Error ? e.message : e);
       showNotification("Failed to rename project", "error", 3000);
     }
     renamingProjectId = null;
@@ -218,8 +218,8 @@
       const s = sessionState.sessions.find((x) => x.id === sessionId);
       if (s) s.alias = name;
       showNotification("Session renamed", "success", 2000);
-    } catch (e: any) {
-      console.error("Failed to rename session:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to rename session:", e instanceof Error ? e.message : e);
       showNotification("Failed to rename session", "error", 3000);
     }
     renamingSessionId = null;
@@ -260,9 +260,9 @@
 
   <div class="flex-1 min-h-0 overflow-y-auto py-1 {collapsed ? 'px-1' : 'px-2'}">
     {#if collapsed}
-      {#each projectState.projects as project}
+      {#each projectState.projects as project (project.id)}
         <div class="flex flex-col items-center gap-1">
-          {#each getSessions(project.id) as session}
+          {#each getSessions(project.id) as session (session.id)}
             <button
               class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id === sessionState.activeSessionId ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
               onclick={() => activateSession(session.id)}
@@ -274,7 +274,7 @@
         </div>
       {/each}
     {:else}
-      {#each projectState.projects as project}
+      {#each projectState.projects as project (project.id)}
         {@const isActive = getSession(sessionState.activeSessionId ?? "")?.projectId === project.id}
         <div class="rounded-md mb-0.5">
           <div class="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs transition-colors select-none {isActive ? 'text-foreground bg-secondary/60' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'}">
@@ -325,7 +325,7 @@
 
           {#if expanded[project.id]}
             <div class="ml-4 pl-2 border-l border-border/40 space-y-0.5 pb-1">
-              {#each getSessions(project.id) as session}
+              {#each getSessions(project.id) as session (session.id)}
                 <div class="group w-full flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-colors {session.id === sessionState.activeSessionId ? 'bg-primary/10 text-foreground' : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
                   onclick={() => activateSession(session.id)} role="button" tabindex="0"
                   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') activateSession(session.id); }}

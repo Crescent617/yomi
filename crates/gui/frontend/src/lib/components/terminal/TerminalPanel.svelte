@@ -53,7 +53,7 @@
     });
 
     // Receive PTY output
-    const l = await listen("terminal:data", (e: any) => {
+    const l = await listen("terminal:data", (e: { payload: { id: string; data: string } }) => {
       if (e.payload.id === id) {
         term.write(e.payload.data);
       }

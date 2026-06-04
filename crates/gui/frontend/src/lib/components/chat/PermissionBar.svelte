@@ -11,8 +11,8 @@
     try {
       await api.respondPermission(activeSession.id, reqId, true, remember);
       activeSession.pendingPermissions = activeSession.pendingPermissions.filter((p) => p.reqId !== reqId);
-    } catch (e: any) {
-      showNotification("Approval failed: " + (e?.message ?? ""), "error", 3000);
+    } catch (e: unknown) {
+      showNotification("Approval failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
     }
   }
 
@@ -21,8 +21,8 @@
     try {
       await api.respondPermission(activeSession.id, reqId, false, false);
       activeSession.pendingPermissions = activeSession.pendingPermissions.filter((p) => p.reqId !== reqId);
-    } catch (e: any) {
-      showNotification("Denial failed: " + (e?.message ?? ""), "error", 3000);
+    } catch (e: unknown) {
+      showNotification("Denial failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
     }
   }
 

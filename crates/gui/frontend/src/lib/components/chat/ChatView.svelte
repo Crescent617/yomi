@@ -10,25 +10,23 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import CheckpointTimeline from "./CheckpointTimeline.svelte";
   import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { levelLabel, levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
+  import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
   let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
 
   const activeSession = $derived(getActiveSession());
 
-  const hasNonChatTabs = $derived(activeSession?.tabs.some((t: any) => t.type !== "chat") ?? false);
+  const hasNonChatTabs = $derived(activeSession?.tabs.some((t: { type: string }) => t.type !== "chat") ?? false);
 
   let selectedProjectId = $state<string | "new">("");
   let newProjectPath = $state("");
   let newProjectName = $state("");
   let permissionLevel = $state("");
-  let permissionLevelReady = $state(false);
-  let listRef: any = $state(null);
+  let listRef: { scrollToBottom?: () => void } | null = $state(null);
   let isNearBottom = $state(true);
-  let chatInputRef: any = $state(null);
+  let chatInputRef: { setContent?: (text: string) => void } | null = $state(null);
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
@@ -121,11 +119,7 @@
     homeFileAttachments = homeFileAttachments.filter((p) => p !== path);
   }
 
-  const selectedProject = $derived(
-    selectedProjectId && selectedProjectId !== "new"
-      ? projectState.projects.find((p) => p.id === selectedProjectId)
-      : undefined
-  );
+
 
   function onNearBottomChange(near: boolean) {
     isNearBottom = near;
@@ -163,11 +157,9 @@
       } else {
         permissionLevel = "caution";
       }
-      permissionLevelReady = true;
     }).catch(() => {
       if (cancelled) return;
       permissionLevel = "caution";
-      permissionLevelReady = true;
     });
     return () => { cancelled = true; };
   });
@@ -211,9 +203,9 @@
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
         });
-      } catch (e: any) {
-        console.error("Failed to create project:", e?.message ?? e);
-        showNotification("Failed to create project: " + (e?.message ?? ""), "error", 5000);
+      } catch (e: unknown) {
+        console.error("Failed to create project:", e instanceof Error ? e.message : e);
+        showNotification("Failed to create project: " + (e instanceof Error ? e.message : ""), "error", 5000);
         submitting = false;
         return;
       }
@@ -268,10 +260,10 @@
       // Send the home input
       const baseText = homeInput.trim();
       homeInput = "";
-      const filePrefix = homeFileAttachments.length > 0
-        ? homeFileAttachments.map((p) => `[File: ${p}]`).join("\n") + "\n"
+      const fileSuffix = homeFileAttachments.length > 0
+        ? "\n" + homeFileAttachments.map((p) => `[File: ${p}]`).join("\n")
         : "";
-      const text = filePrefix + baseText;
+      const text = baseText + fileSuffix;
       homeFileAttachments = [];
       const hasImages = homeInlineImages.length > 0;
       clearHomeInlineImages();
@@ -281,9 +273,9 @@
       } else {
         await api.sendMessage(id, text);
       }
-    } catch (e: any) {
-      console.error("Failed to create session:", e?.message ?? e);
-      showNotification("Failed to create session: " + (e?.message ?? "Unknown error"), "error", 5000);
+    } catch (e: unknown) {
+      console.error("Failed to create session:", e instanceof Error ? e.message : e);
+      showNotification("Failed to create session: " + (e instanceof Error ? e.message : "Unknown error"), "error", 5000);
     } finally {
       submitting = false;
     }
@@ -327,8 +319,8 @@
       await api.renameSession(activeSession.id, name);
       activeSession.alias = name;
       showNotification("Session renamed", "success", 2000);
-    } catch (e: any) {
-      console.error("Failed to rename session:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to rename session:", e instanceof Error ? e.message : e);
       showNotification("Failed to rename session", "error", 3000);
     } finally {
       editingTitle = false;
@@ -383,7 +375,6 @@
           autofocus
         />
       {:else}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <span
           class="font-medium truncate cursor-pointer hover:text-primary transition-colors"
           title={activeSession.alias ?? activeSession.id.slice(-8)}
@@ -637,18 +628,6 @@
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <div class="flex-1 relative min-h-0">
-            <CheckpointTimeline
-              checkpoints={activeSession.checkpoints ?? []}
-              onRewind={(id) => {
-                if (!activeSession) return;
-                api.rewind(activeSession.id, id).then(() => {
-                  showNotification("Rewinding to checkpoint...", "info", 3000);
-                }).catch((e: any) => {
-                  console.error("Failed to rewind:", e?.message ?? e);
-                  showNotification("Failed to rewind", "error", 3000);
-                });
-              }}
-            />
             <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
           </div>
           <div class="shrink-0 w-full">
@@ -657,8 +636,8 @@
                 if (!activeSession) return;
                 api.sendSteer(activeSession.id, blocks).then(() => {
                   showNotification("Steer message queued for next turn", "info", 3000);
-                }).catch((e: any) => {
-                  console.error("Failed to send steer:", e?.message ?? e);
+                }).catch((e: unknown) => {
+                  console.error("Failed to send steer:", e instanceof Error ? e.message : e);
                   showNotification("Failed to send steer", "error", 3000);
                 });
               }} />
@@ -681,7 +660,7 @@
         </div>
       </div>
     {:else if activeSession}
-      {@const activeTab = activeSession.tabs.find((t: any) => t.id === activeSession.activeTabId)}
+      {@const activeTab = activeSession.tabs.find((t: { id: string }) => t.id === activeSession.activeTabId)}
       {#if activeTab?.type === "preview" && activeTab.entry}
         <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">

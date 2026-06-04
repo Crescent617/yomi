@@ -41,8 +41,8 @@
       activeSession.pendingAskUser = null;
       selections = {};
       customInputs = {};
-    } catch (e: any) {
-      showNotification("Response failed: " + (e?.message ?? ""), "error", 3000);
+    } catch (e: unknown) {
+      showNotification("Response failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
     }
   }
 

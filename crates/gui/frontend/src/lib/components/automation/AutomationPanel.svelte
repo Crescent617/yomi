@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Timer, Plus, Play, Pause, Trash2, ChevronRight, AlertTriangle, CheckCircle2, XCircle } from "lucide-svelte";
-  import { automationStore, type CronJob } from "../../automation.svelte";
+  import { automationStore } from "../../automation.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
 
   interface Props {

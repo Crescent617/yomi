@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Loader2, Square, Clock, Paperclip, Image, X } from "lucide-svelte";
+import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Square, Clock, Paperclip, X } from "lucide-svelte";
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
@@ -216,7 +216,6 @@ async function handleCommand(text: string) {
   const sessionId = sessionState.activeSessionId;
   if (!sessionId) return;
 
-  const lower = text.toLowerCase();
   const parts = text.split(/\s+/);
   const cmd = parts[0].toLowerCase();
 
@@ -232,13 +231,13 @@ async function handleCommand(text: string) {
         break;
       case "/undo":
         {
-          const checkpoints = await api.getCheckpoints(sessionId) as any[];
+          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ sequence?: number; message_id?: string }>;
           if (!Array.isArray(checkpoints) || checkpoints.length < 2) {
             showNotification("No checkpoint to undo", "error", 3000);
             return;
           }
-          const sorted = [...checkpoints].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0));
-          const target = sorted[sorted.length - 2] as any;
+          const sorted = [...checkpoints].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+          const target = sorted[sorted.length - 2];
           if (!target?.message_id) {
             showNotification("No checkpoint to undo", "error", 3000);
             return;
@@ -249,13 +248,13 @@ async function handleCommand(text: string) {
         break;
       case "/rewind":
         {
-          const checkpoints = await api.getCheckpoints(sessionId) as any[];
+          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ sequence?: number; message_id?: string }>;
           if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
             showNotification("No checkpoints to rewind", "error", 3000);
             return;
           }
-          const sorted = [...checkpoints].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0));
-          const target = sorted[sorted.length - 1] as any;
+          const sorted = [...checkpoints].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+          const target = sorted[sorted.length - 1];
           if (!target?.message_id) {
             showNotification("No checkpoint to rewind", "error", 3000);
             return;
@@ -326,9 +325,10 @@ async function handleCommand(text: string) {
         // Unknown command — treat as normal message
         await api.sendMessage(sessionId, text);
     }
-  } catch (e: any) {
-    console.error(`Failed to execute command ${cmd}:`, e?.message ?? e);
-    showNotification(`Command failed: ${e?.message ?? ""}`, "error", 5000);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "";
+    console.error(`Failed to execute command ${cmd}:`, msg);
+    showNotification(`Command failed: ${msg}`, "error", 5000);
   }
 }
 
@@ -340,11 +340,11 @@ async function handleSubmit() {
   content = "";
   autoResize();
 
-  // Append file attachments as prefix text
-  const filePrefix = fileAttachments.length > 0
-    ? fileAttachments.map((p) => `[File: ${p}]`).join("\n") + "\n"
+  // Append file attachments as suffix text
+  const fileSuffix = fileAttachments.length > 0
+    ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
     : "";
-  const text = filePrefix + baseText;
+  const text = baseText + fileSuffix;
 
   fileAttachments = [];
 
@@ -356,15 +356,15 @@ async function handleSubmit() {
       const blocks = buildContentBlocks(text);
       await api.sendMessageBlocks(sessionId, blocks);
       clearInlineImages();
-    } catch (e: any) {
-      console.error("Failed to send message with images:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to send message with images:", e instanceof Error ? e.message : e);
       showNotification("Failed to send message", "error", 3000);
     }
   } else {
     try {
       await api.sendMessage(sessionId, text);
-    } catch (e: any) {
-      console.error("Failed to send message:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("Failed to send message:", e instanceof Error ? e.message : e);
     }
   }
 }
@@ -373,8 +373,8 @@ async function handleCancel() {
   if (!sessionState.activeSessionId) return;
   try {
     await api.cancelSession(sessionState.activeSessionId);
-  } catch (e: any) {
-    console.error("Failed to cancel:", e?.message ?? e);
+  } catch (e: unknown) {
+    console.error("Failed to cancel:", e instanceof Error ? e.message : e);
   }
 }
 
@@ -387,8 +387,8 @@ async function handlePermissionSet(level: string) {
     await api.setPermissionLevel(sessionId, level);
     session.permissionLevel = level;
     showNotification(`Permission level: ${level}`, "info", 2000);
-  } catch (e: any) {
-    console.error("Failed to set permission level:", e?.message ?? e);
+  } catch (e: unknown) {
+    console.error("Failed to set permission level:", e instanceof Error ? e.message : e);
     showNotification("Failed to set permission level", "error", 3000);
   }
 }
@@ -462,10 +462,8 @@ async function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items;
   if (!items) return;
 
-  let hasImage = false;
   for (const item of items) {
     if (item.type.startsWith("image/")) {
-      hasImage = true;
       e.preventDefault();
       const file = item.getAsFile();
       if (file) {
@@ -686,7 +684,7 @@ function getSession(sessionId: string) {
 }
 </script>
 
-<div class="border-t border-border p-3 relative">
+<div class="border-t border-border relative">
   <!-- Command completion dropdown -->
   {#if showCommands && filteredCommands.length > 0}
     <div bind:this={commandListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
@@ -868,7 +866,7 @@ function getSession(sessionId: string) {
       </div>
     {/if}
 
-    <div class="flex items-center mt-1.5 px-1">
+    <div class="flex items-center">
       <button
         type="button"
         onclick={attachFiles}

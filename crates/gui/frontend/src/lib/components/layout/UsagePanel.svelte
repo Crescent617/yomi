@@ -213,7 +213,7 @@
         borderColor: dark ? "#334155" : "#e2e8f0",
         textStyle: { color: dark ? "#f1f5f9" : "#0f172a", fontSize: 12 },
         extraCssText: "border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); z-index: 9999;",
-        formatter: (params: any) => {
+        formatter: (params: { value: [string, number] }) => {
           const day = data.find((d) => d.date === params.value[0]);
           if (!day) return params.value[0];
           const total = day.prompt_tokens + day.cached_tokens + day.completion_tokens;
@@ -361,8 +361,8 @@
       const d = await api.getDailyUsage(DAYS_RANGE);
       console.log("[UsagePanel] daily ok", d?.length ?? 0, "days");
       daily = d ?? [];
-    } catch (e: any) {
-      console.error("[UsagePanel] loadData failed:", e?.message ?? e);
+    } catch (e: unknown) {
+      console.error("[UsagePanel] loadData failed:", e instanceof Error ? e.message : e);
     } finally {
       loading = false;
       console.log("[UsagePanel] loadData done, loading=false");
@@ -575,7 +575,7 @@
                       </td>
                       <td class="px-4 py-2">
                         <div class="flex flex-wrap gap-1">
-                          {#each day.models as model}
+                          {#each day.models as model (model)}
                             <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-secondary text-secondary-foreground">{model}</span>
                           {/each}
                         </div>

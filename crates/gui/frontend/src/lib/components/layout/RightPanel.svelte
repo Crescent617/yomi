@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { ListChecks, FileDiff as FileDiffIcon } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import * as api from "../../api";

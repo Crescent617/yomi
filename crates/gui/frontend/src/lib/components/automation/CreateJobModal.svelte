@@ -185,7 +185,7 @@
             rows="3"
             class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
           ></textarea>
-          <p class="text-xs text-muted-foreground mt-1">Supports {{date}}, {{time}}</p>
+          <p class="text-xs text-muted-foreground mt-1">Supports {'{{date}}'}, {'{{time}}'}</p>
         </div>
       {:else}
         <div>

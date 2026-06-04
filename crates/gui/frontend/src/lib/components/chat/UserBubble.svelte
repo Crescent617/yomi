@@ -54,7 +54,7 @@
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
-        {#each message.contentBlocks ?? [] as block}
+        {#each message.contentBlocks ?? [] as block (block.type + (block.image_url?.url ?? block.text ?? ''))}
           {#if block.type === "image_url" && block.image_url?.url}
             <img
               src={block.image_url.url}

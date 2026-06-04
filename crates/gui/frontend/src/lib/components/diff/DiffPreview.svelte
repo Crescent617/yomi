@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { FileDiff } from "../../diff/types";
-  import { filterAppliedHunks } from "../../diff/engine";
   import { X } from "lucide-svelte";
 
   let {
@@ -24,7 +23,7 @@
 
   // Reset state when a new diff set arrives.
   $effect(() => {
-    diffsProp; // reactive dependency
+    void diffsProp; // reactive dependency
     appliedMap = {};
     activeFileIndex = 0;
   });
@@ -77,7 +76,6 @@
 </script>
 
 {#if open}
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
   onclick={(e) => { if (e.target === e.currentTarget) close(); }}

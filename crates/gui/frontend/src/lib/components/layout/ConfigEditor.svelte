@@ -29,7 +29,7 @@
       filePath = toml.path;
       fullConfig = config?.full_config ?? "";
       dirty = false;
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Failed to load config:", e);
       showNotification("Failed to load config", "error", 3000);
     } finally {
@@ -43,9 +43,9 @@
       await api.reloadConfig();
       showNotification("Config reloaded", "success", 2000);
       await load();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Failed to reload config:", e);
-      showNotification(`Failed to reload: ${e?.message ?? ""}`, "error", 4000);
+      showNotification(`Failed to reload: ${e instanceof Error ? e.message : ""}`, "error", 4000);
     } finally {
       loading = false;
     }
@@ -63,9 +63,9 @@
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
       fullConfig = c?.full_config ?? "";
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Failed to save config:", e);
-      showNotification(`Failed to save: ${e?.message ?? ""}`, "error", 4000);
+      showNotification(`Failed to save: ${e instanceof Error ? e.message : ""}`, "error", 4000);
     } finally {
       saving = false;
     }
