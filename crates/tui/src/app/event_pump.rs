@@ -40,11 +40,13 @@ impl EventPump {
             let sid = SessionId(session_id);
             let mut current_rx = Some(initial_rx);
 
-            // Notify TUI that the initial connection is ready.
-            if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
-                session_id: sid.clone(),
-            })) {
-                tracing::warn!("EventPump failed to send initial connected notification: {e}");
+            // Notify TUI that the initial connection is ready (only in daemon mode).
+            if crate::daemon_mode() {
+                if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
+                    session_id: sid.clone(),
+                })) {
+                    tracing::warn!("EventPump failed to send initial connected notification: {e}");
+                }
             }
 
             'outer: loop {

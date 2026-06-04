@@ -158,6 +158,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     // Initialize global config for TUI
     tui::init_config(config.clone(), feature_gates);
+    tui::init_daemon_mode(!args.no_daemon);
 
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),

@@ -102,7 +102,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds. For synchronous mode (default), default is 60s. For background mode, run forever if not specified.",
+                    "description": "Timeout in seconds. For synchronous mode (default), default is 300s. For background mode, run forever if not specified.",
                     "minimum": 1
                 },
                 "background": {
@@ -163,12 +163,12 @@ impl ShellTool {
             .kill_on_drop(true)
             .output();
 
-        let output = match timeout(Duration::from_secs(timeout_secs.unwrap_or(60)), child).await {
+        let output = match timeout(Duration::from_secs(timeout_secs.unwrap_or(300)), child).await {
             Ok(result) => result?,
             Err(_) => {
                 tracing::warn!(
                     "Bash command timed out after {}s: {}",
-                    timeout_secs.unwrap_or(60),
+                    timeout_secs.unwrap_or(300),
                     command
                 );
                 return Ok(ToolOutput::error("Command timed out"));

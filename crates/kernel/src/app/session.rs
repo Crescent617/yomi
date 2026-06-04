@@ -274,11 +274,12 @@ impl Session {
         }
     }
 
-    /// Update session title from user message content (first 20 chars of first line).
+    /// Update session title from user message content (trim, collapse whitespace, first 20 chars).
     async fn update_title(&self, blocks: &[crate::types::ContentBlock]) {
         if let Some(session_store) = &self.session_store {
             let text: String = blocks.iter().filter_map(|b| b.as_text()).take(1).collect();
-            let title = text.chars().take(20).collect::<String>();
+            let title = text.trim().split_whitespace().collect::<Vec<_>>().join(" ");
+            let title = title.chars().take(20).collect::<String>();
             if !title.is_empty() {
                 match session_store.update_title(&self.id, &title).await {
                     Ok(()) => {
