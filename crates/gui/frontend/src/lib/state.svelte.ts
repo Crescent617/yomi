@@ -1,6 +1,7 @@
 import * as api from "./api";
 import type { TaggedContentBlock } from "./types";
 import { sendNotification } from "@tauri-apps/plugin-notification";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export interface TabEntry {
   name: string;
@@ -132,8 +133,23 @@ export function showNotification(
   pushToast(text, typeMap[level] ?? "info", durationMs);
 }
 
-export function sendDesktopNotification(title: string, body: string) {
+export function sendDesktopNotification(title: string, body: string, sessionId?: string) {
   try {
+    if (sessionId && typeof Notification !== "undefined") {
+      try {
+        const n = new Notification(title, { body, tag: sessionId });
+        n.onclick = () => {
+          getCurrentWindow().setFocus().catch(() => {});
+          appState.activePanel = "chat";
+          if (getSession(sessionId)) {
+            setActiveSession(sessionId);
+          }
+        };
+        return;
+      } catch (webErr) {
+        console.warn("Web Notification API failed, falling back to plugin:", webErr);
+      }
+    }
     sendNotification({ title, body });
   } catch (e) {
     console.error("Failed to send desktop notification:", e);
@@ -770,7 +786,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             error: true,
           }];
           showNotification(msg, "warning", 3000);
-          sendDesktopNotification("Yomi", msg);
+          sendDesktopNotification("Yomi", msg, session.id);
           return true;
         } else if ("failed" in stopReason) {
           const errorMsg = "Task failed: " + (stopReason.failed.error ?? "Unknown");
@@ -783,16 +799,16 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             error: true,
           }];
           showNotification(errorMsg, "error", 5000);
-          sendDesktopNotification("Yomi", errorMsg);
+          sendDesktopNotification("Yomi", errorMsg, session.id);
           return true;
         } else if ("maxIterations" in stopReason) {
           const msg = `Max iterations reached (${stopReason.maxIterations.reached})`;
           showNotification(msg, "warning", 5000);
-          sendDesktopNotification("Yomi", msg);
+          sendDesktopNotification("Yomi", msg, session.id);
           return true;
         }
         // Completed: normal end
-        sendDesktopNotification("Yomi", "Task completed");
+        sendDesktopNotification("Yomi", "Task completed", session.id);
         return true;
       }
     }
@@ -813,6 +829,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       error: true,
     }];
     showNotification(errorMsg, "error", 5000);
+    sendDesktopNotification("Yomi", errorMsg, session.id);
     return true;
   } else if (event.permissionRequest) {
     const req = event.permissionRequest;

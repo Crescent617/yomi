@@ -81,7 +81,7 @@
             id: s.id,
             projectPath: s.projectPath ?? "",
             projectId: s.projectId,
-            alias: s.title,
+            alias: s.title ?? "Untitled",
             messages: [],
             streaming: false,
             unread: 0,
@@ -95,7 +95,7 @@
             permissionLevel: s.autoApproveLevel ?? "caution",
           });
         } else {
-          existing.alias = s.title ?? existing.alias;
+          existing.alias = s.title ?? existing.alias ?? "Untitled";
           existing.permissionLevel = s.autoApproveLevel ?? existing.permissionLevel;
           existing.updatedAt = s.endedAt ?? s.createdAt ?? existing.updatedAt;
         }
@@ -175,7 +175,7 @@
         id,
         projectPath: project.dir,
         projectId,
-        alias: undefined,
+        alias: "Untitled",
         messages: [],
         streaming: false,
         unread: 0,
@@ -266,9 +266,9 @@
             <button
               class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id === sessionState.activeSessionId ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
               onclick={() => activateSession(session.id)}
-              title="{(session.alias ?? formatShortId(session.id)).slice(0, 2)}"
+              title="{(session.alias ?? "Untitled").slice(0, 2)}"
             >
-              {(session.alias ?? formatShortId(session.id)).slice(0, 2).toUpperCase()}
+              {(session.alias ?? "Untitled").slice(0, 2).toUpperCase()}
             </button>
           {/each}
         </div>
@@ -340,8 +340,8 @@
                       autofocus
                     />
                   {:else}
-                    <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? formatShortId(session.id)}>
-                      {session.alias ?? formatShortId(session.id)}
+                    <span class="flex-1 truncate text-sm font-medium" title={session.alias ?? "Untitled"}>
+                      {session.alias ?? "Untitled"}
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
@@ -354,7 +354,7 @@
                       </button>
                       {#if showSessionMenu === session.id}
                         <div class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1">
-                          <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={(e: Event) => { e.stopPropagation(); renamingSessionId = session.id; renameValue = session.alias ?? formatShortId(session.id); showSessionMenu = null; }}>
+                          <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={(e: Event) => { e.stopPropagation(); renamingSessionId = session.id; renameValue = session.alias ?? "Untitled"; showSessionMenu = null; }}>
                             <Pencil size={12} /> Rename
                           </button>
                           <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={(e: Event) => { e.stopPropagation(); copySessionId(session.id); showSessionMenu = null; }}>

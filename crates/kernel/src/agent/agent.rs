@@ -271,9 +271,12 @@ impl Agent {
     /// Persist a single message to storage
     async fn persist_message(&self, message: &Message) {
         if let Some(store) = &self.shared.message_store {
-            let _ = store
+            if let Err(e) = store
                 .append(&self.session_id, std::slice::from_ref(message))
-                .await;
+                .await
+            {
+                tracing::warn!("Failed to persist message: {}", e);
+            }
         }
     }
 
@@ -301,9 +304,9 @@ impl Agent {
                     self.id
                 );
                 // Notify TUI that max iterations reached
-                let _ = self
+                if let Err(e) = self
                     .event_tx
-                    .send(Event::Agent(AgentEvent::Lifecycle {
+                    .try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
                         state: AgentStatus::Stopped {
                             reason: StopReason::MaxIterations {
@@ -311,7 +314,9 @@ impl Agent {
                             },
                         },
                     }))
-                    .await;
+                {
+                    tracing::warn!("Failed to send max iterations event: {}", e);
+                }
                 self.context.transition_to(AgentState::Idle);
                 continue;
             }
@@ -333,13 +338,15 @@ impl Agent {
                     self.start_turn_if_needed().await;
                     tracing::debug!("Agent {} starting streaming", self.id);
                     // Notify UI that streaming has started
-                    let _ = self
+                    if let Err(e) = self
                         .event_tx
-                        .send(Event::Agent(AgentEvent::Lifecycle {
+                        .try_send(Event::Agent(AgentEvent::Lifecycle {
                             agent_id: self.id.clone(),
                             state: AgentStatus::Running,
                         }))
-                        .await;
+                    {
+                        tracing::warn!("Failed to send streaming start event: {}", e);
+                    }
                     self.handle_streaming_with_retry().await
                 }
                 AgentState::ExecutingTool => {
@@ -522,12 +529,16 @@ impl Agent {
             self.goal_ctx = None;
         }
         if let Some(turn) = self.current_turn.take() {
-            let _ = turn.cancel().await;
+            if let Err(e) = turn.cancel().await {
+                tracing::warn!("Failed to cancel turn on rewind: {}", e);
+            }
         }
 
         let truncated = self.truncate_at(&message_id);
         if !truncated {
-            let _ = result_tx.send(Err(format!("Message {} not found", message_id.as_str())));
+            if let Err(e) = result_tx.send(Err(format!("Message {} not found", message_id.as_str()))) {
+                tracing::warn!("Failed to send rewind error result: {:?}", e);
+            }
             return Ok(());
         }
 
@@ -540,7 +551,9 @@ impl Agent {
         .await;
 
         if let Err(e) = &result {
-            let _ = result_tx.send(Err(e.to_string()));
+            if let Err(e) = result_tx.send(Err(e.to_string())) {
+                tracing::warn!("Failed to send rewind error result: {:?}", e);
+            }
             return Ok(());
         }
 
@@ -560,14 +573,19 @@ impl Agent {
         }
 
         let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
-        let _ = self
+        if let Err(e) = self
             .event_tx
             .try_send(Event::System(crate::event::SystemEvent::Rewound {
                 session_id: crate::types::SessionId(self.session_id.clone()),
                 messages: updated_messages,
-            }));
+            }))
+        {
+            tracing::warn!("Failed to send rewound event: {}", e);
+        }
 
-        let _ = result_tx.send(Ok(()));
+        if let Err(e) = result_tx.send(Ok(())) {
+            tracing::warn!("Failed to send rewind success result: {:?}", e);
+        }
         Ok(())
     }
 
@@ -611,7 +629,9 @@ impl Agent {
             Some(AgentInput::Shutdown) => {
                 tracing::info!("Agent {} received close signal", self.id);
                 if let Some(turn) = self.current_turn.take() {
-                    let _ = turn.cancel().await;
+                    if let Err(e) = turn.cancel().await {
+                        tracing::warn!("Failed to cancel turn on shutdown: {}", e);
+                    }
                 }
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
@@ -708,7 +728,9 @@ impl Agent {
                     return Ok(());
                 }
                 AgentInput::Compact => {
-                    let _ = self.force_full_compact().await;
+                    if let Err(e) = self.force_full_compact().await {
+                        tracing::warn!("Agent {} force_full_compact in goal idle failed: {}", self.id, e);
+                    }
                 }
                 AgentInput::Rewind {
                     message_id,
@@ -745,9 +767,9 @@ impl Agent {
             tracing::warn!("Agent {} detected doom loop, stopping goal", self.id);
             goal.mark_fail(crate::goal::GoalFailureReason::DoomLoop)
                 .await;
-            let _ = self
+            if let Err(e) = self
                 .event_tx
-                .send(Event::Agent(AgentEvent::Lifecycle {
+                .try_send(Event::Agent(AgentEvent::Lifecycle {
                     agent_id: self.id.clone(),
                     state: AgentStatus::Stopped {
                         reason: StopReason::Failed {
@@ -755,7 +777,9 @@ impl Agent {
                         },
                     },
                 }))
-                .await;
+            {
+                tracing::warn!("Failed to send doom loop event: {}", e);
+            }
             self.goal_ctx = None;
             return Ok(());
         }
@@ -769,9 +793,9 @@ impl Agent {
                 );
                 goal.mark_fail(crate::goal::GoalFailureReason::MaxIterations)
                     .await;
-                let _ = self
+                if let Err(e) = self
                     .event_tx
-                    .send(Event::Agent(AgentEvent::Lifecycle {
+                    .try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
                         state: AgentStatus::Stopped {
                             reason: StopReason::MaxIterations {
@@ -779,7 +803,9 @@ impl Agent {
                             },
                         },
                     }))
-                    .await;
+                {
+                    tracing::warn!("Failed to send goal max iterations event: {}", e);
+                }
                 self.goal_ctx = None;
                 return Ok(());
             }
@@ -867,13 +893,15 @@ impl Agent {
 
         // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
         // We only persist the message here, the turn object is created later
-        let _ = self
+        if let Err(e) = self
             .event_tx
-            .send(Event::User(crate::event::UserEvent::Message {
+            .try_send(Event::User(crate::event::UserEvent::Message {
                 message_id: msg.id.clone(),
                 content: msg.content.clone(),
             }))
-            .await;
+        {
+            tracing::warn!("Failed to send user message event: {}", e);
+        }
         self.persist_message(&msg).await;
         self.message_buffer.push(msg);
         self.context.transition_to(AgentState::Streaming);
@@ -923,14 +951,16 @@ impl Agent {
         );
 
         let assistant_msg_id = MessageId::new();
-        let _ = self
+        if let Err(e) = self
             .event_tx
-            .send(Event::Model(ModelEvent::Request {
+            .try_send(Event::Model(ModelEvent::Request {
                 agent_id: self.id.clone(),
                 message_id: assistant_msg_id.clone(),
                 message_count: self.message_buffer.len(),
             }))
-            .await;
+        {
+            tracing::warn!("Failed to send model request event: {}", e);
+        }
 
         // Drain pending steer messages and inject them as a user message before streaming
         let mut steer_blocks: Vec<ContentBlock> = Vec::new();
@@ -944,13 +974,15 @@ impl Agent {
                 steer_blocks.len()
             );
             let steer_msg = Message::with_blocks(Role::User, steer_blocks);
-            let _ = self
+            if let Err(e) = self
                 .event_tx
-                .send(Event::User(crate::event::UserEvent::Message {
+                .try_send(Event::User(crate::event::UserEvent::Message {
                     message_id: steer_msg.id.clone(),
                     content: steer_msg.content.clone(),
                 }))
-                .await;
+            {
+                tracing::warn!("Failed to send steer message event: {}", e);
+            }
             self.persist_message(&steer_msg).await;
             self.message_buffer.push(steer_msg);
         }
@@ -1417,16 +1449,18 @@ impl Agent {
         for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let message_id = tool_message_ids[&call.id].clone();
-            let _ = self
+            if let Err(e) = self
                 .event_tx
-                .send(Event::Tool(ToolEvent::Start {
+                .try_send(Event::Tool(ToolEvent::Start {
                     agent_id: self.id.clone(),
                     message_id,
                     tool_id: call.id.clone(),
                     tool_name: call.name.clone(),
                     arguments: args_str,
                 }))
-                .await;
+            {
+                tracing::warn!("Failed to send tool start event: {}", e);
+            }
         }
 
         // Check permissions for each tool call
@@ -1526,7 +1560,9 @@ impl Agent {
             if self.cancel_token.is_cancelled() {
                 return self.handle_cancel("tool execution").await;
             }
-            let _ = self.event_tx.send(Event::Tool(result.event)).await;
+            if let Err(e) = self.event_tx.try_send(Event::Tool(result.event)) {
+                tracing::warn!("Failed to send tool end event: {}", e);
+            }
             self.persist_message(&result.message).await;
             self.message_buffer.push(result.message);
         }

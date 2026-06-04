@@ -229,7 +229,7 @@
             id: s.id,
             projectPath: s.projectPath ?? "",
             projectId: s.projectId,
-            alias: s.title,
+            alias: s.title ?? "Untitled",
             messages: [],
             streaming: false,
             unread: 0,

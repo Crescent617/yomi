@@ -275,37 +275,26 @@ impl Session {
     }
 
     /// Update session title from user message content (first 20 chars of first line).
-    /// Only updates if the session does not yet have a title.
     async fn update_title(&self, blocks: &[crate::types::ContentBlock]) {
         if let Some(session_store) = &self.session_store {
             let text: String = blocks.iter().filter_map(|b| b.as_text()).take(1).collect();
             let title = text.chars().take(20).collect::<String>();
             if !title.is_empty() {
-                // Check if session already has a title; if so, skip
-                let has_existing = session_store
-                    .get(&self.id)
-                    .await
-                    .ok()
-                    .and_then(|info| info)
-                    .and_then(|info| info.title)
-                    .is_some_and(|t| !t.trim().is_empty());
-                if !has_existing {
-                    match session_store.update_title(&self.id, &title).await {
-                        Ok(()) => {
-                            if let Some(ref tx) = self.event_tx {
-                                let _ = tx.send(Event::System(SystemEvent::TitleUpdated {
-                                    session_id: self.id.clone(),
-                                    title: title.clone(),
-                                }));
-                            }
+                match session_store.update_title(&self.id, &title).await {
+                    Ok(()) => {
+                        if let Some(ref tx) = self.event_tx {
+                            let _ = tx.send(Event::System(SystemEvent::TitleUpdated {
+                                session_id: self.id.clone(),
+                                title: title.clone(),
+                            }));
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to update title for session {}: {}",
-                                self.id.0,
-                                e
-                            );
-                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to update title for session {}: {}",
+                            self.id.0,
+                            e
+                        );
                     }
                 }
             }

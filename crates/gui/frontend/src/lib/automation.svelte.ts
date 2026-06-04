@@ -76,10 +76,13 @@ export class AutomationStore {
       await triggerCronJob(jobId);
       await this.load();
       const job = this.jobs.find((j) => j.id === jobId);
-      sendDesktopNotification("Yomi", `Task "${job?.name ?? jobId}" completed`);
+      const sessionId = job?.action?.sessionId;
+      sendDesktopNotification("Yomi", `Task "${job?.name ?? jobId}" completed`, sessionId);
     } catch (e: unknown) {
       this.error = e instanceof Error ? e.message : String(e);
-      sendDesktopNotification("Yomi", `Task "${jobId}" failed: ${this.error}`);
+      const job = this.jobs.find((j) => j.id === jobId);
+      const sessionId = job?.action?.sessionId;
+      sendDesktopNotification("Yomi", `Task "${jobId}" failed: ${this.error}`, sessionId);
     }
   }
 
