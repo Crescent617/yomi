@@ -338,6 +338,14 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send ask_user response: {}", e);
                     }
                 }
+                ControlCommand::Steer { content } => {
+                    if let Err(e) = coord_for_ctrl
+                        .send_steer(&session_id_for_ctrl, content)
+                        .await
+                    {
+                        tracing::error!("Failed to send steer: {}", e);
+                    }
+                }
             }
         }
     });

@@ -585,6 +585,21 @@ impl Coordinator {
         )
     }
 
+    /// Send a steer message to a session (injected before next streaming turn)
+    pub async fn send_steer(
+        &self,
+        session_id: &SessionId,
+        content: Vec<crate::types::ContentBlock>,
+    ) -> Result<()> {
+        tracing::debug!("Sending steer to session {}", session_id.0);
+        let session = self.require_session(session_id)?;
+        let result = session.read().await.send_steer(content).await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to send steer to session {}: {}", session_id.0, e);
+        }
+        result
+    }
+
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.cancel();

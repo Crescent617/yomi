@@ -396,6 +396,14 @@ impl Model {
                     });
                     None
                 }
+                Msg::CommandSteer(blocks) => {
+                    let _ = self.ctrl_tx.try_send(ControlCommand::Steer { content: blocks });
+                    self.show_notification(&Notification::info(
+                        "Steer message queued for next turn",
+                        3000,
+                    ));
+                    None
+                }
                 Msg::Suspend => {
                     // Suspend process to background (Ctrl-Z)
                     self.suspend_process();

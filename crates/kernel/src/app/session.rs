@@ -298,6 +298,18 @@ impl Session {
     }
 
     /// Request compaction of the session's message buffer
+    /// Send a steer message to the main agent (injected before next streaming turn)
+    pub async fn send_steer(&self, content: Vec<crate::types::ContentBlock>) -> Result<()> {
+        match &self.main_agent {
+            Some(handle) => {
+                handle.send_steer(content).await.map_err(|e| {
+                    SessionError::SendFailed(format!("steer: {e}")).into()
+                })
+            }
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
     pub async fn compact(&self) -> Result<()> {
         tracing::debug!("Session {} requesting compaction", self.id.0);
         match &self.main_agent {

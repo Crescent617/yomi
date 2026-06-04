@@ -138,7 +138,7 @@
       {#if tool.arguments}
         <div class="text-xs opacity-60 dark:opacity-50">
           <div class="font-medium mb-0.5">Arguments:</div>
-          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{compactArgs(tool.arguments)}</pre>
+          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{compactArgs(tool.arguments)}</pre>
         </div>
       {/if}
 

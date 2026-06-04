@@ -65,7 +65,7 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 ///
 /// This is the zero-overhead path for a single-tenant GUI. To support
 /// remote connections or multiple clients, use `spawn_daemon()` instead.
-pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
+pub async fn init_coordinator() -> Result<(Arc<kernel::Coordinator>, Arc<dyn kernel::CronStore>)> {
     let working_dir = std::env::current_dir()?;
     let config_file = kernel::config::Config::discover_file();
     let mut config = if let Some(ref path) = config_file {
@@ -87,6 +87,7 @@ pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
     let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to open storage: {e}"))?;
+    let cron_store = storage.cron_store();
     let provider = create_provider(&config)?;
     let task_store = Arc::new(
         kernel::TaskStore::new(&config.data_dir)
@@ -115,7 +116,7 @@ pub async fn init_coordinator() -> Result<Arc<kernel::Coordinator>> {
         }),
     ));
 
-    Ok(coordinator)
+    Ok((coordinator, cron_store))
 }
 
 /// Start the kernel server directly in a background tokio task.
@@ -127,7 +128,7 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let coordinator = init_coordinator().await?;
+    let (coordinator, cron_store) = init_coordinator().await?;
     let config_file = kernel::config::Config::discover_file();
     let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
         || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
@@ -141,7 +142,7 @@ pub async fn spawn_daemon() -> Result<()> {
     tracing::info!("Daemon listening on {addr}");
 
     let server =
-        kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir, None);
+        kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir, Some(cron_store));
     let shutdown = CancellationToken::new();
 
     {

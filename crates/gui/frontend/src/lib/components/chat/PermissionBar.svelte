@@ -53,7 +53,7 @@
               <p class="text-xs text-muted-foreground mt-1">{perm.reason}</p>
             {/if}
             {#if perm.toolArgs}
-              <pre class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{compactJson(perm.toolArgs)}</pre>
+              <pre class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{compactJson(perm.toolArgs)}</pre>
             {/if}
           </div>
           <div class="flex items-center gap-1.5 shrink-0">

@@ -887,6 +887,9 @@ async fn dispatch_command(
         ControlCommand::Rewind { message_id, target } => {
             coordinator.rewind_session(sid, message_id, target).await?;
         }
+        ControlCommand::Steer { content } => {
+            coordinator.send_steer(sid, content).await?;
+        }
     }
     Ok(())
 }

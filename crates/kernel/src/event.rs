@@ -42,6 +42,10 @@ pub enum ControlCommand {
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     },
+    /// Send a steer message to be injected before the next streaming turn
+    Steer {
+        content: Vec<crate::types::ContentBlock>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,6 +6,7 @@ use crate::{
     components::{info_bar::Notification, input_edit::TextInput},
     msg::Msg,
 };
+use kernel::types::ContentBlock;
 
 use super::component::InputComponent;
 
@@ -97,6 +98,14 @@ impl InputComponent {
             "/rewind" => Some(Msg::CommandRewind),
             "/undo" => Some(Msg::CommandUndo),
             "/help" => Some(Msg::CommandHelp),
+            "/steer" => {
+                let content = parts[1..].join(" ");
+                if content.trim().is_empty() {
+                    None
+                } else {
+                    Some(Msg::CommandSteer(vec![ContentBlock::Text { text: content }]))
+                }
+            }
             _ => None, // Unknown command: treat as regular message
         }
     }

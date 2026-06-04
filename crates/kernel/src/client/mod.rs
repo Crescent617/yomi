@@ -109,6 +109,11 @@ pub trait CoordinatorApi: Send + Sync {
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
+    async fn send_steer(
+        &self,
+        session_id: &SessionId,
+        content: Vec<ContentBlock>,
+    ) -> Result<()>;
 
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
@@ -270,6 +275,14 @@ impl CoordinatorApi for Coordinator {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let config_file = crate::config::Config::discover_file();
         self.reload(config_file.as_ref(), &working_dir).await
+    }
+
+    async fn send_steer(
+        &self,
+        session_id: &SessionId,
+        content: Vec<ContentBlock>,
+    ) -> Result<()> {
+        self.send_steer(session_id, content).await
     }
 
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
@@ -998,6 +1011,19 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn reload_agent_config(&self) -> Result<()> {
         self.call(RequestMethod::ReloadAgentConfig).await?;
+        Ok(())
+    }
+
+    async fn send_steer(
+        &self,
+        session_id: &SessionId,
+        content: Vec<ContentBlock>,
+    ) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::Steer { content },
+        })
+        .await?;
         Ok(())
     }
 

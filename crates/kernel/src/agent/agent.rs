@@ -109,6 +109,8 @@ pub struct Agent {
     base_prompt: String,
     /// Current skills list (dynamically refreshable)
     skills: Vec<Arc<crate::skill::Skill>>,
+    /// Channel for receiving steer messages injected before each streaming turn
+    steer_rx: mpsc::Receiver<Vec<ContentBlock>>,
 }
 
 impl Agent {
@@ -119,6 +121,7 @@ impl Agent {
     ) -> (AgentHandle, mpsc::Receiver<Event>) {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
         let (event_tx, event_rx) = mpsc::channel(100);
+        let (steer_tx, steer_rx) = mpsc::channel::<Vec<ContentBlock>>(20);
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
@@ -229,6 +232,7 @@ impl Agent {
             current_turn: None,
             base_prompt: args.base_prompt,
             skills: args.skills.clone(),
+            steer_rx,
         };
 
         let handle_id = id.clone();
@@ -249,6 +253,7 @@ impl Agent {
             permission_responder,
             Some(ask_user_responder),
             Arc::clone(&input_stale_since),
+            steer_tx,
         );
         (handle, event_rx)
     }
@@ -926,6 +931,17 @@ impl Agent {
                 message_count: self.message_buffer.len(),
             }))
             .await;
+
+        // Drain pending steer messages and inject them as a user message before streaming
+        let mut steer_blocks: Vec<ContentBlock> = Vec::new();
+        while let Ok(blocks) = self.steer_rx.try_recv() {
+            steer_blocks.extend(blocks);
+        }
+        if !steer_blocks.is_empty() {
+            tracing::info!("Agent {} injecting {} steer block(s) before streaming", self.id, steer_blocks.len());
+            let steer_msg = Message::with_blocks(Role::User, steer_blocks);
+            self.message_buffer.push(steer_msg);
+        }
 
         // Validate and clean message buffer before sending to provider
         self.message_buffer.sanitize();
