@@ -65,17 +65,17 @@
 
     const maxRunsNum = maxRuns ? parseInt(String(maxRuns), 10) : undefined;
     if (maxRunsNum !== undefined && !Number.isNaN(maxRunsNum)) {
-      payload.maxRuns = maxRunsNum;
+      payload.max_runs = maxRunsNum;
     }
     if (expiresAt) {
-      payload.expiresAt = new Date(expiresAt).toISOString();
+      payload.expires_at = new Date(expiresAt).toISOString();
     }
 
     try {
       if (editingJob) {
         await updateCronJob(editingJob.id, payload);
       } else {
-        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; maxRuns?: number; expiresAt?: string });
+        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; max_runs?: number; expires_at?: string });
       }
       onSaved();
     } catch (e: unknown) {

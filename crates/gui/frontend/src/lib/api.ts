@@ -316,14 +316,14 @@ export async function createCronJob(input: {
   name: string;
   schedule: string;
   action: Record<string, unknown>;
-  maxRuns?: number;
-  expiresAt?: string;
+  max_runs?: number;
+  expires_at?: string;
 }): Promise<string> {
   return invokeCmd("create_cron_job", input);
 }
 
 export async function updateCronJob(
-  jobId: string,
+  job_id: string,
   input: {
     name?: string;
     schedule?: string;
@@ -333,13 +333,13 @@ export async function updateCronJob(
     expiresAt?: string;
   },
 ): Promise<void> {
-  return invokeCmd("update_cron_job", { jobId, ...input });
+  return invokeCmd("update_cron_job", { job_id, ...input });
 }
 
-export async function deleteCronJob(jobId: string): Promise<void> {
-  return invokeCmd("delete_cron_job", { jobId });
+export async function deleteCronJob(job_id: string): Promise<void> {
+  return invokeCmd("delete_cron_job", { job_id });
 }
 
-export async function triggerCronJob(jobId: string): Promise<void> {
-  return invokeCmd("trigger_cron_job", { jobId });
+export async function triggerCronJob(job_id: string): Promise<void> {
+  return invokeCmd("trigger_cron_job", { job_id });
 }

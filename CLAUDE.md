@@ -44,3 +44,8 @@ cargo fmt -- --check
 - **Plugin Loading**: `PluginLoader` loads `.js` plugins from Claude's plugin cache
 - **Unicode Handling**: must carefully handling of unicode width in TUI
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
+
+## GUI / Tauri IPC Pitfalls
+
+- **IPC parameter names must match Rust exactly.** Tauri deserializes the JSON argument object into the Rust command's named parameters by key. If the frontend wrapper uses camelCase (`jobId`) but the Rust parameter is snake_case (`job_id`), the field is silently ignored and the parameter receives its default value. Always verify API wrapper keys against the `#[tauri::command]` function signature.
+- **Cron scheduler reload after mutations.** When adding/updating/deleting cron jobs through direct `CronStore` calls (bypassing `KernelServer`), explicitly call `scheduler.reload()` so the in-process scheduler re-loads its queue from the database.
