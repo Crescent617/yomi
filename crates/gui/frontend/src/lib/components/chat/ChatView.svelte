@@ -10,7 +10,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X } from "lucide-svelte";
+  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
@@ -401,13 +401,13 @@
           {#if openDropdownOpen}
             <div class="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-popover shadow-md py-1">
               <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInExplorer(activeSession.projectPath); openDropdownOpen = false; }}>
-                <ExternalLink size={12} /> Open in Explorer
+                <FolderOpen size={12} /> Open in Explorer
               </button>
               <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.projectPath); openDropdownOpen = false; }}>
-                <ExternalLink size={12} /> Open in VS Code
+                <Code size={12} /> Open in VS Code
               </button>
               <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInZed(activeSession.projectPath); openDropdownOpen = false; }}>
-                <ExternalLink size={12} /> Open in Zed
+                <Zap size={12} /> Open in Zed
               </button>
             </div>
             <div class="fixed inset-0 z-10" onclick={() => openDropdownOpen = false}></div>

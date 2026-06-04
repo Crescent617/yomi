@@ -1,5 +1,6 @@
 import * as api from "./api";
 import type { TaggedContentBlock } from "./types";
+import { sendNotification } from "@tauri-apps/plugin-notification";
 
 export interface TabEntry {
   name: string;
@@ -129,6 +130,14 @@ export function showNotification(
     error: "error",
   };
   pushToast(text, typeMap[level] ?? "info", durationMs);
+}
+
+export function sendDesktopNotification(title: string, body: string) {
+  try {
+    sendNotification({ title, body });
+  } catch (e) {
+    console.error("Failed to send desktop notification:", e);
+  }
 }
 
 export const sessionState = $state({
@@ -761,6 +770,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             error: true,
           }];
           showNotification(msg, "warning", 3000);
+          sendDesktopNotification("Yomi", msg);
           return true;
         } else if ("failed" in stopReason) {
           const errorMsg = "Task failed: " + (stopReason.failed.error ?? "Unknown");
@@ -773,16 +783,16 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             error: true,
           }];
           showNotification(errorMsg, "error", 5000);
+          sendDesktopNotification("Yomi", errorMsg);
           return true;
         } else if ("maxIterations" in stopReason) {
-          showNotification(
-            `Max iterations reached (${stopReason.maxIterations.reached})`,
-            "warning",
-            5000,
-          );
+          const msg = `Max iterations reached (${stopReason.maxIterations.reached})`;
+          showNotification(msg, "warning", 5000);
+          sendDesktopNotification("Yomi", msg);
           return true;
         }
-        // Completed: normal end, no notification needed
+        // Completed: normal end
+        sendDesktopNotification("Yomi", "Task completed");
         return true;
       }
     }

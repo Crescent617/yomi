@@ -38,6 +38,7 @@ kernel = { workspace = true }
 
 # tauri-pilot plugin (debug builds only)
 tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
+tauri-plugin-notification = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

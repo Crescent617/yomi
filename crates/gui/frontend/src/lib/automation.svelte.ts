@@ -1,4 +1,5 @@
 import { listCronJobs, deleteCronJob, triggerCronJob, updateCronJob } from "./api";
+import { sendDesktopNotification } from "./state.svelte";
 
 export interface CronJob {
   id: string;
@@ -74,8 +75,11 @@ export class AutomationStore {
     try {
       await triggerCronJob(jobId);
       await this.load();
+      const job = this.jobs.find((j) => j.id === jobId);
+      sendDesktopNotification("Yomi", `Task "${job?.name ?? jobId}" completed`);
     } catch (e: unknown) {
       this.error = e instanceof Error ? e.message : String(e);
+      sendDesktopNotification("Yomi", `Task "${jobId}" failed: ${this.error}`);
     }
   }
 

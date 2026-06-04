@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Timer, Plus, Play, Pause, Trash2, ChevronRight, AlertTriangle, CheckCircle2, XCircle } from "lucide-svelte";
+  import { Timer, Plus, Play, Pause, Trash2, ChevronRight, AlertTriangle, CheckCircle2, XCircle, Zap, RefreshCw } from "lucide-svelte";
   import { automationStore } from "../../automation.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
 
@@ -144,7 +144,7 @@
                 class="p-2 rounded hover:bg-secondary text-muted-foreground"
                 title="Run now"
               >
-                <Play class="w-4 h-4" />
+                <Zap class="w-4 h-4" />
               </button>
               <button
                 type="button"
@@ -155,7 +155,7 @@
                 {#if job.status === "active"}
                   <Pause class="w-4 h-4" />
                 {:else}
-                  <Play class="w-4 h-4" />
+                  <RefreshCw class="w-4 h-4" />
                 {/if}
               </button>
               <button

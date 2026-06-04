@@ -788,7 +788,7 @@ function getSession(sessionId: string) {
           {/each}
         </div>
       {/if}
-      <div class="flex items-end gap-2 p-3">
+      <div class="flex items-end gap-2 p-2">
         <textarea
           bind:this={textareaRef}
           bind:value={content}
@@ -805,7 +805,7 @@ function getSession(sessionId: string) {
           onpaste={handlePaste}
           placeholder={isStreaming ? "Press Enter to queue next message..." : "Ask anything... (Shift+Enter newline, /command, @file, paste image)"}
           rows={1}
-          class="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px]"
+          class="flex-1 resize-none bg-transparent text-sm placeholder:text-muted-foreground focus-visible:outline-none min-h-[40px] max-h-[200px] py-2.5"
         ></textarea>
         {#if isStreaming}
           <button
@@ -834,7 +834,7 @@ function getSession(sessionId: string) {
       <div class="flex items-center gap-2 mt-1.5 px-1 flex-wrap">
         {#each fileAttachments as path (path)}
           <div class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5">
-            <span class="text-xs text-muted-foreground truncate max-w-[200px]">{path.split("/").pop()}</span>
+            <span class="text-xs text-muted-foreground truncate max-w-50">{path.split("/").pop()}</span>
             <button
               type="button"
               onclick={() => removeFileAttachment(path)}
@@ -848,7 +848,7 @@ function getSession(sessionId: string) {
       </div>
     {/if}
 
-    <div class="flex items-center">
+    <div class="flex items-center gap-1 pb-1">
       <button
         type="button"
         onclick={attachFiles}
@@ -857,15 +857,14 @@ function getSession(sessionId: string) {
       >
         <Paperclip size={14} />
       </button>
-      <div class="flex-1"></div>
       <!-- Permission level -->
-      <div class="flex items-center gap-1">
+      <div class="flex items-center gap-1 rounded-md border border-border px-1 py-0.5">
         {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}
           {@const Icon = levelIcon(level)}
           <button
             type="button"
             onclick={() => handlePermissionSet(level)}
-            class="p-1 rounded transition-colors {activeSession.permissionLevel === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
+            class="p-0.5 rounded transition-colors {activeSession.permissionLevel === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
             title={levelDescription(level)}
           >
             <Icon class="w-4 h-4" />
