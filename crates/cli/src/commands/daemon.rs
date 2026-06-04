@@ -79,7 +79,6 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 Arc::clone(&coordinator),
                 config_file,
                 base_dir,
-                None,
             );
             let shutdown = tokio_util::sync::CancellationToken::new();
 

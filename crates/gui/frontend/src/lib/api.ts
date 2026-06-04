@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { TaggedContentBlock } from "./types";
 
 const DEFAULT_TIMEOUT = 30000; // 30s
 const PING_TIMEOUT = 5000;     // 5s
@@ -169,7 +170,7 @@ export async function sendMessage(sessionId: string, content: string): Promise<v
   return invokeCmd("send_message", { sessionId, content });
 }
 
-export async function sendMessageBlocks(sessionId: string, blocks: unknown[]): Promise<void> {
+export async function sendMessageBlocks(sessionId: string, blocks: TaggedContentBlock[]): Promise<void> {
   return invokeCmd("send_message_blocks", { sessionId, blocks });
 }
 
@@ -215,6 +216,10 @@ export async function startGoal(sessionId: string, description: string): Promise
 
 export async function stopGoal(sessionId: string): Promise<void> {
   return invokeCmd("stop_goal", { sessionId });
+}
+
+export async function sendSteer(sessionId: string, blocks: TaggedContentBlock[]): Promise<void> {
+  return invokeCmd("send_steer", { sessionId, blocks });
 }
 
 export async function getConfigToml(): Promise<{ content: string; path: string }> {

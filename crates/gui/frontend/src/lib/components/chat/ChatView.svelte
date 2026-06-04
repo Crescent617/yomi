@@ -10,6 +10,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
+  import CheckpointTimeline from "./CheckpointTimeline.svelte";
   import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { levelLabel, levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
@@ -640,11 +641,31 @@
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <div class="flex-1 relative min-h-0">
+            <CheckpointTimeline
+              checkpoints={activeSession.checkpoints ?? []}
+              onRewind={(id) => {
+                if (!activeSession) return;
+                api.rewind(activeSession.id, id).then(() => {
+                  showNotification("Rewinding to checkpoint...", "info", 3000);
+                }).catch((e: any) => {
+                  console.error("Failed to rewind:", e?.message ?? e);
+                  showNotification("Failed to rewind", "error", 3000);
+                });
+              }}
+            />
             <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
           </div>
           <div class="shrink-0 w-full">
             <div class="container mx-auto px-4 lg:px-6">
-              <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} />
+              <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} onSteer={(blocks) => {
+                if (!activeSession) return;
+                api.sendSteer(activeSession.id, blocks).then(() => {
+                  showNotification("Steer message queued for next turn", "info", 3000);
+                }).catch((e: any) => {
+                  console.error("Failed to send steer:", e?.message ?? e);
+                  showNotification("Failed to send steer", "error", 3000);
+                });
+              }} />
               <InfoBar session={activeSession} />
               <PermissionBar />
               <AskUserBar />

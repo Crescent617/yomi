@@ -83,7 +83,6 @@ pub struct KernelServer {
     connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
     next_conn_id: Arc<std::sync::atomic::AtomicU64>,
     cron_scheduler: Option<Arc<CronScheduler>>,
-    cron_store: Option<Arc<dyn CronStore>>,
 }
 
 impl KernelServer {
@@ -91,8 +90,8 @@ impl KernelServer {
         coordinator: Arc<Coordinator>,
         config_file_path: Option<PathBuf>,
         base_dir: PathBuf,
-        cron_store: Option<Arc<dyn CronStore>>,
     ) -> Self {
+        let cron_store = coordinator.cron_store.clone();
         let cron_scheduler = cron_store.as_ref().map(|store| {
             let (task_tx, task_rx) = mpsc::channel(64);
             let shutdown = tokio_util::sync::CancellationToken::new();
@@ -126,18 +125,20 @@ impl KernelServer {
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             cron_scheduler,
-            cron_store,
         }
     }
 
     fn require_cron_store(&self) -> std::result::Result<&Arc<dyn CronStore>, ResponseBody> {
-        self.cron_store.as_ref().ok_or_else(|| ResponseBody::Err {
-            error: RpcError {
-                code: "cron_disabled".to_string(),
-                message: "Cron store not configured".to_string(),
-                detail: None,
-            },
-        })
+        self.coordinator
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| ResponseBody::Err {
+                error: RpcError {
+                    code: "cron_disabled".to_string(),
+                    message: "Cron store not configured".to_string(),
+                    detail: None,
+                },
+            })
     }
 
     /// Reload agent configuration from disk.

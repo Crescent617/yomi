@@ -272,3 +272,20 @@ pub async fn rename_session(
         .map_err(GuiError::kernel)?;
     Ok(())
 }
+
+// ── Steer message ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn send_steer(
+    state: State<'_, AppState>,
+    session_id: String,
+    blocks: Vec<ContentBlock>,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .send_steer(&sid, blocks)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}

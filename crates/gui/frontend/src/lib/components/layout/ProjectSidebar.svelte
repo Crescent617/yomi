@@ -123,6 +123,9 @@
       setActiveSession(id);
       const msgs = await api.getMessages(id);
       if (getSession(id)) loadSessionMessages(id, msgs);
+      const cps = await api.getCheckpoints(id);
+      const session = getSession(id);
+      if (session) session.checkpoints = cps ?? [];
     } catch (e: any) {
       console.error("Failed to activate session:", e?.message ?? e);
       if (prev && prev !== id) {

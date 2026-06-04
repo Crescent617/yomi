@@ -122,6 +122,35 @@ pub trait CoordinatorApi: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<crate::storage::usage::UsageSummary>;
+
+    // ── Cron Job ─────────────────────────────────────────────────────────
+    //
+    // DESIGN PRINCIPLE: All cron operations MUST go through `CoordinatorApi`.
+    // Clients (GUI, TUI, CLI) must never hold a `CronStore` directly, because
+    // that would only work in local/in-process mode and break remote IPC mode.
+    // By routing every cron call through the coordinator, both `LocalCoordinator`
+    // and `RemoteCoordinator` can serve the same interface.
+    // ──────────────────────────────────────────────────────────────────────
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId>;
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>>;
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>>;
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: &crate::cron::UpdateCronJobInput,
+    ) -> Result<bool>;
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
@@ -298,6 +327,40 @@ impl CoordinatorApi for Coordinator {
         session_id: &SessionId,
     ) -> Result<crate::storage::usage::UsageSummary> {
         self.get_session_usage(session_id).await
+    }
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId> {
+        self.create_cron_job(input).await
+    }
+
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>> {
+        self.list_cron_jobs(status, limit).await
+    }
+
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        self.get_cron_job(id).await
+    }
+
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: &crate::cron::UpdateCronJobInput,
+    ) -> Result<bool> {
+        self.update_cron_job(id, input).await
+    }
+
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
+        self.delete_cron_job(id).await
     }
 }
 
@@ -1040,5 +1103,83 @@ impl CoordinatorApi for RemoteCoordinator {
         _session_id: &SessionId,
     ) -> Result<crate::storage::usage::UsageSummary> {
         Ok(crate::storage::usage::UsageSummary::default())
+    }
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId> {
+        let result = self
+            .call(RequestMethod::CreateCronJob {
+                name: input.name,
+                schedule: input.schedule,
+                action: input.action,
+                max_runs: input.max_runs,
+                expires_at: input.expires_at,
+            })
+            .await?;
+        let job_id = result
+            .get("job_id")
+            .and_then(|v| v.as_str())
+            .map(|s| crate::cron::CronJobId(s.to_string()))
+            .ok_or_else(|| SessionError::Other("Missing job_id in response".to_string()))?;
+        Ok(job_id)
+    }
+
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>> {
+        let result = self
+            .call(RequestMethod::ListCronJobs {
+                status: status.map(|s| s.as_str().to_string()),
+                limit,
+            })
+            .await?;
+        let jobs: Vec<crate::cron::CronJob> = serde_json::from_value(result)?;
+        Ok(jobs)
+    }
+
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        let result = self
+            .call(RequestMethod::GetCronJob {
+                job_id: id.0.clone(),
+            })
+            .await?;
+        let job: Option<crate::cron::CronJob> = serde_json::from_value(result)?;
+        Ok(job)
+    }
+
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: &crate::cron::UpdateCronJobInput,
+    ) -> Result<bool> {
+        let result = self
+            .call(RequestMethod::UpdateCronJob {
+                job_id: id.0.clone(),
+                name: input.name.clone(),
+                schedule: input.schedule.clone(),
+                action: input.action.clone(),
+                status: input.status.map(|s| s.as_str().to_string()),
+                max_runs: input.max_runs,
+                expires_at: input.expires_at,
+            })
+            .await?;
+        // Server returns Null on success, error on failure
+        Ok(result.is_null())
+    }
+
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
+        let result = self
+            .call(RequestMethod::DeleteCronJob {
+                job_id: id.0.clone(),
+            })
+            .await?;
+        Ok(result.is_null())
     }
 }

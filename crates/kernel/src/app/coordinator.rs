@@ -35,6 +35,14 @@ pub struct Coordinator {
     agent_config: Arc<RwLock<AgentConfig>>,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
+    /// Cron store for scheduled job operations.
+    /// Kept here so that the Coordinator can expose a unified API for both
+    /// in-process and remote clients (via `CoordinatorApi`).
+    /// 
+    /// DESIGN PRINCIPLE: Never let the client layer hold a `CronStore` directly;
+    /// that would only work in local mode and break remote IPC mode. All cron
+    /// operations MUST go through the Coordinator.
+    pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
 }
 
 impl Coordinator {
@@ -142,6 +150,7 @@ impl Coordinator {
             last_activity_at,
             agent_config,
             project_store,
+            cron_store: Some(storage.cron_store()),
         }
     }
 
@@ -900,5 +909,110 @@ impl Coordinator {
             .await
             .summarize(start, now, Some(&filter))
             .await
+    }
+
+    // ── Cron Job API ──────────────────────────────────────────────────────
+    //
+    // All cron operations go through the Coordinator so that clients (GUI, TUI,
+    // CLI) can use the same `CoordinatorApi` regardless of whether they are
+    // talking to an in-process kernel or a remote daemon.  Never let the client
+    // layer hold a `CronStore` directly — that would break remote mode.
+
+    /// Create a new cron job.  Validates the schedule expression before
+    /// persisting and notifies the scheduler to reload.
+    pub async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+
+        // Validate schedule
+        let schedule = crate::cron::CronSchedule::parse(&input.schedule)
+            .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
+
+        let next_run = schedule.next_after(Utc::now());
+        let job = crate::cron::CronJob {
+            id: crate::cron::CronJobId::new(),
+            name: input.name,
+            schedule: input.schedule,
+            action: input.action,
+            status: crate::cron::CronJobStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            next_run_at: next_run,
+            last_run_at: None,
+            run_count: 0,
+            max_runs: input.max_runs,
+            expires_at: input.expires_at,
+            last_error: None,
+        };
+
+        let id = job.id.clone();
+        store.create(&job).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to create cron job: {e}"))
+        })?;
+        Ok(id)
+    }
+
+    /// List cron jobs with optional status filter.
+    pub async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        store
+            .list(status, limit)
+            .await
+            .map_err(|e| crate::types::KernelError::storage(format!("Failed to list cron jobs: {e}")))
+    }
+
+    /// Get a single cron job by ID.
+    pub async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        store
+            .get(id)
+            .await
+            .map_err(|e| crate::types::KernelError::storage(format!("Failed to get cron job: {e}")))
+    }
+
+    /// Update a cron job.  Returns `true` if the job existed.
+    pub async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: &crate::cron::UpdateCronJobInput,
+    ) -> Result<bool> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        store
+            .update(id, input)
+            .await
+            .map_err(|e| crate::types::KernelError::storage(format!("Failed to update cron job: {e}")))
+    }
+
+    /// Delete a cron job.  Returns `true` if the job existed.
+    pub async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+        store
+            .delete(id)
+            .await
+            .map_err(|e| crate::types::KernelError::storage(format!("Failed to delete cron job: {e}")))
     }
 }

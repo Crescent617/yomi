@@ -14,6 +14,12 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Creates a new `AppState` backed by the given `CoordinatorApi`.
+    ///
+    /// DESIGN PRINCIPLE: The GUI layer never holds storage (e.g. `CronStore`)
+    /// directly. All operations — including cron jobs — go through the
+    /// `coordinator`, so the same code works for both local (in-process) and
+    /// remote (IPC) kernel connections.
     pub fn new(coordinator: Arc<dyn CoordinatorApi>) -> Self {
         Self {
             coordinator,

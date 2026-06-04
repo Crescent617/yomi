@@ -1,4 +1,5 @@
 import * as api from "./api";
+import type { TaggedContentBlock } from "./types";
 
 export interface TabEntry {
   name: string;
@@ -73,6 +74,11 @@ export interface PendingAskUser {
   questions: AskQuestion[];
 }
 
+export interface QueuedInput {
+  text: string;
+  blocks?: TaggedContentBlock[];
+}
+
 export interface SessionState {
   id: string;
   projectPath: string;
@@ -86,7 +92,7 @@ export interface SessionState {
   activeTabId: string;
   pendingPermissions: PendingPermission[];
   pendingAskUser: PendingAskUser | null;
-  queuedInput: string | null;
+  queuedInput: QueuedInput | null;
   updatedAt: string;
   permissionLevel?: string;
   compacting?: boolean;
@@ -217,20 +223,11 @@ function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" 
   return "assistant";
 }
 
-// Tagged content block from Rust (tag = "type", rename_all = "snake_case")
-// Used by ContentBlock, ToolOutputBlock, etc.
-interface TaggedContentBlock {
-  type: string;
-  text?: string;
-  thinking?: string;
-  signature?: string;
-  image_url?: { url: string };
-  url?: string;
-  mime_type?: string;
-}
+import type { TaggedContentBlock } from "./types";
 
-// Raw message shape from the Rust backend
-interface RawMessage {
+// ── State ────────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
   id?: unknown;
   role: unknown;
   content?: string | TaggedContentBlock[];
@@ -480,6 +477,7 @@ interface SystemEvent {
   Disconnected?: Record<string, never>;
   SessionSwitched?: { session_id: string };
   TitleUpdated?: { session_id: string; title: string };
+  Rewound?: { session_id: string; messages: RawMessage[] };
 }
 
 interface UserEvent {
@@ -741,9 +739,13 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         }
         // Auto-send queued message when the agent actually stops.
         if (session.queuedInput) {
-          const text = session.queuedInput;
+          const { text, blocks } = session.queuedInput;
           session.queuedInput = null;
-          api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
+          if (blocks && blocks.length > 0) {
+            api.sendMessageBlocks(session.id, blocks).catch((e: Error) => console.error("Failed to send queued message:", e));
+          } else {
+            api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
+          }
         }
         const stopReason = state.Stopped.reason;
         if ("Cancelled" in stopReason) {
@@ -844,6 +846,18 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
   } else if (event.TitleUpdated) {
     if (event.TitleUpdated.session_id !== session.id) return false;
     session.alias = event.TitleUpdated.title;
+    return true;
+  } else if (event.Rewound) {
+    if (event.Rewound.session_id !== session.id) return false;
+    // Clear any streaming buffer since history changed
+    streamingMessages[session.id] = [];
+    session.streaming = false;
+    loadSessionMessages(session.id, event.Rewound.messages);
+    // Refresh checkpoints list after rewind
+    api.getCheckpoints(session.id).then((cps) => {
+      session.checkpoints = cps;
+    }).catch((e: Error) => console.error("Failed to reload checkpoints after rewind:", e));
+    showNotification("Session rewound", "info", 3000);
     return true;
   }
   return false;

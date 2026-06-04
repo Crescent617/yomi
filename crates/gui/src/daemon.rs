@@ -58,6 +58,15 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     }
 }
 
+/// Initialised core components for the GUI (shared by in-process and IPC paths).
+///
+/// DESIGN PRINCIPLE: The GUI never holds a `CronStore` directly. All cron
+/// operations go through the `CoordinatorApi`, so the same code works for both
+/// local (in-process) and remote (IPC) kernel connections.
+pub struct KernelInit {
+    pub coordinator: Arc<kernel::Coordinator>,
+}
+
 /// Initialise a `Coordinator` in-process without any IPC.
 ///
 /// Opens storage, loads config, and builds the agent. The caller can use the
@@ -65,7 +74,7 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 ///
 /// This is the zero-overhead path for a single-tenant GUI. To support
 /// remote connections or multiple clients, use `spawn_daemon()` instead.
-pub async fn init_coordinator() -> Result<(Arc<kernel::Coordinator>, Arc<dyn kernel::CronStore>)> {
+pub async fn init_coordinator() -> Result<KernelInit> {
     let working_dir = std::env::current_dir()?;
     let config_file = kernel::config::Config::discover_file();
     let mut config = if let Some(ref path) = config_file {
@@ -87,7 +96,6 @@ pub async fn init_coordinator() -> Result<(Arc<kernel::Coordinator>, Arc<dyn ker
     let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to open storage: {e}"))?;
-    let cron_store = storage.cron_store();
     let provider = create_provider(&config)?;
     let task_store = Arc::new(
         kernel::TaskStore::new(&config.data_dir)
@@ -116,7 +124,7 @@ pub async fn init_coordinator() -> Result<(Arc<kernel::Coordinator>, Arc<dyn ker
         }),
     ));
 
-    Ok((coordinator, cron_store))
+    Ok(KernelInit { coordinator })
 }
 
 /// Start the kernel server directly in a background tokio task.
@@ -128,7 +136,7 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let (coordinator, cron_store) = init_coordinator().await?;
+    let KernelInit { coordinator } = init_coordinator().await?;
     let config_file = kernel::config::Config::discover_file();
     let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
         || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
@@ -141,8 +149,7 @@ pub async fn spawn_daemon() -> Result<()> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server =
-        kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir, Some(cron_store));
+    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
     let shutdown = CancellationToken::new();
 
     {

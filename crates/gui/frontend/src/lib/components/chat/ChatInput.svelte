@@ -3,6 +3,7 @@ import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen,
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
+import type { TaggedContentBlock } from "../../types";
 import { sessionState, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
 import { fsProvider } from "../../fs/factory";
@@ -178,7 +179,7 @@ export function setContent(text: string) {
 function queueInput() {
   const session = activeSession;
   if (!session || !content.trim()) return;
-  session.queuedInput = content.trim();
+  session.queuedInput = { text: content.trim(), blocks: inlineImages.length > 0 ? buildContentBlocks(content.trim()) : undefined };
   content = "";
   clearInlineImages();
   fileAttachments = [];
@@ -246,6 +247,23 @@ async function handleCommand(text: string) {
           showNotification("Undo last turn", "info", 3000);
         }
         break;
+      case "/rewind":
+        {
+          const checkpoints = await api.getCheckpoints(sessionId) as any[];
+          if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+            showNotification("No checkpoints to rewind", "error", 3000);
+            return;
+          }
+          const sorted = [...checkpoints].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0));
+          const target = sorted[sorted.length - 1] as any;
+          if (!target?.message_id) {
+            showNotification("No checkpoint to rewind", "error", 3000);
+            return;
+          }
+          await api.rewind(sessionId, target.message_id as string);
+          showNotification("Rewinding to latest checkpoint", "info", 3000);
+        }
+        break;
       case "/safe":
         await api.setPermissionLevel(sessionId, "safe");
         showNotification("Permission level set to Safe", "info", 3000);
@@ -267,6 +285,19 @@ async function handleCommand(text: string) {
       case "/reload":
         await api.reloadConfig();
         showNotification("Skills and hooks reloaded", "info", 3000);
+        break;
+      case "/steer":
+        {
+          const steerText = parts.slice(1).join(" ").trim();
+          if (!steerText && inlineImages.length === 0) {
+            showNotification("Please provide steer content: /steer <content>", "error", 5000);
+            return;
+          }
+          const blocks = buildContentBlocks(steerText);
+          await api.sendSteer(sessionId, blocks);
+          clearInlineImages();
+          showNotification("Steer message queued for next turn", "info", 3000);
+        }
         break;
       case "/goal:stop":
         await api.stopGoal(sessionId);
@@ -444,8 +475,8 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
-function buildContentBlocks(text: string): unknown[] {
-  const blocks: unknown[] = [];
+function buildContentBlocks(text: string): TaggedContentBlock[] {
+  const blocks: TaggedContentBlock[] = [];
 
   // First add all inline images
   for (const img of inlineImages) {

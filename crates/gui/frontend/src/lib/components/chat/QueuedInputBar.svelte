@@ -1,13 +1,21 @@
 <script lang="ts">
-  import { Edit3, X, Send } from "lucide-svelte";
+  import { Edit3, X, Send, Navigation } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
+  import type { TaggedContentBlock } from "../../types";
   import { showNotification } from "../../state.svelte";
 
-  let { session, onEdit }: { session: SessionState; onEdit: (text: string) => void } = $props();
+  let { session, onEdit, onSteer }: { session: SessionState; onEdit: (text: string) => void; onSteer: (blocks: TaggedContentBlock[]) => void } = $props();
+
+  function handleSteer() {
+    if (!session.queuedInput) return;
+    const blocks = session.queuedInput.blocks ?? [{ type: "text", text: session.queuedInput.text }];
+    onSteer(blocks);
+    session.queuedInput = null;
+  }
 
   function handleEdit() {
     if (!session.queuedInput) return;
-    onEdit(session.queuedInput);
+    onEdit(session.queuedInput.text);
     session.queuedInput = null;
   }
 
@@ -22,8 +30,17 @@
     <Send class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
     <div class="flex-1 min-w-0">
       <div class="text-xs text-muted-foreground mb-0.5">Queued — will send when streaming ends</div>
-      <div class="text-sm truncate">{session.queuedInput}</div>
+      <div class="text-sm truncate">{session.queuedInput.text}</div>
     </div>
+    <button
+      type="button"
+      onclick={handleSteer}
+      class="shrink-0 inline-flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors"
+      title="Send as steer message"
+    >
+      <Navigation class="w-3.5 h-3.5" />
+      Steer
+    </button>
     <button
       type="button"
       onclick={handleEdit}

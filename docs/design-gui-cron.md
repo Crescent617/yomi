@@ -21,12 +21,12 @@
 │  Rust Backend                                               │
 │  ├── commands/    ← Tauri commands                          │
 │  ├── daemon.rs    ← 启动/管理 kernel daemon                 │
-│  └── state.rs     ← AppState 持有 coordinator               │
+│  └── state.rs     ← AppState 持有 coordinator + cron_store  │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
                     ┌─────────────────┐
-                    │   Coordinator   │  ← in-process 或 daemon
+                    │   Coordinator   │  ← in-process
                     │   (kernel)      │
                     └────────┬────────┘
                              │
@@ -36,6 +36,11 @@
         │ Session │   │ CronStore│   │ Project  │
         │         │   │ (SQLite) │   │ Store    │
         └─────────┘   └──────────┘   └──────────┘
+
+                    ┌─────────────────┐
+                    │  KernelServer   │  ← IPC daemon (optional)
+                    │  + CronScheduler│  ← 调度执行仅在 daemon 中
+                    └─────────────────┘
 ```
 
 ### 1.2 Cron 在 GUI 中的定位
@@ -44,12 +49,13 @@
 - **GUI 侧**：只负责**管理界面**（CRUD + 展示），不处理调度逻辑
 - **调度执行**：由 `KernelServer` 中的 `CronScheduler` 负责
   - GUI 启动 daemon 时，scheduler 自动启动
-  - 如果只用 in-process `Coordinator`，scheduler 不运行，任务仅持久化
+  - 如果只用 in-process `Coordinator`（未启动 daemon），scheduler 不运行，任务仅持久化
+  - **Automation 面板顶部需显示 daemon 运行状态 banner**："定时任务需 daemon 运行时才执行"
 
 ### 1.3 数据流
 
 ```
-User ──▶ Frontend ──▶ Tauri Command ──▶ coordinator.cron_store()
+User ──▶ Frontend ──▶ Tauri Command ──▶ AppState.cron_store()
                                               │
                                               ▼
                                         SqliteCronStore
@@ -101,27 +107,27 @@ User ──▶ Frontend ──▶ Tauri Command ──▶ coordinator.cron_store
 │                                                                    │
 │  ┌─────────────────────────┐  ┌─────────────────────────────────┐ │
 │  │  ● Daily Standup        │  │  Daily Standup                  │ │
-│  │  Every day at 9:00 AM   │  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │ │
+│  │  0 0 9 * * *            │  │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │ │
 │  │  Next: in 2 hours       │  │                                 │ │
 │  │  [💬 Send Message]      │  │  Schedule                       │ │
 │  │                         │  │  ┌─────────────────────────┐   │ │
 │  │  ● Weekly Report        │  │  │ 0 0 9 * * *             │   │ │
-│  │  Every Friday 6:00 PM   │  │  └─────────────────────────┘   │ │
+│  │  0 0 18 * * 5           │  │  └─────────────────────────┘   │ │
 │  │  Next: 3 days           │  │  Every day at 9:00 AM          │ │
 │  │  [💬 Send Message]      │  │                                 │ │
 │  │                         │  │  Action                         │ │
 │  │  ○ Heartbeat            │  │  ┌─────────────────────────┐   │ │
-│  │  Every 30 minutes       │  │  │ 💬 Send Message         │   │ │
+│  │  */30 * * * * *         │  │  │ 💬 Send Message         │   │ │
 │  │  Paused                 │  │  │ Session: project-alpha  │   │ │
 │  │  [🔧 Shell]             │  │  │ "Review today's tasks"  │   │ │
 │  │                         │  │  └─────────────────────────┘   │ │
 │  │  ✕ Failed Task          │  │                                 │ │
-│  │  Every hour             │  │  Status: ● Active               │ │
+│  │  0 * * * * *            │  │  Status: ● Active               │ │
 │  │  Last error: timeout    │  │  Next run: Today, 2:00 PM       │ │
 │  │  [🔧 Shell]             │  │  Last run: Today, 1:30 PM ✓     │ │
 │  │                         │  │  Runs: 42                       │ │
 │  │                         │  │                                 │ │
-│  │                         │  │  [Pause] [Edit] [Delete]        │ │
+│  │                         │  │  [▶ Run Now] [Pause] [Edit] [Delete] │ │
 │  │                         │  │                                 │ │
 │  └─────────────────────────┘  └─────────────────────────────────┘ │
 │                                                                    │
@@ -172,6 +178,20 @@ User ──▶ Frontend ──▶ Tauri Command ──▶ coordinator.cron_store
 │  │                                 │   │
 │  └─────────────────────────────────┘   │
 │  💡 Supports {{date}}, {{time}}        │
+│                                         │
+│  ── Advanced (optional) ──              │
+│                                         │
+│  Max Runs                               │
+│  ┌─────────────────────────────────┐   │
+│  │ 100                             │   │
+│  └─────────────────────────────────┘   │
+│  (leave empty for unlimited)            │
+│                                         │
+│  Expires At                             │
+│  ┌─────────────────────────────────┐   │
+│  │ 2026-12-31 23:59                │   │
+│  └─────────────────────────────────┘   │
+│  (leave empty for never)                │
 │                                         │
 │  [Cancel]              [Create Task]    │
 │                                         │
@@ -273,6 +293,7 @@ pub async fn create_cron_job(
     schedule: String,
     action: serde_json::Value,
     max_runs: Option<u32>,
+    expires_at: Option<String>,  // RFC3339
 ) -> Result<String, GuiError>;  // returns job_id
 
 #[tauri::command]
@@ -284,6 +305,7 @@ pub async fn update_cron_job(
     action: Option<serde_json::Value>,
     status: Option<String>,
     max_runs: Option<u32>,
+    expires_at: Option<String>,
 ) -> Result<(), GuiError>;
 
 #[tauri::command]
@@ -291,7 +313,12 @@ pub async fn delete_cron_job(
     state: State<'_, AppState>,
     job_id: String,
 ) -> Result<(), GuiError>;
-```
+
+#[tauri::command]
+pub async fn trigger_cron_job(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<(), GuiError>;  // 立即触发一次执行（不修改 schedule）
 
 ### 5.2 前端 API 封装
 
@@ -316,8 +343,8 @@ export async function updateCronJob(
   return invokeCmd("update_cron_job", { jobId, ...updates });
 }
 
-export async function deleteCronJob(jobId: string): Promise<void> {
-  return invokeCmd("delete_cron_job", { jobId });
+export async function triggerCronJob(jobId: string): Promise<void> {
+  return invokeCmd("trigger_cron_job", { jobId });
 }
 ```
 
@@ -388,16 +415,17 @@ export async function loadJobs(status?: string) {
 
 | 步骤 | 文件 | 内容 |
 |------|------|------|
-| 1 | `crates/gui/src/commands/automation.rs` | 新建，实现 4 个 cron commands |
+| 1 | `crates/gui/src/commands/automation.rs` | 新建，实现 5 个 cron commands（含 trigger） |
 | 2 | `crates/gui/src/commands/mod.rs` | 导出 automation commands |
-| 3 | `crates/gui/src/main.rs` | 注册 commands |
+| 3 | `crates/gui/src/state.rs` | `AppState` 扩展 `cron_store: Option<Arc<dyn CronStore>>`，command 从中取用 |
+| 4 | `crates/gui/src/main.rs` | 注册 commands，将 `cron_store` 传入 AppState |
 
-### 7.2 Kernel 适配
+### 7.2 Kernel 适配（无需改动，维持现状）
 
-| 步骤 | 文件 | 内容 |
+| 步骤 | 文件 | 说明 |
 |------|------|------|
-| 4 | `crates/kernel/src/app/coordinator.rs` | `Coordinator` 持有 `cron_store` 并暴露 `cron_store()` 方法 |
-| 5 | `crates/kernel/src/server/mod.rs` | `KernelServer::new` 改为从 `coordinator` 获取 `cron_store` |
+| 5 | `crates/gui/src/daemon.rs` | `init_coordinator()` 返回 `KernelInit { coordinator, cron_store }`，平级拆开传参 |
+| 6 | `crates/kernel/src/server/mod.rs` | 维持 `KernelServer::new(..., cron_store)` 独立传参，不从 `coordinator` 获取 |
 
 ### 7.3 前端
 
@@ -439,6 +467,7 @@ export async function loadJobs(status?: string) {
 - 调度执行应该由 daemon 负责
 - GUI 启动 daemon 时，`KernelServer` 会启动 scheduler
 - 如果用户只开 GUI 不开 daemon，cron 任务只是被持久化，不会执行
+- **决策**：Automation 面板顶部显示 banner 提示用户当前 daemon 状态，提供"启动 daemon"按钮
 
 ### 8.3 前后端数据如何对齐？
 
@@ -446,6 +475,13 @@ export async function loadJobs(status?: string) {
 - `action` 使用 `#[serde(tag = "ty", rename_all = "snake_case")]` 对齐
 - `status` 使用 snake_case 字符串对齐
 - 时间字段统一使用 RFC3339 字符串
+
+### 8.4 为什么前端需要 schedule 预校验？
+
+- 后端 `CronSchedule::parse` 已在 `create/update` 时校验
+- 但等用户点"Create"才报错体验差
+- 前端输入框实时校验（用相同 `cron` 库或轻量正则），非法时禁用提交按钮
+- 减少无效往返、提升响应感
 
 ---
 
@@ -455,4 +491,6 @@ export async function loadJobs(status?: string) {
 - [ ] 按状态/类型筛选
 - [ ] 任务运行日志查看
 - [ ] 批量操作（暂停/删除多个）
+- [ ] 卡片 cron 表达式 → 自然语言描述（"Every day at 9:00 AM"）
+- [ ] schedule 可视化日历选择器
 - [ ] 任务执行失败通知
