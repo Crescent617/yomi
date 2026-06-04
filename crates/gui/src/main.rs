@@ -19,10 +19,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            let init = tauri::async_runtime::block_on(daemon::init_coordinator())
+            let init = tauri::async_runtime::block_on(daemon::init_coordinator(true))
                 .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
             let coordinator: Arc<dyn kernel::client::CoordinatorApi> = init.coordinator;
-            app.manage(AppState::new(coordinator));
+            app.manage(AppState::new(coordinator, init.cron_shutdown));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -3,13 +3,12 @@ use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::config::Config;
 use crate::cron::{
-    CronJob, CronJobId, CronJobStatus, CronSchedule, CronScheduler, CronStore, CronWorker,
+    CronJobId,
 };
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
 use crate::types::{KernelError, ProjectId, Result, SessionError, SessionId};
 use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
-use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -82,7 +81,12 @@ pub struct KernelServer {
     reload_lock: Arc<tokio::sync::Mutex<()>>,
     connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
     next_conn_id: Arc<std::sync::atomic::AtomicU64>,
-    cron_scheduler: Option<Arc<CronScheduler>>,
+    /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
+    /// of the cron subsystem (start / reload / shutdown) independently of the
+    /// `Coordinator`, which only provides the data layer (`CronStore`).
+    cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
+    /// Shutdown token shared by the cron scheduler and worker.
+    cron_shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl KernelServer {
@@ -90,32 +94,38 @@ impl KernelServer {
         coordinator: Arc<Coordinator>,
         config_file_path: Option<PathBuf>,
         base_dir: PathBuf,
+        enable_cron: bool,
     ) -> Self {
-        let cron_store = coordinator.cron_store.clone();
-        let cron_scheduler = cron_store.as_ref().map(|store| {
-            let (task_tx, task_rx) = mpsc::channel(64);
-            let shutdown = tokio_util::sync::CancellationToken::new();
-            let scheduler = Arc::new(CronScheduler::new(
-                Arc::clone(store),
-                task_tx,
-                shutdown.clone(),
-            ));
+        let (cron_scheduler, cron_shutdown) = if enable_cron {
+            let store = coordinator.cron_store.as_ref().map(Arc::clone);
+            if let Some(store) = store {
+                let (task_tx, task_rx) = mpsc::channel(64);
+                let shutdown = tokio_util::sync::CancellationToken::new();
+                let scheduler = Arc::new(crate::cron::CronScheduler::new(
+                    Arc::clone(&store),
+                    task_tx,
+                    shutdown.clone(),
+                ));
 
-            // Spawn scheduler
-            let sched_clone = Arc::clone(&scheduler);
-            tokio::spawn(async move { sched_clone.run().await });
+                let sched_clone = Arc::clone(&scheduler);
+                tokio::spawn(async move { sched_clone.run().await });
 
-            // Spawn worker
-            let worker = CronWorker::new(
-                Arc::clone(&coordinator),
-                task_rx,
-                Arc::clone(store),
-                Some(Arc::clone(&scheduler)),
-            );
-            tokio::spawn(async move { worker.run().await });
+                let worker = crate::cron::CronWorker::new(
+                    Arc::clone(&coordinator) as Arc<dyn crate::cron::CronExecutor>,
+                    task_rx,
+                    store,
+                    Some(Arc::clone(&scheduler)),
+                    shutdown.clone(),
+                );
+                tokio::spawn(async move { worker.run().await });
 
-            scheduler
-        });
+                (Some(scheduler), Some(shutdown))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
 
         Self {
             coordinator,
@@ -125,21 +135,10 @@ impl KernelServer {
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             cron_scheduler,
+            cron_shutdown,
         }
     }
 
-    fn require_cron_store(&self) -> std::result::Result<&Arc<dyn CronStore>, ResponseBody> {
-        self.coordinator
-            .cron_store
-            .as_ref()
-            .ok_or_else(|| ResponseBody::Err {
-                error: RpcError {
-                    code: "cron_disabled".to_string(),
-                    message: "Cron store not configured".to_string(),
-                    detail: None,
-                },
-            })
-    }
 
     /// Reload agent configuration from disk.
     /// Returns `true` if reload succeeded, `false` if it fell back to defaults.
@@ -259,8 +258,8 @@ impl KernelServer {
         for entry in self.connections.iter() {
             entry.value().cancel();
         }
-        if let Some(ref scheduler) = self.cron_scheduler {
-            scheduler.shutdown.cancel();
+        if let Some(ref shutdown) = self.cron_shutdown {
+            shutdown.cancel();
         }
     }
 
@@ -621,45 +620,15 @@ impl KernelServer {
                 max_runs,
                 expires_at,
             } => {
-                // 1. 验证 cron 表达式
-                let schedule_parsed = match CronSchedule::parse(&schedule) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "invalid_schedule".to_string(),
-                                message: e.to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
-                };
-
-                let store = match self.require_cron_store() {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
-                let next_run = schedule_parsed.next_after(Utc::now());
-                let job = CronJob {
-                    id: CronJobId::new(),
+                let input = crate::cron::CreateCronJobInput {
                     name,
                     schedule,
                     action,
-                    status: CronJobStatus::Active,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    next_run_at: next_run,
-                    last_run_at: None,
-                    run_count: 0,
                     max_runs,
                     expires_at,
-                    last_error: None,
                 };
-
-                let job_id = job.id.clone();
-                match store.create(&job).await {
-                    Ok(()) => {
+                match self.coordinator.create_cron_job(input).await {
+                    Ok(job_id) => {
                         if let Some(ref scheduler) = self.cron_scheduler {
                             scheduler.reload();
                         }
@@ -677,13 +646,8 @@ impl KernelServer {
                 }
             }
             RequestMethod::ListCronJobs { status, limit } => {
-                let store = match self.require_cron_store() {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
                 let status = status.and_then(|s| s.parse().ok());
-                match store.list(status, limit).await {
+                match self.coordinator.list_cron_jobs(status, limit).await {
                     Ok(jobs) => ResponseBody::Ok {
                         result: match serde_json::to_value(jobs) {
                             Ok(v) => v,
@@ -708,12 +672,7 @@ impl KernelServer {
                 }
             }
             RequestMethod::GetCronJob { job_id } => {
-                let store = match self.require_cron_store() {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
-                match store.get(&CronJobId(job_id)).await {
+                match self.coordinator.get_cron_job(&CronJobId(job_id)).await {
                     Ok(Some(job)) => ResponseBody::Ok {
                         result: match serde_json::to_value(job) {
                             Ok(v) => v,
@@ -728,12 +687,9 @@ impl KernelServer {
                             }
                         },
                     },
-                    Ok(None) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "job_not_found".to_string(),
-                            message: "Cron job not found".to_string(),
-                            detail: None,
-                        },
+                    // Return null so the client can distinguish "not found" from a real error.
+                    Ok(None) => ResponseBody::Ok {
+                        result: serde_json::Value::Null,
                     },
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
@@ -753,24 +709,6 @@ impl KernelServer {
                 max_runs,
                 expires_at,
             } => {
-                let store = match self.require_cron_store() {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
-                // 如果传入了新的 schedule，先校验合法性
-                if let Some(ref schedule_str) = schedule {
-                    if let Err(e) = CronSchedule::parse(schedule_str) {
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "invalid_schedule".to_string(),
-                                message: e.to_string(),
-                                detail: None,
-                            },
-                        };
-                    }
-                }
-
                 let status = status.and_then(|s| s.parse().ok());
                 let input = crate::cron::UpdateCronJobInput {
                     name,
@@ -781,23 +719,18 @@ impl KernelServer {
                     expires_at,
                     ..Default::default()
                 };
-
-                match store.update(&CronJobId(job_id), &input).await {
-                    Ok(true) => {
-                        if let Some(ref scheduler) = self.cron_scheduler {
-                            scheduler.reload();
+                match self.coordinator.update_cron_job(&CronJobId(job_id), input).await {
+                    // Return true/false so the client can distinguish "updated" from "not found".
+                    Ok(updated) => {
+                        if updated {
+                            if let Some(ref scheduler) = self.cron_scheduler {
+                                scheduler.reload();
+                            }
                         }
                         ResponseBody::Ok {
-                            result: serde_json::Value::Null,
+                            result: serde_json::Value::Bool(updated),
                         }
                     }
-                    Ok(false) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "job_not_found".to_string(),
-                            message: "Cron job not found".to_string(),
-                            detail: None,
-                        },
-                    },
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
                             code: "update_cron_job_failed".to_string(),
@@ -808,27 +741,18 @@ impl KernelServer {
                 }
             }
             RequestMethod::DeleteCronJob { job_id } => {
-                let store = match self.require_cron_store() {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
-                match store.delete(&CronJobId(job_id)).await {
-                    Ok(true) => {
-                        if let Some(ref scheduler) = self.cron_scheduler {
-                            scheduler.reload();
+                match self.coordinator.delete_cron_job(&CronJobId(job_id)).await {
+                    // Return true/false so the client can distinguish "deleted" from "not found".
+                    Ok(deleted) => {
+                        if deleted {
+                            if let Some(ref scheduler) = self.cron_scheduler {
+                                scheduler.reload();
+                            }
                         }
                         ResponseBody::Ok {
-                            result: serde_json::Value::Null,
+                            result: serde_json::Value::Bool(deleted),
                         }
                     }
-                    Ok(false) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "job_not_found".to_string(),
-                            message: "Cron job not found".to_string(),
-                            detail: None,
-                        },
-                    },
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
                             code: "delete_cron_job_failed".to_string(),

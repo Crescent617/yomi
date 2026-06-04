@@ -148,7 +148,7 @@ pub trait CoordinatorApi: Send + Sync {
     async fn update_cron_job(
         &self,
         id: &crate::cron::CronJobId,
-        input: &crate::cron::UpdateCronJobInput,
+        input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool>;
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
 }
@@ -354,7 +354,7 @@ impl CoordinatorApi for Coordinator {
     async fn update_cron_job(
         &self,
         id: &crate::cron::CronJobId,
-        input: &crate::cron::UpdateCronJobInput,
+        input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool> {
         self.update_cron_job(id, input).await
     }
@@ -1150,28 +1150,31 @@ impl CoordinatorApi for RemoteCoordinator {
                 job_id: id.0.clone(),
             })
             .await?;
-        let job: Option<crate::cron::CronJob> = serde_json::from_value(result)?;
-        Ok(job)
+        if result.is_null() {
+            return Ok(None);
+        }
+        let job = serde_json::from_value(result)?;
+        Ok(Some(job))
     }
 
     async fn update_cron_job(
         &self,
         id: &crate::cron::CronJobId,
-        input: &crate::cron::UpdateCronJobInput,
+        input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool> {
         let result = self
             .call(RequestMethod::UpdateCronJob {
                 job_id: id.0.clone(),
-                name: input.name.clone(),
-                schedule: input.schedule.clone(),
-                action: input.action.clone(),
+                name: input.name,
+                schedule: input.schedule,
+                action: input.action,
                 status: input.status.map(|s| s.as_str().to_string()),
                 max_runs: input.max_runs,
                 expires_at: input.expires_at,
             })
             .await?;
-        // Server returns Null on success, error on failure
-        Ok(result.is_null())
+        let updated: bool = serde_json::from_value(result)?;
+        Ok(updated)
     }
 
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
@@ -1180,6 +1183,7 @@ impl CoordinatorApi for RemoteCoordinator {
                 job_id: id.0.clone(),
             })
             .await?;
-        Ok(result.is_null())
+        let deleted: bool = serde_json::from_value(result)?;
+        Ok(deleted)
     }
 }

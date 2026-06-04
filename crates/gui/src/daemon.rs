@@ -65,16 +65,19 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 /// local (in-process) and remote (IPC) kernel connections.
 pub struct KernelInit {
     pub coordinator: Arc<kernel::Coordinator>,
+    /// Shutdown token for the cron subsystem (only present when cron was started).
+    pub cron_shutdown: Option<CancellationToken>,
 }
 
 /// Initialise a `Coordinator` in-process without any IPC.
 ///
-/// Opens storage, loads config, and builds the agent. The caller can use the
-/// returned `Arc` directly as a `dyn CoordinatorApi`.
+/// Opens storage, loads config, and builds the agent.  Also starts the cron
+/// scheduler + worker because the GUI is the only consumer that needs cron.
+/// The caller should call `KernelInit::shutdown_cron()` on application exit.
 ///
 /// This is the zero-overhead path for a single-tenant GUI. To support
 /// remote connections or multiple clients, use `spawn_daemon()` instead.
-pub async fn init_coordinator() -> Result<KernelInit> {
+pub async fn init_coordinator(enable_cron: bool) -> Result<KernelInit> {
     let working_dir = std::env::current_dir()?;
     let config_file = kernel::config::Config::discover_file();
     let mut config = if let Some(ref path) = config_file {
@@ -112,7 +115,7 @@ pub async fn init_coordinator() -> Result<KernelInit> {
     .await
     .context("Failed to build agent config in blocking task")?;
 
-    let coordinator = Arc::new(kernel::Coordinator::new(
+    let coordinator = kernel::Coordinator::new(
         &storage,
         provider,
         agent_config,
@@ -122,9 +125,43 @@ pub async fn init_coordinator() -> Result<KernelInit> {
         config.features.hooks.then(|| {
             kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
         }),
-    ));
+    );
 
-    Ok(KernelInit { coordinator })
+    // Start cron subsystem only when requested (GUI in-process mode).
+    let cron_shutdown = if enable_cron {
+        coordinator
+            .cron_store()
+            .map(|store| {
+                let (task_tx, task_rx) = tokio::sync::mpsc::channel(64);
+                let shutdown = CancellationToken::new();
+                let scheduler = Arc::new(kernel::cron::CronScheduler::new(
+                    store.clone(),
+                    task_tx,
+                    shutdown.clone(),
+                ));
+
+                let sched_clone = Arc::clone(&scheduler);
+                tokio::spawn(async move { sched_clone.run().await });
+
+                let worker = kernel::cron::CronWorker::new(
+                    Arc::clone(&coordinator) as Arc<dyn kernel::cron::CronExecutor>,
+                    task_rx,
+                    store.clone(),
+                    Some(Arc::clone(&scheduler)),
+                    shutdown.clone(),
+                );
+                tokio::spawn(async move { worker.run().await });
+
+                shutdown
+            })
+    } else {
+        None
+    };
+
+    Ok(KernelInit {
+        coordinator,
+        cron_shutdown,
+    })
 }
 
 /// Start the kernel server directly in a background tokio task.
@@ -136,7 +173,7 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let KernelInit { coordinator } = init_coordinator().await?;
+    let KernelInit { coordinator, .. } = init_coordinator(false).await?;
     let config_file = kernel::config::Config::discover_file();
     let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
         || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
@@ -149,7 +186,12 @@ pub async fn spawn_daemon() -> Result<()> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
+    let server = kernel::server::KernelServer::new(
+        Arc::clone(&coordinator),
+        config_file,
+        base_dir,
+        true, // enable_cron: GUI daemon has cron
+    );
     let shutdown = CancellationToken::new();
 
     {

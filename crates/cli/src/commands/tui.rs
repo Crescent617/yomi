@@ -148,7 +148,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let _log_guard = init_logging(&config)?;
 
     let coordinator: Arc<dyn CoordinatorApi> = if args.no_daemon {
-        Arc::new(create_local_coordinator(&config, &working_dir).await?)
+        create_local_coordinator(&config, &working_dir).await?
     } else {
         daemon::spawn_daemon().await?;
         Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
@@ -245,7 +245,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 async fn create_local_coordinator(
     config: &Config,
     working_dir: &Path,
-) -> Result<kernel::Coordinator> {
+) -> Result<Arc<kernel::Coordinator>> {
     let storage = kernel::StorageSet::open_with_config(&config.data_dir, config).await?;
     let provider = create_provider(config)?;
     let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);

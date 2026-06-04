@@ -37,6 +37,7 @@ impl std::fmt::Debug for AgentHandle {
 }
 
 impl AgentHandle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: AgentId,
         input_tx: mpsc::Sender<AgentInput>,

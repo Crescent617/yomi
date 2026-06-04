@@ -97,47 +97,74 @@ impl CronScheduler {
         self.reload_tx.send_modify(|v| *v += 1);
     }
 
-    /// 任务执行完成后，重新将任务加入调度队列
+    /// 任务执行完成后，重新将任务加入调度队列。
+    /// 从数据库读取最新状态，检查 `run_count` / `expires_at` / `status`，决定是否继续调度。
     pub async fn job_finished(&self, job_id: &CronJobId) {
         let mut running = self.running.write().await;
         running.remove(job_id);
         drop(running);
 
-        // 确保旧的 queue entry 被移除，避免重复
+        // 移除旧的 queue entry，避免重复
         self.remove_job(job_id).await;
 
-        // 重新加载该任务的调度时间
-        if let Ok(Some(job)) = self.store.get(job_id).await {
-            if matches!(job.status, CronJobStatus::Active) {
-                if let Ok(schedule) = CronSchedule::parse(&job.schedule) {
-                    let next = schedule.next_after(Utc::now());
-                    if let Some(next) = next {
-                        // 持久化 next_run_at 到数据库，避免内存与数据库不一致
-                        if let Err(e) = self
-                            .store
-                            .update(
-                                job_id,
-                                &crate::cron::types::UpdateCronJobInput {
-                                    next_run_at: Some(next),
-                                    ..Default::default()
-                                },
-                            )
-                            .await
-                        {
-                            tracing::warn!(
-                                "Failed to update next_run_at for job {}: {}",
-                                job_id.0,
-                                e
-                            );
-                        }
+        let now = Utc::now();
+        let job = match self.store.get(job_id).await {
+            Ok(Some(j)) => j,
+            Ok(None) => {
+                tracing::warn!("Cron job {} not found in store after execution", job_id.0);
+                return;
+            }
+            Err(e) => {
+                tracing::error!("Failed to reload cron job {}: {}", job_id.0, e);
+                return;
+            }
+        };
 
-                        let mut queue = self.queue.write().await;
-                        let mut jobs = self.jobs.write().await;
-                        queue.entry(next).or_default().push(job_id.clone());
-                        if let Some(j) = jobs.get_mut(job_id) {
-                            j.next_run_at = Some(next);
-                        }
-                    }
+        // 非 active 状态直接丢弃，不重新入队
+        if !matches!(job.status, CronJobStatus::Active) {
+            return;
+        }
+
+        // 过期
+        if let Some(expires_at) = job.expires_at {
+            if now >= expires_at {
+                self.complete_job(job_id).await;
+                return;
+            }
+        }
+
+        // 已达最大执行次数
+        if let Some(max_runs) = job.max_runs {
+            if job.run_count >= max_runs {
+                self.complete_job(job_id).await;
+                return;
+            }
+        }
+
+        // 重新计算 next_run 并更新数据库 + 缓存
+        if let Ok(schedule) = CronSchedule::parse(&job.schedule) {
+            let next = schedule.next_after(now);
+            if let Some(next) = next {
+                if let Err(e) = self.store.update(
+                    job_id,
+                    &crate::cron::types::UpdateCronJobInput {
+                        next_run_at: Some(next),
+                        ..Default::default()
+                    },
+                ).await {
+                    tracing::warn!("Failed to update next_run_at for job {}: {}", job_id.0, e);
+                }
+
+                let mut queue = self.queue.write().await;
+                let mut jobs = self.jobs.write().await;
+                queue.entry(next).or_default().push(job_id.clone());
+                if let Some(j) = jobs.get_mut(job_id) {
+                    j.next_run_at = Some(next);
+                } else {
+                    // load_jobs 可能已清空缓存，直接插入完整 job 保持 queue/jobs 一致
+                    let mut job = job;
+                    job.next_run_at = Some(next);
+                    jobs.insert(job_id.clone(), job);
                 }
             }
         }
@@ -155,42 +182,7 @@ impl CronScheduler {
         jobs.clear();
 
         for mut job in active_jobs {
-            // 如果 next_run_at 为空或已过期，重新计算
-            let next_run = match job.next_run_at {
-                Some(t) if t > now => Some(t),
-                _ => {
-                    // 重新计算 next_run
-                    match CronSchedule::parse(&job.schedule) {
-                        Ok(schedule) => {
-                            let next = schedule.next_after(now);
-                            // 更新数据库中的 next_run_at
-                            if let Err(e) = self
-                                .store
-                                .update(
-                                    &job.id,
-                                    &crate::cron::types::UpdateCronJobInput {
-                                        next_run_at: next,
-                                        ..Default::default()
-                                    },
-                                )
-                                .await
-                            {
-                                tracing::warn!(
-                                    "Failed to update next_run_at for job {}: {}",
-                                    job.id.0,
-                                    e
-                                );
-                            }
-                            next
-                        }
-                        Err(e) => {
-                            tracing::error!("Invalid schedule for job {}: {}", job.id.0, e);
-                            None
-                        }
-                    }
-                }
-            };
-
+            let next_run = Self::compute_next_run(&job, now, &self.store).await;
             if let Some(next) = next_run {
                 job.next_run_at = Some(next);
                 queue.entry(next).or_default().push(job.id.clone());
@@ -200,6 +192,43 @@ impl CronScheduler {
 
         tracing::info!("Loaded {} active cron jobs", jobs.len());
         Ok(())
+    }
+
+    /// 辅助函数：计算 job 的 `next_run`，如果缺失/过期则重新计算并回写数据库。
+    async fn compute_next_run(
+        job: &CronJob,
+        now: DateTime<Utc>,
+        store: &Arc<dyn CronStore>,
+    ) -> Option<DateTime<Utc>> {
+        match job.next_run_at {
+            Some(t) if t > now => Some(t),
+            _ => match CronSchedule::parse(&job.schedule) {
+                Ok(schedule) => {
+                    let next = schedule.next_after(now);
+                    if let Err(e) = store
+                        .update(
+                            &job.id,
+                            &crate::cron::types::UpdateCronJobInput {
+                                next_run_at: next,
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to update next_run_at for job {}: {}",
+                            job.id.0,
+                            e
+                        );
+                    }
+                    next
+                }
+                Err(e) => {
+                    tracing::error!("Invalid schedule for job {}: {}", job.id.0, e);
+                    None
+                }
+            },
+        }
     }
 
     /// 触发所有到期的任务
@@ -401,7 +430,6 @@ mod tests {
         async fn record_execution(
             &self,
             _id: &CronJobId,
-            _next_run: Option<DateTime<Utc>>,
             _error: Option<String>,
         ) -> Result<(), CronError> {
             Ok(())

@@ -208,3 +208,15 @@ impl From<std::str::Utf8Error> for CronError {
         CronError::ShellFailed(e.to_string())
     }
 }
+
+/// 渲染 cron 模板中的变量占位符：
+/// - `{{timestamp}}` → ISO8601 时间戳
+/// - `{{date}}` → YYYY-MM-DD
+/// - `{{time}}` → HH:MM:SS
+pub fn render_template(template: &str) -> String {
+    let now = chrono::Utc::now();
+    template
+        .replace("{{timestamp}}", &now.to_rfc3339())
+        .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
+        .replace("{{time}}", &now.format("%H:%M:%S").to_string())
+}

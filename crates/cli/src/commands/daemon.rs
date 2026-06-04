@@ -60,7 +60,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             })
             .await?;
 
-            let coordinator = Arc::new(kernel::Coordinator::new(
+            let coordinator = kernel::Coordinator::new(
                 &storage,
                 provider,
                 agent_config,
@@ -73,12 +73,13 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                         config.features.allow_command_hooks,
                     )
                 }),
-            ));
+            );
 
             let server = kernel::server::KernelServer::new(
                 Arc::clone(&coordinator),
                 config_file,
                 base_dir,
+                false, // enable_cron: CLI daemon does not start cron
             );
             let shutdown = tokio_util::sync::CancellationToken::new();
 

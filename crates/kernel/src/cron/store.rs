@@ -23,11 +23,10 @@ pub trait CronStore: Send + Sync {
     async fn delete(&self, id: &CronJobId) -> Result<bool, CronError>;
     /// 获取所有 active 任务（供 scheduler 加载）
     async fn list_active(&self) -> Result<Vec<CronJob>, CronError>;
-    /// `原子更新执行记录（run_count`++, `last_run_at`, `next_run_at`, `last_error`）
+    /// `原子更新执行记录（run_count`++, `last_run_at`, `last_error`）
     async fn record_execution(
         &self,
         id: &CronJobId,
-        next_run: Option<DateTime<Utc>>,
         error: Option<String>,
     ) -> Result<(), CronError>;
 }
@@ -162,20 +161,17 @@ impl CronStore for SqliteCronStore {
     async fn record_execution(
         &self,
         id: &CronJobId,
-        next_run: Option<DateTime<Utc>>,
         error: Option<String>,
     ) -> Result<(), CronError> {
         sqlx::query(
             r"UPDATE cron_jobs SET
                 run_count = run_count + 1,
                 last_run_at = ?,
-                next_run_at = ?,
                 last_error = ?,
                 updated_at = ?
             WHERE id = ?",
         )
         .bind(Utc::now().to_rfc3339())
-        .bind(next_run.map(|t| t.to_rfc3339()))
         .bind(error.as_ref())
         .bind(Utc::now().to_rfc3339())
         .bind(&id.0)

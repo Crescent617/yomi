@@ -38,7 +38,7 @@ pub struct Coordinator {
     /// Cron store for scheduled job operations.
     /// Kept here so that the Coordinator can expose a unified API for both
     /// in-process and remote clients (via `CoordinatorApi`).
-    /// 
+    ///
     /// DESIGN PRINCIPLE: Never let the client layer hold a `CronStore` directly;
     /// that would only work in local mode and break remote IPC mode. All cron
     /// operations MUST go through the Coordinator.
@@ -76,6 +76,11 @@ impl Coordinator {
             .expect("checkpoint_store not configured")
     }
 
+    /// Get cron store if configured.
+    pub fn cron_store(&self) -> Option<Arc<dyn crate::cron::CronStore>> {
+        self.cron_store.clone()
+    }
+
     /// Get data directory from `agent_shared`
     pub async fn data_dir(&self) -> std::path::PathBuf {
         self.agent_shared.read().await.data_dir.clone()
@@ -100,7 +105,7 @@ impl Coordinator {
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
         hook_registry: Option<crate::hooks::HookRegistry>,
-    ) -> Self {
+    ) -> Arc<Self> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
         let todo_storage = storage.todo_store();
@@ -140,18 +145,19 @@ impl Coordinator {
         let session_event_senders = Arc::new(DashMap::new());
         let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
         let agent_config = Arc::new(RwLock::new(agent_config));
+        let cron_store = Some(storage.cron_store());
 
         Self::spawn_session_pruner(Arc::clone(&sessions), Arc::clone(&session_event_senders));
 
-        Self {
+        Arc::new(Self {
             agent_shared,
             sessions,
             session_event_senders,
             last_activity_at,
             agent_config,
             project_store,
-            cron_store: Some(storage.cron_store()),
-        }
+            cron_store,
+        })
     }
 
     fn now_epoch() -> u64 {
@@ -917,9 +923,14 @@ impl Coordinator {
     // CLI) can use the same `CoordinatorApi` regardless of whether they are
     // talking to an in-process kernel or a remote daemon.  Never let the client
     // layer hold a `CronStore` directly — that would break remote mode.
+    //
+    // DESIGN PRINCIPLE: Every mutating cron operation (create / update / delete)
+    // automatically notifies the scheduler to reload, so callers never need to
+    // remember to do it manually.  This keeps both local (GUI in-process) and
+    // remote (KernelServer) paths consistent.
 
-    /// Create a new cron job.  Validates the schedule expression before
-    /// persisting and notifies the scheduler to reload.
+    /// Create a new cron job.  Validates the schedule expression, computes the
+    /// first `next_run_at`, persists, and notifies the scheduler.
     pub async fn create_cron_job(
         &self,
         input: crate::cron::CreateCronJobInput,
@@ -929,7 +940,6 @@ impl Coordinator {
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
 
-        // Validate schedule
         let schedule = crate::cron::CronSchedule::parse(&input.schedule)
             .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
 
@@ -988,23 +998,35 @@ impl Coordinator {
             .map_err(|e| crate::types::KernelError::storage(format!("Failed to get cron job: {e}")))
     }
 
-    /// Update a cron job.  Returns `true` if the job existed.
+    /// Update a cron job.  Validates the schedule if changed, recalculates
+    /// `next_run_at`, persists.  Returns `true` if the job existed.
+    ///
+    /// Caller is responsible for notifying the scheduler to reload if needed.
     pub async fn update_cron_job(
         &self,
         id: &crate::cron::CronJobId,
-        input: &crate::cron::UpdateCronJobInput,
+        mut input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool> {
         let store = self
             .cron_store
             .as_ref()
             .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+
+        if let Some(ref schedule_str) = input.schedule {
+            let schedule = crate::cron::CronSchedule::parse(schedule_str)
+                .map_err(|e| crate::types::KernelError::storage(e.to_string()))?;
+            input.next_run_at = schedule.next_after(Utc::now());
+        }
+
         store
-            .update(id, input)
+            .update(id, &input)
             .await
             .map_err(|e| crate::types::KernelError::storage(format!("Failed to update cron job: {e}")))
     }
 
     /// Delete a cron job.  Returns `true` if the job existed.
+    ///
+    /// Caller is responsible for notifying the scheduler to reload if needed.
     pub async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
         let store = self
             .cron_store
@@ -1014,5 +1036,54 @@ impl Coordinator {
             .delete(id)
             .await
             .map_err(|e| crate::types::KernelError::storage(format!("Failed to delete cron job: {e}")))
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::cron::CronExecutor for Coordinator {
+    async fn execute_cron_action(
+        &self,
+        action: &crate::cron::CronAction,
+    ) -> std::result::Result<(), crate::cron::CronError> {
+        use crate::cron::types::{render_template, CronAction, CronError};
+        use crate::types::{ContentBlock, SessionId};
+
+        match action {
+            CronAction::SendMessage {
+                session_id,
+                content,
+            } => {
+                let sid = SessionId(session_id.clone());
+                if self.get_session(&sid).is_none() {
+                    self.restore_session(&sid).await.map_err(CronError::Session)?;
+                }
+                let text = render_template(content);
+                let blocks = vec![ContentBlock::Text { text }];
+                self.send_message(&sid, blocks).await.map_err(CronError::Session)?;
+            }
+            CronAction::Shell {
+                command,
+                working_dir,
+            } => {
+                let output = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(working_dir.as_deref().unwrap_or("."))
+                    .kill_on_drop(true)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                    .await
+                    .map_err(CronError::Io)?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(CronError::ShellFailed(stderr.to_string()));
+                }
+            }
+            CronAction::Internal { .. } => {
+                return Err(CronError::UnsupportedAction("Internal".to_string()));
+            }
+        }
+        Ok(())
     }
 }
