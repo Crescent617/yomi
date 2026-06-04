@@ -84,7 +84,11 @@ pub async fn spawn_daemon() -> Result<()> {
 
     let mut child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
-    tokio::fs::write(pid_file_path(), pid.to_string()).await?;
+    let pid_file = pid_file_path();
+    if let Some(parent) = pid_file.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(pid_file, pid.to_string()).await?;
 
     // Poll until the daemon socket is actually accepting connections.
     // Daemon initialisation (storage, provider, skills) can take a few

@@ -8,6 +8,18 @@
 //! Falls back to OSC escape sequences if notify-rust fails.
 
 use std::io::{self, Write};
+use std::sync::OnceLock;
+
+static IN_SSH: OnceLock<bool> = OnceLock::new();
+
+/// Check if running inside an SSH session (cached at first call).
+fn in_ssh() -> bool {
+    *IN_SSH.get_or_init(|| {
+        std::env::var("SSH_CONNECTION").is_ok()
+            || std::env::var("SSH_CLIENT").is_ok()
+            || std::env::var("SSH_TTY").is_ok()
+    })
+}
 
 /// Check if running inside tmux.
 fn in_tmux() -> bool {
@@ -83,6 +95,13 @@ pub fn send_desktop_notification(title: &str, message: &str) {
         return;
     }
 
+    // In SSH sessions there is no desktop notification bus, so skip
+    // notify-rust entirely to avoid noisy failures on the TUI stdout.
+    if in_ssh() {
+        let _ = notify_osc(title, message);
+        return;
+    }
+
     // Try native notification via notify-rust
     match notify_rust::Notification::new()
         .summary(title)
@@ -90,9 +109,7 @@ pub fn send_desktop_notification(title: &str, message: &str) {
         .show()
     {
         Ok(_) => return,
-        Err(e) => {
-            tracing::warn!("notify-rust failed, falling back to OSC: {e}");
-        }
+        Err(_) => {}
     }
 
     // Fallback to OSC for terminals that support it
