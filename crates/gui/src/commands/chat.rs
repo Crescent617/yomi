@@ -5,6 +5,153 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::GuiError;
 use crate::state::AppState;
 
+/// GUI-layer camelCase wrappers for Message / ContentBlock
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageInfo {
+    pub id: String,
+    pub role: String,
+    pub content: Vec<ContentBlockInfo>,
+    pub tool_calls: Option<Vec<kernel::types::ToolCall>>,
+    pub tool_call_id: Option<String>,
+    pub created_at: String,
+    pub token_usage: Option<TokenUsageInfo>,
+    pub response_id: Option<String>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageInfo {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ContentBlockInfo {
+    Text { text: String },
+    Thinking { thinking: String, signature: Option<String> },
+    RedactedThinking { data: String },
+    ImageUrl { imageUrl: ImageUrlInfo },
+    Audio { audio: AudioDataInfo },
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageUrlInfo {
+    pub url: String,
+    pub detail: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDataInfo {
+    pub data: String,
+    pub format: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ContentBlockInput {
+    Text { text: String },
+    Thinking { thinking: String, signature: Option<String> },
+    RedactedThinking { data: String },
+    ImageUrl { imageUrl: ImageUrlInput },
+    Audio { audio: AudioDataInput },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageUrlInput {
+    pub url: String,
+    pub detail: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDataInput {
+    pub data: String,
+    pub format: String,
+}
+
+fn content_block_info(cb: &ContentBlock) -> ContentBlockInfo {
+    match cb {
+        ContentBlock::Text { text } => ContentBlockInfo::Text { text: text.clone() },
+        ContentBlock::Thinking { thinking, signature } => ContentBlockInfo::Thinking {
+            thinking: thinking.clone(),
+            signature: signature.clone(),
+        },
+        ContentBlock::RedactedThinking { data } => {
+            ContentBlockInfo::RedactedThinking { data: data.clone() }
+        }
+        ContentBlock::ImageUrl { image_url } => ContentBlockInfo::ImageUrl {
+            imageUrl: ImageUrlInfo {
+                url: image_url.url.clone(),
+                detail: image_url.detail.clone(),
+            },
+        },
+        ContentBlock::Audio { audio } => ContentBlockInfo::Audio {
+            audio: AudioDataInfo {
+                data: audio.data.clone(),
+                format: audio.format.clone(),
+            },
+        },
+    }
+}
+
+fn content_block_input(cb: ContentBlockInput) -> ContentBlock {
+    match cb {
+        ContentBlockInput::Text { text } => ContentBlock::Text { text },
+        ContentBlockInput::Thinking { thinking, signature } => {
+            ContentBlock::Thinking { thinking, signature }
+        }
+        ContentBlockInput::RedactedThinking { data } => ContentBlock::RedactedThinking { data },
+        ContentBlockInput::ImageUrl { imageUrl } => ContentBlock::ImageUrl {
+            image_url: kernel::types::ImageUrl {
+                url: imageUrl.url,
+                detail: imageUrl.detail,
+            },
+        },
+        ContentBlockInput::Audio { audio } => ContentBlock::Audio {
+            audio: kernel::types::AudioData {
+                data: audio.data,
+                format: audio.format,
+            },
+        },
+    }
+}
+
+fn message_info(msg: &kernel::types::Message) -> MessageInfo {
+    MessageInfo {
+        id: msg.id.as_str().to_string(),
+        role: match msg.role {
+            kernel::types::Role::System => "system".to_string(),
+            kernel::types::Role::User => "user".to_string(),
+            kernel::types::Role::Assistant => "assistant".to_string(),
+            kernel::types::Role::Tool => "tool".to_string(),
+        },
+        content: msg.content.iter().map(content_block_info).collect(),
+        tool_calls: msg.tool_calls.clone(),
+        tool_call_id: msg.tool_call_id.clone(),
+        created_at: msg.created_at.to_rfc3339(),
+        token_usage: msg.token_usage.as_ref().map(|tu| TokenUsageInfo {
+            prompt_tokens: tu.prompt_tokens,
+            completion_tokens: tu.completion_tokens,
+            total_tokens: tu.total_tokens,
+        }),
+        response_id: msg.response_id.clone(),
+        finish_reason: msg.finish_reason.map(|fr| match fr {
+            kernel::types::FinishReason::Stop => "stop".to_string(),
+            kernel::types::FinishReason::MaxTokens => "maxTokens".to_string(),
+            kernel::types::FinishReason::ContentFilter => "contentFilter".to_string(),
+            kernel::types::FinishReason::ToolCalls => "toolCalls".to_string(),
+        }),
+    }
+}
+
 fn parse_level(s: &str) -> Result<Level, GuiError> {
     match s.to_lowercase().as_str() {
         "safe" => Ok(Level::Safe),
@@ -34,15 +181,59 @@ pub async fn send_message(
 pub async fn send_message_blocks(
     state: State<'_, AppState>,
     session_id: String,
-    blocks: Vec<ContentBlock>,
+    blocks: Vec<ContentBlockInput>,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
+    let blocks: Vec<ContentBlock> = blocks.into_iter().map(content_block_input).collect();
     coord
         .send_message(&sid, blocks)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())
+}
+
+/// Recursively convert JSON keys from snake_case / PascalCase to camelCase.
+/// Used for kernel Event serialization so the frontend receives camelCase keys.
+fn to_camel_case_json(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut new = serde_json::Map::new();
+            for (k, v) in map {
+                let key = if k.contains('_') {
+                    snake_to_camel(&k)
+                } else if k.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
+                    let mut chars = k.chars();
+                    let first = chars.next().unwrap().to_ascii_lowercase();
+                    format!("{}{}", first, chars.as_str())
+                } else {
+                    k
+                };
+                new.insert(key, to_camel_case_json(v));
+            }
+            serde_json::Value::Object(new)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(to_camel_case_json).collect())
+        }
+        other => other,
+    }
+}
+
+fn snake_to_camel(s: &str) -> String {
+    let mut result = String::new();
+    let mut uppercase = false;
+    for c in s.chars() {
+        if c == '_' {
+            uppercase = true;
+        } else if uppercase {
+            result.push(c.to_ascii_uppercase());
+            uppercase = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[tauri::command]
@@ -75,9 +266,11 @@ pub async fn subscribe(
     let tasks_cleanup = state.event_tasks.clone();
     let handle = tauri::async_runtime::spawn(async move {
         while let Ok(event) = rx.recv().await {
+            let event_value = serde_json::to_value(&event).unwrap_or_default();
+            let event_value = to_camel_case_json(event_value);
             let payload = serde_json::json!({
                 "sessionId": sid,
-                "event": event,
+                "event": event_value,
             });
             let _ = app_handle.emit("kernel:event", payload);
         }
@@ -123,7 +316,7 @@ pub async fn get_messages(
         .map_err(GuiError::kernel)?;
     let values: Vec<_> = messages
         .into_iter()
-        .map(|m| serde_json::to_value(m).unwrap_or_default())
+        .map(|m| serde_json::to_value(message_info(&m)).unwrap_or_default())
         .collect();
     Ok(values)
 }
@@ -279,10 +472,11 @@ pub async fn rename_session(
 pub async fn send_steer(
     state: State<'_, AppState>,
     session_id: String,
-    blocks: Vec<ContentBlock>,
+    blocks: Vec<ContentBlockInput>,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
+    let blocks: Vec<ContentBlock> = blocks.into_iter().map(content_block_input).collect();
     coord
         .send_steer(&sid, blocks)
         .await

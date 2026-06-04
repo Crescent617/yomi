@@ -231,36 +231,18 @@ async function handleCommand(text: string) {
         break;
       case "/undo":
         {
-          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ sequence?: number; message_id?: string }>;
-          if (!Array.isArray(checkpoints) || checkpoints.length < 2) {
+          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ messageId?: string }>;
+          if (!Array.isArray(checkpoints) || checkpoints.length < 1) {
             showNotification("No checkpoint to undo", "error", 3000);
             return;
           }
-          const sorted = [...checkpoints].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-          const target = sorted[sorted.length - 2];
-          if (!target?.message_id) {
+          const target = checkpoints[checkpoints.length - 1];
+          if (!target?.messageId) {
             showNotification("No checkpoint to undo", "error", 3000);
             return;
           }
-          await api.rewind(sessionId, target.message_id as string);
+          await api.rewind(sessionId, target.messageId as string);
           showNotification("Undo last turn", "info", 3000);
-        }
-        break;
-      case "/rewind":
-        {
-          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ sequence?: number; message_id?: string }>;
-          if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
-            showNotification("No checkpoints to rewind", "error", 3000);
-            return;
-          }
-          const sorted = [...checkpoints].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-          const target = sorted[sorted.length - 1];
-          if (!target?.message_id) {
-            showNotification("No checkpoint to rewind", "error", 3000);
-            return;
-          }
-          await api.rewind(sessionId, target.message_id as string);
-          showNotification("Rewinding to latest checkpoint", "info", 3000);
         }
         break;
       case "/safe":
@@ -479,8 +461,8 @@ function buildContentBlocks(text: string): TaggedContentBlock[] {
   // First add all inline images
   for (const img of inlineImages) {
     blocks.push({
-      type: "image_url",
-      image_url: { url: img.url, detail: "auto" },
+      type: "imageUrl",
+      imageUrl: { url: img.url, detail: "auto" },
     });
   }
 

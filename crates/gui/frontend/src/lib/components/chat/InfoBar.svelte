@@ -10,7 +10,7 @@
 
   const displayMessages = $derived(getDisplayMessages(session?.id ?? ""));
 
-  let config = $state<{ model: string; context_window: number } | null>(null);
+  let config = $state<{ model: string; contextWindow: number } | null>(null);
 
   onMount(() => {
     api.getConfig().then(c => config = c).catch(() => {});
@@ -154,8 +154,8 @@
       {#if config}
         <span class="text-muted-foreground/60">{config.model}</span>
         <span class="text-muted-foreground/40">·</span>
-        <span class="text-muted-foreground/60" class:text-amber-500={totalTokens > config.context_window * 0.8}>
-          {formatTokens(totalTokens)} / {formatTokens(config.context_window)}
+        <span class="text-muted-foreground/60" class:text-amber-500={totalTokens > config.contextWindow * 0.8}>
+          {formatTokens(totalTokens)} / {formatTokens(config.contextWindow)}
         </span>
       {/if}
     </div>

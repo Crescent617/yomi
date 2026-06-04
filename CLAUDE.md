@@ -32,6 +32,7 @@ cargo fmt -- --check
 
 - **crates/kernel/** - Core agent system, tools, providers, and business logic
 - **crates/cli/** - Command-line interface and main entry point
+- **crates/gui/** - Desktop GUI built with Tauri v2
 - **crates/tui/** - Terminal UI components using tuirealm
 
 ## Key Patterns

@@ -140,12 +140,23 @@ pub struct CronSchedule {
 
 impl CronSchedule {
     pub fn parse(expression: &str) -> Result<Self, CronError> {
+        let trimmed = expression.trim();
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+        // cron 0.15 requires 6 fields (seconds minutes hours days months weekdays).
+        // Standard Unix cron uses 5 fields. Auto-prefix "0" for seconds when 5 fields are given.
+        let expression = if parts.len() == 5 {
+            format!("0 {trimmed}")
+        } else {
+            trimmed.to_string()
+        };
+
         let schedule: cron::Schedule = expression
             .parse()
             .map_err(|e: cron::error::Error| CronError::InvalidSchedule(e.to_string()))?;
         Ok(Self {
             schedule,
-            source: expression.to_string(),
+            source: trimmed.to_string(),
         })
     }
 

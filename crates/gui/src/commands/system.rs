@@ -86,10 +86,10 @@ pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value
 
     Ok(serde_json::json!({
         "model": model,
-        "context_window": context_window,
+        "contextWindow": context_window,
         "provider": provider,
-        "auto_approve": auto_approve,
-        "full_config": full_config,
+        "autoApprove": auto_approve,
+        "fullConfig": full_config,
     }))
 }
 
@@ -98,11 +98,11 @@ pub async fn get_usage_summary(state: State<'_, AppState>) -> Result<serde_json:
     let coord = state.coordinator.clone();
     let summary = coord.get_usage_summary().await.map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
-        "prompt_tokens": summary.prompt_tokens,
-        "completion_tokens": summary.completion_tokens,
-        "cached_tokens": summary.cached_tokens,
-        "total_tokens": summary.total_tokens(),
-        "request_count": summary.request_count,
+        "promptTokens": summary.prompt_tokens,
+        "completionTokens": summary.completion_tokens,
+        "cachedTokens": summary.cached_tokens,
+        "totalTokens": summary.total_tokens(),
+        "requestCount": summary.request_count,
     }))
 }
 
@@ -123,11 +123,11 @@ pub async fn get_daily_usage(
         .map(|d| {
             serde_json::json!({
                 "date": d.date,
-                "prompt_tokens": d.prompt_tokens,
-                "completion_tokens": d.completion_tokens,
-                "cached_tokens": d.cached_tokens,
-                "total_tokens": d.total_tokens(),
-                "request_count": d.request_count,
+                "promptTokens": d.prompt_tokens,
+                "completionTokens": d.completion_tokens,
+                "cachedTokens": d.cached_tokens,
+                "totalTokens": d.total_tokens(),
+                "requestCount": d.request_count,
                 "models": d.models,
             })
         })
@@ -147,11 +147,11 @@ pub async fn get_session_usage(
         .await
         .map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "cached_tokens": usage.cached_tokens,
-        "total_tokens": usage.total_tokens(),
-        "request_count": usage.request_count,
+        "promptTokens": usage.prompt_tokens,
+        "completionTokens": usage.completion_tokens,
+        "cachedTokens": usage.cached_tokens,
+        "totalTokens": usage.total_tokens(),
+        "requestCount": usage.request_count,
     }))
 }
 

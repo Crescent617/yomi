@@ -6,20 +6,20 @@ export interface CronJob {
   schedule: string;
   action: {
     ty: string;
-    session_id?: string;
+    sessionId?: string;
     content?: string;
     command?: string;
-    working_dir?: string;
+    workingDir?: string;
   };
   status: string; // "active" | "paused" | "completed" | "deleted" | "error"
-  created_at: string;
-  updated_at: string;
-  next_run_at: string | null;
-  last_run_at: string | null;
-  run_count: number;
-  max_runs: number | null;
-  expires_at: string | null;
-  last_error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  runCount: number;
+  maxRuns: number | null;
+  expiresAt: string | null;
+  lastError: string | null;
 }
 
 export class AutomationStore {
@@ -41,7 +41,7 @@ export class AutomationStore {
       const raw = await listCronJobs(undefined, 100);
       this.jobs = (raw as CronJob[]).sort(
         (a, b) =>
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
     } catch (e: unknown) {
       this.error = e instanceof Error ? e.message : String(e);

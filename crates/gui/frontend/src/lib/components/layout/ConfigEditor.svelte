@@ -27,7 +27,7 @@
       ]);
       content = toml.content;
       filePath = toml.path;
-      fullConfig = config?.full_config ?? "";
+      fullConfig = config?.fullConfig ?? "";
       dirty = false;
     } catch (e: unknown) {
       console.error("Failed to load config:", e);

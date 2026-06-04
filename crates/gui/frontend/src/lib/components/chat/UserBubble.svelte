@@ -18,7 +18,7 @@
   );
 
   const hasImages = $derived(
-    message.contentBlocks?.some((b) => b.type === "image_url" && b.image_url?.url) ?? false
+    message.contentBlocks?.some((b) => b.type === "imageUrl" && b.imageUrl?.url) ?? false
   );
 </script>
 
@@ -54,13 +54,13 @@
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
-        {#each message.contentBlocks ?? [] as block (block.type + (block.image_url?.url ?? block.text ?? ''))}
-          {#if block.type === "image_url" && block.image_url?.url}
+        {#each message.contentBlocks ?? [] as block (block.type + (block.imageUrl?.url ?? block.text ?? ''))}
+          {#if block.type === "imageUrl" && block.imageUrl?.url}
             <img
-              src={block.image_url.url}
+              src={block.imageUrl.url}
               alt="Uploaded image"
               class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-              onclick={() => window.open(block.image_url!.url, "_blank")}
+              onclick={() => window.open(block.imageUrl!.url, "_blank")}
             />
           {/if}
         {/each}

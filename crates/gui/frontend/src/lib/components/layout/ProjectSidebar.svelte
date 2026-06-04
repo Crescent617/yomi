@@ -170,7 +170,7 @@
     if (!project) return;
     try {
       const config = await api.getConfig();
-      const id = await api.createSession(project.dir, config?.auto_approve ?? "caution", projectId);
+      const id = await api.createSession(project.dir, config?.autoApprove ?? "caution", projectId);
       sessionState.sessions.push({
         id,
         projectPath: project.dir,
@@ -186,7 +186,7 @@
         pendingAskUser: null,
         queuedInput: null,
         updatedAt: new Date().toISOString(),
-        permissionLevel: config?.auto_approve ?? "caution",
+        permissionLevel: config?.autoApprove ?? "caution",
       });
       await activateSession(id);
     } catch (e: unknown) {

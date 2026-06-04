@@ -88,8 +88,8 @@
     const blocks: unknown[] = [];
     for (const img of homeInlineImages) {
       blocks.push({
-        type: "image_url",
-        image_url: { url: img.url, detail: "auto" },
+        type: "imageUrl",
+        imageUrl: { url: img.url, detail: "auto" },
       });
     }
     const trimmed = text.trim();
@@ -152,8 +152,8 @@
     }).catch(() => {});
     api.getConfig().then(c => {
       if (cancelled) return;
-      if (c?.auto_approve) {
-        permissionLevel = c.auto_approve;
+      if (c?.autoApprove) {
+        permissionLevel = c.autoApprove;
       } else {
         permissionLevel = "caution";
       }
@@ -171,7 +171,7 @@
     if (!level) {
       try {
         const c = await api.getConfig();
-        level = c.auto_approve || "caution";
+        level = c.autoApprove || "caution";
       } catch {
         level = "caution";
       }

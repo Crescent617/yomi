@@ -232,14 +232,14 @@ export interface ChatMessage {
   id?: unknown;
   role: unknown;
   content?: string | TaggedContentBlock[];
-  tool_call_id?: string;
-  tool_calls?: RawToolCall[];
+  toolCallId?: string;
+  toolCalls?: RawToolCall[];
 }
 
 interface RawToolCall {
   id?: string;
   name?: string;
-  tool_name?: string;
+  toolName?: string;
   arguments?: string | Record<string, unknown>;
 }
 
@@ -263,13 +263,13 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
     } else if (typeof m.content === "string") {
       output = m.content;
     }
-    if (m.tool_call_id) {
-      toolOutputs[m.tool_call_id] = output;
-      const cleanId = m.tool_call_id.replace(/^functions\./, "");
-      if (cleanId !== m.tool_call_id) {
+    if (m.toolCallId) {
+      toolOutputs[m.toolCallId] = output;
+      const cleanId = m.toolCallId.replace(/^functions\./, "");
+      if (cleanId !== m.toolCallId) {
         toolOutputs[cleanId] = output;
       }
-      const match = m.tool_call_id.match(/^functions\.(\w+):/);
+      const match = m.toolCallId.match(/^functions\.(\w+):/);
       if (match) {
         toolOutputByName[match[1].toLowerCase()] = output;
       }
@@ -350,12 +350,12 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         text = m.content;
       }
 
-      // Extract tool_calls from the message
+      // Extract toolCalls from the message
       const tools: ToolCall[] = [];
-      if (Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
+      if (Array.isArray(m.toolCalls)) {
+        for (const tc of m.toolCalls) {
           const toolId = tc.id || "";
-          const toolName = tc.name || tc.tool_name || "";
+          const toolName = tc.name || tc.toolName || "";
           let args = "";
           if (tc.arguments) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
@@ -406,28 +406,28 @@ interface ChunkContent {
 
 interface ModelChunk {
   Chunk?: { content: ChunkContent };
-  ToolCallDelta?: { tool_id: string; tool_name: string; arguments_delta?: string };
+  ToolCallDelta?: { toolId: string; toolName: string; argumentsDelta?: string };
   Completed?: Record<string, never>;
   Error?: { message: string };
   Compacting?: { active: boolean };
 }
 
 interface ToolStart {
-  tool_id: string;
-  tool_name: string;
+  toolId: string;
+  toolName: string;
   arguments?: string;
 }
 
 interface ToolEnd {
-  tool_id: string;
-  tool_name: string;
-  is_error: boolean;
-  elapsed_ms: number;
-  content_blocks?: TaggedContentBlock[];
+  toolId: string;
+  toolName: string;
+  isError: boolean;
+  elapsedMs: number;
+  contentBlocks?: TaggedContentBlock[];
 }
 
 interface ToolProgress {
-  tool_id: string;
+  toolId: string;
   message?: string;
   tokens?: number;
 }
@@ -440,12 +440,12 @@ interface ToolEvent {
 
 interface AgentLifecycleStopped {
   state: {
-    Stopped: {
+    stopped: {
       reason:
-        | { Cancelled: { operation?: string } }
-        | { Failed: { error: string } }
-        | { MaxIterations: { reached: number } }
-        | { Completed: true };
+        | { cancelled: { operation?: string } }
+        | { failed: { error: string } }
+        | { maxIterations: { reached: number } }
+        | { completed: true };
     };
   };
 }
@@ -459,16 +459,16 @@ type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 interface AgentEvent {
   Lifecycle?: AgentLifecycle;
   Error?: { message?: string };
-  PermissionRequest?: {
-    req_id: string;
-    tool_name: string;
-    tool_args?: string;
-    tool_level?: string;
+  permissionRequest?: {
+    reqId: string;
+    toolName: string;
+    toolArgs?: string;
+    toolLevel?: string;
     reason?: string;
   };
   AskUser?: {
-    req_id: string;
-    agent_id: string;
+    reqId: string;
+    agentId: string;
     questions: AskQuestion[];
   };
 }
@@ -476,40 +476,40 @@ interface AgentEvent {
 interface SystemEvent {
   Connected?: Record<string, never>;
   Disconnected?: Record<string, never>;
-  SessionSwitched?: { session_id: string };
-  TitleUpdated?: { session_id: string; title: string };
-  Rewound?: { session_id: string; messages: RawMessage[] };
+  SessionSwitched?: { sessionId: string };
+  TitleUpdated?: { sessionId: string; title: string };
+  Rewound?: { sessionId: string; messages: RawMessage[] };
 }
 
 interface UserEvent {
-  Message?: {
-    message_id: string;
+  message?: {
+    messageId: string;
     content: TaggedContentBlock[];
   };
 }
 
 type KernelEvent =
-  | { Model: ModelChunk }
-  | { Agent: AgentEvent }
-  | { System: SystemEvent }
-  | { Tool: ToolEvent }
-  | { User: UserEvent };
+  | { model: ModelChunk }
+  | { agent: AgentEvent }
+  | { system: SystemEvent }
+  | { tool: ToolEvent }
+  | { user: UserEvent };
 
 export function handleEvent(sessionId: string, rawEvent: unknown) {
   const session = getSession(sessionId);
   if (!session) return;
 
   const ev = rawEvent as KernelEvent;
-  if ("Model" in ev) {
-    handleModelEvent(session, ev.Model);
-  } else if ("Agent" in ev) {
-    handleAgentEvent(session, ev.Agent);
-  } else if ("System" in ev) {
-    handleSystemEvent(session, ev.System);
-  } else if ("Tool" in ev) {
-    handleToolEvent(session, ev.Tool);
-  } else if ("User" in ev) {
-    handleUserEvent(session, ev.User);
+  if ("model" in ev) {
+    handleModelEvent(session, ev.model);
+  } else if ("agent" in ev) {
+    handleAgentEvent(session, ev.agent);
+  } else if ("system" in ev) {
+    handleSystemEvent(session, ev.system);
+  } else if ("tool" in ev) {
+    handleToolEvent(session, ev.tool);
+  } else if ("user" in ev) {
+    handleUserEvent(session, ev.user);
   }
 
   if (sessionState.activeSessionId !== sessionId) {
@@ -531,8 +531,8 @@ function findToolById(session: SessionState, toolId: string): { msg: ChatMessage
 }
 
 function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
-  if (event.Chunk) {
-    const chunk = event.Chunk;
+  if (event.chunk) {
+    const chunk = event.chunk;
     const content = chunk.content;
     // Any chunk from the model means streaming is active
     if (!session.streaming) session.streaming = true;
@@ -561,8 +561,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       return true;
     }
     return true;
-  } else if (event.ToolCallDelta) {
-    const delta = event.ToolCallDelta;
+  } else if (event.toolCallDelta) {
+    const delta = event.toolCallDelta;
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
@@ -570,19 +570,19 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
+    let tool = lastMsg.tools.find((t) => t.id === delta.toolId);
     if (!tool) {
-      tool = { id: delta.tool_id, toolName: delta.tool_name, status: "running", arguments: "", folded: true };
+      tool = { id: delta.toolId, toolName: delta.toolName, status: "running", arguments: "", folded: true };
       lastMsg.tools.push(tool);
     }
-    if (delta.arguments_delta) {
-      tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
+    if (delta.argumentsDelta) {
+      tool.arguments = (tool.arguments ?? "") + delta.argumentsDelta;
     }
     streamingMessages[session.id] = buf;
     if (!session.streaming) session.streaming = true;
     return true;
-  } else if (event.Compacting) {
-    const active = event.Compacting.active;
+  } else if (event.compacting) {
+    const active = event.compacting.active;
     session.compacting = active;
     if (!active) {
       // Compaction finished — reload messages to reflect compacted history
@@ -591,7 +591,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       }).catch((e: Error) => console.error("Failed to reload messages after compaction:", e));
     }
     return true;
-  } else if (event.Completed) {
+  } else if (event.completed) {
     // Streaming chunks finished — merge buffer, but do not mutate session.messages
     // here. User messages are added only via UserEvent::Message from the kernel.
     const buf = streamingMessages[session.id] ?? [];
@@ -600,7 +600,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       streamingMessages[session.id] = [];
     }
     return true;
-  } else if (event.Error) {
+  } else if (event.error) {
     // Model-level streaming error — Stopped::Failed will end streaming
     return false;
   }
@@ -608,9 +608,9 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
 }
 
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
-  if (event.Start) {
-    const start = event.Start;
-    const found = findToolById(session, start.tool_id);
+  if (event.start) {
+    const start = event.start;
+    const found = findToolById(session, start.toolId);
     if (found) {
       found.tool.status = "running";
       if (start.arguments) found.tool.arguments = start.arguments;
@@ -623,37 +623,37 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
+    let tool = lastMsg.tools.find((t) => t.id === start.toolId);
     if (!tool) {
       tool = {
-        id: start.tool_id,
-        toolName: start.tool_name,
+        id: start.toolId,
+        toolName: start.toolName,
         status: "running",
         arguments: start.arguments ?? "",
         folded: true,
       };
       lastMsg.tools.push(tool);
-      showNotification(`Calling ${start.tool_name}...`, "info", 2000);
+      showNotification(`Calling ${start.toolName}...`, "info", 2000);
     } else {
       tool.status = "running";
       if (start.arguments) tool.arguments = start.arguments;
     }
     streamingMessages[session.id] = buf;
     return true;
-  } else if (event.End) {
-    const end = event.End;
-    const found = findToolById(session, end.tool_id);
+  } else if (event.end) {
+    const end = event.end;
+    const found = findToolById(session, end.toolId);
     if (found) {
-      found.tool.status = end.is_error ? "failed" : "completed";
-      found.tool.elapsedMs = end.elapsed_ms;
-      found.tool.output = end.content_blocks
+      found.tool.status = end.isError ? "failed" : "completed";
+      found.tool.elapsedMs = end.elapsedMs;
+      found.tool.output = end.contentBlocks
         ?.map((b: TaggedContentBlock) => {
           if (typeof b === "string") return b;
           return b.type === "text" && b.text ? b.text : "";
         })
         .join("");
-      if (end.is_error) {
-        showNotification(`${end.tool_name} failed`, "error", 4000);
+      if (end.isError) {
+        showNotification(`${end.toolName} failed`, "error", 4000);
       }
       return true;
     }
@@ -664,34 +664,34 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === end.tool_id);
+    let tool = lastMsg.tools.find((t) => t.id === end.toolId);
     if (!tool) {
       // Tool 的 Start 事件可能丢失，从 End 重建
       tool = {
-        id: end.tool_id,
-        toolName: end.tool_name,
-        status: end.is_error ? "failed" : "completed",
+        id: end.toolId,
+        toolName: end.toolName,
+        status: end.isError ? "failed" : "completed",
         arguments: "",
         folded: true,
       };
       lastMsg.tools.push(tool);
     }
-    tool.status = end.is_error ? "failed" : "completed";
-    tool.elapsedMs = end.elapsed_ms;
-    tool.output = end.content_blocks
+    tool.status = end.isError ? "failed" : "completed";
+    tool.elapsedMs = end.elapsedMs;
+    tool.output = end.contentBlocks
       ?.map((b: TaggedContentBlock) => {
         if (typeof b === "string") return b;
         return b.type === "text" && b.text ? b.text : "";
       })
       .join("");
-    if (end.is_error) {
-      showNotification(`${end.tool_name} failed`, "error", 4000);
+    if (end.isError) {
+      showNotification(`${end.toolName} failed`, "error", 4000);
     }
     streamingMessages[session.id] = buf;
     return true;
-  } else if (event.Progress) {
-    const progress = event.Progress;
-    const found = findToolById(session, progress.tool_id);
+  } else if (event.progress) {
+    const progress = event.progress;
+    const found = findToolById(session, progress.toolId);
     if (found) {
       found.tool.progress = progress.message;
       found.tool.tokens = progress.tokens;
@@ -704,10 +704,10 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
+    let tool = lastMsg.tools.find((t) => t.id === progress.toolId);
     if (!tool) {
       tool = {
-        id: progress.tool_id,
+        id: progress.toolId,
         toolName: "",
         status: "running",
         arguments: "",
@@ -724,14 +724,14 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
 }
 
 function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
-  if (event.Lifecycle) {
-    const state = event.Lifecycle.state;
+  if (event.lifecycle) {
+    const state = event.lifecycle.state;
     if (state === "Running" && !session.streaming) {
       session.streaming = true;
       showNotification("AI is responding...", "info", 2000);
       return true;
     } else if (typeof state === "object") {
-      if (state.Stopped && session.streaming) {
+      if (state.stopped && session.streaming) {
         session.streaming = false;
         const buf = streamingMessages[session.id] ?? [];
         if (buf.length > 0) {
@@ -748,9 +748,9 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
           }
         }
-        const stopReason = state.Stopped.reason;
-        if ("Cancelled" in stopReason) {
-          const op = stopReason.Cancelled.operation;
+        const stopReason = state.stopped.reason;
+        if ("cancelled" in stopReason) {
+          const op = stopReason.cancelled.operation;
           const msg = op ? `Cancelled: ${op}` : "Cancelled";
           session.messages = [...session.messages, {
             id: crypto.randomUUID(),
@@ -762,8 +762,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           }];
           showNotification(msg, "warning", 3000);
           return true;
-        } else if ("Failed" in stopReason) {
-          const errorMsg = "Task failed: " + (stopReason.Failed.error ?? "Unknown");
+        } else if ("failed" in stopReason) {
+          const errorMsg = "Task failed: " + (stopReason.failed.error ?? "Unknown");
           session.messages = [...session.messages, {
             id: crypto.randomUUID(),
             role: "system",
@@ -774,9 +774,9 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           }];
           showNotification(errorMsg, "error", 5000);
           return true;
-        } else if ("MaxIterations" in stopReason) {
+        } else if ("maxIterations" in stopReason) {
           showNotification(
-            `Max iterations reached (${stopReason.MaxIterations.reached})`,
+            `Max iterations reached (${stopReason.maxIterations.reached})`,
             "warning",
             5000,
           );
@@ -786,14 +786,14 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         return true;
       }
     }
-  } else if (event.Error && session.streaming) {
+  } else if (event.error && session.streaming) {
     session.streaming = false;
     const buf = streamingMessages[session.id] ?? [];
     if (buf.length > 0) {
       session.messages = [...session.messages, ...buf];
       streamingMessages[session.id] = [];
     }
-    const errorMsg = "Agent error: " + (event.Error.message ?? "Unknown");
+    const errorMsg = "Agent error: " + (event.error.message ?? "Unknown");
     session.messages = [...session.messages, {
       id: crypto.randomUUID(),
       role: "system",
@@ -804,22 +804,22 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     }];
     showNotification(errorMsg, "error", 5000);
     return true;
-  } else if (event.PermissionRequest) {
-    const req = event.PermissionRequest;
+  } else if (event.permissionRequest) {
+    const req = event.permissionRequest;
     session.pendingPermissions.push({
-      reqId: req.req_id,
-      toolName: req.tool_name,
-      toolArgs: req.tool_args ?? "",
-      toolLevel: req.tool_level ?? "safe",
+      reqId: req.reqId,
+      toolName: req.toolName,
+      toolArgs: req.toolArgs ?? "",
+      toolLevel: req.toolLevel ?? "safe",
       reason: req.reason ?? "",
     });
-    showNotification(`${req.tool_name} needs approval`, "warn", 5000);
+    showNotification(`${req.toolName} needs approval`, "warn", 5000);
     return true;
-  } else if (event.AskUser) {
-    const req = event.AskUser;
+  } else if (event.askUser) {
+    const req = event.askUser;
     session.pendingAskUser = {
-      reqId: req.req_id,
-      agentId: req.agent_id,
+      reqId: req.reqId,
+      agentId: req.agentId,
       questions: req.questions,
     };
     showNotification("Agent has a question for you", "info", 5000);
@@ -829,8 +829,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
 }
 
 function handleUserEvent(session: SessionState, event: UserEvent): boolean {
-  if (event.Message) {
-    const msg = event.Message;
+  if (event.message) {
+    const msg = event.message;
     const content = msg.content
       ?.map((b: TaggedContentBlock) => {
         if (typeof b === "string") return b;
@@ -840,7 +840,7 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
     const hasNonText = Array.isArray(msg.content) && msg.content.some((b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text");
     session.messages = [
       ...session.messages,
-      { id: msg.message_id, role: "user", content, contentBlocks: hasNonText ? msg.content : undefined, thinking: null, tools: [] },
+      { id: msg.messageId, role: "user", content, contentBlocks: hasNonText ? msg.content : undefined, thinking: null, tools: [] },
     ];
     session.updatedAt = new Date().toISOString();
     // User message received → show streaming indicator immediately
@@ -851,24 +851,24 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
 }
 
 function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
-  if (event.Connected) {
+  if (event.connected) {
     showNotification("Connected", "success", 2000);
     return true;
-  } else if (event.Disconnected) {
+  } else if (event.disconnected) {
     showNotification("Disconnected", "error", 3000);
     return true;
-  } else if (event.SessionSwitched) {
+  } else if (event.sessionSwitched) {
     return true;
-  } else if (event.TitleUpdated) {
-    if (event.TitleUpdated.session_id !== session.id) return false;
-    session.alias = event.TitleUpdated.title;
+  } else if (event.titleUpdated) {
+    if (event.titleUpdated.sessionId !== session.id) return false;
+    session.alias = event.titleUpdated.title;
     return true;
-  } else if (event.Rewound) {
-    if (event.Rewound.session_id !== session.id) return false;
+  } else if (event.rewound) {
+    if (event.rewound.sessionId !== session.id) return false;
     // Clear any streaming buffer since history changed
     streamingMessages[session.id] = [];
     session.streaming = false;
-    loadSessionMessages(session.id, event.Rewound.messages);
+    loadSessionMessages(session.id, event.rewound.messages);
     // Refresh checkpoints list after rewind
     api.getCheckpoints(session.id).then((cps) => {
       session.checkpoints = cps;

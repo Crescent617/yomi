@@ -91,7 +91,7 @@ export async function listSessions(
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
-  const result = await invokeCmd<{ sessions: unknown[]; has_more: boolean }>(
+  const result = await invokeCmd<{ sessions: unknown[]; hasMore: boolean }>(
     "list_sessions",
     { projectId, before, limit }
   );
@@ -101,16 +101,16 @@ export async function listSessions(
       return {
         id: String(session.id ?? ""),
         projectPath: String(session.workingDir ?? ""),
-        createdAt: String(session.created_at ?? ""),
-        endedAt: session.updated_at ? String(session.updated_at) : undefined,
+        createdAt: String(session.createdAt ?? ""),
+        endedAt: session.updatedAt ? String(session.updatedAt) : undefined,
         title: session.title ? String(session.title) : undefined,
         projectId: session.projectId ? String(session.projectId) : undefined,
-        autoApproveLevel: session.auto_approve_level
-          ? String(session.auto_approve_level)
+        autoApproveLevel: session.autoApproveLevel
+          ? String(session.autoApproveLevel)
           : undefined,
       };
     }),
-    hasMore: result.has_more,
+    hasMore: result.hasMore,
   };
 }
 
@@ -232,20 +232,20 @@ export async function saveConfigToml(content: string): Promise<void> {
 
 export async function getConfig(): Promise<{
   model: string;
-  context_window: number;
+  contextWindow: number;
   provider: string;
-  auto_approve: string;
-  full_config: string;
+  autoApprove: string;
+  fullConfig: string;
 }> {
   return invokeCmd("get_config");
 }
 
 export async function getUsageSummary(): Promise<{
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  total_tokens: number;
-  request_count: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalTokens: number;
+  requestCount: number;
 }> {
   return invokeCmd("get_usage_summary");
 }
@@ -253,11 +253,11 @@ export async function getUsageSummary(): Promise<{
 export async function getDailyUsage(days: number): Promise<
   {
     date: string;
-    prompt_tokens: number;
-    completion_tokens: number;
-    cached_tokens: number;
-    total_tokens: number;
-    request_count: number;
+    promptTokens: number;
+    completionTokens: number;
+    cachedTokens: number;
+    totalTokens: number;
+    requestCount: number;
     models: string[];
   }[]
 > {
@@ -265,11 +265,11 @@ export async function getDailyUsage(days: number): Promise<
 }
 
 export async function getSessionUsage(sessionId: string): Promise<{
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  total_tokens: number;
-  request_count: number;
+  promptTokens: number;
+  completionTokens: number;
+  cachedTokens: number;
+  totalTokens: number;
+  requestCount: number;
 }> {
   return invokeCmd("get_session_usage", { sessionId });
 }
@@ -316,14 +316,14 @@ export async function createCronJob(input: {
   name: string;
   schedule: string;
   action: Record<string, unknown>;
-  max_runs?: number;
-  expires_at?: string;
+  maxRuns?: number;
+  expiresAt?: string;
 }): Promise<string> {
   return invokeCmd("create_cron_job", input);
 }
 
 export async function updateCronJob(
-  job_id: string,
+  jobId: string,
   input: {
     name?: string;
     schedule?: string;
@@ -333,13 +333,13 @@ export async function updateCronJob(
     expiresAt?: string;
   },
 ): Promise<void> {
-  return invokeCmd("update_cron_job", { job_id, ...input });
+  return invokeCmd("update_cron_job", { jobId, ...input });
 }
 
-export async function deleteCronJob(job_id: string): Promise<void> {
-  return invokeCmd("delete_cron_job", { job_id });
+export async function deleteCronJob(jobId: string): Promise<void> {
+  return invokeCmd("delete_cron_job", { jobId });
 }
 
-export async function triggerCronJob(job_id: string): Promise<void> {
-  return invokeCmd("trigger_cron_job", { job_id });
+export async function triggerCronJob(jobId: string): Promise<void> {
+  return invokeCmd("trigger_cron_job", { jobId });
 }

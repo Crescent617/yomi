@@ -13,13 +13,13 @@
 
   let name = $state(editingJob?.name ?? "");
   let schedule = $state(editingJob?.schedule ?? "");
-  let actionType = $state(editingJob?.action.ty ?? "send_message");
-  let sessionId = $state(editingJob?.action.session_id ?? "");
+  let actionType = $state(editingJob?.action.ty ?? "sendMessage");
+  let sessionId = $state(editingJob?.action.sessionId ?? "");
   let content = $state(editingJob?.action.content ?? "");
   let command = $state(editingJob?.action.command ?? "");
-  let workingDir = $state(editingJob?.action.working_dir ?? "");
-  let maxRuns = $state(editingJob?.max_runs ?? "");
-  let expiresAt = $state(editingJob?.expires_at ? utcToLocalDatetimeLocal(editingJob.expires_at) : "");
+  let workingDir = $state(editingJob?.action.workingDir ?? "");
+  let maxRuns = $state(editingJob?.maxRuns ?? "");
+  let expiresAt = $state(editingJob?.expiresAt ? utcToLocalDatetimeLocal(editingJob.expiresAt) : "");
 
   let showAdvanced = $state(false);
   let scheduleValid = $state<boolean | null>(null);
@@ -27,9 +27,20 @@
   let saving = $state(false);
   let error = $state("");
 
+  function extractErrorMessage(e: unknown): string {
+    if (e instanceof Error) return e.message;
+    if (typeof e === "string") return e;
+    if (e && typeof e === "object" && "message" in e) return String((e as Record<string, unknown>).message);
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
+
   function validateSchedule(s: string) {
     if (!s) { scheduleValid = null; scheduleError = ""; return; }
-    // Basic cron validation: must have 5-6 fields or be a simple expression
+    // Must have 5 or 6 fields (standard Unix cron or with seconds)
     const parts = s.trim().split(/\s+/);
     if (parts.length !== 5 && parts.length !== 6) {
       scheduleValid = false;
@@ -49,12 +60,12 @@
     error = "";
 
     const action: Record<string, unknown> = { ty: actionType };
-    if (actionType === "send_message") {
-      action.session_id = sessionId.trim() || undefined;
+    if (actionType === "sendMessage") {
+      action.sessionId = sessionId.trim() || undefined;
       action.content = content;
     } else if (actionType === "shell") {
       action.command = command;
-      action.working_dir = workingDir.trim() || undefined;
+      action.workingDir = workingDir.trim() || undefined;
     }
 
     const payload: Record<string, unknown> = {
@@ -65,21 +76,21 @@
 
     const maxRunsNum = maxRuns ? parseInt(String(maxRuns), 10) : undefined;
     if (maxRunsNum !== undefined && !Number.isNaN(maxRunsNum)) {
-      payload.max_runs = maxRunsNum;
+      payload.maxRuns = maxRunsNum;
     }
     if (expiresAt) {
-      payload.expires_at = new Date(expiresAt).toISOString();
+      payload.expiresAt = new Date(expiresAt).toISOString();
     }
 
     try {
       if (editingJob) {
         await updateCronJob(editingJob.id, payload);
       } else {
-        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; max_runs?: number; expires_at?: string });
+        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; maxRuns?: number; expiresAt?: string });
       }
       onSaved();
     } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
+      error = extractErrorMessage(e);
     } finally {
       saving = false;
     }
@@ -139,7 +150,7 @@
         {#if scheduleError}
           <p class="text-xs text-red-500 mt-1">{scheduleError}</p>
         {:else}
-          <p class="text-xs text-muted-foreground mt-1">5 fields (min hour dom mon dow) or 6 (with seconds)</p>
+          <p class="text-xs text-muted-foreground mt-1">5 or 6 fields (optional seconds prefix)</p>
         {/if}
       </div>
 
@@ -149,9 +160,9 @@
         <div class="flex gap-2">
           <button
             type="button"
-            onclick={() => actionType = "send_message"}
+            onclick={() => actionType = "sendMessage"}
             class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                   {actionType === 'send_message' ? 'bg-primary/10 border-primary text-primary' : 'border-input hover:bg-muted'}"
+                   {actionType === 'sendMessage' ? 'bg-primary/10 border-primary text-primary' : 'border-input hover:bg-muted'}"
           >
             💬 Send Message
           </button>
@@ -167,7 +178,7 @@
       </div>
 
       <!-- Action fields -->
-      {#if actionType === "send_message"}
+      {#if actionType === "sendMessage"}
         <div>
           <label class="block text-sm font-medium mb-1">Session ID</label>
           <input

@@ -7,7 +7,6 @@ export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
   ["/yolo", "Toggle YOLO mode (auto-approve all tools)"],
   ["/browse", "Toggle browse mode"],
   ["/sessions", "Switch to another session"],
-  ["/rewind", "Restore conversation/file checkpoint"],
   ["/undo", "Undo last turn"],
   ["/compact", "Force message compaction"],
   ["/reload", "Reload skills and hooks from disk"],

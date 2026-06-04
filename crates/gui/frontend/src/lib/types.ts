@@ -5,9 +5,9 @@ export interface TaggedContentBlock {
   text?: string;
   thinking?: string;
   signature?: string;
-  image_url?: { url: string };
+  imageUrl?: { url: string };
   url?: string;
-  mime_type?: string;
+  mimeType?: string;
 }
 
 export interface ContentBlockText {
@@ -16,8 +16,8 @@ export interface ContentBlockText {
 }
 
 export interface ContentBlockImage {
-  type: "image_url";
-  image_url: { url: string };
+  type: "imageUrl";
+  imageUrl: { url: string };
 }
 
 export type ContentBlock = ContentBlockText | ContentBlockImage | TaggedContentBlock;

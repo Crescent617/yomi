@@ -6,6 +6,7 @@ use crate::error::GuiError;
 use crate::state::AppState;
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: String,
     pub created_at: String,
@@ -13,15 +14,13 @@ pub struct SessionInfo {
     pub parent_id: Option<String>,
     pub title: Option<String>,
     pub message_count: i64,
-    #[serde(rename = "projectId")]
     pub project_id: Option<String>,
-    #[serde(rename = "workingDir")]
     pub working_dir: Option<String>,
-    #[serde(rename = "autoApproveLevel")]
     pub auto_approve_level: Option<String>,
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaginatedSessions {
     pub sessions: Vec<SessionInfo>,
     pub has_more: bool,

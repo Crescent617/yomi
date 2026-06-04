@@ -5,6 +5,7 @@ use crate::error::GuiError;
 use crate::state::AppState;
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {
     pub id: String,
     pub name: String,
