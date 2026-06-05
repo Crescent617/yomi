@@ -50,7 +50,7 @@ pub enum ControlCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UserEvent {
     /// User message with multi-modal content blocks
     Message {
@@ -60,7 +60,7 @@ pub enum UserEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AgentEvent {
     /// Agent 生命周期状态变化
     Lifecycle {
@@ -103,7 +103,7 @@ pub enum AgentEvent {
 
 /// Agent lifecycle state change (business-level, distinct from internal `AgentState`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AgentStatus {
     /// Agent started running
     Running,
@@ -113,7 +113,7 @@ pub enum AgentStatus {
 
 /// Reasons why the Agent stopped
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StopReason {
     /// Normal completion of a step
     Completed {
@@ -143,7 +143,7 @@ pub enum ErrorPhase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ModelEvent {
     Request {
         agent_id: AgentId,
@@ -197,7 +197,7 @@ pub enum ModelEvent {
 
 /// Content chunk for streaming
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ContentChunk {
     Text(String),
     Thinking {
@@ -208,7 +208,7 @@ pub enum ContentChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ToolEvent {
     Start {
         agent_id: AgentId,
@@ -241,7 +241,7 @@ pub enum ToolEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SystemEvent {
     /// Session shutdown (main agent ended)
     Shutdown {

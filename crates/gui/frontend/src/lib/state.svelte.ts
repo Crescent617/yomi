@@ -599,6 +599,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     if (!tool) {
       tool = { id: delta.toolId, toolName: delta.toolName, status: "running", arguments: "", folded: true };
       lastMsg.tools.push(tool);
+    } else if (delta.toolName) {
+      tool.toolName = delta.toolName;
     }
     if (delta.argumentsDelta) {
       tool.arguments = (tool.arguments ?? "") + delta.argumentsDelta;
@@ -888,7 +890,10 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     return true;
   } else if (event.titleUpdated) {
     if (event.titleUpdated.sessionId !== session.id) return false;
-    session.alias = event.titleUpdated.title;
+    const idx = sessionState.sessions.findIndex((s) => s.id === session.id);
+    if (idx >= 0) {
+      sessionState.sessions[idx] = { ...sessionState.sessions[idx], alias: event.titleUpdated.title };
+    }
     return true;
   } else if (event.rewound) {
     if (event.rewound.sessionId !== session.id) return false;

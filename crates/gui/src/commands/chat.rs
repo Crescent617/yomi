@@ -31,7 +31,7 @@ pub struct TokenUsageInfo {
 }
 
 #[derive(serde::Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ContentBlockInfo {
     Text { text: String },
     Thinking { thinking: String, signature: Option<String> },
@@ -55,7 +55,7 @@ pub struct AudioDataInfo {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ContentBlockInput {
     Text { text: String },
     Thinking { thinking: String, signature: Option<String> },
