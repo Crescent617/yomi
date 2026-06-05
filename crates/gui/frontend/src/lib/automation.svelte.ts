@@ -23,6 +23,17 @@ export interface CronJob {
   lastError: string | null;
 }
 
+function extractErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e) return String((e as Record<string, unknown>).message);
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
 export class AutomationStore {
   jobs = $state<CronJob[]>([]);
   loading = $state(false);
@@ -45,7 +56,7 @@ export class AutomationStore {
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
     } catch (e: unknown) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = extractErrorMessage(e);
     } finally {
       this.loading = false;
     }
@@ -57,7 +68,7 @@ export class AutomationStore {
       this.jobs = this.jobs.filter((j) => j.id !== jobId);
       if (this.selectedJobId === jobId) this.selectedJobId = null;
     } catch (e: unknown) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = extractErrorMessage(e);
     }
   }
 
@@ -67,7 +78,7 @@ export class AutomationStore {
       await updateCronJob(job.id, { status: newStatus });
       await this.load();
     } catch (e: unknown) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = extractErrorMessage(e);
     }
   }
 
@@ -79,7 +90,7 @@ export class AutomationStore {
       const sessionId = job?.action?.sessionId;
       sendDesktopNotification("Yomi", `Task "${job?.name ?? jobId}" completed`, sessionId);
     } catch (e: unknown) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = extractErrorMessage(e);
       const job = this.jobs.find((j) => j.id === jobId);
       const sessionId = job?.action?.sessionId;
       sendDesktopNotification("Yomi", `Task "${jobId}" failed: ${this.error}`, sessionId);

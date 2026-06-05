@@ -62,7 +62,7 @@
       showNotification("Config saved", "success", 2000);
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
-      fullConfig = c?.full_config ?? "";
+      fullConfig = c?.fullConfig ?? "";
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
       showNotification(`Failed to save: ${e instanceof Error ? e.message : ""}`, "error", 4000);

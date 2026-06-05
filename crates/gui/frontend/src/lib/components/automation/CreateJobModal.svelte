@@ -205,6 +205,8 @@
             bind:value={command}
             placeholder="echo hello"
             rows="3"
+            lang="en"
+            spellcheck={false}
             class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
           ></textarea>
         </div>
