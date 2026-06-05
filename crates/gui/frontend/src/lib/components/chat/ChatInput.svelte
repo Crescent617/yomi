@@ -169,6 +169,12 @@ const historyEntries = $derived.by(() => {
 });
 
 // ── actions ──
+export function focus() {
+  requestAnimationFrame(() => {
+    textareaRef?.focus();
+  });
+}
+
 export function setContent(text: string) {
   content = text;
   clearInlineImages();

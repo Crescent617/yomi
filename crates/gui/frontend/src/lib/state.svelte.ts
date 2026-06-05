@@ -242,10 +242,11 @@ function extractId(raw: unknown): string {
   return typeof raw === "string" && raw.length > 0 ? raw : crypto.randomUUID();
 }
 
-function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" {
+function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" | "error" {
   if (role === "User" || role === "user") return "user";
   if (role === "tool" || role === "Tool") return "tool";
   if (role === "system" || role === "System") return "system";
+  if (role === "error" || role === "Error") return "error";
   return "assistant";
 }
 
@@ -333,7 +334,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         thinking: null,
         tools: [],
       });
-    } else if (role === "system") {
+    } else if (role === "system" || role === "error") {
       let text = "";
       if (Array.isArray(m.content)) {
         for (const block of m.content) {
@@ -348,7 +349,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
       }
       parsedMessages.push({
         id: extractId(m.id),
-        role: "system",
+        role: role as "system" | "error",
         content: text,
         thinking: null,
         tools: [],
@@ -781,11 +782,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           const msg = op ? `Cancelled: ${op}` : "Cancelled";
           session.messages = [...session.messages, {
             id: crypto.randomUUID(),
-            role: "system",
+            role: "error",
             content: msg,
             thinking: null,
             tools: [],
-            error: true,
           }];
           showNotification(msg, "warning", 3000);
           sendDesktopNotification("Yomi", msg, session.id);
@@ -794,17 +794,23 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           const errorMsg = "Task failed: " + (stopReason.failed.error ?? "Unknown");
           session.messages = [...session.messages, {
             id: crypto.randomUUID(),
-            role: "system",
+            role: "error",
             content: errorMsg,
             thinking: null,
             tools: [],
-            error: true,
           }];
           showNotification(errorMsg, "error", 5000);
           sendDesktopNotification("Yomi", errorMsg, session.id);
           return true;
         } else if ("maxIterations" in stopReason) {
           const msg = `Max iterations reached (${stopReason.maxIterations.reached})`;
+          session.messages = [...session.messages, {
+            id: crypto.randomUUID(),
+            role: "error",
+            content: msg,
+            thinking: null,
+            tools: [],
+          }];
           showNotification(msg, "warning", 5000);
           sendDesktopNotification("Yomi", msg, session.id);
           return true;
@@ -824,11 +830,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     const errorMsg = "Agent error: " + (event.error ?? "Unknown");
     session.messages = [...session.messages, {
       id: crypto.randomUUID(),
-      role: "system",
+      role: "error",
       content: errorMsg,
       thinking: null,
       tools: [],
-      error: true,
     }];
     showNotification(errorMsg, "error", 5000);
     sendDesktopNotification("Yomi", errorMsg, session.id);

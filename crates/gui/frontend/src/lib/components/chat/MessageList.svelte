@@ -74,7 +74,7 @@
         {@const isStreaming = activeSession.streaming && isLastMessage}
         {#if message.role === "user"}
           <UserBubble {message} />
-        {:else if message.error}
+        {:else if message.error || message.role === "error"}
           <ErrorBubble {message} />
         {:else if message.role === "system"}
           <SystemBubble {message} />

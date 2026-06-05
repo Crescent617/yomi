@@ -26,7 +26,7 @@
   let permissionLevel = $state("");
   let listRef: { scrollToBottom?: () => void } | null = $state(null);
   let isNearBottom = $state(true);
-  let chatInputRef: { setContent?: (text: string) => void } | null = $state(null);
+  let chatInputRef: { setContent?: (text: string) => void; focus?: () => void } | null = $state(null);
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
@@ -129,6 +129,16 @@
     listRef?.scrollToBottom?.();
     isNearBottom = true;
   }
+
+  // Auto-focus chat input when switching to a new session (only once per session)
+  let lastFocusedSessionId = $state("");
+  $effect(() => {
+    const id = activeSession?.id;
+    if (id && id !== lastFocusedSessionId) {
+      lastFocusedSessionId = id;
+      chatInputRef?.focus?.();
+    }
+  });
 
   // Pick the first project by default when projects load and nothing selected
   $effect(() => {
@@ -465,6 +475,7 @@
                 placeholder="Ask anything..."
                 rows={3}
                 disabled={submitting}
+                autofocus
                 class="w-full resize-none bg-transparent text-base placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
               ></textarea>
               {#if homeInlineImages.length > 0}
