@@ -42,9 +42,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            CC=clang CXX=clang++ cargo build --release --target ${{ matrix.target }}
+            CC=clang CXX=clang++ cargo build --release --target ${{ matrix.target }} --bin yomi
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} --bin yomi
           fi
 
       - name: Package
