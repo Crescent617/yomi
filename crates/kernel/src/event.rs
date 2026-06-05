@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Top-level event wrapper - modular design prevents enum explosion
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Event {
     User(UserEvent),
     Agent(AgentEvent),
@@ -42,9 +43,14 @@ pub enum ControlCommand {
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     },
+    /// Send a steer message to be injected before the next streaming turn
+    Steer {
+        content: Vec<crate::types::ContentBlock>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UserEvent {
     /// User message with multi-modal content blocks
     Message {
@@ -54,6 +60,7 @@ pub enum UserEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AgentEvent {
     /// Agent 生命周期状态变化
     Lifecycle {
@@ -96,26 +103,23 @@ pub enum AgentEvent {
 
 /// Agent lifecycle state change (business-level, distinct from internal `AgentState`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AgentStatus {
     /// Agent started running
     Running,
-    /// Task completed naturally (was `ReActLoopEnd`)
-    TurnCompleted {
-        total_iterations: usize,
-        /// Finish reason from the API (e.g. `MaxTokens`, `ContentFilter`)
-        finish_reason: Option<crate::types::FinishReason>,
-        /// ID of the last assistant message
-        last_message_id: Option<MessageId>,
-    },
     /// Agent stopped (includes various end reasons)
     Stopped { reason: StopReason },
 }
 
 /// Reasons why the Agent stopped
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum StopReason {
-    /// Normal completion
-    Completed,
+    /// Normal completion of a step
+    Completed {
+        /// Finish reason from the API (e.g. `MaxTokens`, `ContentFilter`)
+        finish_reason: Option<crate::types::FinishReason>,
+    },
     /// User cancelled
     Cancelled {
         /// Name of the cancelled operation (e.g. "streaming", "compaction")
@@ -129,6 +133,7 @@ pub enum StopReason {
 
 /// Agent execution phase, used for error reporting
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ErrorPhase {
     Streaming,
     ToolExecution,
@@ -138,6 +143,7 @@ pub enum ErrorPhase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ModelEvent {
     Request {
         agent_id: AgentId,
@@ -191,6 +197,7 @@ pub enum ModelEvent {
 
 /// Content chunk for streaming
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ContentChunk {
     Text(String),
     Thinking {
@@ -201,6 +208,7 @@ pub enum ContentChunk {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ToolEvent {
     Start {
         agent_id: AgentId,
@@ -233,6 +241,7 @@ pub enum ToolEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SystemEvent {
     /// Session shutdown (main agent ended)
     Shutdown {
@@ -250,4 +259,9 @@ pub enum SystemEvent {
     Connected { session_id: SessionId },
     /// Connection to daemon was lost (reader/heartbeat detected an error)
     ConnectionLost { session_id: SessionId },
+    /// Session title was updated (e.g. from first user message)
+    TitleUpdated {
+        session_id: SessionId,
+        title: String,
+    },
 }

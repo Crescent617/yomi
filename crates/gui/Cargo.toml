@@ -1,0 +1,53 @@
+[package]
+name = "yomi-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Tauri v2
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-store = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-rolling-file = { workspace = true }
+tokio-util = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+
+# Config TOML editing
+toml = { workspace = true }
+
+# Daemon lifecycle (shared with CLI)
+directories = { workspace = true }
+
+# Terminal
+portable-pty = "0.8"
+
+# Internal crate — zero modifications to kernel
+kernel = { workspace = true }
+
+# tauri-pilot plugin (debug builds only)
+tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
+tauri-plugin-notification = "2"
+
+# Fix PATH for GUI apps (macOS / Linux / Windows)
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d50" }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["process", "signal"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

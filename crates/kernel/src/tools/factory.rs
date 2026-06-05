@@ -7,7 +7,7 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::tools::{
     AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
-    SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
+    SleepTool, SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
 use std::sync::Arc;
@@ -24,7 +24,9 @@ pub struct ToolRegistryConfig<'a> {
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     pub enable_sub_agents: bool,
     pub enable_reminder: bool,
+    pub enable_sleep: bool,
     pub ask_user_state: Option<crate::tools::AskUserState>,
+    pub tool_blocklist: Vec<String>,
 }
 
 impl<'a> ToolRegistryConfig<'a> {
@@ -45,8 +47,10 @@ impl<'a> ToolRegistryConfig<'a> {
             parent_session_id: None,
             file_state_store: None,
             enable_sub_agents: true,
-            enable_reminder: true,
+            enable_reminder: false,
+            enable_sleep: true,
             ask_user_state: None,
+            tool_blocklist: shared.tool_blocklist.clone(),
         }
     }
 
@@ -68,7 +72,9 @@ impl<'a> ToolRegistryConfig<'a> {
             file_state_store: None,
             enable_sub_agents: false,
             enable_reminder: false,
+            enable_sleep: false,
             ask_user_state: None,
+            tool_blocklist: shared.tool_blocklist.clone(),
         }
     }
 
@@ -167,6 +173,11 @@ impl ToolRegistryFactory {
             }
         }
 
+        // Register Sleep tool if enabled
+        if config.enable_sleep {
+            registry.register(SleepTool::new());
+        }
+
         // Register ask_user tool if state is provided
         if let Some(ask_user_state) = config.ask_user_state {
             registry.register(AskUserTool::new(
@@ -174,6 +185,26 @@ impl ToolRegistryFactory {
                 config.event_tx.clone(),
                 ask_user_state,
             ));
+        }
+
+        // Apply tool blocklist (regex patterns) — remove matching tools from the registry
+        if !config.tool_blocklist.is_empty() {
+            if let Ok(set) = regex::RegexSet::new(&config.tool_blocklist) {
+                let to_remove: Vec<String> = registry
+                    .list()
+                    .into_iter()
+                    .filter(|name| set.is_match(name))
+                    .collect();
+                for name in &to_remove {
+                    registry.remove(name);
+                    tracing::info!("Tool '{}' blocked by blocklist pattern", name);
+                }
+            } else {
+                tracing::warn!(
+                    "Invalid regex in tool_blocklist: {:?}",
+                    config.tool_blocklist
+                );
+            }
         }
 
         registry

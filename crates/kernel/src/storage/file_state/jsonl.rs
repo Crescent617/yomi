@@ -22,7 +22,8 @@ impl JsonlFileStateStore {
     /// Lazy initialization: file is created on first write
     pub fn new(session_id: &str, data_dir: &Path) -> Self {
         let file_states_dir = data_dir.join("sessions").join("file_states");
-        let file_path = file_states_dir.join(format!("{session_id}.jsonl"));
+        let safe_id = session_id.replace(['/', '\\'], "_");
+        let file_path = file_states_dir.join(format!("{safe_id}.jsonl"));
 
         let inner: JsonlStore<FileState, PathBuf> =
             JsonlStore::new(&file_path, |fs: &FileState| fs.path.clone());

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 /// Unique identifier for agents
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct AgentId(SmolStr);
 
 impl Default for AgentId {
@@ -35,8 +36,50 @@ impl std::fmt::Display for AgentId {
     }
 }
 
+/// Unique identifier for projects
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProjectId(pub String);
+
+impl ProjectId {
+    pub fn new() -> Self {
+        Self(Uuid::now_v7().to_string())
+    }
+
+    /// The default workspace project ID (all zeros UUID).
+    /// This is a valid UUID v4 nil value, used as a stable identifier
+    /// for the per-data-directory default project.
+    pub fn default_workspace() -> Self {
+        Self("00000000-0000-0000-0000-000000000000".to_string())
+    }
+}
+
+impl Default for ProjectId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Project entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: ProjectId,
+    pub name: String,
+    pub dir: std::path::PathBuf,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Unique identifier for sessions
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SessionId(pub String);
 
 impl SessionId {
@@ -53,6 +96,7 @@ impl Default for SessionId {
 
 /// Unique identifier for messages
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct MessageId(SmolStr);
 
 impl MessageId {

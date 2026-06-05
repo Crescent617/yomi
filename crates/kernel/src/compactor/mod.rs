@@ -340,36 +340,53 @@ async fn generate_summary(
         ..model_config.clone()
     };
 
-    // Call API
-    let mut stream = provider
-        .stream(&summary_messages, &[], &summary_config)
-        .await?;
+    // Call API with cancellation support
+    let mut stream = tokio::select! {
+        biased;
+        () = async {
+            if let Some(ref t) = cancel_token {
+                t.cancelled().await
+            } else {
+                std::future::pending().await
+            }
+        } => {
+            return Err(CompactionError::Cancelled);
+        }
+        result = provider.stream(&summary_messages, &[], &summary_config) => result?,
+    };
 
     // Collect response with cancellation check
     let mut summary = String::with_capacity(SUMMARY_MAX_TOKENS as usize);
     let mut token_usage = crate::providers::TokenUsage::default();
 
     loop {
-        // Check if cancelled (non-blocking check)
-        if cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
-            return Err(CompactionError::Cancelled);
-        }
+        let item = tokio::select! {
+            biased;
+            () = async {
+                if let Some(ref t) = cancel_token {
+                    t.cancelled().await
+                } else {
+                    std::future::pending().await
+                }
+            } => {
+                return Err(CompactionError::Cancelled);
+            }
+            item = stream.try_next() => match item {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        };
 
-        match tokio::time::timeout(std::time::Duration::from_millis(100), stream.try_next()).await {
-            Ok(Ok(Some(item))) => match item {
-                ModelStreamItem::Chunk(crate::event::ContentChunk::Text(text)) => {
-                    summary.push_str(&text);
-                }
-                ModelStreamItem::TokenUsage(usage) => {
-                    token_usage = usage;
-                }
-                ModelStreamItem::Complete => break,
-                _ => {}
-            },
-            Ok(Ok(None)) => break,
-            Ok(Err(e)) => return Err(e.into()),
-            // Timeout, continue loop to check cancellation
-            Err(_) => {}
+        match item {
+            ModelStreamItem::Chunk(crate::event::ContentChunk::Text(text)) => {
+                summary.push_str(&text);
+            }
+            ModelStreamItem::TokenUsage(usage) => {
+                token_usage = usage;
+            }
+            ModelStreamItem::Complete => break,
+            _ => {}
         }
     }
     Ok((summary, token_usage))

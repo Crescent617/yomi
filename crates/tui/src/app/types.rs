@@ -20,7 +20,7 @@ pub struct TuiResult {
     pub input_history: Vec<String>,
     /// Whether to create a new session after exiting
     pub should_create_new_session: bool,
-    /// Session ID to switch to (for /sessions command)
+    /// Session ID to switch to on exit (for /sessions command)
     pub switch_to_session: Option<String>,
 }
 
@@ -123,6 +123,13 @@ pub struct Model {
     pub(crate) queued_message: Option<Vec<ContentBlock>>,
     /// Last known terminal size to detect resize events
     pub(crate) last_terminal_size: (u16, u16),
+    /// Pending async clipboard read handle.
+    pub(crate) clipboard_handle: Option<tokio::task::JoinHandle<Option<String>>>,
+    /// Shared flag set by signal handler to request graceful exit.
+    pub(crate) signal_quit: Arc<std::sync::atomic::AtomicBool>,
+    /// Channel for async command results to be injected back into the event loop.
+    pub(crate) cmd_tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    pub(crate) cmd_rx: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     /// Transparent event pump that hides broadcast churn and auto-reconnects.
     pub(crate) _event_pump: super::event_pump::EventPump,
 }

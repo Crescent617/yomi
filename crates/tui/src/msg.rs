@@ -1,6 +1,8 @@
 //! Messages for TUI application
 
+use crate::components::fuzzy_picker::PickerItem;
 use crate::components::info_bar::Notification;
+use kernel::checkpoint::Checkpoint;
 use kernel::event::Event as AppEvent;
 use kernel::types::ContentBlock;
 
@@ -65,16 +67,17 @@ pub enum Msg {
     DialogCancelled,           // Dialog was cancelled
 
     // Slash commands (String = raw user input, e.g. "/goal do stuff")
-    CommandNew,          // /new - create new session
-    CommandGoal(String), // /goal <description> - start autonomous goal mode
-    CommandGoalStop,     // /goal:stop - stop autonomous goal mode
-    CommandYolo,         // /yolo - toggle yolo mode
-    CommandBrowse,       // /browse - toggle browse mode
-    CommandCompact,      // /compact - force message compaction
-    CommandReload,       // /reload - reload skills and hooks in daemon
-    CommandHelp,         // /help - show help dialog
-    CommandSessions,     // /sessions - switch session
-    CommandTodos,        // /todos - toggle todo list visibility
+    CommandNew,                      // /new - create new session
+    CommandGoal(String),             // /goal <description> - start autonomous goal mode
+    CommandGoalStop,                 // /goal:stop - stop autonomous goal mode
+    CommandYolo,                     // /yolo - toggle yolo mode
+    CommandBrowse,                   // /browse - toggle browse mode
+    CommandCompact,                  // /compact - force message compaction
+    CommandReload,                   // /reload - reload skills and hooks in daemon
+    CommandSteer(Vec<ContentBlock>), // /steer <content> - inject steer message before next streaming
+    CommandHelp,                     // /help - show help dialog
+    CommandSessions,                 // /sessions - switch session
+    CommandTodos,                    // /todos - toggle todo list visibility
 
     // Session picker
     SessionSelected(String), // User selected a session to switch to
@@ -82,6 +85,10 @@ pub enum Msg {
 
     // Suspend process to background (Ctrl-Z)
     Suspend,
+
+    // Async clipboard read
+    ReadClipboard,
+    ClipboardText(String),
 
     // History: raw submitted text + the actual message to process.
     // Emitted whenever the user presses Enter; the raw text goes into input history.
@@ -100,6 +107,10 @@ pub enum Msg {
     CommandUndo, // /undo - undo last turn (rewind to latest checkpoint)
     CheckpointSelected(String, RewindTarget), // message_id, target (Conversation/Files/Both)
     CloseCheckpointPicker, // Close checkpoint picker without selection
+
+    // Async command results
+    SessionList(Vec<PickerItem>),
+    CheckpointList(Vec<Checkpoint>),
 }
 
 /// Target for rewinding (mirrors `kernel::checkpoint::RewindTarget`)

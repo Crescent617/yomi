@@ -47,6 +47,8 @@ impl Model {
             crate::config().auto_approve,
         );
 
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Ok(Self {
             app,
             state: AppState {
@@ -75,6 +77,10 @@ impl Model {
             permission_level: crate::config().auto_approve,
             queued_message: None,
             last_terminal_size: (0, 0),
+            clipboard_handle: None,
+            signal_quit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cmd_tx,
+            cmd_rx,
             _event_pump: event_pump,
         })
     }

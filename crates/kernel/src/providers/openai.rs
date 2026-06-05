@@ -198,6 +198,12 @@ impl Provider for OpenAIProvider {
             .header("Authorization", format!("Bearer {}", config.api_key))
             .header("Content-Type", "application/json")
             .json(&request_body);
+
+        // Inject custom headers from config
+        let request = config
+            .headers
+            .iter()
+            .fold(request, |req, (k, v)| req.header(k, v));
         let response = request.send().await?;
         if !response.status().is_success() {
             let status = response.status();

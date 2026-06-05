@@ -3,6 +3,7 @@
 //! Provides a simple way to initialize all storage backends with a single call.
 //! Handles directory creation, database pool setup, migrations, and store instantiation.
 
+use crate::cron::SqliteCronStore;
 use crate::types::{KernelError, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::path::{Path, PathBuf};
@@ -30,6 +31,10 @@ pub struct StorageSet {
     todo_store: Arc<dyn super::TodoStore>,
     /// Checkpoint and file history store
     checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
+    /// Project metadata store
+    project_store: Arc<dyn super::ProjectStore>,
+    /// Cron job store
+    cron_store: Arc<dyn crate::cron::CronStore>,
 }
 
 impl std::fmt::Debug for StorageSet {
@@ -42,6 +47,8 @@ impl std::fmt::Debug for StorageSet {
             .field("usage_store", &"<dyn UsageStore>")
             .field("todo_store", &"<dyn TodoStore>")
             .field("checkpoint_store", &"<dyn CheckpointStore>")
+            .field("project_store", &"<dyn ProjectStore>")
+            .field("cron_store", &"<dyn CronStore>")
             .finish()
     }
 }
@@ -109,6 +116,12 @@ impl StorageSet {
             .await
             .map_err(|e| KernelError::storage(format!("failed to create checkpoint dir: {e}")))?;
 
+        // Create default workspace project
+        let workspace_dir = data_dir.join("workspace");
+        tokio::fs::create_dir_all(&workspace_dir)
+            .await
+            .map_err(|e| KernelError::storage(format!("failed to create workspace dir: {e}")))?;
+
         // Create store instances
         let session_store: Arc<dyn super::SessionStore> =
             Arc::new(super::SqliteSessionStore::new(pool.clone()));
@@ -117,6 +130,19 @@ impl StorageSet {
         let usage_store: Arc<dyn super::UsageStore> =
             Arc::new(super::SqliteUsageStore::new(pool.clone()));
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));
+        let project_store: Arc<dyn super::ProjectStore> =
+            Arc::new(super::SqliteProjectStore::new(pool.clone()));
+        let cron_store: Arc<dyn crate::cron::CronStore> =
+            Arc::new(SqliteCronStore::new(pool.clone()));
+
+        // Ensure default workspace project exists
+        let default_project_id = crate::types::ProjectId::default_workspace();
+        let workspace_dir_str = workspace_dir.to_str().unwrap_or("");
+        if project_store.get(&default_project_id).await?.is_none() {
+            project_store
+                .create(&default_project_id, "Default", workspace_dir_str)
+                .await?;
+        }
 
         // Create checkpoint store with optional config
         let checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore> =
@@ -139,6 +165,8 @@ impl StorageSet {
             usage_store,
             todo_store,
             checkpoint_store,
+            project_store,
+            cron_store,
         })
     }
 
@@ -187,9 +215,19 @@ impl StorageSet {
         self.checkpoint_store.clone()
     }
 
+    /// Get the project store
+    pub fn project_store(&self) -> Arc<dyn super::ProjectStore> {
+        self.project_store.clone()
+    }
+
     /// Get the data directory path
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Get the cron store
+    pub fn cron_store(&self) -> Arc<dyn crate::cron::CronStore> {
+        self.cron_store.clone()
     }
 
     /// Get a file state store for a specific session
@@ -215,7 +253,7 @@ mod tests {
         let session_id = SessionId::new();
         storage
             .session_store()
-            .create(&session_id, None)
+            .create(&session_id, None, None, None)
             .await
             .unwrap();
         storage

@@ -22,7 +22,8 @@ impl JsonlMessageStore {
     }
 
     fn file_path(&self, session_id: &str) -> PathBuf {
-        self.base_dir.join(format!("{session_id}.jsonl"))
+        let safe_id = session_id.replace(['/', '\\'], "_");
+        self.base_dir.join(format!("{safe_id}.jsonl"))
     }
 
     async fn read_lines(&self, path: &Path) -> Result<Vec<Message>> {

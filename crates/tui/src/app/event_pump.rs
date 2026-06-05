@@ -30,7 +30,7 @@ impl EventPump {
         initial_rx: broadcast::Receiver<Event>,
         coordinator: Arc<dyn CoordinatorApi>,
         session_id: String,
-        auto_approve: Level,
+        _auto_approve: Level,
     ) -> (Self, mpsc::Receiver<Event>) {
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -40,17 +40,19 @@ impl EventPump {
             let sid = SessionId(session_id);
             let mut current_rx = Some(initial_rx);
 
-            // Notify TUI that the initial connection is ready.
-            if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
-                session_id: sid.clone(),
-            })) {
-                tracing::warn!("EventPump failed to send initial connected notification: {e}");
+            // Notify TUI that the initial connection is ready (only in daemon mode).
+            if crate::daemon_mode() {
+                if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
+                    session_id: sid.clone(),
+                })) {
+                    tracing::warn!("EventPump failed to send initial connected notification: {e}");
+                }
             }
 
             'outer: loop {
                 // When broadcast is closed, resubscribe (infinite retry).
                 if current_rx.is_none() {
-                    match Self::resubscribe(&coordinator, &sid, auto_approve, &cancel_for_task)
+                    match Self::resubscribe(&coordinator, &sid, _auto_approve, &cancel_for_task)
                         .await
                     {
                         Some(new_rx) => {
@@ -80,13 +82,9 @@ impl EventPump {
                     result = r.recv() => {
                         match result {
                             Ok(ev) => {
-                                if let Err(e) = tx.try_send(ev) {
-                                    match e {
-                                        mpsc::error::TrySendError::Full(_) => {
-                                            tracing::warn!("EventPump mpsc full");
-                                        }
-                                        mpsc::error::TrySendError::Closed(_) => break 'outer,
-                                    }
+                                if let Err(e) = tx.send(ev).await {
+                                    tracing::warn!("EventPump mpsc closed: {e}");
+                                    break 'outer;
                                 }
                             }
                             Err(broadcast::error::RecvError::Closed) => {
@@ -94,7 +92,8 @@ impl EventPump {
                                 current_rx = None;
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("EventPump lagged by {n} events");
+                                tracing::warn!("EventPump lagged by {n} events, forcing resubscribe");
+                                current_rx = None;
                             }
                         }
                     }
@@ -112,7 +111,7 @@ impl EventPump {
     async fn resubscribe(
         coordinator: &Arc<dyn CoordinatorApi>,
         session_id: &SessionId,
-        auto_approve: Level,
+        _auto_approve: Level,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Option<broadcast::Receiver<Event>> {
         let mut retries: u32 = 0;
@@ -133,7 +132,7 @@ impl EventPump {
                             "Session {} missing on daemon, attempting restore…",
                             session_id.0
                         );
-                        match coordinator.restore_session(session_id, auto_approve).await {
+                        match coordinator.restore_session(session_id).await {
                             Ok(_) => {
                                 // Session restored — immediately retry subscribe.
                                 continue;

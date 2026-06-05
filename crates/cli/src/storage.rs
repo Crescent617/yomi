@@ -56,11 +56,14 @@ impl AppStorage {
         })
     }
 
-    /// Hash a working directory path to a filename using MD5
+    /// Hash a working directory path to a filename using std hasher
     fn hash_path(working_dir: &Path) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let path_str = working_dir.to_string_lossy();
-        let hash = md5::compute(path_str.as_bytes());
-        format!("{hash:x}")
+        let mut hasher = DefaultHasher::new();
+        path_str.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
     }
 
     fn proj_meta_path(&self, working_dir: &Path) -> PathBuf {

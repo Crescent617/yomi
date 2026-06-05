@@ -148,7 +148,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let _log_guard = init_logging(&config)?;
 
     let coordinator: Arc<dyn CoordinatorApi> = if args.no_daemon {
-        Arc::new(create_local_coordinator(&config, &working_dir).await?)
+        create_local_coordinator(&config, &working_dir).await?
     } else {
         daemon::spawn_daemon().await?;
         Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
@@ -158,6 +158,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 
     // Initialize global config for TUI
     tui::init_config(config.clone(), feature_gates);
+    tui::init_daemon_mode(!args.no_daemon);
 
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),
@@ -245,7 +246,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 async fn create_local_coordinator(
     config: &Config,
     working_dir: &Path,
-) -> Result<kernel::Coordinator> {
+) -> Result<Arc<kernel::Coordinator>> {
     let storage = kernel::StorageSet::open_with_config(&config.data_dir, config).await?;
     let provider = create_provider(config)?;
     let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
@@ -265,10 +266,9 @@ async fn create_local_coordinator(
         Some(task_store),
         Some(config.agent.compactor.clone()),
         skill_folders,
-        config
-            .features
-            .hooks
-            .then(|| kernel::hooks::build_registry(&config.hooks)),
+        config.features.hooks.then(|| {
+            kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+        }),
     ))
 }
 

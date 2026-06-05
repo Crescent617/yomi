@@ -40,6 +40,9 @@ nucleo = { workspace = true }
 # Date/time formatting for checkpoint picker
 chrono = { workspace = true }
 
+# Desktop notifications (cross-platform via notify-rust)
+notify-rust = { workspace = true }
+
 # Unix signal handling for Ctrl-Z (suspend)
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["signal"] }

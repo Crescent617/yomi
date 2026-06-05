@@ -1,3 +1,4 @@
+use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::checkpoint::RewindTarget;
 use crate::event::{ControlCommand, Event};
@@ -5,10 +6,12 @@ use crate::goal::GoalState;
 use crate::permissions::Level;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
 use crate::types::{
-    ContentBlock, KernelError, Message, MessageId, Result, SessionError, SessionId,
+    ContentBlock, KernelError, Message, MessageId, Project, ProjectId, Result, SessionError,
+    SessionId,
 };
 use crate::wire::{RequestIdGenerator, RequestMethod, ResponseBody, RpcError, WireMsg};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
@@ -32,16 +35,30 @@ type PendingMap = dashmap::DashMap<
 >;
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Event>>;
 
+/// Paginated session list result
+#[derive(Debug, Clone)]
+pub struct PaginatedSessions {
+    pub sessions: Vec<crate::storage::session::SessionInfo>,
+    pub has_more: bool,
+}
+
 /// Unified API for both local (in-process) and remote (IPC) coordinators.
 #[async_trait]
 pub trait CoordinatorApi: Send + Sync {
-    async fn create_session(
+    // ── Project ──────────────────────────────────────────────────────────
+    async fn list_projects(&self) -> Result<Vec<Project>>;
+    async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId>;
-    async fn restore_session(&self, id: &SessionId, auto_approve_level: Level)
-        -> Result<SessionId>;
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project>;
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>>;
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()>;
+    async fn delete_project(&self, id: &ProjectId) -> Result<()>;
+
+    // ── Session ──────────────────────────────────────────────────────────
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId>;
     async fn fork_session(
         &self,
         parent: &SessionId,
@@ -64,6 +81,7 @@ pub trait CoordinatorApi: Send + Sync {
         message_id: MessageId,
         target: RewindTarget,
     ) -> Result<()>;
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()>;
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
@@ -74,8 +92,10 @@ pub trait CoordinatorApi: Send + Sync {
     ) -> Result<broadcast::Receiver<Event>>;
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>>;
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions>;
     async fn get_checkpoints(
         &self,
         session_id: &SessionId,
@@ -89,26 +109,80 @@ pub trait CoordinatorApi: Send + Sync {
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
+
+    // ── Usage ──────────────────────────────────────────────────────────
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
+    async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>>;
+    async fn get_session_usage(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary>;
+
+    // ── Cron Job ─────────────────────────────────────────────────────────
+    //
+    // DESIGN PRINCIPLE: All cron operations MUST go through `CoordinatorApi`.
+    // Clients (GUI, TUI, CLI) must never hold a `CronStore` directly, because
+    // that would only work in local/in-process mode and break remote IPC mode.
+    // By routing every cron call through the coordinator, both `LocalCoordinator`
+    // and `RemoteCoordinator` can serve the same interface.
+    // ──────────────────────────────────────────────────────────────────────
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId>;
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>>;
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>>;
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: crate::cron::UpdateCronJobInput,
+    ) -> Result<bool>;
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
 
 #[async_trait]
 impl CoordinatorApi for Coordinator {
-    async fn create_session(
-        &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
-        self.create_session(project_path, auto_approve_level).await
+    async fn list_projects(&self) -> Result<Vec<Project>> {
+        self.list_projects().await
     }
 
-    async fn restore_session(
+    async fn create_project(
         &self,
-        id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
-        self.restore_session(id, auto_approve_level).await
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project> {
+        self.create_project(dir, name).await
+    }
+
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
+        self.get_project(id).await
+    }
+
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
+        self.rename_project(id, name).await
+    }
+
+    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+        self.delete_project(id).await
+    }
+
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
+        self.create_session(input).await
+    }
+
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
+        self.restore_session(id).await
     }
 
     async fn fork_session(
@@ -155,6 +229,10 @@ impl CoordinatorApi for Coordinator {
         self.rewind_session(session_id, message_id, target).await
     }
 
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
+        self.rename_session(session_id, title).await
+    }
+
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         self.start_goal(session_id, state).await
     }
@@ -185,9 +263,12 @@ impl CoordinatorApi for Coordinator {
 
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        self.list_sessions(args).await
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions> {
+        let (sessions, has_more) = self.list_sessions(project_id, before, limit).await?;
+        Ok(PaginatedSessions { sessions, has_more })
     }
 
     async fn get_checkpoints(
@@ -216,8 +297,62 @@ impl CoordinatorApi for Coordinator {
     }
 
     async fn reload_agent_config(&self) -> Result<()> {
-        // Local coordinator runs in-process; skills are already fresh.
-        Ok(())
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let config_file = crate::config::Config::discover_file();
+        self.reload(config_file.as_ref(), &working_dir).await
+    }
+
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
+        self.send_steer(session_id, content).await
+    }
+
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
+        self.get_usage_summary().await
+    }
+
+    async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+        self.get_daily_usage(days).await
+    }
+
+    async fn get_session_usage(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary> {
+        self.get_session_usage(session_id).await
+    }
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId> {
+        self.create_cron_job(input).await
+    }
+
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>> {
+        self.list_cron_jobs(status, limit).await
+    }
+
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        self.get_cron_job(id).await
+    }
+
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: crate::cron::UpdateCronJobInput,
+    ) -> Result<bool> {
+        self.update_cron_job(id, input).await
+    }
+
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
+        self.delete_cron_job(id).await
     }
 }
 
@@ -519,11 +654,12 @@ impl RemoteCoordinator {
                     .get("proto")
                     .and_then(|v| v.as_u64())
                     .map_or(0, |n| n as u32);
-                if server_proto < crate::wire::WIRE_PROTOCOL_VERSION {
+                let client_proto = crate::wire::WIRE_PROTOCOL_VERSION;
+                if server_proto != client_proto {
                     tracing::error!(
-                        "Wire protocol version too old: server {}, client {}",
+                        "Wire protocol version mismatch: server v{}, client v{}",
                         server_proto,
-                        crate::wire::WIRE_PROTOCOL_VERSION
+                        client_proto,
                     );
                     self.invalidate_connection().await;
                     return Err(SessionError::WireProtocolMismatch.into());
@@ -623,14 +759,6 @@ impl RemoteCoordinator {
     ) -> Result<broadcast::Receiver<Event>> {
         use dashmap::mapref::entry::Entry;
 
-        // Always send a fresh Subscribe RPC to the daemon.
-        //
-        // The old fast-path (checking `receiver_count > 0` and returning an
-        // existing receiver) was dangerous after a daemon restart: the
-        // local sender might still be alive while the daemon-side
-        // forwarding task has already died, so the receiver would never
-        // see new events.  By always sending Subscribe we guarantee the
-        // daemon creates (or refreshes) the forwarding task.
         let tx = match self.event_routers.entry(session_id.0.clone()) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
@@ -661,30 +789,70 @@ impl RemoteCoordinator {
 
 #[async_trait]
 impl CoordinatorApi for RemoteCoordinator {
-    async fn create_session(
+    async fn list_projects(&self) -> Result<Vec<Project>> {
+        let result = self.call(RequestMethod::ListProjects).await?;
+        let projects: Vec<Project> = serde_json::from_value(result)?;
+        Ok(projects)
+    }
+
+    async fn create_project(
         &self,
-        project_path: std::path::PathBuf,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
+        dir: std::path::PathBuf,
+        name: Option<String>,
+    ) -> Result<Project> {
+        let result = self
+            .call(RequestMethod::CreateProject {
+                dir: dir.to_string_lossy().to_string(),
+                name,
+            })
+            .await?;
+        let project: Project = serde_json::from_value(result)?;
+        Ok(project)
+    }
+
+    async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
+        let result = self
+            .call(RequestMethod::GetProject {
+                project_id: id.0.clone(),
+            })
+            .await?;
+        let project: Option<Project> = serde_json::from_value(result)?;
+        Ok(project)
+    }
+
+    async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
+        self.call(RequestMethod::RenameProject {
+            project_id: id.0.clone(),
+            name,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+        self.call(RequestMethod::DeleteProject {
+            project_id: id.0.clone(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::CreateSession {
-                project_path: project_path.to_string_lossy().to_string(),
-                auto_approve_level,
+                project_id: input.project_id.map(|p| p.0),
+                working_dir: input.working_dir.map(|p| p.to_string_lossy().to_string()),
+                auto_approve_level: input.auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
         Ok(SessionId(sid))
     }
 
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        auto_approve_level: Level,
-    ) -> Result<SessionId> {
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::RestoreSession {
                 session_id: id.0.clone(),
-                auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -775,6 +943,15 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(())
     }
 
+    async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
+        self.call(RequestMethod::RenameSession {
+            session_id: session_id.0.clone(),
+            title,
+        })
+        .await?;
+        Ok(())
+    }
+
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
@@ -820,11 +997,23 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn list_sessions(
         &self,
-        args: crate::storage::session::ListArgs,
-    ) -> Result<Vec<crate::storage::session::SessionInfo>> {
-        let result = self.call(RequestMethod::ListSessions(args)).await?;
-        let sessions = serde_json::from_value(result)?;
-        Ok(sessions)
+        project_id: Option<&ProjectId>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<PaginatedSessions> {
+        let result = self
+            .call(RequestMethod::ListSessions {
+                project_id: project_id.map(|p| p.0.clone()),
+                before,
+                limit,
+            })
+            .await?;
+        let sessions: Vec<crate::storage::session::SessionInfo> = serde_json::from_value(result)?;
+        // Remote server doesn't return has_more separately in this version;
+        // we infer from the result length.
+        let has_more = sessions.len() > limit;
+        let sessions = sessions.into_iter().take(limit).collect();
+        Ok(PaginatedSessions { sessions, has_more })
     }
 
     async fn get_checkpoints(
@@ -878,5 +1067,111 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn reload_agent_config(&self) -> Result<()> {
         self.call(RequestMethod::ReloadAgentConfig).await?;
         Ok(())
+    }
+
+    async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::Steer { content },
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
+        Ok(crate::storage::usage::UsageSummary::default())
+    }
+
+    async fn get_daily_usage(&self, _days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_session_usage(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<crate::storage::usage::UsageSummary> {
+        Ok(crate::storage::usage::UsageSummary::default())
+    }
+
+    async fn create_cron_job(
+        &self,
+        input: crate::cron::CreateCronJobInput,
+    ) -> Result<crate::cron::CronJobId> {
+        let result = self
+            .call(RequestMethod::CreateCronJob {
+                name: input.name,
+                schedule: input.schedule,
+                action: input.action,
+                max_runs: input.max_runs,
+                expires_at: input.expires_at,
+            })
+            .await?;
+        let job_id = result
+            .get("job_id")
+            .and_then(|v| v.as_str())
+            .map(|s| crate::cron::CronJobId(s.to_string()))
+            .ok_or_else(|| SessionError::Other("Missing job_id in response".to_string()))?;
+        Ok(job_id)
+    }
+
+    async fn list_cron_jobs(
+        &self,
+        status: Option<crate::cron::CronJobStatus>,
+        limit: usize,
+    ) -> Result<Vec<crate::cron::CronJob>> {
+        let result = self
+            .call(RequestMethod::ListCronJobs {
+                status: status.map(|s| s.as_str().to_string()),
+                limit,
+            })
+            .await?;
+        let jobs: Vec<crate::cron::CronJob> = serde_json::from_value(result)?;
+        Ok(jobs)
+    }
+
+    async fn get_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+    ) -> Result<Option<crate::cron::CronJob>> {
+        let result = self
+            .call(RequestMethod::GetCronJob {
+                job_id: id.0.clone(),
+            })
+            .await?;
+        if result.is_null() {
+            return Ok(None);
+        }
+        let job = serde_json::from_value(result)?;
+        Ok(Some(job))
+    }
+
+    async fn update_cron_job(
+        &self,
+        id: &crate::cron::CronJobId,
+        input: crate::cron::UpdateCronJobInput,
+    ) -> Result<bool> {
+        let result = self
+            .call(RequestMethod::UpdateCronJob {
+                job_id: id.0.clone(),
+                name: input.name,
+                schedule: input.schedule,
+                action: input.action,
+                status: input.status.map(|s| s.as_str().to_string()),
+                max_runs: input.max_runs,
+                expires_at: input.expires_at,
+            })
+            .await?;
+        let updated: bool = serde_json::from_value(result)?;
+        Ok(updated)
+    }
+
+    async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
+        let result = self
+            .call(RequestMethod::DeleteCronJob {
+                job_id: id.0.clone(),
+            })
+            .await?;
+        let deleted: bool = serde_json::from_value(result)?;
+        Ok(deleted)
     }
 }

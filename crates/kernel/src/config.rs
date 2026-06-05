@@ -2,9 +2,7 @@ use crate::agent::AgentConfig;
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::types::KernelError;
-use crate::utils::env::{
-    env_bool, env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit,
-};
+use crate::utils::env::{env_bool_opt, env_first, env_parse, env_var, parse_number_with_unit};
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +30,6 @@ pub mod env_names {
     pub const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
 
     /// Application settings
-    pub const YOLO: &str = env_name!("YOLO");
     pub const DATA_DIR: &str = env_name!("DATA_DIR");
     pub const MAX_ITERATIONS: &str = env_name!("MAX_ITERATIONS");
     pub const ENABLE_SUB_AGENTS: &str = env_name!("ENABLE_SUB_AGENTS");
@@ -59,6 +56,10 @@ pub mod env_names {
     pub const COMPACTOR_RATIO: &str = env_name!("COMPACTOR_RATIO");
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
+    /// Tool blocklist (comma-separated regex patterns)
+    pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
+    /// Allow command hooks to execute (default false for security)
+    pub const ALLOW_COMMAND_HOOKS: &str = env_name!("ALLOW_COMMAND_HOOKS");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
 }
@@ -138,6 +139,9 @@ impl std::fmt::Display for ModelProvider {
 pub struct FeaturesConfig {
     /// Enable `PreToolUse` / `PostToolUse` lifecycle hooks.
     pub hooks: bool,
+    /// Allow command hooks (`sh -c` / `cmd /C`) to execute.
+    /// Disabled by default for security — must be explicitly enabled.
+    pub allow_command_hooks: bool,
 }
 
 /// Complete yomi configuration from environment
@@ -145,7 +149,6 @@ pub struct FeaturesConfig {
 #[serde(default)]
 pub struct Config {
     pub agent: AgentConfig,
-    pub yolo: bool,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,7 +213,6 @@ impl Default for Config {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
             agent: AgentConfig::default(),
-            yolo: false,
             auto_approve: Level::default(),
             data_dir,
             log_dir: None,
@@ -313,7 +315,6 @@ impl Config {
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
             self.agent.model.thinking.effort = Some(effort);
         }
-        self.yolo = env_bool(env_names::YOLO);
 
         // Enable sub-agents (default true unless explicitly set to "false")
         if let Some(val) = env_var(env_names::ENABLE_SUB_AGENTS) {
@@ -342,11 +343,6 @@ impl Config {
             }
         }
 
-        // If yolo mode is enabled, auto-approve level should be Dangerous
-        if self.yolo {
-            self.auto_approve = Level::Dangerous;
-        }
-
         // Context window size (supports formats like "131072", "128k", "200k", "200000")
         if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
             if let Some(tokens) = parse_number_with_unit(&context_window) {
@@ -362,6 +358,20 @@ impl Config {
         // Maximum checkpoints per session
         if let Some(max) = env_parse::<usize>(env_names::MAX_CHECKPOINTS) {
             self.max_checkpoints = max;
+        }
+
+        // Tool blocklist (comma-separated regex patterns)
+        if let Some(list) = env_var(env_names::TOOL_BLOCKLIST) {
+            self.agent.tool_blocklist = list
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+
+        // Allow command hooks (security flag, default false)
+        if let Some(val) = env_bool_opt(env_names::ALLOW_COMMAND_HOOKS) {
+            self.features.allow_command_hooks = val;
         }
     }
 
@@ -478,12 +488,62 @@ mod tests {
 
         // Verify key fields are preserved
         assert_eq!(parsed.agent.model.provider, config.agent.model.provider);
-        assert_eq!(parsed.yolo, config.yolo);
         assert_eq!(parsed.data_dir, config.data_dir);
         assert_eq!(parsed.hooks.len(), 1);
         assert_eq!(parsed.hooks[0].name, "test-hook");
         assert_eq!(parsed.hooks[0].command, "echo test");
         assert_eq!(parsed.hooks[0].timeout, 10);
+    }
+
+    #[test]
+    fn test_config_model_headers_roundtrip() {
+        let mut config = Config::default();
+        config
+            .agent
+            .model
+            .headers
+            .insert("X-Custom-Key".to_string(), "my-value".to_string());
+        config
+            .agent
+            .model
+            .headers
+            .insert("Authorization".to_string(), "Bearer override".to_string());
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(
+            parsed.agent.model.headers.get("X-Custom-Key"),
+            Some(&"my-value".to_string())
+        );
+        assert_eq!(
+            parsed.agent.model.headers.get("Authorization"),
+            Some(&"Bearer override".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_model_headers_from_toml() {
+        let toml = r#"
+[agent.model]
+provider = "openai"
+model_id = "gpt-4"
+endpoint = "https://api.example.com/v1"
+api_key = "sk-test"
+
+[agent.model.headers]
+"X-Custom-Key" = "my-value"
+"Authorization" = "Bearer override"
+""#;
+        let parsed: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            parsed.agent.model.headers.get("X-Custom-Key"),
+            Some(&"my-value".to_string())
+        );
+        assert_eq!(
+            parsed.agent.model.headers.get("Authorization"),
+            Some(&"Bearer override".to_string())
+        );
     }
 
     #[test]

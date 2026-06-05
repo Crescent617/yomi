@@ -213,6 +213,14 @@ impl Component for InputComponent {
                     self.component.insert_str(&content);
                 }
             }
+            Attribute::Custom(attr::CLIPBOARD_PASTE) => {
+                if let AttrValue::String(text) = value {
+                    if self.component.has_selection() {
+                        self.component.delete_selection();
+                    }
+                    self.component.insert_str(&text);
+                }
+            }
             Attribute::Custom(attr::HAS_QUEUED_MESSAGE) => {
                 if let AttrValue::Flag(has_queued) = value {
                     self.has_queued_message = has_queued;

@@ -17,8 +17,8 @@ use crate::utils::text::{preprocess, truncate_by_chars, truncate_by_width};
 
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
-    SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SUBAGENT_TOOL_NAME, TODO_TOOL_NAME,
-    WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
+    SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SLEEP_TOOL_NAME, SUBAGENT_TOOL_NAME,
+    TODO_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -728,6 +728,7 @@ pub fn tool_icon(tool_name: &str) -> &'static str {
         WEBFETCH_TOOL_NAME => "󰖟 ",
         WEBSEARCH_TOOL_NAME => " ",
         REMINDER_TOOL_NAME => "󰀠 ",
+        SLEEP_TOOL_NAME => "󰒲 ",
         // Task tools
         TASK_CREATE_TOOL_NAME
         | TASK_GET_TOOL_NAME

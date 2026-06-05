@@ -25,6 +25,7 @@ pub mod event;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
+pub mod cron;
 pub mod memory;
 pub mod permissions;
 pub mod prompt;
@@ -46,6 +47,7 @@ pub use permissions::{Checker, Level, ToolLevelResolver};
 pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedFileInfo};
 
 // Re-export commonly used types
+pub use app::coordinator::CreateSessionInput;
 pub use app::{Coordinator, Session, SessionConfig};
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
@@ -60,7 +62,8 @@ pub use skill::{deduplicate_skills, Skill, SkillLoader};
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
-    session::{ListArgs, SessionInfo, SessionStore, SqliteSessionStore},
+    project::{ProjectStore, SqliteProjectStore},
+    session::{SessionInfo, SessionStore, SqliteSessionStore},
     todo::{
         strip_system_reminders, JsonTodoStore, TodoItem, TodoListData, TodoStatus, TodoStore,
         SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,
@@ -73,10 +76,16 @@ pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 // Re-exports for providers
-pub use providers::{AnthropicProvider, OpenAIProvider};
+pub use providers::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
 pub use tools::{
     execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
     SubagentTool, WriteTool,
+};
+
+// Cron system re-exports
+pub use cron::{
+    CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
+    CronScheduler, CronStore, CronWorker, SqliteCronStore, UpdateCronJobInput,
 };
 
 // Task system re-exports

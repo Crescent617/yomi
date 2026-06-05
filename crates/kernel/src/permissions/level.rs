@@ -30,6 +30,16 @@ impl std::str::FromStr for Level {
     }
 }
 
+impl Level {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Safe => "safe",
+            Self::Caution => "caution",
+            Self::Dangerous => "dangerous",
+        }
+    }
+}
+
 impl std::fmt::Display for Level {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {

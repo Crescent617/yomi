@@ -216,62 +216,36 @@ impl Model {
                         AgentStatus::Running => {
                             // Agent started - could show in status bar if needed
                         }
-                        AgentStatus::TurnCompleted {
-                            total_iterations,
-                            finish_reason,
-                            ..
-                        } => {
-                            // Task naturally completed - check for special finish reasons
-                            match finish_reason {
-                                Some(FinishReason::MaxTokens) => {
-                                    let message = " Response truncated: max tokens reached";
-                                    Self::send_desktop_notification("Yomi - Stopped", message);
-                                    self.handle_streaming_error(
-                                        StreamingStatus::Failed,
-                                        message.to_string(),
-                                    );
-                                }
-                                Some(FinishReason::ContentFilter) => {
-                                    let message = " Response blocked: content filter triggered";
-                                    Self::send_desktop_notification("Yomi - Stopped", message);
-                                    self.handle_streaming_error(
-                                        StreamingStatus::Failed,
-                                        message.to_string(),
-                                    );
-                                }
-                                _ => {
-                                    // Normal completion
-                                    self.finalize_assistant_message();
-                                    self.stop_streaming(StreamingStatus::Completed);
-                                    let message = format!(
-                                        "😸 Task completed ({total_iterations} iterations)"
-                                    );
-                                    Self::send_desktop_notification("Yomi", &message);
-                                    self.show_notification(
-                                        &crate::components::info_bar::Notification::success(
-                                            &message, 5000,
-                                        ),
-                                    );
-                                }
-                            }
-                            self.state.should_redraw = true;
-                        }
                         AgentStatus::Stopped { reason } => match reason {
-                            StopReason::Completed => {
-                                // Goal-mode completion skips TurnCompleted, so ensure cleanup
-                                // happens here if streaming is still active.
-                                if self.state.is_streaming {
-                                    self.finalize_assistant_message();
-                                    self.stop_streaming(StreamingStatus::Completed);
-                                    self.state.should_redraw = true;
+                            StopReason::Completed { finish_reason } => {
+                                match finish_reason {
+                                    Some(FinishReason::MaxTokens) => {
+                                        self.stop_streaming(StreamingStatus::Failed);
+                                        self.show_error_message(
+                                            "Response truncated: max tokens reached",
+                                        );
+                                    }
+                                    Some(FinishReason::ContentFilter) => {
+                                        self.stop_streaming(StreamingStatus::Failed);
+                                        self.show_error_message(
+                                            "Response blocked: content filter triggered",
+                                        );
+                                    }
+                                    _ => {
+                                        if self.state.is_streaming {
+                                            self.finalize_assistant_message();
+                                            self.stop_streaming(StreamingStatus::Completed);
+                                        }
+                                    }
                                 }
-                                let message = "🎯 Goal completed";
+                                let message = "😸 Task completed";
                                 Self::send_desktop_notification("Yomi", message);
                                 self.show_notification(
                                     &crate::components::info_bar::Notification::success(
                                         message, 5000,
                                     ),
                                 );
+                                self.state.should_redraw = true;
                             }
                             StopReason::Cancelled { operation } => {
                                 // Cancelled - no desktop notification, just update UI
@@ -316,11 +290,13 @@ impl Model {
                         ));
                         self.state.should_redraw = true;
                     } else {
-                        // Non-recoverable error: stop streaming and add to chat view
-                        self.handle_streaming_error(
-                            StreamingStatus::Failed,
-                            format!("{phase_str} error: {error}"),
-                        );
+                        // Non-recoverable error: show notification only.
+                        // Streaming ends only when AgentStatus::Stopped arrives.
+                        let message = format!("{phase_str} error: {error}");
+                        self.show_notification(&crate::components::info_bar::Notification::error(
+                            message, 5000,
+                        ));
+                        self.state.should_redraw = true;
                     }
                 }
                 // Retrying event - show in status bar
