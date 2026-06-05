@@ -41,11 +41,13 @@ info *ARGS:
 # Start GUI dev mode (Tauri + Svelte 5 single process)
 gui-dev:
     cd crates/gui/frontend && npm install
+    cd crates/gui && npm install
     cd crates/gui && npx tauri dev
 
 # Build GUI release bundle and fix DMG signature
 gui-build:
     cd crates/gui/frontend && npm install
+    cd crates/gui && npm install
     cd crates/gui && npx tauri build
     bash scripts/fix-dmg-signature.sh
 
