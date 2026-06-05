@@ -54,7 +54,7 @@ impl CompactionManager {
         let result = compactor
             .auto_compact(
                 message_buffer.messages(),
-                &*self.provider,
+                Arc::clone(&self.provider),
                 &self.model_config,
                 Some(cancel_token.runtime_token()),
             )
@@ -78,7 +78,7 @@ impl CompactionManager {
         let result = compactor
             .full_compact(
                 message_buffer.messages(),
-                &*self.provider,
+                Arc::clone(&self.provider),
                 &self.model_config,
                 Some(cancel_token.runtime_token()),
             )

@@ -3,6 +3,46 @@ import type { TaggedContentBlock } from "./types";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+// 非活跃 session 自动 unsubscribe 延迟（60 秒）
+const INACTIVE_UNSUBSCRIBE_DELAY = 60_000;
+
+const pendingUnsubscribeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+export function scheduleUnsubscribe(sessionId: string) {
+  const session = getSession(sessionId);
+  if (!session) return;
+  if (session.id === sessionState.activeSessionId) return; // 当前活跃的，不清理
+  if (session.streaming) return; // 正在 streaming，不清理
+  if (session.compacting) return; // 正在 compacting，不清理
+
+  cancelPendingUnsubscribe(sessionId);
+
+  pendingUnsubscribeTimers[sessionId] = setTimeout(() => {
+    api.unsubscribe(sessionId).catch(() => {});
+    delete pendingUnsubscribeTimers[sessionId];
+  }, INACTIVE_UNSUBSCRIBE_DELAY);
+}
+
+export function cancelPendingUnsubscribe(sessionId: string) {
+  const timer = pendingUnsubscribeTimers[sessionId];
+  if (timer) {
+    clearTimeout(timer);
+    delete pendingUnsubscribeTimers[sessionId];
+  }
+}
+
+export function unsubscribeAllInactive() {
+  for (const sessionId of Object.keys(pendingUnsubscribeTimers)) {
+    clearTimeout(pendingUnsubscribeTimers[sessionId]);
+    delete pendingUnsubscribeTimers[sessionId];
+  }
+  for (const session of sessionState.sessions) {
+    if (session.id !== sessionState.activeSessionId) {
+      api.unsubscribe(session.id).catch(() => {});
+    }
+  }
+}
+
 export interface TabEntry {
   name: string;
   path: string;
@@ -40,6 +80,7 @@ export interface ChatMessage {
   thinking?: { content: string; elapsedMs: number } | null;
   tools?: ToolCall[];
   error?: boolean;
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
 export interface ProjectState {
@@ -99,6 +140,7 @@ export interface SessionState {
   updatedAt: string;
   permissionLevel?: string;
   compacting?: boolean;
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
 
 export const appState = $state({
@@ -186,6 +228,12 @@ export function setActiveSession(id: string | null) {
   if (prevId && id !== prevId) {
     const prev = getSession(prevId);
     if (prev) prev.unread = 0;
+    // 旧 session 进入非活跃，如果不在 streaming，延迟 unsubscribe
+    scheduleUnsubscribe(prevId);
+  }
+  // 新 session 被激活，取消可能存在的 pending unsubscribe
+  if (id) {
+    cancelPendingUnsubscribe(id);
   }
   sessionState.activeSessionId = id;
 }
@@ -200,6 +248,13 @@ function upsertSession(session: SessionState) {
 }
 
 
+
+export function syncSessionStatus(sessionId: string, status: { streaming: boolean; compacting: boolean }) {
+  const session = getSession(sessionId);
+  if (!session) return;
+  session.streaming = status.streaming;
+  session.compacting = status.compacting;
+}
 
 export function openFileTab(
   session: SessionState,
@@ -413,13 +468,31 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         content: text,
         thinking,
         tools,
+        tokenUsage: m.tokenUsage
+          ? {
+              promptTokens: m.tokenUsage.promptTokens,
+              completionTokens: m.tokenUsage.completionTokens,
+              totalTokens: m.tokenUsage.totalTokens,
+            }
+          : undefined,
       });
+    }
+  }
+
+  // Find the latest token usage from assistant messages (aligns with TUI logic)
+  let latestTokenUsage = session.tokenUsage;
+  for (let i = parsedMessages.length - 1; i >= 0; i--) {
+    const msg = parsedMessages[i];
+    if (msg.role === "assistant" && msg.tokenUsage) {
+      latestTokenUsage = msg.tokenUsage;
+      break;
     }
   }
 
   upsertSession({
     ...session,
     messages: parsedMessages,
+    tokenUsage: latestTokenUsage,
   });
 }
 
@@ -436,6 +509,14 @@ interface ModelChunk {
   completed?: Record<string, never>;
   error?: { message: string };
   compacting?: { active: boolean };
+  tokenUsage?: {
+    agentId: string;
+    messageId: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    contextWindow: number;
+  };
 }
 
 interface ToolStart {
@@ -484,7 +565,7 @@ type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
   lifecycle?: AgentLifecycle;
-  error?: string;
+  error?: { agentId: string; phase: string; error: string; isRecoverable: boolean };
   permissionRequest?: {
     reqId: string;
     toolName: string;
@@ -496,6 +577,12 @@ interface AgentEvent {
     reqId: string;
     agentId: string;
     questions: AskQuestion[];
+  };
+  retrying?: {
+    agentId: string;
+    attempt: number;
+    maxAttempts: number;
+    reason: string;
   };
 }
 
@@ -543,6 +630,21 @@ export function handleEvent(sessionId: string, rawEvent: unknown) {
   }
 }
 
+/** Mark a session as streaming and cancel any pending unsubscribe. */
+function startStreaming(session: SessionState) {
+  if (!session.streaming) {
+    session.streaming = true;
+  }
+  cancelPendingUnsubscribe(session.id);
+}
+
+/** Schedule unsubscribe if the session is not currently active. */
+function scheduleUnsubscribeIfInactive(session: SessionState) {
+  if (session.id !== sessionState.activeSessionId) {
+    scheduleUnsubscribe(session.id);
+  }
+}
+
 /** Search all messages for a tool with the given id. */
 function findToolById(session: SessionState, toolId: string): { msg: ChatMessage; tool: ToolCall } | null {
   const allMessages = [...session.messages, ...(streamingMessages[session.id] ?? [])];
@@ -557,11 +659,21 @@ function findToolById(session: SessionState, toolId: string): { msg: ChatMessage
 }
 
 function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
+  if (event.tokenUsage) {
+    const u = event.tokenUsage;
+    session.tokenUsage = {
+      promptTokens: u.promptTokens,
+      completionTokens: u.completionTokens,
+      totalTokens: u.totalTokens,
+    };
+    return true;
+  }
+
   if (event.chunk) {
     const chunk = event.chunk;
     const content = chunk.content;
     // Any chunk from the model means streaming is active
-    if (!session.streaming) session.streaming = true;
+    startStreaming(session);
 
     if (content?.text) {
       const text = content.text;
@@ -607,11 +719,14 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       tool.arguments = (tool.arguments ?? "") + delta.argumentsDelta;
     }
     streamingMessages[session.id] = buf;
-    if (!session.streaming) session.streaming = true;
+    startStreaming(session);
     return true;
   } else if (event.compacting) {
     const active = event.compacting.active;
     session.compacting = active;
+    if (active) {
+      cancelPendingUnsubscribe(session.id);
+    }
     if (!active) {
       // Compaction finished — reload messages to reflect compacted history
       api.getMessages(session.id).then((msgs) => {
@@ -619,7 +734,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       }).catch((e: Error) => console.error("Failed to reload messages after compaction:", e));
     }
     return true;
-  } else if (event.completed) {
+} else if (event.completed) {
     // Streaming chunks finished — merge buffer, but do not mutate session.messages
     // here. User messages are added only via UserEvent::Message from the kernel.
     const buf = streamingMessages[session.id] ?? [];
@@ -749,12 +864,13 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.lifecycle) {
     const state = event.lifecycle.state;
     if (state === "running" && !session.streaming) {
-      session.streaming = true;
+      startStreaming(session);
       showNotification("AI is responding...", "info", 2000);
       return true;
     } else if (typeof state === "object") {
       if (state.stopped && session.streaming) {
         session.streaming = false;
+        scheduleUnsubscribeIfInactive(session);
         const buf = streamingMessages[session.id] ?? [];
         if (buf.length > 0) {
           session.messages = [...session.messages, ...buf];
@@ -821,7 +937,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       session.messages = [...session.messages, ...buf];
       streamingMessages[session.id] = [];
     }
-    const errorMsg = "Agent error: " + (event.error ?? "Unknown");
+    const errorStr = event.error.error ?? "Unknown";
+    const errorMsg = "Agent error: " + errorStr;
     session.messages = [...session.messages, {
       id: crypto.randomUUID(),
       role: "error",
@@ -829,8 +946,22 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       thinking: null,
       tools: [],
     }];
-    showNotification(errorMsg, "error", 5000);
+    const level = event.error.isRecoverable ? "warning" : "error";
+    showNotification(errorMsg, level, 5000);
     sendDesktopNotification("Yomi", errorMsg, session.id);
+    scheduleUnsubscribeIfInactive(session);
+    return true;
+  } else if (event.retrying) {
+    const retry = event.retrying;
+    const msg = `Agent retrying (${retry.attempt}/${retry.maxAttempts})`;
+    session.messages = [...session.messages, {
+      id: crypto.randomUUID(),
+      role: "error",
+      content: msg,
+      thinking: null,
+      tools: [],
+    }];
+    showNotification(msg, "warning", 3000);
     return true;
   } else if (event.permissionRequest) {
     const req = event.permissionRequest;
@@ -872,7 +1003,7 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
     ];
     session.updatedAt = new Date().toISOString();
     // User message received → show streaming indicator immediately
-    session.streaming = true;
+    startStreaming(session);
     return true;
   }
   return false;
@@ -899,6 +1030,7 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     // Clear any streaming buffer since history changed
     streamingMessages[session.id] = [];
     session.streaming = false;
+    scheduleUnsubscribeIfInactive(session);
     loadSessionMessages(session.id, event.rewound.messages);
     // Refresh checkpoints list after rewind
     api.getCheckpoints(session.id).then((cps) => {

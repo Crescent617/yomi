@@ -357,6 +357,22 @@ impl Session {
         self.main_agent.as_ref().map(|h| h.state())
     }
 
+    /// Whether the main agent is currently streaming
+    pub fn is_streaming(&self) -> bool {
+        self.main_agent
+            .as_ref()
+            .map(|h| h.state() == AgentState::Streaming)
+            .unwrap_or(false)
+    }
+
+    /// Whether the main agent is currently compacting messages
+    pub fn is_compacting(&self) -> bool {
+        self.main_agent
+            .as_ref()
+            .map(|h| h.is_compacting())
+            .unwrap_or(false)
+    }
+
     pub const fn id(&self) -> &SessionId {
         &self.id
     }

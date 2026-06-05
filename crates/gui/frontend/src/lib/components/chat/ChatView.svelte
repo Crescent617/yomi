@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages } from "../../state.svelte";
+  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus } from "../../state.svelte";
   import * as api from "../../api";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
@@ -243,9 +243,11 @@
       }
       setActiveSession(id);
       await api.subscribe(id);
+      const status = await api.getSessionStatus(id);
       const msgs = await api.getMessages(id);
       const session = sessionState.sessions.find(s => s.id === id);
       if (session) {
+        syncSessionStatus(id, status);
         loadSessionMessages(id, msgs);
         // Merge any stale streaming buffer (defensive)
         const buf = streamingMessages[id] ?? [];

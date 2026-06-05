@@ -11,7 +11,7 @@ use crate::tools::executor::ToolExecutionResult;
 use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
 use futures::TryStreamExt;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -111,6 +111,8 @@ pub struct Agent {
     skills: Vec<Arc<crate::skill::Skill>>,
     /// Channel for receiving steer messages injected before each streaming turn
     steer_rx: mpsc::Receiver<Vec<ContentBlock>>,
+    /// Whether the agent is currently compacting messages
+    compacting: Arc<AtomicBool>,
 }
 
 impl Agent {
@@ -210,6 +212,7 @@ impl Agent {
         });
 
         let data_dir = shared.data_dir.clone();
+        let compacting = Arc::new(AtomicBool::new(false));
 
         let agent = Self {
             id: id.clone(),
@@ -233,6 +236,7 @@ impl Agent {
             base_prompt: args.base_prompt,
             skills: args.skills.clone(),
             steer_rx,
+            compacting: Arc::clone(&compacting),
         };
 
         let handle_id = id.clone();
@@ -254,6 +258,7 @@ impl Agent {
             Some(ask_user_responder),
             Arc::clone(&input_stale_since),
             steer_tx,
+            Arc::clone(&compacting),
         );
         (handle, event_rx)
     }
@@ -1185,7 +1190,7 @@ impl Agent {
         let result = compactor
             .auto_compact(
                 self.message_buffer.messages(),
-                &*self.shared.provider,
+                Arc::clone(&self.shared.provider),
                 &self.shared.model_config,
                 Some(self.cancel_token.runtime_token()),
             )
@@ -1208,7 +1213,7 @@ impl Agent {
         let result = compactor
             .full_compact(
                 self.message_buffer.messages(),
-                &*self.shared.provider,
+                Arc::clone(&self.shared.provider),
                 &self.shared.model_config,
                 Some(self.cancel_token.runtime_token()),
             )
@@ -1278,6 +1283,7 @@ impl Agent {
 
     /// Emit compaction start/end event.
     async fn emit_compaction_event(&self, active: bool) {
+        self.compacting.store(active, Ordering::Relaxed);
         if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
             agent_id: self.id.clone(),
             active,

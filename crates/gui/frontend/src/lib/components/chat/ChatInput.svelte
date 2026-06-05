@@ -4,7 +4,7 @@ import { levelDescription, levelIcon, levelColor, type PermissionLevel } from ".
 import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
 import type { TaggedContentBlock } from "../../types";
-import { sessionState, getActiveSession, showNotification, loadSessionMessages } from "../../state.svelte";
+import { sessionState, getActiveSession, showNotification } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
 import { fsProvider } from "../../fs/factory";
 import type { FileEntry } from "../../fs/provider";
@@ -262,12 +262,6 @@ async function handleCommand(text: string) {
       case "/compact":
         await api.compactSession(sessionId);
         showNotification("Session compaction requested", "info", 3000);
-        // Reload messages after a short delay to reflect compacted state
-        setTimeout(() => {
-          api.getMessages(sessionId).then((msgs) => {
-            loadSessionMessages(sessionId, msgs);
-          }).catch((e: Error) => console.error("Failed to reload after compact:", e));
-        }, 2000);
         break;
       case "/reload":
         await api.reloadConfig();

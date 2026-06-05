@@ -66,6 +66,9 @@ pub enum RequestMethod {
     GetSessionMessages {
         session_id: String,
     },
+    GetSessionStatus {
+        session_id: String,
+    },
     GetCheckpoints {
         session_id: String,
     },

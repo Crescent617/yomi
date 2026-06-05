@@ -186,6 +186,10 @@ export async function getMessages(sessionId: string): Promise<unknown[]> {
   return invokeCmd("get_messages", { sessionId });
 }
 
+export async function getSessionStatus(sessionId: string): Promise<{ streaming: boolean; compacting: boolean }> {
+  return invokeCmd("get_session_status", { sessionId });
+}
+
 export async function getCheckpoints(sessionId: string): Promise<unknown[]> {
   return invokeCmd("get_checkpoints", { sessionId });
 }

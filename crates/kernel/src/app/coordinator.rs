@@ -554,6 +554,16 @@ impl Coordinator {
         self.sessions.get(id).map(|e| Arc::clone(e.value()))
     }
 
+    /// Get runtime status for a session (streaming, compacting, etc.)
+    pub async fn get_session_status(&self, id: &SessionId) -> Result<crate::types::SessionStatus> {
+        let session = self.require_session(id)?;
+        let session = session.read().await;
+        Ok(crate::types::SessionStatus {
+            streaming: session.is_streaming(),
+            compacting: session.is_compacting(),
+        })
+    }
+
     fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
         self.get_session(session_id).ok_or_else(|| {
             SessionError::NotFound {
