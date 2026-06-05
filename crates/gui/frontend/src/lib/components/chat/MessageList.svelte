@@ -106,10 +106,11 @@
 </script>
 
 {#if activeSession}
-  <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto relative">
-    <div class="container mx-auto px-4 lg:px-6 pt-2 pb-4">
-      <!-- Sticky todo progress bar -->
-      <div class="sticky top-2 z-20 flex flex-col items-center mb-4 relative">
+  <div class="h-full relative">
+    <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto">
+      <div class="container mx-auto px-4 lg:px-6 pt-2 pb-4">
+        <!-- Sticky todo progress bar -->
+        <div class="sticky top-2 z-20 flex flex-col items-center mb-4 relative">
         {#if hasTodos && totalCount !== completedCount}
           <button
             type="button"
@@ -172,17 +173,18 @@
         {/each}
       </div>
     </div>
-    {#if !isNearBottom}
-      <button
-        type="button"
-        onclick={scrollToBottom}
-        class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
-      >
-        <ArrowDown class="w-3 h-3" />
-        Bottom
-      </button>
-    {/if}
   </div>
+  {#if !isNearBottom}
+    <button
+      type="button"
+      onclick={scrollToBottom}
+      class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+    >
+      <ArrowDown class="w-3 h-3" />
+      Bottom
+    </button>
+  {/if}
+</div>
 {:else}
   <div class="flex items-center justify-center h-full text-muted-foreground">
     No messages

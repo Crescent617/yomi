@@ -49,11 +49,11 @@ gui-build:
     cd crates/gui && npx tauri build
     bash scripts/fix-dmg-signature.sh
 
-build-release:
-    cargo build --release
+tui-build:
+    cargo build --release --bin yomi
 
 # Release TUI to homebrew tap (downloads from GitHub release)
-brew-release:
+brew-release-tui:
     bash ./scripts/brew-release.sh
 
 # Release GUI to homebrew tap (local build + upload + update cask)
