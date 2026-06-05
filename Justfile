@@ -52,5 +52,10 @@ gui-build:
 build-release:
     cargo build --release
 
+# Release TUI to homebrew tap (downloads from GitHub release)
 brew-release:
     bash ./scripts/brew-release.sh
+
+# Release GUI to homebrew tap (local build + upload + update cask)
+brew-release-gui:
+    bash ./scripts/brew-cask-release.sh
