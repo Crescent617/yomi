@@ -22,7 +22,7 @@
   let timerInterval: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
-    if (session?.streaming) {
+    if (session?.streaming || session?.compacting) {
       startTime = Date.now();
       elapsedMs = 0;
       timerInterval = setInterval(() => {
@@ -44,9 +44,14 @@
     }
   });
 
-  // ── Total token estimate: all messages ──
+  // ── Total tokens: prefer backend real usage, fallback to estimation ──
   const totalTokens = $derived.by(() => {
     if (!session) return 0;
+    // Use backend-reported token usage (aligns with TUI status bar)
+    if (session.tokenUsage?.totalTokens != null) {
+      return session.tokenUsage.totalTokens;
+    }
+    // Fallback to client-side estimation
     let bytes = 0;
     for (const msg of displayMessages) {
       bytes += utf8ByteLength(msg.content);
@@ -133,7 +138,7 @@
         <span class="text-muted-foreground shrink-0">{formatTokens(streamingTokens)} tokens</span>
       {/if}
 
-      {#if session?.streaming && elapsedMs > 0}
+      {#if (session?.streaming || session?.compacting) && elapsedMs > 0}
         <span class="text-muted-foreground/70 shrink-0">· {formatElapsed(elapsedMs)}</span>
       {/if}
 
@@ -152,10 +157,13 @@
     <!-- Right: model + ctx -->
     <div class="flex items-center gap-2 shrink-0">
       {#if config}
+        {@const pct = (totalTokens / config.contextWindow) * 100}
         <span class="text-muted-foreground/60">{config.model}</span>
         <span class="text-muted-foreground/40">·</span>
-        <span class="text-muted-foreground/60" class:text-amber-500={totalTokens > config.contextWindow * 0.8}>
-          {formatTokens(totalTokens)} / {formatTokens(config.contextWindow)}
+        <span class="text-muted-foreground/60"
+          class:text-amber-500={pct >= 70}
+          class:text-red-500={pct >= 90}>
+          {pct.toFixed(1)}% ({(config.contextWindow / 1000).toFixed(0)}K)
         </span>
       {/if}
     </div>

@@ -1,7 +1,7 @@
 {
   "$schema": "./frontend/node_modules/@tauri-apps/cli/schema.json",
   "productName": "Yomi",
-  "version": "0.2.27",
+  "version": "0.2.28",
   "identifier": "com.yomi.gui",
   "build": {
     "beforeDevCommand": "cd frontend && npm run dev",

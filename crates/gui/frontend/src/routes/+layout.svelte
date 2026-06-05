@@ -1,7 +1,8 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
-  import { handleEvent, getSession } from "../lib/state.svelte";
+  import { handleEvent, getSession, unsubscribeAllInactive } from "../lib/state.svelte";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
   import { initSettings, startThemeListener, stopThemeListener } from "../lib/settings.svelte";
   import "../app.css";
@@ -16,8 +17,13 @@
         handleEvent(sessionId, event);
       }
     });
+    const appWindow = getCurrentWindow();
+    const unlistenClose = await appWindow.onCloseRequested(() => {
+      unsubscribeAllInactive();
+    });
     return () => {
       unlisten.then((fn: () => void) => fn());
+      unlistenClose();
       stopThemeListener();
     };
   });

@@ -10,6 +10,7 @@
     loadSessionMessages,
     getSession,
     showNotification,
+    syncSessionStatus,
   } from "../../state.svelte";
 
   let { collapsed = false }: { collapsed?: boolean } = $props();
@@ -26,18 +27,22 @@
     if (projectState.projects.length === 0) {
       api.listProjects().then((list) => {
         projectState.projects = list.map((p) => ({ ...p }));
-        // Auto-expand first project and load its sessions
-        if (list.length > 0) {
-          const first = list[0].id;
-          expanded = { [first]: true };
-          loadSessions(first);
+        // Auto-expand first 3 projects and load their sessions
+        const firstN = list.slice(0, 3).map((p) => p.id);
+        if (firstN.length > 0) {
+          expanded = Object.fromEntries(firstN.map((id) => [id, true]));
+          for (const id of firstN) {
+            loadSessions(id);
+          }
         }
       }).catch(console.error);
     } else if (projectState.projects.length > 0) {
-      // Projects already loaded (e.g. HMR), expand first
-      const first = projectState.projects[0].id;
-      expanded = { [first]: true };
-      loadSessions(first);
+      // Projects already loaded (e.g. HMR), expand first 3
+      const firstN = projectState.projects.slice(0, 3).map((p) => p.id);
+      expanded = Object.fromEntries(firstN.map((id) => [id, true]));
+      for (const id of firstN) {
+        loadSessions(id);
+      }
     }
   });
 
@@ -118,18 +123,22 @@
   async function activateSession(id: string) {
     const prev = sessionState.activeSessionId;
     try {
-      if (prev && prev !== id) await api.unsubscribe(prev);
       await api.subscribe(id);
       setActiveSession(id);
+      // Sync initial runtime status from backend (streaming / compacting)
+      const status = await api.getSessionStatus(id);
+      const session = getSession(id);
+      if (session) {
+        syncSessionStatus(id, status);
+      }
       const msgs = await api.getMessages(id);
       if (getSession(id)) loadSessionMessages(id, msgs);
       const cps = await api.getCheckpoints(id);
-      const session = getSession(id);
       if (session) session.checkpoints = cps ?? [];
     } catch (e: unknown) {
       console.error("Failed to activate session:", e instanceof Error ? e.message : e);
       if (prev && prev !== id) {
-        try { await api.subscribe(prev); setActiveSession(prev); } catch { setActiveSession(null); }
+        setActiveSession(prev);
       } else {
         setActiveSession(null);
       }
@@ -139,6 +148,7 @@
   async function deleteSession(id: string) {
     if (!confirm("Delete this session?")) return;
     try {
+      await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
       if (sessionState.activeSessionId === id) setActiveSession(null);
@@ -296,8 +306,8 @@
               {:else}
                 <span class="truncate font-medium">{project.name}</span>
               {/if}
-              {#if getSessions(project.id).some((s) => s.streaming)}
-                <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0"></span>
+              {#if getSessions(project.id).some((s) => s.streaming || s.compacting)}
+                <span class="w-1.5 h-1.5 rounded-full {getSessions(project.id).some((s) => s.streaming) ? 'bg-primary' : 'bg-amber-500'} animate-pulse shrink-0"></span>
               {/if}
             </button>
 
@@ -345,8 +355,8 @@
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
-                    {#if session.streaming}
-                      <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                    {#if session.streaming || session.compacting}
+                      <span class="w-1.5 h-1.5 rounded-full {session.streaming ? 'bg-primary' : 'bg-amber-500'} animate-pulse"></span>
                     {/if}
                     <div class="relative">
                       <button class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100" onclick={(e: Event) => { e.stopPropagation(); showSessionMenu = showSessionMenu === session.id ? null : session.id; }}>

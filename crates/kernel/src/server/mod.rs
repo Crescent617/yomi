@@ -549,6 +549,12 @@ impl KernelServer {
                     .get_session_messages(&SessionId(session_id))
                     .await,
             ),
+            RequestMethod::GetSessionStatus { session_id } => rpc_body(
+                "get_session_status_failed",
+                self.coordinator
+                    .get_session_status(&SessionId(session_id))
+                    .await,
+            ),
             RequestMethod::DeleteSession { session_id } => rpc_body(
                 "delete_failed",
                 self.coordinator

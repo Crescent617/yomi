@@ -86,6 +86,10 @@ pub trait CoordinatorApi: Send + Sync {
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
+    async fn get_session_status(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionStatus>;
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
@@ -247,6 +251,13 @@ impl CoordinatorApi for Coordinator {
 
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
         self.get_session_messages(session_id).await
+    }
+
+    async fn get_session_status(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionStatus> {
+        self.get_session_status(session_id).await
     }
 
     async fn subscribe_session_events(
@@ -986,6 +997,19 @@ impl CoordinatorApi for RemoteCoordinator {
             .await?;
         let msgs: Vec<Message> = serde_json::from_value(result)?;
         Ok(msgs)
+    }
+
+    async fn get_session_status(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<crate::types::SessionStatus> {
+        let result = self
+            .call(RequestMethod::GetSessionStatus {
+                session_id: session_id.0.clone(),
+            })
+            .await?;
+        let status: crate::types::SessionStatus = serde_json::from_value(result)?;
+        Ok(status)
     }
 
     async fn subscribe_session_events(

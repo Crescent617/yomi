@@ -304,6 +304,20 @@ pub async fn get_messages(
 }
 
 #[tauri::command]
+pub async fn get_session_status(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    let status = coord
+        .get_session_status(&sid)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(serde_json::to_value(status).unwrap_or_default())
+}
+
+#[tauri::command]
 pub async fn get_todos(
     state: State<'_, AppState>,
     session_id: String,

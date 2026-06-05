@@ -86,6 +86,24 @@ impl SessionId {
     pub fn new() -> Self {
         Self(Uuid::now_v7().to_string())
     }
+
+    /// Create from an existing string (used for database retrieval)
+    pub fn from_string(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// Get the string representation
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Session runtime status for UI state syncing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStatus {
+    pub streaming: bool,
+    pub compacting: bool,
 }
 
 impl Default for SessionId {

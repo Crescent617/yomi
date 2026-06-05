@@ -237,7 +237,7 @@ impl Compactor {
     pub async fn full_compact(
         &self,
         messages: &[Arc<Message>],
-        provider: &dyn Provider,
+        provider: Arc<dyn Provider>,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<CompactionResult, CompactionError> {
@@ -282,7 +282,7 @@ impl Compactor {
     pub async fn auto_compact(
         &self,
         messages: &[Arc<Message>],
-        provider: &dyn Provider,
+        provider: Arc<dyn Provider>,
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Option<CompactionResult>, CompactionError> {
@@ -301,13 +301,13 @@ impl Compactor {
             }
             // Need full compaction on top of micro results
             return self
-                .full_compact(&after_micro, provider, model_config, cancel_token)
+                .full_compact(&after_micro, Arc::clone(&provider), model_config, cancel_token)
                 .await
                 .map(Some);
         }
 
         // No micro-compaction possible, do full compaction directly
-        self.full_compact(messages, provider, model_config, cancel_token)
+        self.full_compact(messages, Arc::clone(&provider), model_config, cancel_token)
             .await
             .map(Some)
     }
@@ -317,7 +317,7 @@ impl Compactor {
 /// Returns (summary, `token_usage`) or Err if cancelled or API fails.
 async fn generate_summary(
     messages: &[Arc<Message>],
-    provider: &dyn Provider,
+    provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
     cancel_token: Option<CancellationToken>,
 ) -> Result<(String, crate::providers::TokenUsage), CompactionError> {
@@ -340,6 +340,17 @@ async fn generate_summary(
         ..model_config.clone()
     };
 
+    // Spawn provider request in a separate task to allow cancellation
+    let summary_messages_clone = summary_messages;
+    let summary_config_clone = summary_config;
+    let provider_clone = Arc::clone(&provider);
+    let stream_task = tokio::spawn(async move {
+        provider_clone
+            .stream(&summary_messages_clone, &[], &summary_config_clone)
+            .await
+    });
+    let abort_handle = stream_task.abort_handle();
+
     // Call API with cancellation support
     let mut stream = tokio::select! {
         biased;
@@ -350,9 +361,15 @@ async fn generate_summary(
                 std::future::pending().await
             }
         } => {
+            abort_handle.abort();
             return Err(CompactionError::Cancelled);
         }
-        result = provider.stream(&summary_messages, &[], &summary_config) => result?,
+        result = stream_task => match result {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(e) if e.is_cancelled() => return Err(CompactionError::Cancelled),
+            Err(e) => return Err(CompactionError::Api(format!("Summary stream task panicked: {e}"))),
+        }
     };
 
     // Collect response with cancellation check
