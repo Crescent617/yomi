@@ -680,9 +680,6 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
           return b.type === "text" && b.text ? b.text : "";
         })
         .join("");
-      if (end.isError) {
-        showNotification(`${end.toolName} failed`, "error", 4000);
-      }
       return true;
     }
     const buf = streamingMessages[session.id] ?? [];
@@ -712,9 +709,6 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
         return b.type === "text" && b.text ? b.text : "";
       })
       .join("");
-    if (end.isError) {
-      showNotification(`${end.toolName} failed`, "error", 4000);
-    }
     streamingMessages[session.id] = buf;
     return true;
   } else if (event.progress) {

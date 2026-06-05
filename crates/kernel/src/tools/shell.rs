@@ -124,11 +124,12 @@ For long-running commands (e.g. start a server, run a script with unknown durati
 
         tracing::debug!("Executing bash command: {}", command);
 
+        let cancel_token = ctx.cancel_token.clone();
         if background {
-            self.exec_async(command, timeout_secs, &ctx.working_dir)
+            self.exec_async(command, timeout_secs, &ctx.working_dir, cancel_token)
                 .await
         } else {
-            self.exec_sync(command, timeout_secs, &ctx.working_dir)
+            self.exec_sync(command, timeout_secs, &ctx.working_dir, cancel_token)
                 .await
         }
     }
@@ -151,9 +152,10 @@ impl ShellTool {
         command: &str,
         timeout_secs: Option<u64>,
         working_dir: &std::path::Path,
+        cancel_token: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolOutput> {
         let (shell, arg) = Self::shell_command();
-        let child = Command::new(&shell)
+        let output_fut = Command::new(&shell)
             .arg(&arg)
             .arg(command)
             .current_dir(working_dir)
@@ -163,12 +165,29 @@ impl ShellTool {
             .kill_on_drop(true)
             .output();
 
-        let output = match timeout(Duration::from_secs(timeout_secs.unwrap_or(300)), child).await {
-            Ok(result) => result?,
+        let timeout_duration = Duration::from_secs(timeout_secs.unwrap_or(300));
+        let output_result = match cancel_token {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => {
+                        tracing::info!("Bash command cancelled: {}", command);
+                        // output_fut is dropped here; .kill_on_drop(true) ensures the process is killed
+                        return Ok(ToolOutput::error("Command cancelled"));
+                    }
+                    result = timeout(timeout_duration, output_fut) => result,
+                }
+            }
+            None => timeout(timeout_duration, output_fut).await,
+        };
+
+        let output = match output_result {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => return Err(KernelError::tool(format!("Process error: {e}"))),
             Err(_) => {
                 tracing::warn!(
                     "Bash command timed out after {}s: {}",
-                    timeout_secs.unwrap_or(300),
+                    timeout_duration.as_secs(),
                     command
                 );
                 return Ok(ToolOutput::error("Command timed out"));
@@ -217,6 +236,7 @@ impl ShellTool {
         command: &str,
         timeout_secs: Option<u64>,
         working_dir: &std::path::Path,
+        cancel_token: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolOutput> {
         let ctx = self
             .ctx
@@ -256,12 +276,18 @@ impl ShellTool {
                 command_clone,
                 output_path_clone.clone(),
                 timeout_secs,
+                cancel_token,
             )
             .await;
 
             let text = match result {
-                Ok((code, timed_out)) => {
-                    if timed_out {
+                Ok((code, timed_out, cancelled)) => {
+                    if cancelled {
+                        format!(
+                            "[Task {task_id_clone} (PID: {pid}) cancelled]\nPartial output: {}",
+                            output_path_clone.display()
+                        )
+                    } else if timed_out {
                         format!(
                             "[Task {task_id_clone} (PID: {pid}) timed out]\nPartial output: {}",
                             output_path_clone.display()
@@ -293,12 +319,40 @@ impl ShellTool {
     }
 }
 
+/// Parse a successful `child.wait()` result.
+fn parse_wait_result(
+    result: std::result::Result<std::process::ExitStatus, std::io::Error>,
+) -> Result<(i32, bool, bool)> {
+    match result {
+        Ok(status) => Ok((status.code().unwrap_or(-1), false, false)),
+        Err(e) => Err(KernelError::tool(format!("Process error: {e}"))),
+    }
+}
+
+/// Handle a timed-out `child.wait()` result.
+async fn handle_timeout_result(
+    result: std::result::Result<
+        std::result::Result<std::process::ExitStatus, std::io::Error>,
+        tokio::time::error::Elapsed,
+    >,
+    child: &mut tokio::process::Child,
+) -> Result<(i32, bool, bool)> {
+    match result {
+        Ok(result) => parse_wait_result(result),
+        Err(_) => {
+            let _ = child.kill().await;
+            Ok((-1, true, false))
+        }
+    }
+}
+
 async fn wait_for_child(
     mut child: tokio::process::Child,
     command: String,
     output_path: std::path::PathBuf,
     timeout_secs: Option<u64>,
-) -> Result<(i32, bool)> {
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+) -> Result<(i32, bool, bool)> {
     use tokio::time::timeout;
 
     let stdout = child.stdout.take().expect("stdout piped");
@@ -355,30 +409,54 @@ async fn wait_for_child(
     });
 
     let result = if let Some(secs) = timeout_secs {
-        match timeout(Duration::from_secs(secs), child.wait()).await {
-            Ok(Ok(status)) => Ok((status.code().unwrap_or(-1), false)),
-            Ok(Err(e)) => Err(KernelError::tool(format!("Process error: {e}"))),
-            Err(_) => {
-                let _ = child.kill().await;
-                Ok((-1, true))
+        let timeout_fut = timeout(Duration::from_secs(secs), child.wait());
+        match cancel_token {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => {
+                        let _ = child.kill().await;
+                        Ok((-1, false, true))
+                    }
+                    result = timeout_fut => handle_timeout_result(result, &mut child).await,
+                }
             }
+            None => handle_timeout_result(timeout_fut.await, &mut child).await,
         }
     } else {
-        let status = child.wait().await?;
-        Ok((status.code().unwrap_or(-1), false))
+        match cancel_token {
+            Some(token) => {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => {
+                        let _ = child.kill().await;
+                        Ok((-1, false, true))
+                    }
+                    result = child.wait() => parse_wait_result(result),
+                }
+            }
+            None => parse_wait_result(child.wait().await),
+        }
     };
 
     let _ = tokio::join!(out_reader, err_reader);
     drop(tx);
     let _ = writer.await;
 
-    let (code, timed_out) = result?;
+    let (code, timed_out, cancelled) = result?;
 
     match File::options().append(true).open(&output_path).await {
         Ok(mut file) => {
-            if timed_out {
+            if cancelled {
                 let _ = file
-                    .write_all(format!("\n# Task timed out after {timeout_secs:?}s\n").as_bytes())
+                    .write_all(b"\n# Task cancelled\n")
+                    .await;
+            } else if timed_out {
+                let timeout_str = timeout_secs
+                    .map(|s| format!("{s}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let _ = file
+                    .write_all(format!("\n# Task timed out after {timeout_str}s\n").as_bytes())
                     .await;
             }
             let _ = file
@@ -390,7 +468,7 @@ async fn wait_for_child(
         }
     }
 
-    Ok((code, timed_out))
+    Ok((code, timed_out, cancelled))
 }
 
 #[cfg(test)]

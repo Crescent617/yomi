@@ -95,6 +95,9 @@ pub fn run() {
 }
 
 fn main() {
+    if let Err(e) = fix_path_env::fix() {
+        tracing::debug!("Failed to fix PATH environment: {e}");
+    }
     let _guard = init_logging();
     run();
 }

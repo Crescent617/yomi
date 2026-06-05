@@ -5,21 +5,9 @@
   let { content, elapsedMs, isStreaming = false }: { content: string; elapsedMs: number; isStreaming?: boolean } = $props();
 
   let expanded = $state(false);
-  let userToggled = $state(false);
-
-  // Auto-expand while streaming, auto-fold when streaming ends
-  $effect(() => {
-    if (isStreaming) {
-      expanded = true;
-      userToggled = false;
-    } else if (!userToggled) {
-      expanded = false;
-    }
-  });
 
   function toggle() {
     expanded = !expanded;
-    userToggled = true;
   }
 </script>
 

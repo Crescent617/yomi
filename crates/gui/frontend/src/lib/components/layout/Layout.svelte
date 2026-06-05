@@ -11,6 +11,10 @@
   import RightPanel from "./RightPanel.svelte";
 
   let mobileSidebarOpen = $state(false);
+  let leftSidebarWidth = $state(256);
+  let rightSidebarWidth = $state(288);
+  let isDraggingLeft = $state(false);
+  let isDraggingRight = $state(false);
 
   onMount(() => {
     loadProjects();
@@ -40,6 +44,47 @@
   function toggleMobileSidebar() {
     mobileSidebarOpen = !mobileSidebarOpen;
   }
+
+  function startDragLeft(e: MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = appState.sidebarCollapsed ? 64 : leftSidebarWidth;
+    isDraggingLeft = true;
+    if (appState.sidebarCollapsed) {
+      appState.sidebarCollapsed = false;
+    }
+
+    function onMove(ev: MouseEvent) {
+      const delta = ev.clientX - startX;
+      leftSidebarWidth = Math.max(160, Math.min(400, startWidth + delta));
+    }
+    function onUp() {
+      isDraggingLeft = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  function startDragRight(e: MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = rightSidebarWidth;
+    isDraggingRight = true;
+
+    function onMove(ev: MouseEvent) {
+      const delta = startX - ev.clientX;
+      rightSidebarWidth = Math.max(200, Math.min(400, startWidth + delta));
+    }
+    function onUp() {
+      isDraggingRight = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 </script>
 
 <div class="fixed inset-0 flex bg-background text-foreground overflow-hidden">
@@ -52,10 +97,19 @@
     {#if appState.activePanel === "chat"}
       <!-- Desktop inline sidebar -->
       <aside
-        class="hidden lg:flex flex-col border-r border-border shrink-0 transition-[width] duration-300 ease-out
-               {appState.sidebarCollapsed ? 'w-16' : 'w-64'}"
+        class="hidden lg:flex flex-col border-r border-border shrink-0 relative overflow-hidden
+               {isDraggingLeft ? '' : 'transition-[width] duration-300 ease-out'}"
+        style="width: {appState.sidebarCollapsed ? 64 : leftSidebarWidth}px"
       >
         <ProjectSidebar collapsed={appState.sidebarCollapsed} />
+        {#if !appState.sidebarCollapsed}
+          <div
+            class="absolute right-0 top-0 bottom-0 w-[2px] cursor-col-resize hover:bg-primary/50 z-10"
+            onmousedown={startDragLeft}
+            role="separator"
+            aria-label="Resize sidebar"
+          ></div>
+        {/if}
       </aside>
 
       <!-- Mobile overlay sidebar -->
@@ -89,8 +143,16 @@
 
       {#if !appState.rightPanelCollapsed}
         <aside
-          class="hidden lg:flex flex-col border-l border-border shrink-0 w-72 transition-all duration-300 ease-out"
+          class="hidden lg:flex flex-col border-l border-border shrink-0 relative overflow-hidden
+                 {isDraggingRight ? '' : 'transition-all duration-300 ease-out'}"
+          style="width: {rightSidebarWidth}px"
         >
+          <div
+            class="absolute left-0 top-0 bottom-0 w-[2px] cursor-col-resize hover:bg-primary/50 z-10"
+            onmousedown={startDragRight}
+            role="separator"
+            aria-label="Resize right panel"
+          ></div>
           <RightPanel session={activeSession} />
         </aside>
       {/if}

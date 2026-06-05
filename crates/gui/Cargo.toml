@@ -40,6 +40,9 @@ kernel = { workspace = true }
 tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
 tauri-plugin-notification = "2"
 
+# Fix PATH for GUI apps (macOS / Linux / Windows)
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d50" }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

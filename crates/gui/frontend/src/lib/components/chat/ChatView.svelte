@@ -10,7 +10,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ArrowDown, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap } from "lucide-svelte";
+  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
@@ -24,8 +24,6 @@
   let newProjectPath = $state("");
   let newProjectName = $state("");
   let permissionLevel = $state("");
-  let listRef: { scrollToBottom?: () => void } | null = $state(null);
-  let isNearBottom = $state(true);
   let chatInputRef: { setContent?: (text: string) => void; focus?: () => void } | null = $state(null);
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
@@ -117,17 +115,6 @@
 
   function removeHomeFileAttachment(path: string) {
     homeFileAttachments = homeFileAttachments.filter((p) => p !== path);
-  }
-
-
-
-  function onNearBottomChange(near: boolean) {
-    isNearBottom = near;
-  }
-
-  function scrollToBottom() {
-    listRef?.scrollToBottom?.();
-    isNearBottom = true;
   }
 
   // Auto-focus chat input when switching to a new session (only once per session)
@@ -639,7 +626,7 @@
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
           <div class="flex-1 relative min-h-0">
-            <MessageList bind:this={listRef} onNearBottomChange={onNearBottomChange} />
+            <MessageList />
           </div>
           <div class="shrink-0 w-full">
             <div class="container mx-auto px-4 lg:px-6">
@@ -658,16 +645,6 @@
               <ChatInput bind:this={chatInputRef} />
             </div>
           </div>
-          {#if !isNearBottom}
-            <button
-              type="button"
-              onclick={scrollToBottom}
-              class="absolute bottom-24 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
-            >
-              <ArrowDown class="w-3 h-3" />
-              Bottom
-            </button>
-          {/if}
         </div>
       </div>
     {:else if activeSession}

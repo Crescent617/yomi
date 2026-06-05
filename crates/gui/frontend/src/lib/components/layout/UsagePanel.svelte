@@ -71,7 +71,7 @@
     for (let i = 0; i < 365; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const iso = d.toISOString().slice(0, 10);
+      const iso = toLocalISODate(d);
       if (activeSet.has(iso)) {
         current++;
       } else if (i > 0) {
@@ -146,6 +146,10 @@
     return date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric", weekday: "long" });
   }
 
+  function toLocalISODate(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
   /** Fill 365 days back from today so the heatmap has a fixed width */
   const filledDaily = $derived.by(() => {
     const map = new Map<string, DayData>();
@@ -156,7 +160,7 @@
     for (let i = DAYS_RANGE - 1; i >= 0; i--) {
       const cur = new Date(today);
       cur.setDate(cur.getDate() - i);
-      const iso = cur.toISOString().slice(0, 10);
+      const iso = toLocalISODate(cur);
       result.push(
         map.get(iso) ?? {
           date: iso,

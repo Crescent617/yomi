@@ -609,10 +609,12 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function autoResize() {
-  if (textareaRef) {
-    textareaRef.style.height = "auto";
-    textareaRef.style.height = Math.min(textareaRef.scrollHeight, 200) + "px";
+  if (!textareaRef) return;
+  textareaRef.style.height = "auto";
+  if (!content.trim()) {
+    return; // let min-height/rows decide initial height
   }
+  textareaRef.style.height = Math.min(textareaRef.scrollHeight, 200) + "px";
 }
 
 function getFileIcon(entry: FileEntry) {

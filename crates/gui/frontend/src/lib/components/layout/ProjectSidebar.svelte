@@ -241,7 +241,7 @@
 
 <div class="flex flex-col h-full {collapsed ? 'items-center' : ''}">
   {#if !collapsed}
-    <div class="shrink-0 p-2 border-b border-border/50">
+    <div class="shrink-0 p-2">
       <button
         class="w-full flex items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 active:scale-[0.98] transition-all"
         onclick={() => setActiveSession(null)}
