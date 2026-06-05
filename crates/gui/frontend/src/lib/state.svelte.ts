@@ -483,7 +483,7 @@ type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
   lifecycle?: AgentLifecycle;
-  error?: { message?: string };
+  error?: string;
   permissionRequest?: {
     reqId: string;
     toolName: string;
@@ -821,7 +821,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       session.messages = [...session.messages, ...buf];
       streamingMessages[session.id] = [];
     }
-    const errorMsg = "Agent error: " + (event.error.message ?? "Unknown");
+    const errorMsg = "Agent error: " + (event.error ?? "Unknown");
     session.messages = [...session.messages, {
       id: crypto.randomUUID(),
       role: "system",

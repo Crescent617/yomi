@@ -4,7 +4,7 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-// ── GUI-layer camelCase wrappers for CronJob / CronAction ──────────────
+// ── GUI-layer camelCase wrappers for CronJob ───────────────────────────
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +12,7 @@ struct CronJobInfo {
     id: String,
     name: String,
     schedule: String,
-    action: CronActionInfo,
+    action: CronAction,
     status: String,
     created_at: String,
     updated_at: String,
@@ -24,28 +24,12 @@ struct CronJobInfo {
     last_error: Option<String>,
 }
 
-#[derive(serde::Serialize)]
-#[serde(tag = "ty", rename_all = "camelCase")]
-enum CronActionInfo {
-    SendMessage { session_id: String, content: String },
-    Shell { command: String, working_dir: Option<String> },
-    Internal { endpoint: String, payload: serde_json::Value },
-}
-
-#[derive(serde::Deserialize)]
-#[serde(tag = "ty", rename_all = "camelCase")]
-pub enum CronActionInput {
-    SendMessage { session_id: String, content: String },
-    Shell { command: String, working_dir: Option<String> },
-    Internal { endpoint: String, payload: serde_json::Value },
-}
-
 fn cron_job_info(job: &CronJob) -> CronJobInfo {
     CronJobInfo {
         id: job.id.0.clone(),
         name: job.name.clone(),
         schedule: job.schedule.clone(),
-        action: cron_action_info(&job.action),
+        action: job.action.clone(),
         status: job.status.as_str().to_string(),
         created_at: job.created_at.to_rfc3339(),
         updated_at: job.updated_at.to_rfc3339(),
@@ -55,37 +39,6 @@ fn cron_job_info(job: &CronJob) -> CronJobInfo {
         max_runs: job.max_runs,
         expires_at: job.expires_at.map(|d| d.to_rfc3339()),
         last_error: job.last_error.clone(),
-    }
-}
-
-fn cron_action_info(action: &CronAction) -> CronActionInfo {
-    match action {
-        CronAction::SendMessage { session_id, content } => CronActionInfo::SendMessage {
-            session_id: session_id.clone(),
-            content: content.clone(),
-        },
-        CronAction::Shell { command, working_dir } => CronActionInfo::Shell {
-            command: command.clone(),
-            working_dir: working_dir.clone(),
-        },
-        CronAction::Internal { endpoint, payload } => CronActionInfo::Internal {
-            endpoint: endpoint.clone(),
-            payload: payload.clone(),
-        },
-    }
-}
-
-fn cron_action_input(input: CronActionInput) -> CronAction {
-    match input {
-        CronActionInput::SendMessage { session_id, content } => CronAction::SendMessage {
-            session_id,
-            content,
-        },
-        CronActionInput::Shell { command, working_dir } => CronAction::Shell {
-            command,
-            working_dir,
-        },
-        CronActionInput::Internal { endpoint, payload } => CronAction::Internal { endpoint, payload },
     }
 }
 
@@ -139,10 +92,8 @@ pub async fn create_cron_job(
     let _ = kernel::cron::CronSchedule::parse(&schedule)
         .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
 
-    let action: CronAction = cron_action_input(
-        serde_json::from_value::<CronActionInput>(action)
-            .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?,
-    );
+    let action: CronAction = serde_json::from_value(action)
+        .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?;
 
     let expires_at = match expires_at {
         Some(s) => Some(
@@ -216,10 +167,8 @@ pub async fn update_cron_job(
     };
 
     let action_parsed = match action {
-        Some(v) => Some(cron_action_input(
-            serde_json::from_value::<CronActionInput>(v)
-                .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?,
-        )),
+        Some(v) => Some(serde_json::from_value::<CronAction>(v)
+            .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?),
         None => None,
     };
 

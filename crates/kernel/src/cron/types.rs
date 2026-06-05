@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// 定时任务唯一 ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct CronJobId(pub String);
 
 impl Default for CronJobId {
@@ -25,7 +26,7 @@ impl std::fmt::Display for CronJobId {
 
 /// 任务触发时要执行的动作
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "ty", rename_all = "snake_case")]
+#[serde(tag = "ty", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CronAction {
     /// 向指定 Session 发送消息（触发 Agent 响应）
     SendMessage {

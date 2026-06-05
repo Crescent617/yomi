@@ -1,4 +1,4 @@
-use kernel::event::{Event, SystemEvent};
+use kernel::event::{Event, SystemEvent, UserEvent};
 use kernel::permissions::Level;
 use kernel::types::{ContentBlock, SessionId};
 use tauri::{AppHandle, Emitter, State};
@@ -228,13 +228,25 @@ pub async fn subscribe(
 
             // SystemEvent::Rewound contains raw Message objects which are still snake_case.
             // Convert them to MessageInfo so the frontend receives camelCase.
-            if let Event::System(SystemEvent::Rewound { messages, .. }) = event {
+            if let Event::System(SystemEvent::Rewound { ref messages, .. }) = event {
                 if let Some(msgs) = event_value.pointer_mut("/system/rewound/messages").and_then(|v| v.as_array_mut()) {
                     let converted: Vec<serde_json::Value> = messages
                         .iter()
                         .map(|m| serde_json::to_value(message_info(m)).unwrap_or_default())
                         .collect();
                     *msgs = converted;
+                }
+            }
+
+            // UserEvent::Message contains raw ContentBlock objects which are still snake_case.
+            // Convert them to ContentBlockInfo so the frontend receives camelCase.
+            if let Event::User(UserEvent::Message { ref content, .. }) = event {
+                if let Some(blocks) = event_value.pointer_mut("/user/message/content").and_then(|v| v.as_array_mut()) {
+                    let converted: Vec<serde_json::Value> = content
+                        .iter()
+                        .map(|b| serde_json::to_value(content_block_info(b)).unwrap_or_default())
+                        .collect();
+                    *blocks = converted;
                 }
             }
 

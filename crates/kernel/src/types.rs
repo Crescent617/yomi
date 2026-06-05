@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 /// Unique identifier for agents
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct AgentId(SmolStr);
 
 impl Default for AgentId {
@@ -37,6 +38,7 @@ impl std::fmt::Display for AgentId {
 
 /// Unique identifier for projects
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ProjectId(pub String);
 
 impl ProjectId {
@@ -66,6 +68,7 @@ impl std::fmt::Display for ProjectId {
 
 /// Project entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: ProjectId,
     pub name: String,
@@ -76,6 +79,7 @@ pub struct Project {
 
 /// Unique identifier for sessions
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SessionId(pub String);
 
 impl SessionId {
@@ -92,6 +96,7 @@ impl Default for SessionId {
 
 /// Unique identifier for messages
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct MessageId(SmolStr);
 
 impl MessageId {

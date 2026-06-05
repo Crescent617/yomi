@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 
 /// Session metadata for listing and display
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: SessionId,
     pub created_at: DateTime<Utc>,
