@@ -249,7 +249,10 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         let subagent_session_id = if let Some(session_store) = &self.session_store {
             let working_dir = ctx.working_dir.to_string_lossy().to_string();
             let sid = SessionId(ctx.message_id.as_str().to_string());
-            match session_store.create(&sid, Some(&working_dir)).await {
+            match session_store
+                .create(&sid, None, Some(&working_dir), None)
+                .await
+            {
                 Ok(()) => {
                     tracing::debug!(
                         "Created sub-agent session: {} for agent {}",

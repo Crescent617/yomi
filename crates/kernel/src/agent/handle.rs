@@ -17,6 +17,8 @@ pub struct AgentHandle {
     pub(super) ask_user_responder: Option<AskUserResponder>,
     /// Generation counter: inputs with lower generation are stale (cancelled before send)
     input_stale_since: Arc<AtomicU64>,
+    /// Channel for sending steer messages that are injected before the next streaming
+    pub(super) steer_tx: mpsc::Sender<Vec<ContentBlock>>,
 }
 
 impl std::fmt::Debug for AgentHandle {
@@ -35,6 +37,7 @@ impl std::fmt::Debug for AgentHandle {
 }
 
 impl AgentHandle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: AgentId,
         input_tx: mpsc::Sender<AgentInput>,
@@ -43,6 +46,7 @@ impl AgentHandle {
         permission_responder: Option<Responder>,
         ask_user_responder: Option<AskUserResponder>,
         input_stale_since: Arc<AtomicU64>,
+        steer_tx: mpsc::Sender<Vec<ContentBlock>>,
     ) -> Self {
         Self {
             id,
@@ -52,6 +56,7 @@ impl AgentHandle {
             permission_responder,
             ask_user_responder,
             input_stale_since,
+            steer_tx,
         }
     }
 
@@ -172,5 +177,13 @@ impl AgentHandle {
             .map_err(|_| AgentError::ChannelClosed)?;
 
         result_rx.await.map_err(|_| AgentError::ChannelClosed)
+    }
+
+    /// Send a steer message to be injected before the next streaming turn
+    pub async fn send_steer(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
+        self.steer_tx
+            .send(content)
+            .await
+            .map_err(|_| AgentError::ChannelClosed)
     }
 }

@@ -176,6 +176,8 @@ pub const HISTORY: &str = "history";
 pub const WORKING_DIR: &str = "working_dir";
 /// Attribute for setting input content.
 pub const INPUT_CONTENT: &str = "input_content";
+/// Attribute for pasting clipboard text at the current cursor position.
+pub const CLIPBOARD_PASTE: &str = "clipboard_paste";
 
 // =============================================================================
 // Animation

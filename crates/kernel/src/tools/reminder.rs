@@ -34,7 +34,7 @@ impl Tool for ReminderTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Schedule a self-reminder after a delay. Used ONLY when user ask to remind themselves of something after a short time."
+        "Schedule a self-reminder after a delay. Used ONLY when the user explicitly asks to be reminded of something after a short time. Do NOT use to track tool execution, poll async tasks, or wait for other tools to complete — they already notify you automatically when finished."
     }
 
     fn schema(&self) -> Value {

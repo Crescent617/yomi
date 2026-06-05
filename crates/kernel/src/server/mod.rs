@@ -1,9 +1,11 @@
 use crate::agent::AgentConfig;
+use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
 use crate::config::Config;
+use crate::cron::CronJobId;
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
-use crate::types::{KernelError, Result, SessionError, SessionId};
+use crate::types::{KernelError, ProjectId, Result, SessionError, SessionId};
 use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +41,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
 
     let mut agent = config.agent.clone();
     agent.skills = skills;
+    agent.allow_command_hooks = config.features.allow_command_hooks;
     agent
 }
 
@@ -76,6 +79,12 @@ pub struct KernelServer {
     reload_lock: Arc<tokio::sync::Mutex<()>>,
     connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
     next_conn_id: Arc<std::sync::atomic::AtomicU64>,
+    /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
+    /// of the cron subsystem (start / reload / shutdown) independently of the
+    /// `Coordinator`, which only provides the data layer (`CronStore`).
+    cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
+    /// Shutdown token shared by the cron scheduler and worker.
+    cron_shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl KernelServer {
@@ -83,7 +92,39 @@ impl KernelServer {
         coordinator: Arc<Coordinator>,
         config_file_path: Option<PathBuf>,
         base_dir: PathBuf,
+        enable_cron: bool,
     ) -> Self {
+        let (cron_scheduler, cron_shutdown) = if enable_cron {
+            let store = coordinator.cron_store.as_ref().map(Arc::clone);
+            if let Some(store) = store {
+                let (task_tx, task_rx) = mpsc::channel(64);
+                let shutdown = tokio_util::sync::CancellationToken::new();
+                let scheduler = Arc::new(crate::cron::CronScheduler::new(
+                    Arc::clone(&store),
+                    task_tx,
+                    shutdown.clone(),
+                ));
+
+                let sched_clone = Arc::clone(&scheduler);
+                tokio::spawn(async move { sched_clone.run().await });
+
+                let worker = crate::cron::CronWorker::new(
+                    Arc::clone(&coordinator) as Arc<dyn crate::cron::CronExecutor>,
+                    task_rx,
+                    store,
+                    Some(Arc::clone(&scheduler)),
+                    shutdown.clone(),
+                );
+                tokio::spawn(async move { worker.run().await });
+
+                (Some(scheduler), Some(shutdown))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         Self {
             coordinator,
             config_file_path,
@@ -91,6 +132,8 @@ impl KernelServer {
             reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            cron_scheduler,
+            cron_shutdown,
         }
     }
 
@@ -100,27 +143,54 @@ impl KernelServer {
         let _guard = self.reload_lock.lock().await;
         let file_path = self.config_file_path.clone();
         let base_dir = self.base_dir.clone();
-        let (new_agent, hook_registry) = match tokio::task::spawn_blocking(move || {
-            let config = reload_config(file_path.as_ref(), &base_dir);
-            let agent = build_agent_config(&config, &base_dir);
-            let hooks = config
-                .features
-                .hooks
-                .then(|| crate::hooks::build_registry(&config.hooks));
-            (agent, hooks)
-        })
-        .await
-        {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::error!("Reload task panicked: {e}");
-                return false;
-            }
-        };
+        let (new_agent, hook_registry, provider, model_config) =
+            match tokio::task::spawn_blocking(move || {
+                let config = reload_config(file_path.as_ref(), &base_dir);
+                let agent = build_agent_config(&config, &base_dir);
+                let hooks = config.features.hooks.then(|| {
+                    crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
+                });
+                let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
+                    match config.agent.model.provider {
+                        crate::config::ModelProvider::OpenAI => {
+                            match crate::providers::OpenAIProvider::new() {
+                                Ok(p) => Arc::new(p),
+                                Err(e) => {
+                                    tracing::error!("Failed to create OpenAI provider: {e}");
+                                    return None;
+                                }
+                            }
+                        }
+                        crate::config::ModelProvider::Anthropic => {
+                            match crate::providers::AnthropicProvider::new() {
+                                Ok(p) => Arc::new(p),
+                                Err(e) => {
+                                    tracing::error!("Failed to create Anthropic provider: {e}");
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!("No API key configured — using NoKeyProvider");
+                    Arc::new(crate::providers::NoKeyProvider)
+                };
+                let model_config = Arc::new(config.agent.model.clone());
+                Some((agent, hooks, provider, model_config))
+            })
+            .await
+            {
+                Ok(Some(pair)) => pair,
+                Ok(None) => return false,
+                Err(e) => {
+                    tracing::error!("Reload task panicked: {e}");
+                    return false;
+                }
+            };
         let model_id = new_agent.model.model_id.clone();
         let skill_count = new_agent.skills.len();
         self.coordinator
-            .update_agent_config(new_agent, hook_registry)
+            .update_agent_config(new_agent, hook_registry, Some(provider), Some(model_config))
             .await;
         tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
         true
@@ -184,6 +254,9 @@ impl KernelServer {
     pub async fn shutdown(&self) {
         for entry in self.connections.iter() {
             entry.value().cancel();
+        }
+        if let Some(ref shutdown) = self.cron_shutdown {
+            shutdown.cancel();
         }
     }
 
@@ -292,25 +365,59 @@ impl KernelServer {
         method: RequestMethod,
     ) -> ResponseBody {
         match method {
-            RequestMethod::CreateSession {
-                project_path,
-                auto_approve_level,
-            } => rpc_body(
-                "create_session_failed",
-                self.coordinator
-                    .create_session(project_path.into(), auto_approve_level)
-                    .await
-                    .map(|sid| sid.0),
+            // ── Project ──────────────────────────────────────────────────
+            RequestMethod::ListProjects => rpc_body(
+                "list_projects_failed",
+                self.coordinator.list_projects().await,
             ),
-            RequestMethod::RestoreSession {
-                session_id,
+            RequestMethod::CreateProject { dir, name } => rpc_body(
+                "create_project_failed",
+                self.coordinator.create_project(dir.into(), name).await,
+            ),
+            RequestMethod::GetProject { project_id } => rpc_body(
+                "get_project_failed",
+                self.coordinator.get_project(&ProjectId(project_id)).await,
+            ),
+            RequestMethod::RenameProject { project_id, name } => rpc_body(
+                "rename_project_failed",
+                self.coordinator
+                    .rename_project(&ProjectId(project_id), name)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::DeleteProject { project_id } => rpc_body(
+                "delete_project_failed",
+                self.coordinator
+                    .delete_project(&ProjectId(project_id))
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+
+            // ── Session ──────────────────────────────────────────────────
+            RequestMethod::CreateSession {
+                project_id,
+                working_dir,
                 auto_approve_level,
             } => {
+                let input = CreateSessionInput {
+                    project_id: project_id.map(ProjectId),
+                    working_dir: working_dir.map(std::path::PathBuf::from),
+                    auto_approve_level,
+                };
+                rpc_body(
+                    "create_session_failed",
+                    self.coordinator
+                        .create_session(input)
+                        .await
+                        .map(|sid| sid.0),
+                )
+            }
+            RequestMethod::RestoreSession { session_id } => {
                 let sid = SessionId(session_id);
                 rpc_body(
                     "restore_session_failed",
                     self.coordinator
-                        .restore_session(&sid, auto_approve_level)
+                        .restore_session(&sid)
                         .await
                         .map(|sid| sid.0),
                 )
@@ -346,56 +453,34 @@ impl KernelServer {
             }
             RequestMethod::Subscribe { session_id } => {
                 let sid = SessionId(session_id.clone());
-                match self.coordinator.subscribe_session_events(&sid) {
-                    Some(rx) => {
-                        let session_id_for_task = session_id.clone();
-                        let send_tx2 = send_tx.clone();
-                        let cancel2 = cancel.clone();
 
-                        let mut subs = subscriptions.write().await;
-                        if let Some(old) = subs.remove(&session_id) {
-                            old.abort();
+                // Try to subscribe directly first
+                let mut rx = self.coordinator.subscribe_session_events(&sid);
+                if rx.is_none() {
+                    // Session not in memory - try to restore from storage
+                    match self.coordinator.restore_session(&sid).await {
+                        Ok(_) => {
+                            rx = self.coordinator.subscribe_session_events(&sid);
                         }
-
-                        let handle = tokio::spawn(async move {
-                            let mut rx = rx;
-                            loop {
-                                let event = tokio::select! {
-                                    biased;
-                                    () = cancel2.cancelled() => break,
-                                    result = rx.recv() => match result {
-                                        Ok(ev) => ev,
-                                        Err(_) => break,
-                                    },
-                                };
-                                let msg = WireMsg::Event {
-                                    session_id: session_id_for_task.clone(),
-                                    event,
-                                };
-                                if let Err(e) = send_tx2.try_send(msg) {
-                                    match e {
-                                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                                            tracing::warn!(
-                                                "Outbound channel full, dropping event for session={}",
-                                                session_id_for_task
-                                            );
-                                        }
-                                        tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
-                                    }
-                                }
-                            }
-                        });
-
-                        subs.insert(session_id, handle);
-                        ResponseBody::Ok {
-                            result: serde_json::Value::Null,
+                        Err(e) => {
+                            return ResponseBody::Err {
+                                error: RpcError {
+                                    code: "restore_failed".to_string(),
+                                    message: e.to_string(),
+                                    detail: None,
+                                },
+                            };
                         }
                     }
+                }
+
+                let rx = match rx {
+                    Some(rx) => rx,
                     None => {
                         let err = SessionError::NotFound {
                             session_id: sid.0.clone(),
                         };
-                        ResponseBody::Err {
+                        return ResponseBody::Err {
                             error: RpcError {
                                 code: "session_error".to_string(),
                                 message: KernelError::from(err.clone()).to_string(),
@@ -403,8 +488,51 @@ impl KernelServer {
                                     serde_json::to_value(&err).expect("SessionError serializes"),
                                 ),
                             },
+                        };
+                    }
+                };
+
+                let session_id_for_task = session_id.clone();
+                let send_tx2 = send_tx.clone();
+                let cancel2 = cancel.clone();
+
+                let mut subs = subscriptions.write().await;
+                if let Some(old) = subs.remove(&session_id) {
+                    old.abort();
+                }
+
+                let handle = tokio::spawn(async move {
+                    let mut rx = rx;
+                    loop {
+                        let event = tokio::select! {
+                            biased;
+                            () = cancel2.cancelled() => break,
+                            result = rx.recv() => match result {
+                                Ok(ev) => ev,
+                                Err(_) => break,
+                            },
+                        };
+                        let msg = WireMsg::Event {
+                            session_id: session_id_for_task.clone(),
+                            event,
+                        };
+                        if let Err(e) = send_tx2.try_send(msg) {
+                            match e {
+                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                    tracing::warn!(
+                                        "Outbound channel full, dropping event for session={}",
+                                        session_id_for_task
+                                    );
+                                }
+                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+                            }
                         }
                     }
+                });
+
+                subs.insert(session_id, handle);
+                ResponseBody::Ok {
+                    result: serde_json::Value::Null,
                 }
             }
             RequestMethod::Unsubscribe { session_id } => {
@@ -428,10 +556,18 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
-            RequestMethod::ListSessions(args) => rpc_body(
-                "list_sessions_failed",
-                self.coordinator.list_sessions(args).await,
-            ),
+            RequestMethod::ListSessions {
+                project_id,
+                before,
+                limit,
+            } => {
+                let pid = project_id.as_ref().map(|p| ProjectId(p.clone()));
+                let result = self
+                    .coordinator
+                    .list_sessions(pid.as_ref(), before, limit)
+                    .await;
+                rpc_body("list_sessions_failed", result.map(|(s, _)| s))
+            }
             RequestMethod::GetCheckpoints { session_id } => rpc_body(
                 "get_checkpoints_failed",
                 self.coordinator
@@ -441,6 +577,13 @@ impl KernelServer {
             RequestMethod::GetTodos { session_id } => rpc_body(
                 "get_todos_failed",
                 self.coordinator.get_todos(&SessionId(session_id)).await,
+            ),
+            RequestMethod::RenameSession { session_id, title } => rpc_body(
+                "rename_session_failed",
+                self.coordinator
+                    .rename_session(&SessionId(session_id), title)
+                    .await
+                    .map(|()| serde_json::Value::Null),
             ),
             RequestMethod::ShutdownSession { session_id } => rpc_body(
                 "shutdown_failed",
@@ -465,6 +608,162 @@ impl KernelServer {
                     }
                 }
             }
+
+            // ── Cron Job ──────────────────────────────────────────────────
+            RequestMethod::CreateCronJob {
+                name,
+                schedule,
+                action,
+                max_runs,
+                expires_at,
+            } => {
+                let input = crate::cron::CreateCronJobInput {
+                    name,
+                    schedule,
+                    action,
+                    max_runs,
+                    expires_at,
+                };
+                match self.coordinator.create_cron_job(input).await {
+                    Ok(job_id) => {
+                        if let Some(ref scheduler) = self.cron_scheduler {
+                            scheduler.reload();
+                        }
+                        ResponseBody::Ok {
+                            result: serde_json::json!({"job_id": job_id.0}),
+                        }
+                    }
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "create_cron_job_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+            RequestMethod::ListCronJobs { status, limit } => {
+                let status = status.and_then(|s| s.parse().ok());
+                match self.coordinator.list_cron_jobs(status, limit).await {
+                    Ok(jobs) => ResponseBody::Ok {
+                        result: match serde_json::to_value(jobs) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return ResponseBody::Err {
+                                    error: RpcError {
+                                        code: "serialize_error".to_string(),
+                                        message: e.to_string(),
+                                        detail: None,
+                                    },
+                                };
+                            }
+                        },
+                    },
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "list_cron_jobs_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+            RequestMethod::GetCronJob { job_id } => {
+                match self.coordinator.get_cron_job(&CronJobId(job_id)).await {
+                    Ok(Some(job)) => ResponseBody::Ok {
+                        result: match serde_json::to_value(job) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return ResponseBody::Err {
+                                    error: RpcError {
+                                        code: "serialize_error".to_string(),
+                                        message: e.to_string(),
+                                        detail: None,
+                                    },
+                                };
+                            }
+                        },
+                    },
+                    // Return null so the client can distinguish "not found" from a real error.
+                    Ok(None) => ResponseBody::Ok {
+                        result: serde_json::Value::Null,
+                    },
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "get_cron_job_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+            RequestMethod::UpdateCronJob {
+                job_id,
+                name,
+                schedule,
+                action,
+                status,
+                max_runs,
+                expires_at,
+            } => {
+                let status = status.and_then(|s| s.parse().ok());
+                let input = crate::cron::UpdateCronJobInput {
+                    name,
+                    schedule,
+                    action,
+                    status,
+                    max_runs,
+                    expires_at,
+                    ..Default::default()
+                };
+                match self
+                    .coordinator
+                    .update_cron_job(&CronJobId(job_id), input)
+                    .await
+                {
+                    // Return true/false so the client can distinguish "updated" from "not found".
+                    Ok(updated) => {
+                        if updated {
+                            if let Some(ref scheduler) = self.cron_scheduler {
+                                scheduler.reload();
+                            }
+                        }
+                        ResponseBody::Ok {
+                            result: serde_json::Value::Bool(updated),
+                        }
+                    }
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "update_cron_job_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+            RequestMethod::DeleteCronJob { job_id } => {
+                match self.coordinator.delete_cron_job(&CronJobId(job_id)).await {
+                    // Return true/false so the client can distinguish "deleted" from "not found".
+                    Ok(deleted) => {
+                        if deleted {
+                            if let Some(ref scheduler) = self.cron_scheduler {
+                                scheduler.reload();
+                            }
+                        }
+                        ResponseBody::Ok {
+                            result: serde_json::Value::Bool(deleted),
+                        }
+                    }
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "delete_cron_job_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+
             RequestMethod::Hello => ResponseBody::Ok {
                 result: serde_json::json!({
                     "proto": crate::wire::WIRE_PROTOCOL_VERSION,
@@ -513,6 +812,9 @@ async fn dispatch_command(
         }
         ControlCommand::Rewind { message_id, target } => {
             coordinator.rewind_session(sid, message_id, target).await?;
+        }
+        ControlCommand::Steer { content } => {
+            coordinator.send_steer(sid, content).await?;
         }
     }
     Ok(())

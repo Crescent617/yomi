@@ -1,6 +1,5 @@
 use crate::args::GlobalArgs;
 use anyhow::Result;
-use kernel::ListArgs;
 use tokio::fs;
 
 /// Cleanup old session data
@@ -11,13 +10,9 @@ pub async fn run(global: GlobalArgs, days: i64, yes: bool) -> Result<()> {
     if !yes {
         // Dry-run: only query and show what would be deleted
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
-        let old_sessions = storage
+        let (old_sessions, _) = storage
             .session_store()
-            .list(ListArgs {
-                before: Some(cutoff),
-                limit: None,
-                ..Default::default()
-            })
+            .list(None, Some(cutoff), 10000)
             .await?;
 
         if old_sessions.is_empty() {

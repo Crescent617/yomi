@@ -17,8 +17,12 @@ pub struct AgentConfig {
     pub system_prompt: String,
     #[serde(skip)]
     pub skills: Vec<Arc<Skill>>,
+    /// Tool blocklist (regex patterns) for disabling tools
+    pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
     pub compactor: Compactor,
+    /// Allow command hooks to execute (default false for security)
+    pub allow_command_hooks: bool,
 }
 
 /// Configuration for spawning a new agent
@@ -69,7 +73,7 @@ impl AgentSpawnArgs {
             parent_session_id: None,
             max_iterations: 100,
             enable_sub_agents: true,
-            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            working_dir: std::path::PathBuf::new(),
             cancel_token: None,
             file_state_store: None,
             goal_ctx: None,
@@ -157,7 +161,9 @@ impl Default for AgentConfig {
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             skills: Vec::new(),
+            tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
+            allow_command_hooks: false,
         }
     }
 }
@@ -299,6 +305,10 @@ pub struct AgentShared {
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
     /// Hook registry for lifecycle event handlers (wrapped for hot-reload)
     pub hook_registry: Option<Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>>,
+    /// Tool blocklist (regex patterns) inherited from config
+    pub tool_blocklist: Vec<String>,
+    /// Allow command hooks to execute (default false for security)
+    pub allow_command_hooks: bool,
 }
 
 impl AgentShared {
@@ -366,6 +376,8 @@ impl AgentShared {
             data_dir,
             message_interceptor: None,
             hook_registry: None,
+            tool_blocklist: Vec::new(),
+            allow_command_hooks: false,
         }
     }
 
@@ -402,6 +414,34 @@ impl AgentShared {
         registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>,
     ) -> Self {
         self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set the tool blocklist
+    #[must_use]
+    pub fn with_tool_blocklist(mut self, blocklist: Vec<String>) -> Self {
+        self.tool_blocklist = blocklist;
+        self
+    }
+
+    /// Set whether command hooks are allowed to execute
+    #[must_use]
+    pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
+        self.allow_command_hooks = allow;
+        self
+    }
+
+    /// Set the provider
+    #[must_use]
+    pub fn with_provider(mut self, provider: Arc<dyn crate::providers::Provider>) -> Self {
+        self.provider = provider;
+        self
+    }
+
+    /// Set the model config
+    #[must_use]
+    pub fn with_model_config(mut self, model_config: Arc<crate::providers::ModelConfig>) -> Self {
+        self.model_config = model_config;
         self
     }
 }

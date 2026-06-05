@@ -2,6 +2,7 @@ use crate::event::ContentChunk;
 use crate::types::{FinishReason, Message, ToolDefinition};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::pin::Pin;
 use thiserror::Error;
 
@@ -116,6 +117,8 @@ pub struct ModelConfig {
     pub fallback_model_id: Option<String>,
     pub sse_timeout_secs: u64,
     pub thinking: ThinkingConfig,
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub headers: HashMap<String, String>,
 }
 
 impl Default for ModelConfig {
@@ -130,6 +133,7 @@ impl Default for ModelConfig {
             fallback_model_id: None,
             sse_timeout_secs: 30,
             thinking: ThinkingConfig::default(),
+            headers: HashMap::new(),
         }
     }
 }
@@ -216,6 +220,31 @@ pub trait Provider: Send + Sync {
     }
 
     fn name(&self) -> &str;
+}
+
+/// A provider that always returns a configuration error (no API key).
+/// Used so the GUI can start even when the API key is missing.
+#[derive(Debug)]
+pub struct NoKeyProvider;
+
+#[async_trait]
+impl Provider for NoKeyProvider {
+    async fn stream(
+        &self,
+        _messages: &[Arc<Message>],
+        _tools: &[Arc<ToolDefinition>],
+        _config: &ModelConfig,
+    ) -> Result<ModelStream, ProviderError> {
+        tracing::error!("NoKeyProvider.stream called — API key not configured");
+        Err(ProviderError::Config(
+            "API key not configured. Please set it via the config editor or environment variable."
+                .into(),
+        ))
+    }
+
+    fn name(&self) -> &'static str {
+        "no-key"
+    }
 }
 
 /// Wrapper that adds rate limit retry with exponential backoff

@@ -3,6 +3,7 @@
 use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
+    app::coordinator::CreateSessionInput,
     client::CoordinatorApi,
     event::ControlCommand,
     permissions::Level,
@@ -20,7 +21,6 @@ async fn send_with_retry(
     coordinator: &dyn CoordinatorApi,
     session_id: &SessionId,
     blocks: Vec<ContentBlock>,
-    auto_approve: Level,
     max_retries: u32,
 ) -> Result<()> {
     let mut retries = 0;
@@ -33,7 +33,7 @@ async fn send_with_retry(
                     "Session {} missing on daemon, attempting restore...",
                     session_id.0
                 );
-                match coordinator.restore_session(session_id, auto_approve).await {
+                match coordinator.restore_session(session_id).await {
                     Ok(_) => {
                         tracing::info!("Session restored successfully");
                         restored = true;
@@ -106,9 +106,12 @@ pub async fn resolve_session(
 ) -> Result<SessionId> {
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
     if !is_launch {
-        return Ok(coordinator
-            .create_session(working_dir.to_path_buf(), auto_approve_level)
-            .await?);
+        let input = CreateSessionInput {
+            project_id: None,
+            working_dir: Some(working_dir.to_path_buf()),
+            auto_approve_level,
+        };
+        return Ok(coordinator.create_session(input).await?);
     }
 
     match session_arg {
@@ -117,17 +120,17 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator
-                .restore_session(&session_id, auto_approve_level)
-                .await
-            {
+            match coordinator.restore_session(&session_id).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    Ok(coordinator
-                        .create_session(working_dir.to_path_buf(), auto_approve_level)
-                        .await?)
+                    let input = CreateSessionInput {
+                        project_id: None,
+                        working_dir: Some(working_dir.to_path_buf()),
+                        auto_approve_level,
+                    };
+                    Ok(coordinator.create_session(input).await?)
                 }
             }
         }
@@ -137,31 +140,39 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator
-                    .restore_session(&session_id, auto_approve_level)
-                    .await
-                {
+                match coordinator.restore_session(&session_id).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        Ok(coordinator
-                            .create_session(working_dir.to_path_buf(), auto_approve_level)
-                            .await?)
+                        let input = CreateSessionInput {
+                            project_id: None,
+                            working_dir: Some(working_dir.to_path_buf()),
+                            auto_approve_level,
+                        };
+                        Ok(coordinator.create_session(input).await?)
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                Ok(coordinator
-                    .create_session(working_dir.to_path_buf(), auto_approve_level)
-                    .await?)
+                let input = CreateSessionInput {
+                    project_id: None,
+                    working_dir: Some(working_dir.to_path_buf()),
+                    auto_approve_level,
+                };
+                Ok(coordinator.create_session(input).await?)
             }
         },
         // No --session: create new session
-        SessionArg::New => Ok(coordinator
-            .create_session(working_dir.to_path_buf(), auto_approve_level)
-            .await?),
+        SessionArg::New => {
+            let input = CreateSessionInput {
+                project_id: None,
+                working_dir: Some(working_dir.to_path_buf()),
+                auto_approve_level,
+            };
+            Ok(coordinator.create_session(input).await?)
+        }
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
@@ -173,9 +184,12 @@ pub async fn resolve_session(
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                Ok(coordinator
-                    .create_session(working_dir.to_path_buf(), auto_approve_level)
-                    .await?)
+                let input = CreateSessionInput {
+                    project_id: None,
+                    working_dir: Some(working_dir.to_path_buf()),
+                    auto_approve_level,
+                };
+                Ok(coordinator.create_session(input).await?)
             }
         },
         // --fork <id>: fork specific session
@@ -227,7 +241,7 @@ pub async fn run_session_loop(
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
-    let auto_approve_for_restore = auto_approve;
+    let _auto_approve_for_restore = auto_approve;
     let input_handle = tokio::spawn(async move {
         let mut has_saved = false;
         while let Some(blocks) = input_rx.recv().await {
@@ -242,7 +256,6 @@ pub async fn run_session_loop(
                 &*coord_for_input,
                 &session_id_for_input,
                 blocks,
-                auto_approve_for_restore,
                 MAX_RETRIES,
             )
             .await
@@ -323,6 +336,14 @@ pub async fn run_session_loop(
                         .await
                     {
                         tracing::error!("Failed to send ask_user response: {}", e);
+                    }
+                }
+                ControlCommand::Steer { content } => {
+                    if let Err(e) = coord_for_ctrl
+                        .send_steer(&session_id_for_ctrl, content)
+                        .await
+                    {
+                        tracing::error!("Failed to send steer: {}", e);
                     }
                 }
             }

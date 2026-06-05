@@ -1,10 +1,11 @@
 use crate::event::{ControlCommand, Event};
 use crate::permissions::Level;
 use crate::types::ContentBlock;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 2;
+pub const WIRE_PROTOCOL_VERSION: u32 = 3;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,13 +14,31 @@ pub enum RequestMethod {
     /// Handshake: client checks daemon wire protocol version.
     Hello,
 
+    // ── Project ──────────────────────────────────────────────────────────
+    ListProjects,
+    CreateProject {
+        dir: String,
+        name: Option<String>,
+    },
+    GetProject {
+        project_id: String,
+    },
+    RenameProject {
+        project_id: String,
+        name: String,
+    },
+    DeleteProject {
+        project_id: String,
+    },
+
+    // ── Session ──────────────────────────────────────────────────────────
     CreateSession {
-        project_path: String,
+        project_id: Option<String>,
+        working_dir: Option<String>,
         auto_approve_level: Level,
     },
     RestoreSession {
         session_id: String,
-        auto_approve_level: Level,
     },
     ForkSession {
         parent_id: String,
@@ -39,7 +58,11 @@ pub enum RequestMethod {
     Unsubscribe {
         session_id: String,
     },
-    ListSessions(crate::storage::session::ListArgs),
+    ListSessions {
+        project_id: Option<String>,
+        before: Option<DateTime<Utc>>,
+        limit: usize,
+    },
     GetSessionMessages {
         session_id: String,
     },
@@ -49,6 +72,10 @@ pub enum RequestMethod {
     GetTodos {
         session_id: String,
     },
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
     ShutdownSession {
         session_id: String,
     },
@@ -56,6 +83,34 @@ pub enum RequestMethod {
         session_id: String,
     },
     ReloadAgentConfig,
+
+    // ── Cron Job ─────────────────────────────────────────────────────────
+    CreateCronJob {
+        name: String,
+        schedule: String,
+        action: crate::cron::CronAction,
+        max_runs: Option<u32>,
+        expires_at: Option<DateTime<Utc>>,
+    },
+    ListCronJobs {
+        status: Option<String>,
+        limit: usize,
+    },
+    GetCronJob {
+        job_id: String,
+    },
+    UpdateCronJob {
+        job_id: String,
+        name: Option<String>,
+        schedule: Option<String>,
+        action: Option<crate::cron::CronAction>,
+        status: Option<String>,
+        max_runs: Option<u32>,
+        expires_at: Option<DateTime<Utc>>,
+    },
+    DeleteCronJob {
+        job_id: String,
+    },
 }
 
 /// Response body — tagged union, no serde magic.

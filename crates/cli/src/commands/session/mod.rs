@@ -1,7 +1,6 @@
 use crate::args::GlobalArgs;
 use anyhow::{Context, Result};
 use comfy_table::{ContentArrangement, Table};
-use kernel::ListArgs;
 
 pub mod cancel;
 pub mod cleanup;
@@ -32,17 +31,21 @@ pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
     let current_dir_str = current_dir.to_string_lossy().to_string();
 
     // List sessions: by default only current working dir, with --all list all
-    // Limit default to 50 to prevent overwhelming output
-    let args = ListArgs {
-        working_dir: if all {
-            None
-        } else {
-            Some(current_dir_str.clone())
-        },
-        limit: Some(50),
-        ..Default::default()
+    let (sessions, _) = storage.session_store().list(None, None, 200).await?;
+
+    let sessions: Vec<_> = if all {
+        sessions
+    } else {
+        sessions
+            .into_iter()
+            .filter(|s| {
+                s.working_dir
+                    .as_ref()
+                    .is_some_and(|wd| wd == &current_dir_str)
+            })
+            .take(50)
+            .collect()
     };
-    let sessions = storage.session_store().list(args).await?;
 
     if !all && sessions.is_empty() {
         println!("No sessions found for current directory: {current_dir_str}");

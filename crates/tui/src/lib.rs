@@ -27,12 +27,20 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 // Global feature gates
 static FEATURE_GATES: OnceLock<FeatureGates> = OnceLock::new();
 
+// Global daemon mode flag
+static DAEMON_MODE: OnceLock<bool> = OnceLock::new();
+
 /// Initialize global configuration (called once at startup)
 pub fn init_config(config: Config, feature_gates: FeatureGates) {
     CONFIG.set(config).expect("Config already initialized");
     FEATURE_GATES
         .set(feature_gates)
         .expect("Feature gates already initialized");
+}
+
+/// Initialize daemon mode flag (called once at startup)
+pub fn init_daemon_mode(daemon_mode: bool) {
+    DAEMON_MODE.set(daemon_mode).expect("Daemon mode already initialized");
 }
 
 /// Get a reference to the global configuration
@@ -43,6 +51,11 @@ pub fn config() -> &'static Config {
 /// Get a reference to the global feature gates
 pub fn feature_gates() -> &'static FeatureGates {
     FEATURE_GATES.get().expect("Feature gates not initialized")
+}
+
+/// Get daemon mode flag
+pub fn daemon_mode() -> bool {
+    *DAEMON_MODE.get().unwrap_or(&true)
 }
 
 // Re-export theme utilities

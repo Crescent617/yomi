@@ -38,8 +38,24 @@ debug *ARGS:
 info *ARGS:
     RUST_LOG=info cargo run --bin yomi -- {{ARGS}}
 
-build-release:
-    cargo build --release
+# Start GUI dev mode (Tauri + Svelte 5 single process)
+gui-dev:
+    cd crates/gui/frontend && npm install
+    cd crates/gui && npx tauri dev
 
-brew-release:
+# Build GUI release bundle and fix DMG signature
+gui-build:
+    cd crates/gui/frontend && npm install
+    cd crates/gui && npx tauri build
+    bash scripts/fix-dmg-signature.sh
+
+tui-build:
+    cargo build --release --bin yomi
+
+# Release TUI to homebrew tap (downloads from GitHub release)
+brew-release-tui:
     bash ./scripts/brew-release.sh
+
+# Release GUI to homebrew tap (local build + upload + update cask)
+brew-release-gui:
+    bash ./scripts/brew-cask-release.sh

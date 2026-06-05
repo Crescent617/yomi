@@ -12,10 +12,7 @@ async fn resolve_session_id(storage: &StorageSet, session_id: Option<String>) ->
         Some(id) => Ok(id),
         None => {
             // Try to find the most recent session in current directory
-            let sessions = storage
-                .session_store()
-                .list(kernel::storage::ListArgs::default())
-                .await?;
+            let (sessions, _) = storage.session_store().list(None, None, 50).await?;
             let cwd = std::env::current_dir()?;
             let cwd_str = cwd.to_string_lossy();
 

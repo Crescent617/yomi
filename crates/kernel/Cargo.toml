@@ -37,12 +37,14 @@ lru = { workspace = true }
 html2text = { workspace = true }
 urlencoding = { workspace = true }
 scraper = { workspace = true }
+directories = { workspace = true }
 
 # Task system dependencies
 # Note: fs4 removed - using SQLite instead of file-based storage
 dashmap = { workspace = true }
 
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
+cron = { workspace = true }
 
 [lints]
 workspace = true
