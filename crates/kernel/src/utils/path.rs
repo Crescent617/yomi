@@ -1,16 +1,24 @@
 //! Path utilities for the kernel crate
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 /// Default data directory path
 pub const DEFAULT_DATA_DIR: &str = "~/.yomi";
+
+static HOME_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_path_buf())
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+});
 
 /// Expand `~` to the user's home directory
 pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
     let path = path.as_ref();
     if let Some(stripped) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-            return PathBuf::from(home).join(stripped);
+        if let Some(ref home) = *HOME_DIR {
+            return home.join(stripped);
         }
     }
     PathBuf::from(path)

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { sessionState, projectState, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus } from "../../state.svelte";
+  import { sessionState, projectState, getSession, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus } from "../../state.svelte";
   import * as api from "../../api";
+  import { collapseHome } from "../../utils";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
@@ -10,8 +11,9 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap } from "lucide-svelte";
+  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { homeDir } from "@tauri-apps/api/path";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 
   let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
@@ -31,6 +33,7 @@
   let homeInput = $state("");
   let submitting = $state(false);
   let homeFileAttachments = $state<string[]>([]);
+  let homeDirPath = $state("");
 
   // ── home inline images (clipboard paste) ──
   interface HomeInlineImage {
@@ -158,6 +161,9 @@
       if (cancelled) return;
       permissionLevel = "caution";
     });
+    homeDir().then(h => {
+      if (!cancelled) homeDirPath = h;
+    }).catch(() => {});
     return () => { cancelled = true; };
   });
 
@@ -326,6 +332,29 @@
     }
   }
 
+  // ── Git info sync ──
+  async function syncGitInfo(sessionId: string, projectPath: string) {
+    try {
+      const info = await api.getGitInfo(projectPath);
+      const session = getSession(sessionId);
+      if (session && session.id === activeSession?.id) {
+        session.gitInfo = info;
+      }
+    } catch {
+      const session = getSession(sessionId);
+      if (session && session.id === activeSession?.id) {
+        session.gitInfo = null;
+      }
+    }
+  }
+
+  // Refresh immediately when active session changes
+  $effect(() => {
+    const session = activeSession;
+    if (!session?.projectPath) return;
+    syncGitInfo(session.id, session.projectPath);
+  });
+
   function closeProjectDropdown(e: MouseEvent) {
     if (projectDropdownRef && !projectDropdownRef.contains(e.target as Node)) {
       projectDropdownOpen = false;
@@ -384,7 +413,25 @@
           {activeSession.alias ?? activeSession.id.slice(-8)}
         </span>
       {/if}
-      <span class="text-xs text-muted-foreground truncate">{activeSession.projectPath}</span>
+      {#if activeSession.projectPath}
+        {@const displayPath = collapseHome(activeSession.projectPath, homeDirPath)}
+        <span class="text-xs text-muted-foreground truncate" title={activeSession.projectPath}>{displayPath}</span>
+      {/if}
+      {#if activeSession.gitInfo?.branch}
+        <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/80 bg-muted rounded px-1.5 py-0.5 ml-1">
+          <GitBranch size={10} />
+          {activeSession.gitInfo.branch}
+        </span>
+        {@const g = activeSession.gitInfo}
+        {#if g.addedLines > 0 || g.deletedLines > 0 || g.untracked > 0}
+          <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/70 font-mono bg-muted rounded px-1.5 py-0.5 ml-1">
+            <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
+            {#if g.addedLines > 0}{#key g.addedLines}<span class="roll-num text-green-700/80 dark:text-green-400/80">+{g.addedLines}</span>{/key}{/if}
+            {#if g.deletedLines > 0}{#key g.deletedLines}<span class="roll-num text-red-700/80 dark:text-red-400/80">-{g.deletedLines}</span>{/key}{/if}
+            {#if g.untracked > 0}{#key g.untracked}<span class="roll-num text-slate-500 dark:text-slate-400">?{g.untracked}</span>{/key}{/if}
+          </span>
+        {/if}
+      {/if}
     </div>
     <div class="flex items-center gap-2">
       {#if activeSession.projectPath}
@@ -675,3 +722,13 @@
     {/if}
   </div>
 </div>
+
+<style>
+  @keyframes roll-in {
+    0% { transform: translateY(60%); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  .roll-num {
+    animation: roll-in 0.25s ease-out;
+  }
+</style>

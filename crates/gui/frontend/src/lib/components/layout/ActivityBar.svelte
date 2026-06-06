@@ -48,9 +48,9 @@
     {#if settings.theme === "system"}
       <Monitor class="w-5 h-5" />
     {:else if settings.theme === "dark"}
-      <Sun class="w-5 h-5" />
-    {:else}
       <Moon class="w-5 h-5" />
+    {:else}
+      <Sun class="w-5 h-5" />
     {/if}
   </button>
 </div>

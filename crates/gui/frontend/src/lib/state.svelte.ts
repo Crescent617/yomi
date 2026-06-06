@@ -1,4 +1,5 @@
 import * as api from "./api";
+import type { GitInfo } from "./api";
 import type { TaggedContentBlock } from "./types";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -141,6 +142,7 @@ export interface SessionState {
   permissionLevel?: string;
   compacting?: boolean;
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  gitInfo?: GitInfo | null;
 }
 
 export const appState = $state({
@@ -750,6 +752,22 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
   return false;
 }
 
+function maybeRefreshGitInfo(session: SessionState) {
+  if (!session.projectPath || session.id !== sessionState.activeSessionId) return;
+  const { id, projectPath } = session;
+  api.getGitInfo(projectPath).then((info) => {
+    const current = getSession(id);
+    if (current && current.id === sessionState.activeSessionId) {
+      current.gitInfo = info;
+    }
+  }).catch(() => {
+    const current = getSession(id);
+    if (current && current.id === sessionState.activeSessionId) {
+      current.gitInfo = null;
+    }
+  });
+}
+
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
     const start = event.start;
@@ -795,6 +813,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
           return b.type === "text" && b.text ? b.text : "";
         })
         .join("");
+      maybeRefreshGitInfo(session);
       return true;
     }
     const buf = streamingMessages[session.id] ?? [];
@@ -825,6 +844,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       })
       .join("");
     streamingMessages[session.id] = buf;
+    maybeRefreshGitInfo(session);
     return true;
   } else if (event.progress) {
     const progress = event.progress;

@@ -307,6 +307,27 @@ export async function openInEditor(path: string): Promise<void> {
   return invokeCmd("open_in_editor", { path });
 }
 
+export interface GitInfo {
+  branch?: string | null;
+  addedLines: number;
+  deletedLines: number;
+  untracked: number;
+  repoRoot?: string;
+}
+
+const inflightGit = new Map<string, Promise<GitInfo | null>>();
+
+export async function getGitInfo(path: string): Promise<GitInfo | null> {
+  const existing = inflightGit.get(path);
+  if (existing) return existing;
+
+  const promise = invokeCmd<GitInfo | null>("get_git_info", { path })
+    .finally(() => inflightGit.delete(path));
+
+  inflightGit.set(path, promise);
+  return promise;
+}
+
 // ─── Cron / Automation ──────────────────────────────────
 
 export async function listCronJobs(
