@@ -66,3 +66,23 @@ export function formatTokens(n: number): string {
 export function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
+
+/**
+ * Collapse the user's home directory prefix to `~`.
+ * Compatible with both Unix (`/home/user/...`) and Windows (`C:\Users\user\...`).
+ *
+ * `home` must be provided (obtain via `@tauri-apps/api/path` `homeDir()` in Tauri).
+ * If `home` is empty, returns `path` unchanged.
+ */
+export function collapseHome(path: string, home: string): string {
+  if (!home) return path;
+  const normalizedHome = home.replace(/\\/g, "/").replace(/\/$/, "");
+  const normalizedPath = path.replace(/\\/g, "/");
+  if (
+    normalizedPath === normalizedHome ||
+    normalizedPath.startsWith(normalizedHome + "/")
+  ) {
+    return "~" + normalizedPath.slice(normalizedHome.length);
+  }
+  return path;
+}

@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 pub use kernel::transport::{pid_file_path, socket_addr};
+use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
 /// How long to wait for graceful shutdown before falling back to kill.
@@ -61,7 +62,22 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let current_exe = std::env::current_exe().context("Failed to get current executable")?;
+    let mut current_exe = std::env::current_exe().context("Failed to get current executable")?;
+
+    // On Linux `current_exe` may return a `/proc/self/exe` symlink that has
+    // the `(deleted)` suffix when the binary has been replaced since launch
+    // (e.g. after a fresh cargo install).  In that case `spawn` fails with
+    // ENOENT.  Fall back to argv[0] when the resolved path is missing.
+    if !current_exe.exists() {
+        if let Some(argv0) = std::env::args_os().next() {
+            tracing::warn!(
+                "current_exe {} does not exist, falling back to argv[0] {:?}",
+                current_exe.display(),
+                argv0
+            );
+            current_exe = PathBuf::from(argv0);
+        }
+    }
 
     let mut cmd = std::process::Command::new(&current_exe);
     cmd.arg("daemon")

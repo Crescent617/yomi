@@ -2,20 +2,16 @@
   import { ChevronDown, ChevronRight } from "lucide-svelte";
   import { formatElapsed, tokenEstimate } from "../../utils";
 
-  let { content, elapsedMs, isStreaming = false }: { content: string; elapsedMs: number; isStreaming?: boolean } = $props();
+  let { content, elapsedMs }: { content: string; elapsedMs: number } = $props();
 
   let expanded = $state(false);
-
-  function toggle() {
-    expanded = !expanded;
-  }
 </script>
 
 <div class="text-xs text-muted-foreground">
   <button
     type="button"
     class="flex items-center gap-1.5 hover:text-muted-foreground/80 transition-colors cursor-pointer"
-    onclick={toggle}
+    onclick={() => expanded = !expanded}
   >
     <span class="font-mono">Thinking</span>
     {#if elapsedMs > 0}
@@ -29,6 +25,8 @@
     {/if}
   </button>
   {#if expanded}
-    <pre class="mt-2 whitespace-pre-wrap text-muted-foreground/70 bg-muted/50 rounded px-3 py-2 text-xs">{content}</pre>
+    <div class="mt-2 max-h-60 overflow-y-auto rounded bg-muted/50 px-3 py-2 text-xs text-muted-foreground/70">
+      <pre class="whitespace-pre-wrap">{content}</pre>
+    </div>
   {/if}
 </div>

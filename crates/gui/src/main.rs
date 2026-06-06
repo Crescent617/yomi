@@ -81,6 +81,7 @@ pub fn run() {
             commands::system::open_in_vscode,
             commands::system::open_in_zed,
             commands::system::open_in_editor,
+            commands::system::get_git_info,
             commands::terminal::terminal_spawn,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,

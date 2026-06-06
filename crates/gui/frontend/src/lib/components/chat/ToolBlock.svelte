@@ -7,6 +7,18 @@
 
   let expanded = $state(false);
 
+  function compactArgs(args: string, maxLen = 120): string {
+    if (!args) return "";
+    try {
+      const parsed = JSON.parse(args);
+      const s = JSON.stringify(parsed);
+      if (s.length <= maxLen) return s;
+      return s.slice(0, maxLen) + "…";
+    } catch {
+      return args.replace(/\s+/g, " ").slice(0, maxLen) + (args.length > maxLen ? "…" : "");
+    }
+  }
+
   function statusColor(status: string): string {
     switch (status) {
       case "running":
@@ -37,18 +49,6 @@
         default: return "";
       }
     } catch { return ""; }
-  }
-
-  function compactArgs(args: string, maxLen = 120): string {
-    if (!args) return "";
-    try {
-      const parsed = JSON.parse(args);
-      const s = JSON.stringify(parsed);
-      if (s.length <= maxLen) return s;
-      return s.slice(0, maxLen) + "…";
-    } catch {
-      return args.replace(/\s+/g, " ").slice(0, maxLen) + (args.length > maxLen ? "…" : "");
-    }
   }
 
   function extraMeta(toolName: string, args: string): string {
@@ -85,7 +85,7 @@
 </script>
 
 <div class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}">
-  <!-- Header — always visible: name + target/args + status + chevron -->
+  <!-- Header — always visible, clickable -->
   <button
     type="button"
     class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -132,13 +132,13 @@
     </span>
   </button>
 
-  <!-- Expanded body — args, output, error -->
+  <!-- Body — expanded only -->
   {#if expanded}
-    <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/10">
+    <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/10 max-h-96 overflow-y-auto">
       {#if tool.arguments}
         <div class="text-xs opacity-60 dark:opacity-50">
           <div class="font-medium mb-0.5">Arguments:</div>
-          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{compactArgs(tool.arguments)}</pre>
+          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{tool.arguments}</pre>
         </div>
       {/if}
 

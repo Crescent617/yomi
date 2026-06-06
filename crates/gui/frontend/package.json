@@ -37,7 +37,8 @@
     "echarts": "^6.1.0",
     "lucide-svelte": "^0.475.0",
     "marked": "^18.0.4",
-    "shiki": "^1.0.0"
+    "shiki": "^1.0.0",
+    "streaming-markdown": "^0.2.15"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

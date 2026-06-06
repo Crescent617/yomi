@@ -206,3 +206,96 @@ pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
         .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;
     Ok(())
 }
+
+/// Walk up from `path` to find a `.git` directory or file (worktree).
+/// If `start` is a file, begins from its parent directory.
+fn find_git_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = if start.is_file() { start.parent() } else { Some(start) };
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Run a git command inside `repo_root` and return trimmed stdout.
+fn git_stdout(repo_root: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .env("LC_ALL", "C")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
+    let start = std::path::Path::new(&path);
+    let Some(repo_root) = find_git_root(start) else {
+        return Ok(serde_json::json!(null));
+    };
+
+    // Graceful fallback when git is not installed.
+    if git_stdout(&repo_root, &["--version"]).is_none() {
+        return Ok(serde_json::json!(null));
+    }
+
+    let branch = git_stdout(&repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    // Line-level stats via --shortstat
+    let parse_shortstat = |out: Option<String>| -> (usize, usize) {
+        let mut insertions = 0;
+        let mut deletions = 0;
+        if let Some(text) = out {
+            let text = text.trim();
+            if !text.is_empty() {
+                for part in text.split(',') {
+                    let part = part.trim();
+                    if part.contains("insertion") {
+                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                            insertions = n;
+                        }
+                    } else if part.contains("deletion") {
+                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                            deletions = n;
+                        }
+                    }
+                }
+            }
+        }
+        (insertions, deletions)
+    };
+
+    let unstaged = git_stdout(&repo_root, &["diff", "--shortstat"]);
+    let (unstaged_add, unstaged_del) = parse_shortstat(unstaged);
+    let staged = git_stdout(&repo_root, &["diff", "--cached", "--shortstat"]);
+    let (staged_add, staged_del) = parse_shortstat(staged);
+
+    let added_lines = unstaged_add + staged_add;
+    let deleted_lines = unstaged_del + staged_del;
+
+    // Untracked file count (still file-level)
+    let mut untracked = 0;
+    let status = git_stdout(&repo_root, &["status", "--porcelain", "-uall"]);
+    if let Some(ref s) = status {
+        for line in s.lines() {
+            if line.len() >= 2 && &line[..2] == "??" {
+                untracked += 1;
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "branch": branch,
+        "addedLines": added_lines,
+        "deletedLines": deleted_lines,
+        "untracked": untracked,
+        "repoRoot": repo_root.to_string_lossy().to_string(),
+    }))
+}
