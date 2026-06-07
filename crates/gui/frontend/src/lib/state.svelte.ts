@@ -82,6 +82,7 @@ export interface ChatMessage {
   tools?: ToolCall[];
   error?: boolean;
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  raw?: unknown;
 }
 
 export interface ProjectState {
@@ -217,6 +218,13 @@ export function getDisplayMessages(sessionId: string): ChatMessage[] {
 
 export function getSession(id: string): SessionState | undefined {
   return sessionState.sessions.find((s) => s.id === id);
+}
+
+export function refreshCheckpoints(sessionId: string) {
+  api.getCheckpoints(sessionId).then((cps) => {
+    const session = getSession(sessionId);
+    if (session) session.checkpoints = cps;
+  }).catch((e: Error) => console.error("Failed to reload checkpoints:", e));
 }
 
 export function getActiveSession(): SessionState | null {
@@ -390,6 +398,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         contentBlocks: blocks,
         thinking: null,
         tools: [],
+        raw: m,
       });
     } else if (role === "system" || role === "error") {
       let text = "";
@@ -410,6 +419,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         content: text,
         thinking: null,
         tools: [],
+        raw: m,
       });
     } else {
       // Assistant message
@@ -477,6 +487,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
               totalTokens: m.tokenUsage.totalTokens,
             }
           : undefined,
+        raw: m,
       });
     }
   }
@@ -896,6 +907,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           session.messages = [...session.messages, ...buf];
           streamingMessages[session.id] = [];
         }
+        // Refresh checkpoints after a turn completes
+        refreshCheckpoints(session.id);
         // Auto-send queued message when the agent actually stops.
         if (session.queuedInput) {
           const { text, blocks } = session.queuedInput;
@@ -1053,9 +1066,7 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     scheduleUnsubscribeIfInactive(session);
     loadSessionMessages(session.id, event.rewound.messages);
     // Refresh checkpoints list after rewind
-    api.getCheckpoints(session.id).then((cps) => {
-      session.checkpoints = cps;
-    }).catch((e: Error) => console.error("Failed to reload checkpoints after rewind:", e));
+    refreshCheckpoints(session.id);
     showNotification("Session rewound", "info", 3000);
     return true;
   }

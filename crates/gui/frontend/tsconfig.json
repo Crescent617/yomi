@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": true,
     "types": ["svelte"]
   },
-  "include": ["src/**/*", "src/**/*.svelte"]
+  "include": ["src/**/*", "src/**/*.svelte", "src/**/*.svelte.ts"]
 }

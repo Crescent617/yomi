@@ -9,6 +9,7 @@
   import ActionGroup from "./ActionGroup.svelte";
   import TextBlock from "./TextBlock.svelte";
   import TodoBar from "./TodoBar.svelte";
+  import OperationBar from "./OperationBar.svelte";
   import type { ChatMessage } from "../../state.svelte";
 
   const activeSession = $derived(getActiveSession());
@@ -145,15 +146,22 @@
         {#each displayItems as item, index (item.type === "message" ? item.message.id : `group-${item.messages[0]?.id ?? index}`)}
           {#if item.type === "message"}
             {@const msg = item.message}
-            {#if msg.role === "user"}
-              <UserBubble message={msg} />
-            {:else if msg.error || msg.role === "error"}
-              <ErrorBubble message={msg} />
-            {:else if msg.role === "system"}
-              <SystemBubble message={msg} />
-            {:else}
-              <AssistantBubble message={msg} isStreaming={item.isStreaming} />
-            {/if}
+            <div class="group relative">
+              {#if msg.role === "user"}
+                <UserBubble message={msg} />
+              {:else if msg.error || msg.role === "error"}
+                <ErrorBubble message={msg} />
+              {:else if msg.role === "system"}
+                <SystemBubble message={msg} />
+              {:else}
+                <AssistantBubble message={msg} isStreaming={item.isStreaming} />
+              {/if}
+              {#if msg.role === "user"}
+                <div class="absolute right-0 bottom-0 translate-y-full opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                  <OperationBar message={msg} sessionId={activeSession.id} />
+                </div>
+              {/if}
+            </div>
           {:else}
             <ActionGroup messages={item.messages} isStreaming={item.isStreaming} />
             {#each item.messages as m}

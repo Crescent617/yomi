@@ -44,14 +44,16 @@ impl TodoReminderInterceptor {
                 reminder.push_str("\nReminder: you still have pending todos:");
             }
             let icon = match todo.status {
-                TodoStatus::Pending => "[ ]",
-                TodoStatus::InProgress => "[/]",
+                TodoStatus::Pending => "(pending)",
+                TodoStatus::InProgress => "(in progress)",
                 // Unreachable: only Pending/InProgress items reach this point
                 // (see filter above). Kept for exhaustive match.
-                TodoStatus::Completed => "[x]",
+                TodoStatus::Completed => "(completed)",
             };
             reminder.push('\n');
             reminder.push_str(icon);
+            reminder.push(' ');
+            reminder.push_str(&todo.id);
             reminder.push(' ');
             reminder.push_str(&todo.content);
         }
@@ -198,7 +200,7 @@ mod tests {
         interceptor.intercept(&mut content, &ctx(&history)).await;
         let text = extract_text(&content);
         assert!(text.contains("pending todos"));
-        assert!(text.contains("[ ] A"));
+        assert!(text.contains("(pending) A"));
         assert!(!text.contains("[pending]"));
     }
 

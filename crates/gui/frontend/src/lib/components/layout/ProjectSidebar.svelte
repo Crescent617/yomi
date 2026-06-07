@@ -11,6 +11,7 @@
     getSession,
     showNotification,
     syncSessionStatus,
+    refreshCheckpoints,
   } from "../../state.svelte";
 
   let { collapsed = false }: { collapsed?: boolean } = $props();
@@ -133,8 +134,7 @@
       }
       const msgs = await api.getMessages(id);
       if (getSession(id)) loadSessionMessages(id, msgs);
-      const cps = await api.getCheckpoints(id);
-      if (session) session.checkpoints = cps ?? [];
+      refreshCheckpoints(id);
     } catch (e: unknown) {
       console.error("Failed to activate session:", e instanceof Error ? e.message : e);
       if (prev && prev !== id) {

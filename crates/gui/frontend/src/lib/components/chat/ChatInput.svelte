@@ -1,37 +1,29 @@
 <script lang="ts">
-import { Send, Command, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, File, FileCode, Square, Clock, Paperclip, X } from "lucide-svelte";
+import { Send, Command, Square, Clock, Paperclip, X } from "lucide-svelte";
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
-import { SvelteSet } from "svelte/reactivity";
 import * as api from "../../api";
 import type { TaggedContentBlock } from "../../types";
 import { sessionState, getActiveSession, showNotification } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
-import { fsProvider } from "../../fs/factory";
 import type { FileEntry } from "../../fs/provider";
 import { open } from "@tauri-apps/plugin-dialog";
+
+import { createFilePicker } from "$lib/filePicker";
+import FilePicker from "../filePicker/FilePicker.svelte";
 
 let content = $state("");
 let textareaRef: HTMLTextAreaElement | null = $state(null);
 let composing = $state(false);
 let ignoreNextEnter = $state(false);
 
-// ── dir cache for file picker ──
-let dirCache = $state<Map<string, FileEntry[]>>(new Map());
+// ── file picker (shared hook) ──
+const filePicker = createFilePicker();
 
 // ── command completion ──
 let showCommands = $state(false);
 let commandFilter = $state("");
 let selectedCommandIdx = $state(0);
 let commandListRef: HTMLDivElement | null = $state(null);
-
-// ── file picker ──
-let showFilePicker = $state(false);
-let filePickerAnchor = $state(0);
-let fileEntries = $state<FileEntry[]>([]);
-let fileExpanded = new SvelteSet<string>();
-let selectedFileIdx = $state(0);
-let filePickerRoot = $state("");
-let fileListRef: HTMLDivElement | null = $state(null);
 
 // ── history picker ──
 let showHistory = $state(false);
@@ -59,6 +51,7 @@ function detectCompletion() {
 
   // ── command: starts with / ──
   if (content.startsWith("/")) {
+    filePicker.close(); // mutually exclusive with @ picker
     const query = content.slice(1);
     const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
     if (valid) {
@@ -78,65 +71,18 @@ function detectCompletion() {
     const afterAt = beforeCursor.slice(lastAt + 1);
     // @ must not be followed by a space (still typing the path)
     if (!afterAt.includes(" ")) {
-      filePickerAnchor = lastAt;
-      if (!showFilePicker) {
-        showFilePicker = true;
-        loadFilePickerRoot();
-      }
+      showCommands = false; // mutually exclusive with / picker
+      const root = getActiveSession()?.projectPath || "";
+      filePicker.open(lastAt, afterAt, root);
     } else {
-      showFilePicker = false;
+      filePicker.close();
     }
   } else {
-    showFilePicker = false;
+    filePicker.close();
   }
 }
 
-async function loadFilePickerRoot() {
-  const session = getActiveSession();
-  const root = session?.projectPath || "";
-  filePickerRoot = root;
-  if (!root) {
-    fileEntries = [];
-    return;
-  }
-  try {
-    const cached = dirCache.get(root);
-    if (cached) {
-      fileEntries = cached;
-    } else {
-      const list = await fsProvider.listDir(root);
-      const sorted = list.sort((a, b) => {
-        if (a.isDirectory && !b.isDirectory) return -1;
-        if (!a.isDirectory && b.isDirectory) return 1;
-        return a.name.localeCompare(b.name);
-      });
-      dirCache.set(root, sorted);
-      fileEntries = sorted;
-    }
-    selectedFileIdx = 0;
-  } catch (e) {
-    console.error("Failed to load files:", e);
-    fileEntries = [];
-  }
-}
 
-async function loadDir(path: string) {
-  const cached = dirCache.get(path);
-  if (cached) return cached;
-  try {
-    const list = await fsProvider.listDir(path);
-    const sorted = list.sort((a, b) => {
-      if (a.isDirectory && !b.isDirectory) return -1;
-      if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name);
-    });
-    dirCache.set(path, sorted);
-    return sorted;
-  } catch (e) {
-    console.error("Failed to list dir:", path, e);
-    return [];
-  }
-}
 
 const filteredCommands = $derived.by(() => {
   const q = commandFilter.toLowerCase();
@@ -208,12 +154,21 @@ function acceptCommand(cmd: string) {
   requestAnimationFrame(autoResize);
 }
 
-function acceptFile(path: string) {
+function onEnterDir(entry: FileEntry) {
+  const newQuery = filePicker.enterDir(entry);
+  const before = content.slice(0, filePicker.anchor);
+  const after = content.slice(textareaRef?.selectionStart ?? content.length);
+  content = before + "@" + newQuery + after;
+  textareaRef?.focus();
+}
+
+function onAcceptFile(entry: FileEntry) {
+  const resultPath = filePicker.acceptFile(entry);
   const cursorPos = textareaRef?.selectionStart ?? content.length;
-  const before = content.slice(0, filePickerAnchor);
+  const before = content.slice(0, filePicker.anchor);
   const after = content.slice(cursorPos);
-  content = before + "@" + path + " " + after;
-  showFilePicker = false;
+  content = before + "@" + resultPath + " " + after;
+  filePicker.close();
   textareaRef?.focus();
   requestAnimationFrame(autoResize);
 }
@@ -513,33 +468,15 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   // File picker navigation
-  if (showFilePicker) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      selectedFileIdx = Math.min(selectedFileIdx + 1, fileEntries.length - 1);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      selectedFileIdx = Math.max(selectedFileIdx - 1, 0);
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const entry = fileEntries[selectedFileIdx];
-      if (entry) {
-        if (entry.isDirectory) {
-          // toggle expand
-          if (fileExpanded.has(entry.path)) fileExpanded.delete(entry.path);
-          else fileExpanded.add(entry.path);
-        } else {
-          acceptFile(entry.path);
-        }
+  if (filePicker.show) {
+    const handled = filePicker.handleKeydown(e);
+    if (handled) {
+      const entries = filePicker.entries;
+      const idx = filePicker.selectedIdx;
+      const entry = entries[idx];
+      if (entry && !entry.isDirectory && (e.key === "Enter" || e.key === "Tab")) {
+        onAcceptFile(entry);
       }
-      return;
-    }
-    if (e.key === "Escape") {
-      showFilePicker = false;
       return;
     }
   }
@@ -611,29 +548,12 @@ function autoResize() {
   textareaRef.style.height = Math.min(textareaRef.scrollHeight, 200) + "px";
 }
 
-function getFileIcon(entry: FileEntry) {
-  if (entry.isDirectory) return fileExpanded.has(entry.path) ? FolderOpen : Folder;
-  const ext = entry.name.split(".").pop()?.toLowerCase();
-  if (["rs", "js", "ts", "py", "go", "java", "c", "cpp", "h", "hpp"].includes(ext ?? "")) {
-    return FileCode;
-  }
-  return File;
-}
+
 
 $effect(() => {
   if (showCommands && commandListRef) {
     const buttons = commandListRef.querySelectorAll("button");
     const selected = buttons[selectedCommandIdx];
-    if (selected) {
-      selected.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-  }
-});
-
-$effect(() => {
-  if (showFilePicker && fileListRef) {
-    const buttons = fileListRef.querySelectorAll("button");
-    const selected = buttons[selectedFileIdx];
     if (selected) {
       selected.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
@@ -658,17 +578,22 @@ $effect(() => {
   }
 });
 
-function toggleDir(path: string) {
-  if (fileExpanded.has(path)) fileExpanded.delete(path);
-  else fileExpanded.add(path);
-}
 
 function getSession(sessionId: string) {
   return sessionState.sessions.find((s) => s.id === sessionId) ?? null;
 }
+
+function handleFocusOut(e: FocusEvent) {
+  const container = e.currentTarget as HTMLElement;
+  if (!container.contains(e.relatedTarget as Node)) {
+    showCommands = false;
+    filePicker.close();
+    showHistory = false;
+  }
+}
 </script>
 
-<div class="border-t border-border relative">
+<div class="border-t border-border relative" onfocusout={handleFocusOut}>
   <!-- Command completion dropdown -->
   {#if showCommands && filteredCommands.length > 0}
     <div bind:this={commandListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
@@ -686,67 +611,16 @@ function getSession(sessionId: string) {
   {/if}
 
   <!-- File picker dropdown -->
-  {#if showFilePicker}
-    <div bind:this={fileListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-56 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
-      <div class="px-3 py-1.5 text-xs text-muted-foreground border-b border-border flex items-center gap-1.5">
-        <FileText size={12} />
-        <span class="truncate">{filePickerRoot}</span>
-      </div>
-      {#if fileEntries.length === 0}
-        <div class="px-3 py-4 text-sm text-muted-foreground text-center">No files found</div>
-      {:else}
-        {#each fileEntries as entry, i (entry.path)}
-          {@const Icon = getFileIcon(entry)}
-          <button
-            class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm transition-colors {i === selectedFileIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
-            onclick={() => {
-              if (entry.isDirectory) {
-                toggleDir(entry.path);
-              } else {
-                acceptFile(entry.path);
-              }
-            }}
-          >
-            {#if entry.isDirectory}
-              {#if fileExpanded.has(entry.path)}
-                <ChevronDown size={14} class="shrink-0 text-muted-foreground" />
-              {:else}
-                <ChevronRight size={14} class="shrink-0 text-muted-foreground" />
-              {/if}
-            {:else}
-              <span class="w-3.5 shrink-0"></span>
-            {/if}
-            <Icon
-              size={14}
-              class="shrink-0 {entry.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
-            />
-            <span class="truncate">{entry.name}</span>
-          </button>
-
-          <!-- Nested dir contents (simplified: only one level shown) -->
-          {#if entry.isDirectory && fileExpanded.has(entry.path)}
-            {#await loadDir(entry.path) then children}
-              {#each children as child (child.path)}
-                {@const ChildIcon = child.isDirectory ? Folder : File}
-                <button
-                  class="flex items-center gap-2 w-full pl-8 pr-3 py-1 text-left text-xs transition-colors hover:bg-secondary/50"
-                  onclick={() => {
-                    if (!child.isDirectory) acceptFile(child.path);
-                  }}
-                >
-                  <ChildIcon
-                    size={12}
-                    class="shrink-0 {child.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
-                  />
-                  <span class="truncate {child.isDirectory ? 'text-primary' : ''}">{child.name}</span>
-                </button>
-              {/each}
-            {/await}
-          {/if}
-        {/each}
-      {/if}
-    </div>
-  {/if}
+  <FilePicker
+    show={filePicker.show}
+    entries={filePicker.entries}
+    selectedIdx={filePicker.selectedIdx}
+    query={filePicker.query}
+    root={filePicker.root}
+    onEnter={onEnterDir}
+    onAccept={onAcceptFile}
+    onClose={() => filePicker.close()}
+  />
 
   <!-- History picker -->
   {#if showHistory}
