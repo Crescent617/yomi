@@ -7,7 +7,21 @@
   const md = new Marked();
   md.setOptions({ gfm: true, breaks: true });
 
-  const rendered = $derived(md.parse(message.content || "", { async: false }) as string);
+  const rawRendered = $derived(md.parse(message.content || "", { async: false }) as string);
+
+  // Escape unknown HTML tags so they display as text (e.g. <system_reminder>)
+  // while preserving markdown-generated tags like <p>, <strong>, <code>, etc.
+  const allowedTags = new Set([
+    "p", "strong", "b", "em", "a", "code", "pre", "ul", "ol", "li", "blockquote",
+    "h1", "h2", "h3", "h4", "h5", "h6", "br", "hr", "div", "span", "img",
+    "table", "thead", "tbody", "tr", "th", "td", "sup", "sub", "del", "s"
+  ]);
+  const rendered = $derived(
+    rawRendered.replace(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g, (match, slash, tag) => {
+      if (allowedTags.has(tag.toLowerCase())) return match;
+      return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    })
+  );
 
   let expanded = $state(false);
 

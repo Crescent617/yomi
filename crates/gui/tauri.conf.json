@@ -34,7 +34,11 @@
             "dialog:default",
             {
               "identifier": "fs:default",
-              "allow": [{ "path": "$HOME/**" }, { "path": "$HOME/*" }, { "path": "$HOME/" }]
+              "allow": [
+                { "path": "$HOME/**" },
+                { "path": "$HOME/*" },
+                { "path": "$HOME/" }
+              ]
             },
             "fs:read-files",
             "fs:write-files",
@@ -47,6 +51,11 @@
           ]
         }
       ]
+    }
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
     }
   },
   "bundle": {

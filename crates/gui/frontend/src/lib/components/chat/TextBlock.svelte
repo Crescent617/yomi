@@ -7,37 +7,41 @@
   let parser: ReturnType<typeof smd.parser> | null = null;
   let lastContent = "";
 
+  function flushParser() {
+    if (parser) {
+      smd.parser_end(parser);
+      parser = null;
+    }
+  }
+
   $effect(() => {
     if (!el) return;
     const curr = content;
     const streaming = isStreaming;
 
     if (!parser) {
-      // 初始化：清理 DOM，创建 parser，写入完整内容
       el.innerHTML = "";
       const renderer = smd.default_renderer(el);
       parser = smd.parser(renderer);
       smd.parser_write(parser, curr);
       lastContent = curr;
+      if (!streaming) flushParser();
     } else if (!curr.startsWith(lastContent)) {
-      // 内容重置（rewind 或突变），重建 parser
       el.innerHTML = "";
       const renderer = smd.default_renderer(el);
       parser = smd.parser(renderer);
       smd.parser_write(parser, curr);
       lastContent = curr;
+      if (!streaming) flushParser();
     } else if (streaming && curr.length > lastContent.length) {
-      // 增量追加
       smd.parser_write(parser, curr.slice(lastContent.length));
       lastContent = curr;
     } else if (!streaming) {
-      // streaming 结束：先写入剩余增量，再 flush 保持 DOM
       if (curr.length > lastContent.length) {
         smd.parser_write(parser, curr.slice(lastContent.length));
         lastContent = curr;
       }
-      smd.parser_end(parser);
-      parser = null;
+      flushParser();
     }
   });
 </script>

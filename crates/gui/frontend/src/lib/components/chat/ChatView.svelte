@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessionState, projectState, getSession, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus } from "../../state.svelte";
+  import { sessionState, projectState, getSession, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus, refreshCheckpoints } from "../../state.svelte";
   import * as api from "../../api";
   import { collapseHome } from "../../utils";
   import TabBar from "../layout/TabBar.svelte";
@@ -15,6 +15,10 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
+  import { createFilePicker } from "$lib/filePicker";
+  import type { FileEntry } from "../../fs/provider";
+  import FilePicker from "../filePicker/FilePicker.svelte";
+  import type { TaggedContentBlock } from "../../types";
 
   let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
 
@@ -34,6 +38,10 @@
   let submitting = $state(false);
   let homeFileAttachments = $state<string[]>([]);
   let homeDirPath = $state("");
+
+  // ── home file picker (shared hook) ──
+  const homeFilePicker = createFilePicker();
+  let homeTextareaRef: HTMLTextAreaElement | null = $state(null);
 
   // ── home inline images (clipboard paste) ──
   interface HomeInlineImage {
@@ -85,8 +93,8 @@
     }
   }
 
-  function buildHomeContentBlocks(text: string): unknown[] {
-    const blocks: unknown[] = [];
+  function buildHomeContentBlocks(text: string): TaggedContentBlock[] {
+    const blocks: TaggedContentBlock[] = [];
     for (const img of homeInlineImages) {
       blocks.push({
         type: "imageUrl",
@@ -255,6 +263,8 @@
       if (session) {
         syncSessionStatus(id, status);
         loadSessionMessages(id, msgs);
+        // Load checkpoints for the new session
+        refreshCheckpoints(id);
         // Merge any stale streaming buffer (defensive)
         const buf = streamingMessages[id] ?? [];
         if (buf.length > 0) {
@@ -368,7 +378,62 @@
     }
   });
 
+  function detectHomeFilePicker() {
+    if (!homeTextareaRef) return;
+    const cursorPos = homeTextareaRef.selectionStart;
+    const beforeCursor = homeInput.slice(0, cursorPos);
+    const lastAt = beforeCursor.lastIndexOf("@");
+    if (lastAt >= 0) {
+      const afterAt = beforeCursor.slice(lastAt + 1);
+      if (!afterAt.includes(" ")) {
+        const root = projectState.projects.find(p => p.id === selectedProjectId)?.dir || "";
+        homeFilePicker.open(lastAt, afterAt, root);
+      } else {
+        homeFilePicker.close();
+      }
+    } else {
+      homeFilePicker.close();
+    }
+  }
+
+  function onEnterHomeDir(entry: FileEntry) {
+    const newQuery = homeFilePicker.enterDir(entry);
+    const before = homeInput.slice(0, homeFilePicker.anchor);
+    const after = homeInput.slice(homeTextareaRef?.selectionStart ?? homeInput.length);
+    homeInput = before + "@" + newQuery + after;
+    homeTextareaRef?.focus();
+  }
+
+  function onAcceptHomeFile(entry: FileEntry) {
+    const resultPath = homeFilePicker.acceptFile(entry);
+    const cursorPos = homeTextareaRef?.selectionStart ?? homeInput.length;
+    const before = homeInput.slice(0, homeFilePicker.anchor);
+    const after = homeInput.slice(cursorPos);
+    homeInput = before + "@" + resultPath + " " + after;
+    homeFilePicker.close();
+    homeTextareaRef?.focus();
+  }
+
+  function handleHomeFocusOut(e: FocusEvent) {
+    const container = e.currentTarget as HTMLElement;
+    if (!container.contains(e.relatedTarget as Node)) {
+      homeFilePicker.close();
+    }
+  }
+
   function handleHomeKeydown(e: KeyboardEvent) {
+    if (homeFilePicker.show) {
+      const handled = homeFilePicker.handleKeydown(e);
+      if (handled) {
+        const entries = homeFilePicker.entries;
+        const idx = homeFilePicker.selectedIdx;
+        const entry = entries[idx];
+        if (entry && !entry.isDirectory && (e.key === "Enter" || e.key === "Tab")) {
+          onAcceptHomeFile(entry);
+        }
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleHomeSubmit();
@@ -502,13 +567,16 @@
           </div>
 
           <!-- Input card -->
-          <div class="rounded-2xl border border-border bg-card shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all">
+          <div class="relative rounded-2xl border border-border bg-card shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all" onfocusout={handleHomeFocusOut}>
             <div class="p-4">
               <textarea
+                bind:this={homeTextareaRef}
                 bind:value={homeInput}
                 onkeydown={handleHomeKeydown}
+                oninput={detectHomeFilePicker}
+                onfocus={detectHomeFilePicker}
                 onpaste={handleHomePaste}
-                placeholder="Ask anything..."
+                placeholder="Ask anything... (type @ to reference files)"
                 rows={3}
                 disabled={submitting}
                 autofocus
@@ -553,6 +621,17 @@
                 </div>
               {/if}
             </div>
+            <!-- Home file picker dropdown (floating above input) -->
+            <FilePicker
+              show={homeFilePicker.show}
+              entries={homeFilePicker.entries}
+              selectedIdx={homeFilePicker.selectedIdx}
+              query={homeFilePicker.query}
+              root={homeFilePicker.root}
+              onEnter={onEnterHomeDir}
+              onAccept={onAcceptHomeFile}
+              onClose={() => homeFilePicker.close()}
+            />
             <div class="px-4 py-3 border-t border-border flex items-center justify-between gap-3">
               <div class="flex items-center gap-3">
                 <!-- Project selector -->
