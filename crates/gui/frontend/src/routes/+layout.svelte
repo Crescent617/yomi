@@ -19,7 +19,11 @@
     });
     const appWindow = getCurrentWindow();
     const unlistenClose = await appWindow.onCloseRequested(() => {
-      unsubscribeAllInactive();
+      try {
+        unsubscribeAllInactive();
+      } catch (e) {
+        console.error("Error in onCloseRequested:", e);
+      }
     });
     return () => {
       unlisten.then((fn: () => void) => fn());
