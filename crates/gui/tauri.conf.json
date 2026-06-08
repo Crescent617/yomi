@@ -1,7 +1,7 @@
 {
   "$schema": "./frontend/node_modules/@tauri-apps/cli/schema.json",
   "productName": "Yomi",
-  "version": "0.2.29",
+  "version": "0.2.30",
   "identifier": "com.yomi.gui",
   "build": {
     "beforeDevCommand": "cd frontend && npm run dev",
@@ -47,7 +47,9 @@
             "fs:allow-write-text-file",
             "store:default",
             "pilot:default",
-            "notification:default"
+            "notification:default",
+            "core:window:allow-close",
+            "core:window:allow-destroy"
           ]
         }
       ]
