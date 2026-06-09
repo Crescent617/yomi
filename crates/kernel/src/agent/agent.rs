@@ -899,11 +899,16 @@ impl Agent {
             tracing::warn!("Failed to send completed event: {}", e);
         }
 
-        if result.finish_reason.is_none() {
-            tracing::error!("Agent {} model response has no finish_reason", self.id);
-        }
+        let finish_reason = match result.finish_reason {
+            Some(fr) => fr,
+            None => {
+                tracing::warn!("Agent {} model response has no finish_reason", self.id);
+                self.emit_error(crate::event::ErrorPhase::Streaming, "model response missing finish_reason", true).await;
+                crate::types::FinishReason::Stop
+            }
+        };
 
-        self.transition_after_streaming(result.finish_reason).await
+        self.transition_after_streaming(Some(finish_reason)).await
     }
 
     /// Collect all output from the stream until completion
