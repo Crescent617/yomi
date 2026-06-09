@@ -210,7 +210,11 @@ pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
 /// Walk up from `path` to find a `.git` directory or file (worktree).
 /// If `start` is a file, begins from its parent directory.
 fn find_git_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut current = if start.is_file() { start.parent() } else { Some(start) };
+    let mut current = if start.is_file() {
+        start.parent()
+    } else {
+        Some(start)
+    };
     while let Some(dir) = current {
         if dir.join(".git").exists() {
             return Some(dir.to_path_buf());
@@ -258,11 +262,13 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
                 for part in text.split(',') {
                     let part = part.trim();
                     if part.contains("insertion") {
-                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok())
+                        {
                             insertions = n;
                         }
                     } else if part.contains("deletion") {
-                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                        if let Some(n) = part.split_whitespace().next().and_then(|s| s.parse().ok())
+                        {
                             deletions = n;
                         }
                     }

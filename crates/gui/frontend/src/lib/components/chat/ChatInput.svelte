@@ -173,9 +173,9 @@ function onAcceptFile(entry: FileEntry) {
   requestAnimationFrame(autoResize);
 }
 
-async function handleCommand(text: string) {
+async function handleCommand(text: string): Promise<boolean> {
   const sessionId = sessionState.activeSessionId;
-  if (!sessionId) return;
+  if (!sessionId) return false;
 
   const parts = text.split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -195,12 +195,12 @@ async function handleCommand(text: string) {
           const checkpoints = await api.getCheckpoints(sessionId) as Array<{ messageId?: string }>;
           if (!Array.isArray(checkpoints) || checkpoints.length < 1) {
             showNotification("No checkpoint to undo", "error", 3000);
-            return;
+            return false;
           }
           const target = checkpoints[checkpoints.length - 1];
           if (!target?.messageId) {
             showNotification("No checkpoint to undo", "error", 3000);
-            return;
+            return false;
           }
           await api.rewind(sessionId, target.messageId as string);
           showNotification("Undo last turn", "info", 3000);
@@ -227,7 +227,7 @@ async function handleCommand(text: string) {
           const steerText = parts.slice(1).join(" ").trim();
           if (!steerText && inlineImages.length === 0) {
             showNotification("Please provide steer content: /steer <content>", "error", 5000);
-            return;
+            return false;
           }
           const blocks = buildContentBlocks(steerText);
           await api.sendSteer(sessionId, blocks);
@@ -237,17 +237,35 @@ async function handleCommand(text: string) {
         break;
       case "/goal:stop":
         await api.stopGoal(sessionId);
-        showNotification("Goal mode stopped", "info", 3000);
+        {
+          const session = getActiveSession();
+          if (session) {
+            api.getGoal(sessionId).then((g) => { session.goal = g; }).catch(() => { session.goal = null; });
+          }
+        }
+        console.log("Goal mode stopped");
         break;
       case "/goal":
         {
           const description = parts.slice(1).join(" ").trim();
           if (!description) {
             showNotification("Please provide a goal description: /goal <description>", "error", 5000);
-            return;
+            return false;
           }
           await api.startGoal(sessionId, description);
-          showNotification("Goal mode activated — agent will work autonomously", "info", 5000);
+          {
+            const session = getActiveSession();
+            if (session) {
+              api.getGoal(sessionId).then((g) => { session.goal = g; }).catch(() => {});
+            }
+          }
+          // rename_session will emit TitleUpdated event — alias is synced there
+          try {
+            await api.renameSession(sessionId, description);
+          } catch {
+            // ignore rename failure
+          }
+          console.log("Goal mode activated — agent will work autonomously");
         }
         break;
       case "/history":
@@ -262,10 +280,12 @@ async function handleCommand(text: string) {
         // Unknown command — treat as normal message
         await api.sendMessage(sessionId, text);
     }
+    return true;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "";
     console.error(`Failed to execute command ${cmd}:`, msg);
     showNotification(`Command failed: ${msg}`, "error", 5000);
+    return false;
   }
 }
 
@@ -274,6 +294,21 @@ async function handleSubmit() {
 
   const sessionId = sessionState.activeSessionId;
   const baseText = content.trim();
+
+  if (baseText.startsWith("/")) {
+    const ok = await handleCommand(baseText);
+    if (!ok) {
+      content = baseText;
+      autoResize();
+      return;
+    }
+    content = "";
+    autoResize();
+    fileAttachments = [];
+    clearInlineImages();
+    return;
+  }
+
   content = "";
   autoResize();
 
@@ -285,9 +320,7 @@ async function handleSubmit() {
 
   fileAttachments = [];
 
-  if (text.startsWith("/")) {
-    await handleCommand(text);
-  } else if (inlineImages.length > 0) {
+  if (inlineImages.length > 0) {
     // Message with inline images: build content blocks
     try {
       const blocks = buildContentBlocks(text);
@@ -619,7 +652,6 @@ function handleFocusOut(e: FocusEvent) {
     root={filePicker.root}
     onEnter={onEnterDir}
     onAccept={onAcceptFile}
-    onClose={() => filePicker.close()}
   />
 
   <!-- History picker -->

@@ -103,13 +103,13 @@ pub fn send_desktop_notification(title: &str, message: &str) {
     }
 
     // Try native notification via notify-rust
-    match notify_rust::Notification::new()
+    if notify_rust::Notification::new()
         .summary(title)
         .body(message)
         .show()
+        .is_ok()
     {
-        Ok(_) => return,
-        Err(_) => {}
+        return;
     }
 
     // Fallback to OSC for terminals that support it

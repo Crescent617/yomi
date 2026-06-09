@@ -448,13 +448,9 @@ async fn wait_for_child(
     match File::options().append(true).open(&output_path).await {
         Ok(mut file) => {
             if cancelled {
-                let _ = file
-                    .write_all(b"\n# Task cancelled\n")
-                    .await;
+                let _ = file.write_all(b"\n# Task cancelled\n").await;
             } else if timed_out {
-                let timeout_str = timeout_secs
-                    .map(|s| format!("{s}"))
-                    .unwrap_or_else(|| "unknown".into());
+                let timeout_str = timeout_secs.map_or_else(|| "unknown".into(), |s| format!("{s}"));
                 let _ = file
                     .write_all(format!("\n# Task timed out after {timeout_str}s\n").as_bytes())
                     .await;

@@ -200,7 +200,7 @@ mod tests {
         interceptor.intercept(&mut content, &ctx(&history)).await;
         let text = extract_text(&content);
         assert!(text.contains("pending todos"));
-        assert!(text.contains("(pending) A"));
+        assert!(text.contains("(pending) 1 A"));
         assert!(!text.contains("[pending]"));
     }
 

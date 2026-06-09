@@ -11,7 +11,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff } from "lucide-svelte";
+  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff, Command } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
@@ -42,6 +42,18 @@
   // ── home file picker (shared hook) ──
   const homeFilePicker = createFilePicker();
   let homeTextareaRef: HTMLTextAreaElement | null = $state(null);
+
+  // ── home command picker (only /goal on home screen) ──
+  let showCommands = $state(false);
+  let commandFilter = $state("");
+  let selectedCommandIdx = $state(0);
+  let homeCommandListRef: HTMLDivElement | null = $state(null);
+  const HOME_COMMANDS: readonly (readonly [string, string])[] = [
+    ["/goal", "<description> Start goal mode with optional description"],
+  ];
+  const filteredHomeCommands = $derived(
+    HOME_COMMANDS.filter(([cmd]) => cmd.toLowerCase().includes(commandFilter.toLowerCase()))
+  );
 
   // ── home inline images (clipboard paste) ──
   interface HomeInlineImage {
@@ -178,6 +190,17 @@
   async function handleHomeSubmit() {
     if (submitting || !homeInput.trim()) return;
 
+    // Validate /goal before clearing any state
+    const baseText = homeInput.trim();
+    const isGoal = baseText.toLowerCase() === "/goal" || baseText.toLowerCase().startsWith("/goal ");
+    if (isGoal) {
+      const description = baseText.slice(5).trim();
+      if (!description) {
+        showNotification("Please provide a goal description: /goal <description>", "error", 5000);
+        return;
+      }
+    }
+
     let level = permissionLevel;
     if (!level) {
       try {
@@ -252,6 +275,7 @@
             queuedInput: null,
             updatedAt: s.endedAt ?? s.createdAt,
             permissionLevel: s.autoApproveLevel ?? level ?? "caution",
+            goal: null,
           });
         }
       }
@@ -263,9 +287,8 @@
       if (session) {
         syncSessionStatus(id, status);
         loadSessionMessages(id, msgs);
-        // Load checkpoints for the new session
         refreshCheckpoints(id);
-        // Merge any stale streaming buffer (defensive)
+        api.getGoal(id).then((g) => { session.goal = g; }).catch(() => { session.goal = null; });
         const buf = streamingMessages[id] ?? [];
         if (buf.length > 0) {
           session.messages = [...session.messages, ...buf];
@@ -273,7 +296,6 @@
         }
       }
       // Send the home input
-      const baseText = homeInput.trim();
       homeInput = "";
       const fileSuffix = homeFileAttachments.length > 0
         ? "\n" + homeFileAttachments.map((p) => `[File: ${p}]`).join("\n")
@@ -281,13 +303,29 @@
       const text = baseText + fileSuffix;
       homeFileAttachments = [];
       const hasImages = homeInlineImages.length > 0;
-      clearHomeInlineImages();
-      if (hasImages) {
+      if (isGoal) {
+        const description = baseText.slice(5).trim();
+        await api.startGoal(id, description);
+        {
+          const session = sessionState.sessions.find(s => s.id === id);
+          if (session) {
+            api.getGoal(id).then((g) => { session.goal = g; }).catch(() => {});
+          }
+        }
+        // rename_session will emit TitleUpdated event — alias is synced there
+        try {
+          await api.renameSession(id, description);
+        } catch {
+          // ignore rename failure
+        }
+        console.log("Goal mode activated — agent will work autonomously");
+      } else if (hasImages) {
         const blocks = buildHomeContentBlocks(text);
         await api.sendMessageBlocks(id, blocks);
       } else {
         await api.sendMessage(id, text);
       }
+      clearHomeInlineImages();
     } catch (e: unknown) {
       console.error("Failed to create session:", e instanceof Error ? e.message : e);
       showNotification("Failed to create session: " + (e instanceof Error ? e.message : "Unknown error"), "error", 5000);
@@ -378,10 +416,45 @@
     }
   });
 
-  function detectHomeFilePicker() {
+  $effect(() => {
+    if (showCommands && homeCommandListRef) {
+      const buttons = homeCommandListRef.querySelectorAll("button");
+      const selected = buttons[selectedCommandIdx];
+      if (selected) {
+        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }
+  });
+
+  $effect(() => {
+    if (selectedCommandIdx >= filteredHomeCommands.length) {
+      selectedCommandIdx = Math.max(0, filteredHomeCommands.length - 1);
+    }
+  });
+
+  function detectHomeCompletion() {
     if (!homeTextareaRef) return;
     const cursorPos = homeTextareaRef.selectionStart;
     const beforeCursor = homeInput.slice(0, cursorPos);
+
+    // ── command: starts with / ──
+    if (homeInput.startsWith("/")) {
+      homeFilePicker.close();
+      const query = homeInput.slice(1);
+      const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
+      if (valid) {
+        showCommands = true;
+        commandFilter = query;
+        selectedCommandIdx = 0;
+      } else {
+        showCommands = false;
+      }
+      return;
+    } else {
+      showCommands = false;
+    }
+
+    // ── file: last @ before cursor ──
     const lastAt = beforeCursor.lastIndexOf("@");
     if (lastAt >= 0) {
       const afterAt = beforeCursor.slice(lastAt + 1);
@@ -394,6 +467,12 @@
     } else {
       homeFilePicker.close();
     }
+  }
+
+  function acceptHomeCommand(cmd: string) {
+    homeInput = cmd + " ";
+    showCommands = false;
+    homeTextareaRef?.focus();
   }
 
   function onEnterHomeDir(entry: FileEntry) {
@@ -418,10 +497,38 @@
     const container = e.currentTarget as HTMLElement;
     if (!container.contains(e.relatedTarget as Node)) {
       homeFilePicker.close();
+      showCommands = false;
     }
   }
 
   function handleHomeKeydown(e: KeyboardEvent) {
+    // Command picker navigation
+    if (showCommands) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (filteredHomeCommands.length === 0) return;
+        selectedCommandIdx = (selectedCommandIdx + 1) % filteredHomeCommands.length;
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (filteredHomeCommands.length === 0) return;
+        selectedCommandIdx = (selectedCommandIdx - 1 + filteredHomeCommands.length) % filteredHomeCommands.length;
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        if (filteredHomeCommands.length === 0) return;
+        const cmd = filteredHomeCommands[selectedCommandIdx]?.[0];
+        if (cmd) acceptHomeCommand(cmd);
+        return;
+      }
+      if (e.key === "Escape") {
+        showCommands = false;
+        return;
+      }
+    }
+
     if (homeFilePicker.show) {
       const handled = homeFilePicker.handleKeydown(e);
       if (handled) {
@@ -573,10 +680,10 @@
                 bind:this={homeTextareaRef}
                 bind:value={homeInput}
                 onkeydown={handleHomeKeydown}
-                oninput={detectHomeFilePicker}
-                onfocus={detectHomeFilePicker}
+                oninput={detectHomeCompletion}
+                onfocus={detectHomeCompletion}
                 onpaste={handleHomePaste}
-                placeholder="Ask anything... (type @ to reference files)"
+                placeholder="Ask anything... (type @ to reference files, / for commands)"
                 rows={3}
                 disabled={submitting}
                 autofocus
@@ -621,6 +728,22 @@
                 </div>
               {/if}
             </div>
+            <!-- Home command picker dropdown (floating above input) -->
+            {#if showCommands && filteredHomeCommands.length > 0}
+              <div bind:this={homeCommandListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
+                {#each filteredHomeCommands as [cmd, desc], i (cmd)}
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i === selectedCommandIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
+                    onclick={() => acceptHomeCommand(cmd)}
+                  >
+                    <Command size={14} class="text-muted-foreground shrink-0" />
+                    <span class="font-mono text-primary shrink-0">{cmd}</span>
+                    <span class="text-muted-foreground text-xs truncate">{desc}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
             <!-- Home file picker dropdown (floating above input) -->
             <FilePicker
               show={homeFilePicker.show}
@@ -630,7 +753,6 @@
               root={homeFilePicker.root}
               onEnter={onEnterHomeDir}
               onAccept={onAcceptHomeFile}
-              onClose={() => homeFilePicker.close()}
             />
             <div class="px-4 py-3 border-t border-border flex items-center justify-between gap-3">
               <div class="flex items-center gap-3">

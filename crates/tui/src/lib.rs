@@ -40,7 +40,9 @@ pub fn init_config(config: Config, feature_gates: FeatureGates) {
 
 /// Initialize daemon mode flag (called once at startup)
 pub fn init_daemon_mode(daemon_mode: bool) {
-    DAEMON_MODE.set(daemon_mode).expect("Daemon mode already initialized");
+    DAEMON_MODE
+        .set(daemon_mode)
+        .expect("Daemon mode already initialized");
 }
 
 /// Get a reference to the global configuration

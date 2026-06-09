@@ -144,6 +144,7 @@ export interface SessionState {
   compacting?: boolean;
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   gitInfo?: GitInfo | null;
+  goal?: { description: string; status: string } | null;
 }
 
 export const appState = $state({
@@ -605,6 +606,8 @@ interface SystemEvent {
   sessionSwitched?: { sessionId: string };
   titleUpdated?: { sessionId: string; title: string };
   rewound?: { sessionId: string; messages: RawMessage[] };
+  goalUpdated?: { sessionId: string; description: string; status: string };
+  goalStopped?: { sessionId: string };
 }
 
 interface UserEvent {
@@ -896,7 +899,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     const state = event.lifecycle.state;
     if (state === "running" && !session.streaming) {
       startStreaming(session);
-      showNotification("AI is responding...", "info", 2000);
       return true;
     } else if (typeof state === "object") {
       if (state.stopped && session.streaming) {
@@ -1015,6 +1017,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       questions: req.questions,
     };
     showNotification("Agent has a question for you", "info", 5000);
+    sendDesktopNotification("Yomi", "Agent has a question for you", session.id);
     return true;
   }
   return false;
@@ -1068,6 +1071,17 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     // Refresh checkpoints list after rewind
     refreshCheckpoints(session.id);
     showNotification("Session rewound", "info", 3000);
+    return true;
+  } else if (event.goalUpdated) {
+    if (event.goalUpdated.sessionId !== session.id) return false;
+    session.goal = {
+      description: event.goalUpdated.description,
+      status: event.goalUpdated.status,
+    };
+    return true;
+  } else if (event.goalStopped) {
+    if (event.goalStopped.sessionId !== session.id) return false;
+    session.goal = null;
     return true;
   }
   return false;

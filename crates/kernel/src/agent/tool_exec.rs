@@ -104,7 +104,6 @@ impl ToolExecutionHandler {
             &self.session_id,
             &self.working_dir,
             &self.hook_registry,
-            message_buffer.len(),
             approved_calls,
             &mut denied_results,
         )
@@ -138,7 +137,6 @@ impl ToolExecutionHandler {
             &self.session_id,
             &self.working_dir,
             &self.hook_registry,
-            message_buffer.len(),
             results,
             &tool_calls,
         )

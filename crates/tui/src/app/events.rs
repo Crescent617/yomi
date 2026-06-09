@@ -337,6 +337,39 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
+                Event::System(kernel::event::SystemEvent::GoalUpdated {
+                    description,
+                    status,
+                    ..
+                }) => {
+                    let goal_str = format!("{status}\x00{description}");
+                    if let Err(e) = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom(attr::SET_GOAL),
+                        AttrValue::String(goal_str),
+                    ) {
+                        tracing::warn!("Failed to update goal status: {e}");
+                    }
+                    self.show_notification(&crate::components::info_bar::Notification::info(
+                        format!("Goal {status}: {description}"),
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                }
+                Event::System(kernel::event::SystemEvent::GoalStopped { .. }) => {
+                    if let Err(e) = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom(attr::SET_GOAL),
+                        AttrValue::String(String::new()),
+                    ) {
+                        tracing::warn!("Failed to clear goal status: {e}");
+                    }
+                    self.show_notification(&crate::components::info_bar::Notification::info(
+                        "Goal stopped",
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                }
                 // Rewind completed - refresh messages from the event
                 Event::System(kernel::event::SystemEvent::Rewound { messages, .. }) => {
                     // Recalculate token usage first (before moving messages)
@@ -398,6 +431,7 @@ impl Model {
                         req_id,
                         questions.len()
                     );
+                    Self::send_desktop_notification("Yomi", "Agent has a question for you");
 
                     // Auto-deny any previous pending ask-user request
                     if let Some((old_req_id, _, _)) = self.pending_ask_user.take() {

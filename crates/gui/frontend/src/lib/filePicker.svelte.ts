@@ -11,7 +11,7 @@ export function createFilePicker() {
   let filePickerQuery = $state("");
   let filePickerDir = $state("");
   let homeDirPath = $state("");
-  let dirCache = $state<Map<string, FileEntry[]>>(new Map());
+  const dirCache = $state<Map<string, FileEntry[]>>(new Map());
   let lastRequestId = $state(0);
 
   async function ensureHomeDir() {

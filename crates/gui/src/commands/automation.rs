@@ -167,8 +167,10 @@ pub async fn update_cron_job(
     };
 
     let action_parsed = match action {
-        Some(v) => Some(serde_json::from_value::<CronAction>(v)
-            .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?),
+        Some(v) => Some(
+            serde_json::from_value::<CronAction>(v)
+                .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?,
+        ),
         None => None,
     };
 

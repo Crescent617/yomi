@@ -15,6 +15,7 @@ use crate::types::{Result, ToolOutput};
 pub const SLEEP_TOOL_NAME: &str = "sleep";
 
 /// Tool for synchronous sleeping / waiting.
+#[derive(Default)]
 pub struct SleepTool;
 
 impl SleepTool {
@@ -56,10 +57,10 @@ impl Tool for SleepTool {
 
         let start = tokio::time::Instant::now();
         tokio::select! {
-            _ = sleep(Duration::from_secs(delay)) => {
+            () = sleep(Duration::from_secs(delay)) => {
                 Ok(ToolOutput::text(format!("Slept for {delay} seconds")))
             }
-            _ = ctx.cancelled() => {
+            () = ctx.cancelled() => {
                 let elapsed = start.elapsed().as_secs();
                 Ok(ToolOutput::text(format!(
                     "Sleep cancelled after {elapsed} seconds (planned {delay} seconds, not completed)"

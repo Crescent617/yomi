@@ -10,39 +10,41 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 pub mod command;
+pub mod goal;
 pub mod inline;
 pub mod registry;
 pub mod skill;
 
 pub use command::CommandHookHandler;
+pub use goal::GoalPreStopHandler;
 pub use inline::InlineHookHandler;
 pub use registry::HookRegistry;
 pub use skill::SkillHookHandler;
 
 /// Lifecycle events that can trigger hooks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub enum HookEvent {
     /// Before a tool is executed (after permission check).
+    #[default]
     PreToolUse,
     /// After a tool has executed, before result is committed to message buffer.
     PostToolUse,
+    /// When the agent is about to stop after a streaming turn (no tool calls).
+    /// Hook can decide to continue the session by injecting steer messages.
+    PreStop,
 }
 
 /// Context passed to every hook handler.
 ///
 /// Serialized as camelCase to match Claude Code / Codex hook conventions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookContext {
     pub event: HookEvent,
     pub session_id: String,
-    pub agent_id: String,
-    /// Tool name (e.g. "Bash", "Write", "Edit").
-    pub tool_name: String,
-    /// Tool call id.
-    pub tool_call_id: String,
-    /// Current working directory.
+    pub tool_name: Option<String>,
+    pub tool_call_id: Option<String>,
     pub cwd: PathBuf,
     /// Tool input arguments (`PreToolUse` only).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,8 +52,6 @@ pub struct HookContext {
     /// Tool execution result (`PostToolUse` only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_output: Option<HookToolOutput>,
-    /// Number of messages in the buffer at trigger time.
-    pub messages_count: usize,
 }
 
 /// Serializable subset of `ToolOutput` for hooks.
@@ -126,6 +126,18 @@ pub struct PostToolDecision {
     pub context: Option<String>,
 }
 
+/// Decision returned by a `PreStop` hook.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreStopDecision {
+    /// If true, the agent continues to another streaming turn instead of stopping.
+    #[serde(default = "default_true")]
+    pub continue_session: bool,
+    /// Extra steer messages injected into the conversation before the next streaming turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steer_blocks: Option<Vec<crate::types::ContentBlock>>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -136,6 +148,7 @@ fn default_true() -> bool {
 pub enum HookResult {
     PreTool(PreToolDecision),
     PostTool(PostToolDecision),
+    PreStop(PreStopDecision),
     /// No decision; passthrough.
     Passthrough,
 }
@@ -149,10 +162,6 @@ pub trait HookHandler: Send + Sync {
     /// Which events this handler cares about.
     fn events(&self) -> &[HookEvent];
 
-    /// Whether this handler matches the given context.
-    /// The registry only calls `run` when this returns true.
-    fn matches(&self, ctx: &HookContext) -> bool;
-
     /// Execute the hook.
     async fn run(&self, ctx: &HookContext) -> crate::types::Result<HookResult>;
 }
@@ -161,46 +170,48 @@ impl HookContext {
     /// Build a `PreToolUse` context.
     pub fn pre_tool(
         session_id: impl Into<String>,
-        agent_id: impl Into<String>,
         tool_name: impl Into<String>,
         tool_call_id: impl Into<String>,
         cwd: impl Into<PathBuf>,
         tool_input: Value,
-        messages_count: usize,
     ) -> Self {
         Self {
             event: HookEvent::PreToolUse,
             session_id: session_id.into(),
-            agent_id: agent_id.into(),
-            tool_name: tool_name.into(),
-            tool_call_id: tool_call_id.into(),
+            tool_name: Some(tool_name.into()),
+            tool_call_id: Some(tool_call_id.into()),
             cwd: cwd.into(),
             tool_input: Some(tool_input),
-            tool_output: None,
-            messages_count,
+            ..Default::default()
         }
     }
 
     /// Build a `PostToolUse` context.
     pub fn post_tool(
         session_id: impl Into<String>,
-        agent_id: impl Into<String>,
         tool_name: impl Into<String>,
         tool_call_id: impl Into<String>,
         cwd: impl Into<PathBuf>,
         tool_output: &ToolOutput,
-        messages_count: usize,
     ) -> Self {
         Self {
             event: HookEvent::PostToolUse,
             session_id: session_id.into(),
-            agent_id: agent_id.into(),
-            tool_name: tool_name.into(),
-            tool_call_id: tool_call_id.into(),
+            tool_name: Some(tool_name.into()),
+            tool_call_id: Some(tool_call_id.into()),
             cwd: cwd.into(),
-            tool_input: None,
             tool_output: Some(tool_output.into()),
-            messages_count,
+            ..Default::default()
+        }
+    }
+
+    /// Build a `PreStop` context.
+    pub fn pre_stop(session_id: impl Into<String>, cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            event: HookEvent::PreStop,
+            session_id: session_id.into(),
+            cwd: cwd.into(),
+            ..Default::default()
         }
     }
 
@@ -210,13 +221,15 @@ impl HookContext {
     /// In addition to the raw tool name, known aliases are checked so that
     /// a pattern like `"Bash"` also matches Yomi's `shell` tool.
     pub fn tool_matches(&self, pattern: &regex::Regex) -> bool {
-        // 1. Match the raw Yomi tool name.
-        if pattern.is_match(&self.tool_name) {
-            return true;
+        if let Some(ref name) = self.tool_name {
+            if pattern.is_match(name) {
+                return true;
+            }
+            let alias = tool_alias(&name.to_lowercase());
+            !alias.is_empty() && pattern.is_match(alias)
+        } else {
+            false
         }
-        // 2. Match via alias (e.g. "bash" for "shell").
-        let alias = tool_alias(&self.tool_name.to_lowercase());
-        !alias.is_empty() && pattern.is_match(alias)
     }
 }
 
@@ -300,13 +313,15 @@ pub fn build_registry(entries: &[HookEntry], allow_commands: bool) -> HookRegist
     registry
 }
 
-/// Build a `HookRegistry` from a shared base (config hooks) plus skill-level hooks.
+/// Build a `HookRegistry` from a shared base (config hooks) plus skill-level hooks
+/// and an optional goal store.
 ///
 /// This is used both at agent spawn time and during hot-reload so the logic stays in one place.
 pub async fn build_hook_registry_with_skills(
     base: Option<&tokio::sync::RwLock<HookRegistry>>,
     skills: &[std::sync::Arc<crate::skill::Skill>],
     allow_commands: bool,
+    goal_store: Option<std::sync::Arc<dyn crate::goal::GoalStore>>,
 ) -> HookRegistry {
     let mut registry = match base {
         Some(arc) => arc.read().await.clone(),
@@ -326,6 +341,11 @@ pub async fn build_hook_registry_with_skills(
                 }
             }
         }
+    }
+
+    // Register the built-in goal pre-stop hook if a goal store is available.
+    if let Some(store) = goal_store {
+        registry.register(std::sync::Arc::new(GoalPreStopHandler::new(store)));
     }
 
     registry

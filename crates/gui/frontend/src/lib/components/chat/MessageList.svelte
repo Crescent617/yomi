@@ -1,7 +1,6 @@
 <script lang="ts">
   import { getActiveSession, getDisplayMessages } from "../../state.svelte";
   import { ArrowDown } from "lucide-svelte";
-  import * as api from "../../api";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SystemBubble from "./SystemBubble.svelte";
@@ -164,7 +163,7 @@
             </div>
           {:else}
             <ActionGroup messages={item.messages} isStreaming={item.isStreaming} />
-            {#each item.messages as m}
+            {#each item.messages as m (m.id)}
               {#if m.content?.trim()}
                 <div class="w-full space-y-1 mt-1">
                   <TextBlock content={m.content} isStreaming={item.isStreaming} />

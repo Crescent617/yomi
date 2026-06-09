@@ -52,11 +52,10 @@ impl HookHandler for InlineHookHandler {
         &self.events
     }
 
-    fn matches(&self, ctx: &HookContext) -> bool {
-        ctx.tool_matches(&self.matcher)
-    }
-
     async fn run(&self, ctx: &HookContext) -> Result<HookResult> {
+        if !ctx.tool_matches(&self.matcher) {
+            return Ok(HookResult::Passthrough);
+        }
         match (&self.rule, ctx.event) {
             (InlineRule::Block { patterns, message }, HookEvent::PreToolUse) => {
                 let input_json = ctx

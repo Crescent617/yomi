@@ -218,8 +218,24 @@ export async function startGoal(sessionId: string, description: string): Promise
   return invokeCmd("start_goal", { sessionId, description });
 }
 
+export async function getGoal(sessionId: string): Promise<{ description: string; status: string } | null> {
+  return invokeCmd("get_goal", { sessionId });
+}
+
 export async function stopGoal(sessionId: string): Promise<void> {
   return invokeCmd("stop_goal", { sessionId });
+}
+
+export async function pauseGoal(sessionId: string): Promise<void> {
+  return invokeCmd("pause_goal", { sessionId });
+}
+
+export async function resumeGoal(sessionId: string): Promise<void> {
+  return invokeCmd("resume_goal", { sessionId });
+}
+
+export async function editGoal(sessionId: string, description: string): Promise<void> {
+  return invokeCmd("edit_goal", { sessionId, description });
 }
 
 export async function sendSteer(sessionId: string, blocks: TaggedContentBlock[]): Promise<void> {
