@@ -173,6 +173,11 @@ impl ToolRegistryFactory {
             }
         }
 
+        // Register update_goal tool if goal store is available
+        if let Some(ref store) = config.shared.goal_store {
+            registry.register(crate::tools::UpdateGoalTool::new(Arc::clone(store)));
+        }
+
         // Register Sleep tool if enabled
         if config.enable_sleep {
             registry.register(SleepTool::new());

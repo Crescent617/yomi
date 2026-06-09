@@ -2,6 +2,7 @@ use super::state::GoalState;
 use crate::types::{KernelError, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
+use tokio::sync::Mutex;
 
 /// Storage for goal state persistence
 ///
@@ -23,15 +24,17 @@ pub trait GoalStore: Send + Sync {
 ///
 /// Stores goals as `{data_dir}/goals/{session_id}.json`.
 /// This mirrors the pattern used by `JsonTodoStore`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct JsonGoalStore {
     data_dir: PathBuf,
+    lock: Mutex<()>,
 }
 
 impl JsonGoalStore {
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
         Self {
             data_dir: data_dir.into(),
+            lock: Mutex::new(()),
         }
     }
 
@@ -54,6 +57,7 @@ impl JsonGoalStore {
 #[async_trait]
 impl GoalStore for JsonGoalStore {
     async fn save(&self, session_id: &str, state: &GoalState) -> Result<()> {
+        let _guard = self.lock.lock().await;
         self.ensure_dir().await?;
         let path = self.path(session_id);
         let json =
@@ -65,6 +69,7 @@ impl GoalStore for JsonGoalStore {
     }
 
     async fn load(&self, session_id: &str) -> Result<Option<GoalState>> {
+        let _guard = self.lock.lock().await;
         let path = self.path(session_id);
         if !path.exists() {
             return Ok(None);
@@ -78,6 +83,7 @@ impl GoalStore for JsonGoalStore {
     }
 
     async fn delete(&self, session_id: &str) -> Result<()> {
+        let _guard = self.lock.lock().await;
         let path = self.path(session_id);
         if path.exists() {
             tokio::fs::remove_file(&path)
@@ -103,7 +109,6 @@ mod tests {
 
         let loaded = store.load("sess-1").await.unwrap().unwrap();
         assert_eq!(loaded.description, "do something");
-        assert!(loaded.recent_signatures.is_empty()); // not persisted
     }
 
     #[tokio::test]

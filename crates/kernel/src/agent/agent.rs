@@ -25,6 +25,8 @@ pub enum AgentInput {
         /// Generation counter at send time; lower values are stale (cancelled before send)
         generation: u64,
     },
+    /// Continue the agent from Idle to Streaming (used by goal auto-start)
+    Continue,
     /// Background task completion
     TaskResult {
         task_id: String,
@@ -36,8 +38,6 @@ pub enum AgentInput {
     Shutdown,
     /// Force compaction of message buffer
     Compact,
-    /// Dynamically set or clear goal context
-    SetGoal(Option<crate::goal::GoalContext>),
     /// Dynamically refresh skills list, system prompt, and hooks
     RefreshSkills(Vec<Arc<crate::skill::Skill>>),
     /// Rewind to a specific checkpoint
@@ -69,7 +69,7 @@ impl Clone for AgentInput {
             },
             Self::Shutdown => Self::Shutdown,
             Self::Compact => Self::Compact,
-            Self::SetGoal(goal) => Self::SetGoal(goal.clone()),
+            Self::Continue => Self::Continue,
             Self::RefreshSkills(skills) => Self::RefreshSkills(skills.clone()),
             // Rewind cannot be cloned due to oneshot sender, panic if attempted
             Self::Rewind { .. } => panic!("Rewind input cannot be cloned"),
@@ -95,9 +95,7 @@ pub struct Agent {
     working_dir: std::path::PathBuf,
     /// Generation counter: inputs with lower generation are stale (cancelled before send)
     input_stale_since: Arc<AtomicU64>,
-    /// Optional goal context (state + store) for autonomous goal-mode execution
-    goal_ctx: Option<crate::goal::GoalContext>,
-    /// Hook registry for `PreToolUse` / `PostToolUse` lifecycle hooks
+    /// Hook registry for `PreToolUse` / `PostToolUse` / `PreStop` lifecycle hooks
     hook_registry: crate::hooks::HookRegistry,
     /// Checkpoint store for persistence
     checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
@@ -141,23 +139,6 @@ impl Agent {
             system_prompt
         );
         let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
-
-        // Insert the goal description as a user message so it participates in
-        // conversation history (preserves prompt-cache hits on the system prefix).
-        // Skip if the history already contains the goal marker (resume case).
-        if let Some(ref goal_ctx) = args.goal_ctx {
-            let already_present = args.history.iter().any(|m| {
-                m.role == Role::User
-                    && m.content.iter().any(|b| {
-                        b.as_text()
-                            .is_some_and(|t| t.contains(&goal_ctx.completion_marker))
-                    })
-            });
-            if !already_present {
-                messages.push(Arc::new(Message::user(goal_ctx.to_user_message())));
-            }
-        }
-
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
         let message_buffer = MessageBuffer::from_arc_messages(&messages);
 
@@ -187,6 +168,7 @@ impl Agent {
             shared.hook_registry.as_deref(),
             &args.skills,
             shared.allow_command_hooks,
+            shared.goal_store.clone(),
         )
         .await;
 
@@ -228,7 +210,6 @@ impl Agent {
             permission_checker,
             working_dir: args.working_dir,
             input_stale_since: Arc::clone(&input_stale_since),
-            goal_ctx: args.goal_ctx,
             hook_registry,
             checkpoint_store,
             data_dir,
@@ -304,52 +285,49 @@ impl Agent {
                 && self.context.iteration_count() >= self.max_iterations
                 && self.context.current_state() == AgentState::Streaming
             {
-                tracing::warn!(
-                    "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
-                    self.id
-                );
-                // Notify TUI that max iterations reached
-                if let Err(e) = self
-                    .event_tx
-                    .try_send(Event::Agent(AgentEvent::Lifecycle {
+                let skip_max_iterations = match &self.shared.goal_store {
+                    Some(store) => match store.load(&self.session_id).await {
+                        Ok(Some(goal)) => matches!(goal.status, crate::goal::GoalStatus::Active),
+                        _ => false,
+                    },
+                    None => false,
+                };
+                if !skip_max_iterations {
+                    tracing::warn!(
+                        "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
+                        self.id
+                    );
+                    // Notify TUI that max iterations reached
+                    if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
                         state: AgentStatus::Stopped {
                             reason: StopReason::MaxIterations {
                                 reached: self.max_iterations,
                             },
                         },
-                    }))
-                {
-                    tracing::warn!("Failed to send max iterations event: {}", e);
+                    })) {
+                        tracing::warn!("Failed to send max iterations event: {}", e);
+                    }
+                    self.context.transition_to(AgentState::Idle);
+                    continue;
                 }
-                self.context.transition_to(AgentState::Idle);
-                continue;
             }
 
             // Note: cancel is handled during streaming via select!, not here
             let result = match state {
                 AgentState::Idle => {
                     self.context.reset_iteration();
-                    if self.goal_ctx.is_some() {
-                        tracing::debug!("Agent {} in goal mode, handling idle", self.id);
-                        self.handle_goal_idle().await
-                    } else {
-                        tracing::debug!("Agent {} waiting for input", self.id);
-                        self.handle_wait_for_input().await
-                    }
+                    self.handle_idle().await
                 }
                 AgentState::Streaming => {
                     // Start new turn when entering Streaming
                     self.start_turn_if_needed().await;
                     tracing::debug!("Agent {} starting streaming", self.id);
                     // Notify UI that streaming has started
-                    if let Err(e) = self
-                        .event_tx
-                        .try_send(Event::Agent(AgentEvent::Lifecycle {
-                            agent_id: self.id.clone(),
-                            state: AgentStatus::Running,
-                        }))
-                    {
+                    if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                        agent_id: self.id.clone(),
+                        state: AgentStatus::Running,
+                    })) {
                         tracing::warn!("Failed to send streaming start event: {}", e);
                     }
                     self.handle_streaming_with_retry().await
@@ -528,11 +506,7 @@ impl Agent {
         message_id: MessageId,
         target: crate::checkpoint::RewindTarget,
         result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
-        clear_goal: bool,
     ) -> Result<(), AgentError> {
-        if clear_goal {
-            self.goal_ctx = None;
-        }
         if let Some(turn) = self.current_turn.take() {
             if let Err(e) = turn.cancel().await {
                 tracing::warn!("Failed to cancel turn on rewind: {}", e);
@@ -541,7 +515,9 @@ impl Agent {
 
         let truncated = self.truncate_at(&message_id);
         if !truncated {
-            if let Err(e) = result_tx.send(Err(format!("Message {} not found", message_id.as_str()))) {
+            if let Err(e) =
+                result_tx.send(Err(format!("Message {} not found", message_id.as_str())))
+            {
                 tracing::warn!("Failed to send rewind error result: {:?}", e);
             }
             return Ok(());
@@ -594,13 +570,21 @@ impl Agent {
         Ok(())
     }
 
-    async fn handle_wait_for_input(&mut self) -> Result<(), AgentError> {
+    /// Unified idle handler.
+    ///
+    /// Drains pending external inputs. If an active goal exists and no user input
+    /// is pending, auto-continue by injecting the goal continuation prompt.
+    /// Handle idle state: block until a user input arrives.
+    async fn handle_idle(&mut self) -> Result<(), AgentError> {
+        if self.cancel_token.is_cancelled() {
+            self.cancel_token.reset_if_cancelled();
+            return Ok(());
+        }
         match self.input_rx.recv().await {
             Some(AgentInput::User {
                 content,
                 generation,
             }) => {
-                // Check if this input was sent before the last cancellation
                 let current_gen = self.input_stale_since.load(Ordering::Relaxed);
                 if generation < current_gen {
                     tracing::info!(
@@ -626,8 +610,6 @@ impl Agent {
                 req_id,
                 approved: _,
             }) => {
-                // PermissionResponse is now handled via PermissionResponder
-                // Kept here for backwards compatibility
                 tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
                 Ok(())
             }
@@ -646,19 +628,11 @@ impl Agent {
                 if let Err(e) = self.force_full_compact().await {
                     tracing::warn!("Agent {} force_full_compact failed: {}", self.id, e);
                 }
-                // User-initiated compact doesn't auto-continue, stay in WaitingForInput
                 Ok(())
             }
-            Some(AgentInput::SetGoal(goal)) => {
-                if goal.is_some() {
-                    tracing::info!("Agent {} goal mode activated", self.id);
-                } else {
-                    tracing::info!("Agent {} goal mode deactivated", self.id);
-                }
-                self.goal_ctx = goal;
-                // If a goal was set and we are in Idle, the caller (start_loop)
-                // will immediately re-evaluate and trigger auto-continue on the
-                // next iteration because goal_ctx.is_some() is true.
+            Some(AgentInput::Continue) => {
+                self.cancel_token.reset_if_cancelled();
+                self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
             Some(AgentInput::RefreshSkills(skills)) => {
@@ -676,166 +650,19 @@ impl Agent {
                 result_tx,
             }) => {
                 tracing::info!(
-                    "Agent {} received rewind request to message {}",
+                    "Agent {} received rewind to {}",
                     self.id,
                     message_id.as_str()
                 );
-                self.process_rewind(message_id, target, result_tx, false)
-                    .await
+                self.process_rewind(message_id, target, result_tx).await?;
+                Ok(())
             }
             None => {
+                tracing::info!("Agent {} input channel closed (clean shutdown)", self.id);
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
         }
-    }
-
-    /// Goal-mode idle handler.
-    ///
-    /// Drains pending external inputs. User messages are treated as interventions
-    /// (goal stays active). If nothing is pending, auto-continue.
-    async fn handle_goal_idle(&mut self) -> Result<(), AgentError> {
-        while let Ok(input) = self.input_rx.try_recv() {
-            match input {
-                AgentInput::Shutdown => {
-                    self.context.transition_to(AgentState::Closed);
-                    return Ok(());
-                }
-                AgentInput::SetGoal(None) => {
-                    self.goal_ctx = None;
-                    return Ok(());
-                }
-                AgentInput::SetGoal(Some(state)) => {
-                    self.goal_ctx = Some(state);
-                }
-                AgentInput::RefreshSkills(skills) => {
-                    tracing::info!(
-                        "Agent {} refreshing {} skills in goal idle",
-                        self.id,
-                        skills.len()
-                    );
-                    self.apply_skills_refresh(skills).await;
-                }
-                AgentInput::User {
-                    content,
-                    generation,
-                } => {
-                    if generation >= self.input_stale_since.load(Ordering::Relaxed) {
-                        return self.inject_user_message(content).await;
-                    }
-                }
-                AgentInput::TaskResult { content, .. } => {
-                    self.cancel_token.reset_if_cancelled();
-                    let msg = Message::with_blocks(Role::User, content);
-                    self.persist_message(&msg).await;
-                    self.message_buffer.push(msg);
-                    self.context.transition_to(AgentState::Streaming);
-                    return Ok(());
-                }
-                AgentInput::Compact => {
-                    if let Err(e) = self.force_full_compact().await {
-                        tracing::warn!("Agent {} force_full_compact in goal idle failed: {}", self.id, e);
-                    }
-                }
-                AgentInput::Rewind {
-                    message_id,
-                    target,
-                    result_tx,
-                } => {
-                    tracing::info!(
-                        "Agent {} received rewind request in goal idle to message {}",
-                        self.id,
-                        message_id.as_str()
-                    );
-                    self.process_rewind(message_id, target, result_tx, true)
-                        .await?;
-                    return Ok(());
-                }
-                other => {
-                    tracing::debug!("Agent {} ignored input in goal idle: {:?}", self.id, other);
-                }
-            }
-        }
-
-        if self.cancel_token.is_cancelled() {
-            tracing::info!("Agent {} goal mode interrupted by cancel", self.id);
-            self.goal_ctx = None;
-            self.cancel_token.reset_if_cancelled();
-            return Ok(());
-        }
-
-        let Some(ref mut goal) = self.goal_ctx else {
-            return self.handle_wait_for_input().await;
-        };
-
-        if goal.is_doom_loop() {
-            tracing::warn!("Agent {} detected doom loop, stopping goal", self.id);
-            goal.mark_fail(crate::goal::GoalFailureReason::DoomLoop)
-                .await;
-            if let Err(e) = self
-                .event_tx
-                .try_send(Event::Agent(AgentEvent::Lifecycle {
-                    agent_id: self.id.clone(),
-                    state: AgentStatus::Stopped {
-                        reason: StopReason::Failed {
-                            error: "Doom loop detected".into(),
-                        },
-                    },
-                }))
-            {
-                tracing::warn!("Failed to send doom loop event: {}", e);
-            }
-            self.goal_ctx = None;
-            return Ok(());
-        }
-
-        if let Some(max) = goal.max_iterations {
-            if goal.iteration_count >= max {
-                tracing::warn!(
-                    "Agent {} reached max iterations ({}) for goal, stopping",
-                    self.id,
-                    max
-                );
-                goal.mark_fail(crate::goal::GoalFailureReason::MaxIterations)
-                    .await;
-                if let Err(e) = self
-                    .event_tx
-                    .try_send(Event::Agent(AgentEvent::Lifecycle {
-                        agent_id: self.id.clone(),
-                        state: AgentStatus::Stopped {
-                            reason: StopReason::MaxIterations {
-                                reached: goal.iteration_count,
-                            },
-                        },
-                    }))
-                {
-                    tracing::warn!("Failed to send goal max iterations event: {}", e);
-                }
-                self.goal_ctx = None;
-                return Ok(());
-            }
-        }
-
-        if goal.clear_context {
-            let system = self
-                .message_buffer
-                .messages()
-                .iter()
-                .find(|m| m.role == Role::System)
-                .cloned();
-            self.message_buffer.messages_mut().clear();
-            if let Some(sys) = system {
-                self.message_buffer.push((*sys).clone());
-            }
-            self.message_buffer
-                .push(Message::user(goal.to_user_message()));
-        }
-
-        let msg = Message::user(goal.build_continue_prompt());
-        self.persist_message(&msg).await;
-        self.message_buffer.push(msg);
-        self.context.transition_to(AgentState::Streaming);
-        Ok(())
     }
 
     /// Apply a dynamic skills refresh: rebuild system prompt and hook registry.
@@ -875,6 +702,7 @@ impl Agent {
             self.shared.hook_registry.as_deref(),
             &skills,
             self.shared.allow_command_hooks,
+            self.shared.goal_store.clone(),
         )
         .await;
         tracing::info!("Agent {} refreshed {} skill(s)", self.id, skills.len());
@@ -956,14 +784,11 @@ impl Agent {
         );
 
         let assistant_msg_id = MessageId::new();
-        if let Err(e) = self
-            .event_tx
-            .try_send(Event::Model(ModelEvent::Request {
-                agent_id: self.id.clone(),
-                message_id: assistant_msg_id.clone(),
-                message_count: self.message_buffer.len(),
-            }))
-        {
+        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Request {
+            agent_id: self.id.clone(),
+            message_id: assistant_msg_id.clone(),
+            message_count: self.message_buffer.len(),
+        })) {
             tracing::warn!("Failed to send model request event: {}", e);
         }
 
@@ -1389,45 +1214,47 @@ impl Agent {
                 tool_count
             );
             self.context.transition_to(AgentState::ExecutingTool);
-        } else {
-            // Check goal completion if a goal is active
-            if let Some(ref mut goal) = self.goal_ctx {
-                if let Some(last_msg) = self.message_buffer.messages().last() {
-                    if goal.check_completion(last_msg) {
-                        tracing::info!("Agent {} goal completed", self.id);
-                        goal.mark_complete().await;
-                        if let Err(e) =
-                            self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
-                                agent_id: self.id.clone(),
-                                state: AgentStatus::Stopped {
-                                    reason: StopReason::Completed {
-                                        finish_reason: None,
-                                    },
-                                },
-                            }))
-                        {
-                            tracing::warn!(
-                                "Agent {} failed to send goal completion event: {}",
-                                self.id,
-                                e
-                            );
-                        }
-                        self.goal_ctx = None;
-                        self.context.transition_to(AgentState::Idle);
-                        return Ok(());
-                    }
-                    goal.record_turn_and_save(last_msg).await;
+            return Ok(());
+        }
+
+        // No tool calls: check PreStop hooks for goal auto-continue
+        let ctx = crate::hooks::HookContext::pre_stop(&self.session_id, &self.data_dir);
+        let result = self.hook_registry.run_pre_stop(&ctx).await;
+
+        if let crate::hooks::HookResult::PreStop(decision) = result {
+            if decision.continue_session {
+                let steer_blocks = decision.steer_blocks.unwrap_or(Vec::new());
+                if !steer_blocks.is_empty() {
+                    let msg = Message::with_blocks(Role::User, steer_blocks);
+                    self.persist_message(&msg).await;
+                    self.message_buffer.push(msg);
+                }
+                tracing::info!(
+                    "Agent {} PreStop hooks decided to continue session, transitioning to Streaming",
+                    self.id
+                );
+                self.context.transition_to(AgentState::Streaming);
+                return Ok(());
+            }
+        }
+
+        // No hook or hook says stop
+        // If a goal exists and is not Active, emit GoalUpdated so frontends know
+        if let Some(ref store) = self.shared.goal_store {
+            if let Ok(Some(goal)) = store.load(&self.session_id).await {
+                if !matches!(goal.status, crate::goal::GoalStatus::Active) {
+                    let _ = self.event_tx.try_send(Event::System(
+                        crate::event::SystemEvent::GoalUpdated {
+                            session_id: crate::types::SessionId(self.session_id.clone()),
+                            description: goal.description.clone(),
+                            status: goal.status.as_str().to_string(),
+                        },
+                    ));
                 }
             }
-
-            tracing::debug!(
-                "Agent {} streaming complete, waiting for next input",
-                self.id
-            );
-            // Note: finish_turn() will be called automatically when transitioning to Idle
-            self.emit_stopped_completed(finish_reason);
-            self.context.transition_to(AgentState::Idle);
         }
+        self.emit_stopped_completed(finish_reason);
+        self.context.transition_to(AgentState::Idle);
         Ok(())
     }
 
@@ -1455,16 +1282,13 @@ impl Agent {
         for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let message_id = tool_message_ids[&call.id].clone();
-            if let Err(e) = self
-                .event_tx
-                .try_send(Event::Tool(ToolEvent::Start {
-                    agent_id: self.id.clone(),
-                    message_id,
-                    tool_id: call.id.clone(),
-                    tool_name: call.name.clone(),
-                    arguments: args_str,
-                }))
-            {
+            if let Err(e) = self.event_tx.try_send(Event::Tool(ToolEvent::Start {
+                agent_id: self.id.clone(),
+                message_id,
+                tool_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                arguments: args_str,
+            })) {
                 tracing::warn!("Failed to send tool start event: {}", e);
             }
         }
@@ -1513,7 +1337,6 @@ impl Agent {
             &self.session_id,
             &self.working_dir,
             &self.hook_registry,
-            self.message_buffer.len(),
             approved_calls,
             &mut denied_results,
         )
@@ -1553,7 +1376,6 @@ impl Agent {
             &self.session_id,
             &self.working_dir,
             &self.hook_registry,
-            self.message_buffer.len(),
             results,
             &tool_calls,
         )
@@ -1582,18 +1404,18 @@ impl Agent {
             self.message_buffer.push(msg);
         }
 
-        if continue_session {
-            self.context.transition_to(AgentState::Streaming);
-        } else {
+        if !continue_session {
             tracing::info!(
                 "Agent {} stopping after tool execution (hook requested)",
                 self.id
             );
-            // Note: We don't finish_turn() here because the turn is not truly complete.
-            // The turn ends when we transition to Idle and wait for next user input.
-            // finish_turn() will be called when Streaming completes (see handle_streaming).
             self.context.transition_to(AgentState::Idle);
+            return Ok(());
         }
+
+        // PostToolUse says continue → always transition back to Streaming.
+        // The PreStop hook (goal check) runs at the end of streaming only.
+        self.context.transition_to(AgentState::Streaming);
         Ok(())
     }
 

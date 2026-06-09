@@ -31,13 +31,28 @@ pub struct TokenUsageInfo {
 }
 
 #[derive(serde::Serialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ContentBlockInfo {
-    Text { text: String },
-    Thinking { thinking: String, signature: Option<String> },
-    RedactedThinking { data: String },
-    ImageUrl { image_url: ImageUrlInfo },
-    Audio { audio: AudioDataInfo },
+    Text {
+        text: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: String,
+    },
+    ImageUrl {
+        image_url: ImageUrlInfo,
+    },
+    Audio {
+        audio: AudioDataInfo,
+    },
 }
 
 #[derive(serde::Serialize)]
@@ -55,13 +70,28 @@ pub struct AudioDataInfo {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ContentBlockInput {
-    Text { text: String },
-    Thinking { thinking: String, signature: Option<String> },
-    RedactedThinking { data: String },
-    ImageUrl { image_url: ImageUrlInput },
-    Audio { audio: AudioDataInput },
+    Text {
+        text: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: String,
+    },
+    ImageUrl {
+        image_url: ImageUrlInput,
+    },
+    Audio {
+        audio: AudioDataInput,
+    },
 }
 
 #[derive(serde::Deserialize)]
@@ -81,7 +111,10 @@ pub struct AudioDataInput {
 fn content_block_info(cb: &ContentBlock) -> ContentBlockInfo {
     match cb {
         ContentBlock::Text { text } => ContentBlockInfo::Text { text: text.clone() },
-        ContentBlock::Thinking { thinking, signature } => ContentBlockInfo::Thinking {
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => ContentBlockInfo::Thinking {
             thinking: thinking.clone(),
             signature: signature.clone(),
         },
@@ -106,9 +139,13 @@ fn content_block_info(cb: &ContentBlock) -> ContentBlockInfo {
 fn content_block_input(cb: ContentBlockInput) -> ContentBlock {
     match cb {
         ContentBlockInput::Text { text } => ContentBlock::Text { text },
-        ContentBlockInput::Thinking { thinking, signature } => {
-            ContentBlock::Thinking { thinking, signature }
-        }
+        ContentBlockInput::Thinking {
+            thinking,
+            signature,
+        } => ContentBlock::Thinking {
+            thinking,
+            signature,
+        },
         ContentBlockInput::RedactedThinking { data } => ContentBlock::RedactedThinking { data },
         ContentBlockInput::ImageUrl { image_url } => ContentBlock::ImageUrl {
             image_url: kernel::types::ImageUrl {
@@ -229,7 +266,10 @@ pub async fn subscribe(
             // SystemEvent::Rewound contains raw Message objects which are still snake_case.
             // Convert them to MessageInfo so the frontend receives camelCase.
             if let Event::System(SystemEvent::Rewound { ref messages, .. }) = event {
-                if let Some(msgs) = event_value.pointer_mut("/system/rewound/messages").and_then(|v| v.as_array_mut()) {
+                if let Some(msgs) = event_value
+                    .pointer_mut("/system/rewound/messages")
+                    .and_then(|v| v.as_array_mut())
+                {
                     let converted: Vec<serde_json::Value> = messages
                         .iter()
                         .map(|m| serde_json::to_value(message_info(m)).unwrap_or_default())
@@ -241,7 +281,10 @@ pub async fn subscribe(
             // UserEvent::Message contains raw ContentBlock objects which are still snake_case.
             // Convert them to ContentBlockInfo so the frontend receives camelCase.
             if let Event::User(UserEvent::Message { ref content, .. }) = event {
-                if let Some(blocks) = event_value.pointer_mut("/user/message/content").and_then(|v| v.as_array_mut()) {
+                if let Some(blocks) = event_value
+                    .pointer_mut("/user/message/content")
+                    .and_then(|v| v.as_array_mut())
+                {
                     let converted: Vec<serde_json::Value> = content
                         .iter()
                         .map(|b| serde_json::to_value(content_block_info(b)).unwrap_or_default())
@@ -423,6 +466,27 @@ pub async fn set_permission_level(
 
 // ── Goal mode ────────────────────────────────────────────────────────────
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalInfo {
+    pub description: String,
+    pub status: String,
+}
+
+#[tauri::command]
+pub async fn get_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<GoalInfo>, GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    let goal = coord.get_goal(&sid).await.map_err(GuiError::kernel)?;
+    Ok(goal.map(|g| GoalInfo {
+        description: g.description,
+        status: format!("{:?}", g.status).to_lowercase(),
+    }))
+}
+
 #[tauri::command]
 pub async fn start_goal(
     state: State<'_, AppState>,
@@ -434,6 +498,37 @@ pub async fn start_goal(
     let goal_state = kernel::goal::GoalState::new(description);
     coord
         .start_goal(&sid, goal_state)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pause_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord.pause_goal(&sid).await.map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn resume_goal(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord.resume_goal(&sid).await.map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn edit_goal(
+    state: State<'_, AppState>,
+    session_id: String,
+    description: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .update_goal(&sid, description)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

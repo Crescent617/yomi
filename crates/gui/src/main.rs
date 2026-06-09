@@ -57,6 +57,10 @@ pub fn run() {
             commands::chat::get_todos,
             commands::chat::set_permission_level,
             commands::chat::start_goal,
+            commands::chat::pause_goal,
+            commands::chat::resume_goal,
+            commands::chat::edit_goal,
+            commands::chat::get_goal,
             commands::chat::rename_session,
             commands::chat::send_steer,
             commands::chat::stop_goal,
@@ -104,7 +108,7 @@ fn main() {
     run();
 }
 
-/// Initialise rolling-file logging to `~/.yomi/logs/app.log`.
+/// Initialise rolling-file logging to `~/.yomi/logs/app.log` **and stderr**.
 /// Falls back to stderr-only if the log directory cannot be created.
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let config_file = kernel::config::Config::discover_file();
@@ -150,15 +154,21 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true);
+
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(true)
+        .with_target(true);
+
     if tracing_subscriber::registry()
         .with(env_filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                .with_target(true)
-                .with_thread_ids(true),
-        )
+        .with(file_layer)
+        .with(stderr_layer)
         .try_init()
         .is_ok()
     {

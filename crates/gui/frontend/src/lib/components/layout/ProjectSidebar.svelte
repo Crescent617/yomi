@@ -235,10 +235,6 @@
     renamingSessionId = null;
   }
 
-  function formatShortId(id: string) {
-    return id.slice(-8);
-  }
-
   async function copySessionId(id: string) {
     try {
       await navigator.clipboard.writeText(id);

@@ -1,4 +1,6 @@
+<!-- eslint-disable svelte/no-dom-manipulating -->
 <script lang="ts">
+  /* eslint-disable svelte/no-dom-manipulating */
   import * as smd from "streaming-markdown";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } = $props();

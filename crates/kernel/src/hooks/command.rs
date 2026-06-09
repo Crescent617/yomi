@@ -57,11 +57,10 @@ impl HookHandler for CommandHookHandler {
         &self.events
     }
 
-    fn matches(&self, ctx: &HookContext) -> bool {
-        ctx.tool_matches(&self.matcher)
-    }
-
     async fn run(&self, ctx: &HookContext) -> Result<HookResult> {
+        if !ctx.tool_matches(&self.matcher) {
+            return Ok(HookResult::Passthrough);
+        }
         let input = serde_json::to_string(ctx)
             .map_err(|e| crate::types::KernelError::serde(e.to_string()))?;
 
@@ -181,6 +180,17 @@ impl HookHandler for CommandHookHandler {
                         }))
                     }
                 }
+                HookEvent::PreStop => {
+                    let reason = if trimmed.is_empty() {
+                        "Blocked by hook".to_string()
+                    } else {
+                        trimmed.to_string()
+                    };
+                    Ok(HookResult::PreStop(super::PreStopDecision {
+                        continue_session: false,
+                        steer_blocks: Some(vec![crate::types::ContentBlock::Text { text: reason }]),
+                    }))
+                }
             };
         }
 
@@ -216,6 +226,18 @@ impl HookHandler for CommandHookHandler {
                 } else {
                     Ok(HookResult::PostTool(super::PostToolDecision {
                         context: Some(trimmed.to_string()),
+                        ..Default::default()
+                    }))
+                }
+            }
+            HookEvent::PreStop => {
+                if let Ok(d) = serde_json::from_str::<super::PreStopDecision>(trimmed) {
+                    Ok(HookResult::PreStop(d))
+                } else {
+                    Ok(HookResult::PreStop(super::PreStopDecision {
+                        steer_blocks: Some(vec![crate::types::ContentBlock::Text {
+                            text: trimmed.to_string(),
+                        }]),
                         ..Default::default()
                     }))
                 }

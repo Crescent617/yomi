@@ -534,7 +534,7 @@ api_key = "sk-test"
 [agent.model.headers]
 "X-Custom-Key" = "my-value"
 "Authorization" = "Bearer override"
-""#;
+"#;
         let parsed: Config = toml::from_str(toml).unwrap();
         assert_eq!(
             parsed.agent.model.headers.get("X-Custom-Key"),

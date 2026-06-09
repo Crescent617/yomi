@@ -1,5 +1,5 @@
 use crate::agent::{AgentConfig, AgentShared, AgentState};
-use crate::app::session::{Session, SessionConfig};
+use crate::app::session::{Session, SessionConfig, normalize_session_title};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
@@ -276,9 +276,15 @@ impl Coordinator {
         self.project_store.update_name(id, &name).await
     }
 
-    /// Rename a session (update title in storage)
+    /// Rename a session (update title in storage, normalized: collapse whitespace, truncated to 20 chars).
     pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
-        self.session_store().await.update_title(id, &title).await
+        let title = normalize_session_title(&title);
+        self.session_store().await.update_title(id, &title).await?;
+        if let Some(session) = self.get_session(id) {
+            let session = session.read().await;
+            session.emit_title_updated(&title);
+        }
+        Ok(())
     }
 
     /// Delete a project (only if it has no sessions)
@@ -618,7 +624,7 @@ impl Coordinator {
     ) -> Result<()> {
         tracing::debug!("Sending steer to session {}", session_id.0);
         let session = self.require_session(session_id)?;
-        let result = session.read().await.send_steer(content).await;
+        let result = session.read().await.send_steer(content);
         if let Err(ref e) = result {
             tracing::error!("Failed to send steer to session {}: {}", session_id.0, e);
         }
@@ -727,6 +733,38 @@ impl Coordinator {
         let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
         session_guard.start_goal(state).await
+    }
+
+    /// Pause goal auto-continue for a session
+    pub async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session(session_id)?;
+        let mut session_guard = session.write().await;
+        session_guard.pause_goal().await
+    }
+
+    /// Resume goal auto-continue for a session
+    pub async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session(session_id)?;
+        let mut session_guard = session.write().await;
+        session_guard.resume_goal().await
+    }
+
+    /// Get current goal state for a session
+    pub async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
+        let session = self.require_session(session_id)?;
+        let session_guard = session.read().await;
+        session_guard.get_goal().await
+    }
+
+    /// Update an active goal's description (or create one if missing)
+    pub async fn update_goal(
+        &self,
+        session_id: &SessionId,
+        description: impl Into<String>,
+    ) -> Result<()> {
+        let session = self.require_session(session_id)?;
+        let mut session_guard = session.write().await;
+        session_guard.update_goal(description).await
     }
 
     /// Stop autonomous goal-mode for a session

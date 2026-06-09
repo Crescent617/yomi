@@ -83,6 +83,10 @@ pub trait CoordinatorApi: Send + Sync {
     ) -> Result<()>;
     async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()>;
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
+    async fn pause_goal(&self, session_id: &SessionId) -> Result<()>;
+    async fn resume_goal(&self, session_id: &SessionId) -> Result<()>;
+    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>>;
+    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()>;
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
@@ -239,6 +243,22 @@ impl CoordinatorApi for Coordinator {
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         self.start_goal(session_id, state).await
+    }
+
+    async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
+        self.pause_goal(session_id).await
+    }
+
+    async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
+        self.resume_goal(session_id).await
+    }
+
+    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
+        self.get_goal(session_id).await
+    }
+
+    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
+        self.update_goal(session_id, description).await
     }
 
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
@@ -967,6 +987,44 @@ impl CoordinatorApi for RemoteCoordinator {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
             cmd: ControlCommand::StartGoal(state),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::PauseGoal,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::ResumeGoal,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
+        let result = self
+            .call(RequestMethod::Command {
+                session_id: session_id.0.clone(),
+                cmd: ControlCommand::GetGoal,
+            })
+            .await?;
+        let goal: Option<crate::goal::GoalState> = serde_json::from_value(result)?;
+        Ok(goal)
+    }
+
+    async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::EditGoal { description },
         })
         .await?;
         Ok(())

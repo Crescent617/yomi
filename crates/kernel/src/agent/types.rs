@@ -40,8 +40,6 @@ pub struct AgentSpawnArgs {
     pub cancel_token: Option<super::CancelToken>,
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
-    /// Optional goal context (state + store) for autonomous goal-mode execution
-    pub goal_ctx: Option<crate::goal::GoalContext>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -57,7 +55,6 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
             .field("file_state_store", &self.file_state_store.is_some())
-            .field("goal_ctx", &self.goal_ctx.is_some())
             .finish()
     }
 }
@@ -76,7 +73,6 @@ impl AgentSpawnArgs {
             working_dir: std::path::PathBuf::new(),
             cancel_token: None,
             file_state_store: None,
-            goal_ctx: None,
         }
     }
 
@@ -144,13 +140,6 @@ impl AgentSpawnArgs {
         self.file_state_store = Some(store);
         self
     }
-
-    /// Set goal context for autonomous goal-mode execution
-    #[must_use]
-    pub fn with_goal_ctx(mut self, ctx: crate::goal::GoalContext) -> Self {
-        self.goal_ctx = Some(ctx);
-        self
-    }
 }
 
 impl Default for AgentConfig {
@@ -203,8 +192,9 @@ impl AgentState {
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
-            Self::Idle | Self::ExecutingTool => &[Self::Streaming, Self::Closed],
+            Self::Idle => &[Self::Streaming, Self::Closed],
             Self::Streaming => &[Self::ExecutingTool, Self::Idle],
+            Self::ExecutingTool => &[Self::Streaming, Self::Idle, Self::Closed],
             Self::Closed => &[],
         }
     }
@@ -249,6 +239,9 @@ impl AgentExecutionContext {
 
     pub fn transition_to(&self, new_state: AgentState) -> bool {
         let current = *self.inner.state_tx.borrow();
+        if current == new_state {
+            return true;
+        }
         if !current.can_transition_to(new_state) {
             tracing::warn!("Invalid state transition: {:?} -> {:?}", current, new_state);
             return false;
@@ -309,6 +302,8 @@ pub struct AgentShared {
     pub tool_blocklist: Vec<String>,
     /// Allow command hooks to execute (default false for security)
     pub allow_command_hooks: bool,
+    /// Optional goal store for autonomous goal-mode execution
+    pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
 }
 
 impl AgentShared {
@@ -378,6 +373,7 @@ impl AgentShared {
             hook_registry: None,
             tool_blocklist: Vec::new(),
             allow_command_hooks: false,
+            goal_store: None,
         }
     }
 
@@ -393,6 +389,7 @@ impl AgentShared {
             permission_state,
             file_state_store,
             checkpoint_store,
+            goal_store: self.goal_store.clone(),
             ..self.clone()
         }
     }
@@ -461,6 +458,10 @@ pub enum AgentError {
     #[error("Input channel closed")]
     ChannelClosed,
 
+    /// Steer channel is full (backpressure)
+    #[error("Steer channel full")]
+    ChannelFull,
+
     /// Stream task panicked
     #[error("Stream task panicked: {0}")]
     StreamTaskPanicked(String),
@@ -485,7 +486,7 @@ pub enum AgentError {
 impl AgentError {
     pub fn is_retryable(&self) -> bool {
         use AgentError::{
-            Cancelled, ChannelClosed, MaxIterationsExceeded, NoPermissionChecker,
+            Cancelled, ChannelClosed, ChannelFull, MaxIterationsExceeded, NoPermissionChecker,
             PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked,
         };
         match self {
@@ -495,6 +496,7 @@ impl AgentError {
             MaxIterationsExceeded { .. }
             | Cancelled
             | ChannelClosed
+            | ChannelFull
             | PermissionCheckFailed(_)
             | NoPermissionChecker
             | Serialization(_) => false,
@@ -528,6 +530,7 @@ mod tests {
     #[test]
     fn test_executing_tool_transitions() {
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
+        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Idle));
         assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
     }
 

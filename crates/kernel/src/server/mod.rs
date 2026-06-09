@@ -446,9 +446,7 @@ impl KernelServer {
                 let sid = SessionId(session_id);
                 rpc_body(
                     "command_failed",
-                    dispatch_command(&self.coordinator, &sid, cmd)
-                        .await
-                        .map(|()| serde_json::Value::Null),
+                    dispatch_command(&self.coordinator, &sid, cmd).await,
                 )
             }
             RequestMethod::Subscribe { session_id } => {
@@ -783,10 +781,13 @@ async fn dispatch_command(
     coordinator: &Coordinator,
     sid: &SessionId,
     cmd: crate::event::ControlCommand,
-) -> Result<()> {
+) -> Result<serde_json::Value> {
     use crate::event::ControlCommand;
     match cmd {
-        ControlCommand::Cancel => coordinator.cancel(sid).await?,
+        ControlCommand::Cancel => {
+            coordinator.cancel(sid).await?;
+            Ok(serde_json::Value::Null)
+        }
         ControlCommand::Response {
             req_id,
             approved,
@@ -795,6 +796,7 @@ async fn dispatch_command(
             coordinator
                 .send_permission_response(sid, &req_id, approved, remember)
                 .await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::AskUserResponse { req_id, answers } => {
             let response = crate::tools::AskUserResponse {
@@ -803,27 +805,49 @@ async fn dispatch_command(
             coordinator
                 .send_ask_user_response(sid, &req_id, response)
                 .await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::SetLevel(level) => {
             coordinator.set_permission_level(sid, level).await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::Compact => {
             coordinator.compact_session(sid).await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::StartGoal(state) => {
             coordinator.start_goal(sid, state).await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::StopGoal => {
             coordinator.stop_goal(sid).await?;
+            Ok(serde_json::Value::Null)
+        }
+        ControlCommand::PauseGoal => {
+            coordinator.pause_goal(sid).await?;
+            Ok(serde_json::Value::Null)
+        }
+        ControlCommand::ResumeGoal => {
+            coordinator.resume_goal(sid).await?;
+            Ok(serde_json::Value::Null)
+        }
+        ControlCommand::EditGoal { description } => {
+            coordinator.update_goal(sid, description).await?;
+            Ok(serde_json::Value::Null)
+        }
+        ControlCommand::GetGoal => {
+            let goal = coordinator.get_goal(sid).await?;
+            Ok(serde_json::to_value(goal)?)
         }
         ControlCommand::Rewind { message_id, target } => {
             coordinator.rewind_session(sid, message_id, target).await?;
+            Ok(serde_json::Value::Null)
         }
         ControlCommand::Steer { content } => {
             coordinator.send_steer(sid, content).await?;
+            Ok(serde_json::Value::Null)
         }
     }
-    Ok(())
 }
 
 fn rpc_body<T: serde::Serialize>(

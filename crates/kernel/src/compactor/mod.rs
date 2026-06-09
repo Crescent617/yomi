@@ -301,7 +301,12 @@ impl Compactor {
             }
             // Need full compaction on top of micro results
             return self
-                .full_compact(&after_micro, Arc::clone(&provider), model_config, cancel_token)
+                .full_compact(
+                    &after_micro,
+                    Arc::clone(&provider),
+                    model_config,
+                    cancel_token,
+                )
                 .await
                 .map(Some);
         }
@@ -315,6 +320,7 @@ impl Compactor {
 
 /// Generate summary using API call.
 /// Returns (summary, `token_usage`) or Err if cancelled or API fails.
+#[allow(clippy::semicolon_if_nothing_returned)]
 async fn generate_summary(
     messages: &[Arc<Message>],
     provider: Arc<dyn Provider>,

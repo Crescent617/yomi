@@ -151,14 +151,6 @@ impl AgentHandle {
             .map_err(|_| AgentError::ChannelClosed)
     }
 
-    /// Set or clear the agent's goal context dynamically
-    pub async fn set_goal(&self, goal: Option<crate::goal::GoalContext>) -> Result<(), AgentError> {
-        self.input_tx
-            .send(AgentInput::SetGoal(goal))
-            .await
-            .map_err(|_| AgentError::ChannelClosed)
-    }
-
     /// Dynamically refresh the skill list for a running agent
     pub async fn refresh_skills(
         &self,
@@ -189,11 +181,22 @@ impl AgentHandle {
         result_rx.await.map_err(|_| AgentError::ChannelClosed)
     }
 
-    /// Send a steer message to be injected before the next streaming turn
-    pub async fn send_steer(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
-        self.steer_tx
-            .send(content)
-            .await
-            .map_err(|_| AgentError::ChannelClosed)
+    /// Send a steer message to be injected before the next streaming turn.
+    /// Uses `try_send` to avoid blocking if the agent is backlogged.
+    pub fn send_steer(&self, content: Vec<ContentBlock>) -> Result<(), AgentError> {
+        self.steer_tx.try_send(content).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => AgentError::ChannelFull,
+            mpsc::error::TrySendError::Closed(_) => AgentError::ChannelClosed,
+        })
+    }
+
+    /// Send a continue command to transition the agent from Idle to Streaming.
+    pub fn send_continue(&self) -> Result<(), AgentError> {
+        self.input_tx
+            .try_send(AgentInput::Continue)
+            .map_err(|e| match e {
+                mpsc::error::TrySendError::Full(_) => AgentError::ChannelFull,
+                mpsc::error::TrySendError::Closed(_) => AgentError::ChannelClosed,
+            })
     }
 }

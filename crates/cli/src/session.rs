@@ -338,6 +338,24 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send ask_user response: {}", e);
                     }
                 }
+                ControlCommand::PauseGoal => {
+                    if let Err(e) = coord_for_ctrl.pause_goal(&session_id_for_ctrl).await {
+                        tracing::error!("Failed to pause goal: {}", e);
+                    }
+                }
+                ControlCommand::ResumeGoal => {
+                    if let Err(e) = coord_for_ctrl.resume_goal(&session_id_for_ctrl).await {
+                        tracing::error!("Failed to resume goal: {}", e);
+                    }
+                }
+                ControlCommand::EditGoal { description } => {
+                    if let Err(e) = coord_for_ctrl
+                        .update_goal(&session_id_for_ctrl, description)
+                        .await
+                    {
+                        tracing::error!("Failed to edit goal: {}", e);
+                    }
+                }
                 ControlCommand::Steer { content } => {
                     if let Err(e) = coord_for_ctrl
                         .send_steer(&session_id_for_ctrl, content)
@@ -345,6 +363,10 @@ pub async fn run_session_loop(
                     {
                         tracing::error!("Failed to send steer: {}", e);
                     }
+                }
+                ControlCommand::GetGoal => {
+                    // GetGoal is a query; no-op for CLI since it returns a value
+                    tracing::debug!("GetGoal command received in CLI session — no action");
                 }
             }
         }

@@ -146,10 +146,6 @@ impl HookHandler for SkillHookHandler {
         self.inner.events()
     }
 
-    fn matches(&self, ctx: &super::HookContext) -> bool {
-        self.inner.matches(ctx)
-    }
-
     async fn run(&self, ctx: &super::HookContext) -> Result<HookResult> {
         self.inner.run(ctx).await
     }

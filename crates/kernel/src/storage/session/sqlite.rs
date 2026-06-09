@@ -92,7 +92,7 @@ impl SessionStore for SqliteSessionStore {
         }
         if let Some(before) = before {
             conditions.push("updated_at < ?");
-            binds.push(before.to_rfc3339());
+            binds.push(before.format("%Y-%m-%d %H:%M:%S").to_string());
         }
 
         let query = format!(
@@ -337,16 +337,22 @@ mod tests {
     async fn test_list_limit_and_has_more() {
         let store = create_test_store().await;
 
-        // Create 5 sessions with explicit delays to ensure different timestamps
+        // Create 5 sessions with distinct updated_at timestamps to ensure pagination works
         let mut ids = Vec::new();
         for i in 0..5 {
             let id = SessionId::new();
             store.create(&id, None, None, None).await.unwrap();
-            ids.push(id);
-            // Update message count to change updated_at, with increasing delays
-            tokio::time::sleep(tokio::time::Duration::from_millis(10 + i as u64 * 5)).await;
+            ids.push(id.clone());
             store
                 .update_message_count(&ids[i], i as i64 + 1)
+                .await
+                .unwrap();
+            // Manually stagger updated_at so each session has a distinct timestamp
+            let offset = format!("-{i} seconds");
+            sqlx::query("UPDATE sessions SET updated_at = datetime('now', ?) WHERE id = ?")
+                .bind(&offset)
+                .bind(&ids[i].0)
+                .execute(&store.pool)
                 .await
                 .unwrap();
         }

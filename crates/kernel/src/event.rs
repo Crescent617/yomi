@@ -38,6 +38,14 @@ pub enum ControlCommand {
     StartGoal(crate::goal::GoalState),
     /// Stop autonomous goal-mode execution
     StopGoal,
+    /// Pause goal auto-continue (agent stops after current turn)
+    PauseGoal,
+    /// Resume goal auto-continue
+    ResumeGoal,
+    /// Edit goal description (restarts with updated objective)
+    EditGoal { description: String },
+    /// Get current goal state (returns JSON-serialized Option<GoalState>)
+    GetGoal,
     /// Rewind to a specific checkpoint
     Rewind {
         message_id: crate::types::MessageId,
@@ -264,4 +272,12 @@ pub enum SystemEvent {
         session_id: SessionId,
         title: String,
     },
+    /// Goal state was updated (started, paused, resumed, completed, blocked)
+    GoalUpdated {
+        session_id: SessionId,
+        description: String,
+        status: String,
+    },
+    /// Goal was stopped and removed
+    GoalStopped { session_id: SessionId },
 }

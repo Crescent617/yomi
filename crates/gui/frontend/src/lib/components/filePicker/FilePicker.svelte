@@ -10,7 +10,6 @@
     root,
     onEnter,
     onAccept,
-    onClose,
   }: {
     show: boolean;
     entries: FileEntry[];
@@ -19,7 +18,6 @@
     root: string;
     onEnter: (entry: FileEntry) => void;
     onAccept: (entry: FileEntry) => void;
-    onClose: () => void;
   } = $props();
 
   let listRef: HTMLDivElement | null = $state(null);

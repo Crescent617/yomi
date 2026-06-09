@@ -15,7 +15,6 @@ pub async fn run_pre_tool_hooks(
     session_id: &str,
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
-    msg_count: usize,
     toolcalls: Vec<ToolCall>,
     denied_results: &mut Vec<ToolExecutionResult>,
 ) -> Vec<ToolCall> {
@@ -26,12 +25,10 @@ pub async fn run_pre_tool_hooks(
     for call in toolcalls {
         let ctx = HookContext::pre_tool(
             session_id,
-            agent_id.to_string(),
             &call.name,
             &call.id,
             working_dir,
             call.arguments.clone(),
-            msg_count,
         );
         let (result, hook_contexts) = hook_registry.run_pre_tool(&ctx).await;
         match result {
@@ -98,7 +95,6 @@ pub async fn run_post_tool_hooks(
     session_id: &str,
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
-    msg_count: usize,
     results: Vec<ToolExecutionResult>,
     tool_calls: &[ToolCall],
 ) -> (Vec<ToolExecutionResult>, bool, Vec<String>) {
@@ -118,12 +114,10 @@ pub async fn run_post_tool_hooks(
         hook_tool_output.is_error = matches!(result.event, ToolEvent::End { is_error: true, .. });
         let ctx = HookContext::post_tool(
             session_id,
-            agent_id.to_string(),
             &tool_name,
             &result.tool_call_id,
             working_dir,
             &hook_tool_output,
-            msg_count,
         );
         let (hook_result, hook_contexts) = hook_registry.run_post_tool(&ctx).await;
         contexts.extend(hook_contexts);
