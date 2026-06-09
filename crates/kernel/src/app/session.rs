@@ -1,6 +1,5 @@
 use crate::agent::{Agent, AgentConfig, AgentHandle, AgentShared, AgentSpawnArgs, AgentState};
 use crate::event::{Event, SystemEvent};
-use crate::goal::JsonGoalStore;
 use crate::permissions::{Level, PermissionState};
 use crate::skill::SkillLoader;
 use crate::storage::file_state::JsonlFileStateStore;
@@ -44,8 +43,12 @@ impl Session {
         agent_shared: Arc<tokio::sync::RwLock<AgentShared>>,
     ) -> Result<(Self, mpsc::Receiver<Event>)> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
-        let goal_store: Arc<dyn crate::goal::GoalStore> =
-            Arc::new(JsonGoalStore::new(&config.data_dir));
+        let goal_store = agent_shared
+            .read()
+            .await
+            .goal_store
+            .clone()
+            .expect("goal_store configured by coordinator");
 
         let permission_state = Some(Self::create_permission_state(&config));
 
@@ -58,7 +61,6 @@ impl Session {
             &config,
             &agent_shared,
             &file_state_store,
-            &goal_store,
             permission_state.clone(),
             workspace_skill_dir.as_ref(),
         )
@@ -113,7 +115,6 @@ impl Session {
         config: &SessionConfig,
         agent_shared: &Arc<tokio::sync::RwLock<AgentShared>>,
         file_state_store: &Arc<crate::tools::helper::FileStateStore>,
-        goal_store: &Arc<dyn crate::goal::GoalStore>,
         permission_state: Option<PermissionState>,
         workspace_skill_dir: Option<&PathBuf>,
     ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
@@ -125,14 +126,6 @@ impl Session {
             .get(&id.0)
             .await
             .unwrap_or_default();
-
-        // Resume active goal if one exists
-        let _goal_state = goal_store
-            .load(&id.0)
-            .await
-            .ok()
-            .flatten()
-            .filter(|g| matches!(g.status, crate::goal::GoalStatus::Active));
 
         // Merge global skills with workspace skills (workspace wins on duplicate names)
         let mut skills = config.agent.skills.clone();
@@ -185,7 +178,6 @@ impl Session {
                 base_clone.skill_folders.push(dir.clone());
             }
         }
-        base_clone.goal_store = Some(Arc::clone(goal_store));
         let checkpoint_store = base_clone.checkpoint_store.clone();
         let shared = Arc::new(base_clone.with_per_session(
             permission_state,
@@ -390,6 +382,16 @@ impl Session {
         }
     }
 
+    /// Send a continue command to trigger the agent from Idle to Streaming
+    pub async fn send_continue(&self) -> Result<()> {
+        match &self.main_agent {
+            Some(handle) => handle
+                .send_continue()
+                .map_err(|e| SessionError::SendFailed(format!("continue: {e}")).into()),
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
     pub async fn compact(&self) -> Result<()> {
         tracing::debug!("Session {} requesting compaction", self.id.0);
         match &self.main_agent {
@@ -442,7 +444,7 @@ impl Session {
                 }
             }
         }
-        self.emit_goal_updated(&state).await;
+        self.emit_goal_updated(&state);
         tracing::info!("Session {} goal mode started", self.id.0);
         Ok(())
     }
@@ -456,7 +458,7 @@ impl Session {
             .ok_or_else(|| SessionError::Other("no active goal to pause".to_string()))?;
         state.status = crate::goal::GoalStatus::Paused;
         self.goal_store.save(&self.id.0, &state).await?;
-        self.emit_goal_updated(&state).await;
+        self.emit_goal_updated(&state);
         tracing::info!("Session {} goal paused", self.id.0);
         Ok(())
     }
@@ -470,7 +472,7 @@ impl Session {
             .ok_or_else(|| SessionError::Other("no goal to resume".to_string()))?;
         state.status = crate::goal::GoalStatus::Active;
         self.goal_store.save(&self.id.0, &state).await?;
-        self.emit_goal_updated(&state).await;
+        self.emit_goal_updated(&state);
         tracing::info!("Session {} goal resumed", self.id.0);
         Ok(())
     }
@@ -505,7 +507,7 @@ impl Session {
         self.send_steer(blocks)
             .map_err(|e| SessionError::SendFailed(format!("update goal steer: {e}")))?;
 
-        self.emit_goal_updated(&state).await;
+        self.emit_goal_updated(&state);
         tracing::info!("Session {} goal updated: {}", self.id.0, state.description);
         Ok(())
     }
@@ -515,7 +517,7 @@ impl Session {
         // Always clear storage first so that resume never restores a stale goal,
         // even if the agent handle is already closed.
         self.goal_store.delete(&self.id.0).await?;
-        self.emit_goal_stopped().await;
+        self.emit_goal_stopped();
         tracing::info!("Session {} goal mode stopped", self.id.0);
         Ok(())
     }
@@ -531,7 +533,7 @@ impl Session {
     }
 
     /// Emit `GoalUpdated` event if event sender is configured.
-    async fn emit_goal_updated(&self, state: &crate::goal::GoalState) {
+    fn emit_goal_updated(&self, state: &crate::goal::GoalState) {
         if let Some(ref tx) = self.event_tx {
             let _ = tx.send(Event::System(SystemEvent::GoalUpdated {
                 session_id: self.id.clone(),
@@ -542,7 +544,7 @@ impl Session {
     }
 
     /// Emit `GoalStopped` event if event sender is configured.
-    async fn emit_goal_stopped(&self) {
+    fn emit_goal_stopped(&self) {
         if let Some(ref tx) = self.event_tx {
             let _ = tx.send(Event::System(SystemEvent::GoalStopped {
                 session_id: self.id.clone(),

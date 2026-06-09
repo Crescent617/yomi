@@ -352,17 +352,33 @@ impl Agent {
             }
 
             if let Err(e) = result {
-                let phase = match state {
-                    AgentState::Idle => crate::event::ErrorPhase::Idle,
-                    AgentState::Streaming => crate::event::ErrorPhase::Streaming,
-                    AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
-                    AgentState::Closed => unreachable!(),
-                };
-                self.emit_error(phase, &e.to_string(), false).await;
+                if let AgentError::Cancelled(ctx) = &e {
+                    if let Err(e) = self.handle_cancel(ctx).await {
+                        tracing::warn!("Failed to handle cancel: {}", e);
+                    }
+                    // After cancellation, state transitions to Idle. Handle turn
+                    // lifecycle the same way as a normal transition.
+                    let next_state = self.context.current_state();
+                    if state != AgentState::Idle && next_state == AgentState::Idle {
+                        if let Some(turn) = self.current_turn.take() {
+                            if let Err(e) = turn.complete().await {
+                                tracing::warn!("Failed to complete turn: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    let phase = match state {
+                        AgentState::Idle => crate::event::ErrorPhase::Idle,
+                        AgentState::Streaming => crate::event::ErrorPhase::Streaming,
+                        AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
+                        AgentState::Closed => unreachable!(),
+                    };
+                    self.emit_error(phase, &e.to_string(), false).await;
 
-                // Recover to Idle for non-Idle states
-                if next_state != AgentState::Idle {
-                    self.context.transition_to(AgentState::Idle);
+                    // Recover to Idle for non-Idle states
+                    if next_state != AgentState::Idle {
+                        self.context.transition_to(AgentState::Idle);
+                    }
                 }
             }
 
@@ -836,13 +852,13 @@ impl Agent {
             biased;
             () = self.cancel_token.cancelled() => {
                 abort_handle.abort();
-                return self.handle_cancel("stream creation").await;
+                return Err(AgentError::Cancelled("stream creation".into()));
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => return Err(AgentError::Provider(e)),
                 Err(e) if e.is_cancelled() => {
-                    return Err(AgentError::Cancelled);
+                    return Err(AgentError::Cancelled("stream creation".into()));
                 }
                 Err(e) => return Err(AgentError::StreamTaskPanicked(e.to_string())),
             }
@@ -883,6 +899,10 @@ impl Agent {
             tracing::warn!("Failed to send completed event: {}", e);
         }
 
+        if result.finish_reason.is_none() {
+            tracing::error!("Agent {} model response has no finish_reason", self.id);
+        }
+
         self.transition_after_streaming(result.finish_reason).await
     }
 
@@ -901,7 +921,7 @@ impl Agent {
             tokio::select! {
                 biased;
                 () = self.cancel_token.cancelled() => {
-                    return self.handle_cancel("streaming").await.map(|()| Default::default());
+                    return Err(AgentError::Cancelled("streaming".into()));
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => match item {
@@ -1261,7 +1281,7 @@ impl Agent {
     async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
         // Early-out if cancelled before doing any work
         if self.cancel_token.is_cancelled() {
-            return self.handle_cancel("tool execution").await;
+            return Err(AgentError::Cancelled("tool execution".into()));
         }
 
         let tool_calls: Vec<_> = self
@@ -1386,7 +1406,7 @@ impl Agent {
 
         for result in all_results {
             if self.cancel_token.is_cancelled() {
-                return self.handle_cancel("tool execution").await;
+                return Err(AgentError::Cancelled("tool execution".into()));
             }
             if let Err(e) = self.event_tx.try_send(Event::Tool(result.event)) {
                 tracing::warn!("Failed to send tool end event: {}", e);
@@ -1431,6 +1451,7 @@ impl Agent {
         loop {
             match self.handle_streaming().await {
                 Ok(()) => return Ok(()),
+                Err(e) if e.is_cancelled() => return Err(e),
                 Err(e) if attempt >= max_retries => {
                     return self
                         .fail_agent("Streaming failed after max retries", e)

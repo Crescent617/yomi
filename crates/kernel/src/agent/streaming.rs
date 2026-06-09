@@ -71,12 +71,12 @@ impl StreamingHandler {
             biased;
             () = cancel_token.cancelled() => {
                 abort_handle.abort();
-                Err(AgentError::Cancelled)
+                Err(AgentError::Cancelled("stream creation".into()))
             }
             result = stream_task => match result {
                 Ok(Ok(stream)) => Ok(stream),
                 Ok(Err(e)) => Err(AgentError::Provider(e)),
-                Err(e) if e.is_cancelled() => Err(AgentError::Cancelled),
+                Err(e) if e.is_cancelled() => Err(AgentError::Cancelled("stream creation".into())),
                 Err(e) => Err(AgentError::StreamTaskPanicked(e.to_string())),
             }
         }
@@ -95,7 +95,7 @@ impl StreamingHandler {
             tokio::select! {
                 biased;
                 () = cancel_token.cancelled() => {
-                    return Err(AgentError::Cancelled);
+                    return Err(AgentError::Cancelled("streaming".into()));
                 }
                 item = stream.try_next() => match item {
                     Ok(Some(item)) => {

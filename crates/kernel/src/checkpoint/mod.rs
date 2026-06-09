@@ -116,4 +116,11 @@ pub trait CheckpointStore: Send + Sync {
 
     /// Delete all checkpoints for a session
     async fn delete_session_checkpoints(&self, session_id: &str) -> Result<u64>;
+
+    /// Copy all checkpoints from one session to another
+    async fn copy_session_checkpoints(
+        &self,
+        from_session_id: &str,
+        to_session_id: &str,
+    ) -> Result<u64>;
 }

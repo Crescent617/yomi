@@ -1,6 +1,7 @@
 use crate::agent::AgentConfig;
 use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
+use crate::client::CoordinatorApi;
 use crate::config::Config;
 use crate::cron::CronJobId;
 use crate::skill::{deduplicate_skills, SkillLoader};
@@ -845,6 +846,10 @@ async fn dispatch_command(
         }
         ControlCommand::Steer { content } => {
             coordinator.send_steer(sid, content).await?;
+            Ok(serde_json::Value::Null)
+        }
+        ControlCommand::Continue => {
+            coordinator.send_continue(sid).await?;
             Ok(serde_json::Value::Null)
         }
     }

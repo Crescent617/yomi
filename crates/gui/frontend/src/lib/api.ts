@@ -242,6 +242,10 @@ export async function sendSteer(sessionId: string, blocks: TaggedContentBlock[])
   return invokeCmd("send_steer", { sessionId, blocks });
 }
 
+export async function continueSession(sessionId: string): Promise<void> {
+  return invokeCmd("continue_session", { sessionId });
+}
+
 export async function getConfigToml(): Promise<{ content: string; path: string }> {
   return invokeCmd("get_config_toml");
 }

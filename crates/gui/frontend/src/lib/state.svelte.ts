@@ -228,6 +228,38 @@ export function refreshCheckpoints(sessionId: string) {
   }).catch((e: Error) => console.error("Failed to reload checkpoints:", e));
 }
 
+export function refreshSessions() {
+  api.listSessions().then((result) => {
+    const existing = new Map(sessionState.sessions.map((s) => [s.id, s]));
+    for (const s of result.sessions) {
+      const current = existing.get(s.id);
+      if (!current) {
+        sessionState.sessions.push({
+          id: s.id,
+          projectPath: s.projectPath,
+          projectId: s.projectId,
+          alias: s.title,
+          messages: [],
+          streaming: false,
+          unread: 0,
+          checkpoints: [],
+          tabs: [],
+          activeTabId: "chat",
+          pendingPermissions: [],
+          pendingAskUser: null,
+          queuedInput: null,
+          updatedAt: s.createdAt,
+          permissionLevel: s.autoApproveLevel,
+        });
+      } else {
+        current.alias = s.title ?? current.alias;
+        current.updatedAt = s.createdAt ?? current.updatedAt;
+        current.permissionLevel = s.autoApproveLevel ?? current.permissionLevel;
+      }
+    }
+  }).catch((e: Error) => console.error("Failed to refresh sessions:", e));
+}
+
 export function getActiveSession(): SessionState | null {
   return sessionState.activeSessionId
     ? getSession(sessionState.activeSessionId) ?? null
@@ -625,7 +657,7 @@ type KernelEvent =
   | { user: UserEvent };
 
 export function handleEvent(sessionId: string, rawEvent: unknown) {
-  const session = getSession(sessionId);
+  let session = getSession(sessionId);
   if (!session) return;
 
   const ev = rawEvent as KernelEvent;
@@ -641,6 +673,8 @@ export function handleEvent(sessionId: string, rawEvent: unknown) {
     handleUserEvent(session, ev.user);
   }
 
+  // Re-fetch session in case an event handler replaced it in sessionState.sessions
+  session = getSession(sessionId) ?? session;
   if (sessionState.activeSessionId !== sessionId) {
     session.unread++;
   }
@@ -1033,12 +1067,16 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
       })
       .join("") ?? "";
     const hasNonText = Array.isArray(msg.content) && msg.content.some((b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text");
-    session.messages = [
-      ...session.messages,
-      { id: msg.messageId, role: "user", content, contentBlocks: hasNonText ? msg.content : undefined, thinking: null, tools: [] },
-    ];
+
+    session.messages.push({
+      id: msg.messageId,
+      role: "user",
+      content,
+      contentBlocks: hasNonText ? msg.content : undefined,
+      thinking: null,
+      tools: [],
+    });
     session.updatedAt = new Date().toISOString();
-    // User message received → show streaming indicator immediately
     startStreaming(session);
     return true;
   }

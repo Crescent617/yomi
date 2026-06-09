@@ -7,7 +7,7 @@
   import ErrorBubble from "./ErrorBubble.svelte";
   import ActionGroup from "./ActionGroup.svelte";
   import TextBlock from "./TextBlock.svelte";
-  import TodoBar from "./TodoBar.svelte";
+  import GoalBar from "./GoalBar.svelte";
   import OperationBar from "./OperationBar.svelte";
   import type { ChatMessage } from "../../state.svelte";
 
@@ -175,7 +175,7 @@
       </div>
     </div>
   </div>
-  <TodoBar />
+  <GoalBar />
   {#if !isNearBottom}
     <button
       type="button"

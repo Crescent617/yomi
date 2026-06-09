@@ -305,6 +305,36 @@ impl Model {
                     self.state.quit = true;
                     None
                 }
+                Msg::CommandFork => {
+                    // Fork current session and switch to the new one
+                    let coord = Arc::clone(&self.coordinator);
+                    let tx = self.cmd_tx.clone();
+                    let sid = kernel::types::SessionId(self.session_id.clone());
+                    let level = self.permission_level;
+                    tokio::spawn(async move {
+                        let msg = match coord.fork_session(&sid, level).await {
+                            Ok(new_id) => {
+                                Msg::SessionSelected(new_id.0)
+                            }
+                            Err(e) => Msg::Notification(Notification::error(
+                                format!("Fork failed: {e}"),
+                                5000,
+                            )),
+                        };
+                        if let Err(e) = tx.send(msg) {
+                            tracing::debug!("cmd channel closed, dropping async result: {e}");
+                        }
+                    });
+                    None
+                }
+                Msg::CommandContinue => {
+                    let _ = self.ctrl_tx.try_send(ControlCommand::Continue);
+                    self.show_notification(&Notification::info(
+                        "Agent continuing...",
+                        3000,
+                    ));
+                    None
+                }
                 Msg::CommandGoal(description) => {
                     let state = kernel::goal::GoalState::new(description);
                     let _ = self.ctrl_tx.try_send(ControlCommand::StartGoal(state));

@@ -55,6 +55,8 @@ pub enum ControlCommand {
     Steer {
         content: Vec<crate::types::ContentBlock>,
     },
+    /// Trigger the agent to continue from idle to streaming without new user input
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
