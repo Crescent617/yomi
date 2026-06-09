@@ -675,9 +675,9 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
                 })?;
             }
             if !to_manifest.exists() {
-                fs::copy(&from_manifest, &to_manifest).await.map_err(|e| {
-                    KernelError::io(format!("Failed to copy manifest: {e}"))
-                })?;
+                fs::copy(&from_manifest, &to_manifest)
+                    .await
+                    .map_err(|e| KernelError::io(format!("Failed to copy manifest: {e}")))?;
                 count += 1;
             }
         }
@@ -708,14 +708,13 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         );
         Ok(count)
     }
-
 }
 
 impl FilesystemCheckpointStore {
     async fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
-        fs::create_dir_all(to).await.map_err(|e| {
-            KernelError::io(format!("Failed to create directory: {e}"))
-        })?;
+        fs::create_dir_all(to)
+            .await
+            .map_err(|e| KernelError::io(format!("Failed to create directory: {e}")))?;
 
         let mut stack = vec![(from.to_path_buf(), to.to_path_buf())];
 
@@ -732,14 +731,14 @@ impl FilesystemCheckpointStore {
                 let path = entry.path();
                 let to_path = dst_dir.join(path.file_name().unwrap_or_default());
                 if path.is_dir() {
-                    fs::create_dir_all(&to_path).await.map_err(|e| {
-                        KernelError::io(format!("Failed to create directory: {e}"))
-                    })?;
+                    fs::create_dir_all(&to_path)
+                        .await
+                        .map_err(|e| KernelError::io(format!("Failed to create directory: {e}")))?;
                     stack.push((path, to_path));
                 } else if !to_path.exists() {
-                    fs::copy(&path, &to_path).await.map_err(|e| {
-                        KernelError::io(format!("Failed to copy file: {e}"))
-                    })?;
+                    fs::copy(&path, &to_path)
+                        .await
+                        .map_err(|e| KernelError::io(format!("Failed to copy file: {e}")))?;
                 }
             }
         }

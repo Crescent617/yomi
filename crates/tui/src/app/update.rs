@@ -313,9 +313,7 @@ impl Model {
                     let level = self.permission_level;
                     tokio::spawn(async move {
                         let msg = match coord.fork_session(&sid, level).await {
-                            Ok(new_id) => {
-                                Msg::SessionSelected(new_id.0)
-                            }
+                            Ok(new_id) => Msg::SessionSelected(new_id.0),
                             Err(e) => Msg::Notification(Notification::error(
                                 format!("Fork failed: {e}"),
                                 5000,
@@ -329,10 +327,7 @@ impl Model {
                 }
                 Msg::CommandContinue => {
                     let _ = self.ctrl_tx.try_send(ControlCommand::Continue);
-                    self.show_notification(&Notification::info(
-                        "Agent continuing...",
-                        3000,
-                    ));
+                    self.show_notification(&Notification::info("Agent continuing...", 3000));
                     None
                 }
                 Msg::CommandGoal(description) => {

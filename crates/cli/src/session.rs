@@ -365,10 +365,7 @@ pub async fn run_session_loop(
                     }
                 }
                 ControlCommand::Continue => {
-                    if let Err(e) = coord_for_ctrl
-                        .send_continue(&session_id_for_ctrl)
-                        .await
-                    {
+                    if let Err(e) = coord_for_ctrl.send_continue(&session_id_for_ctrl).await {
                         tracing::error!("Failed to send continue: {}", e);
                     }
                 }

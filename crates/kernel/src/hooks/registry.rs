@@ -22,6 +22,7 @@ impl HookRegistry {
 
     /// Register a hook handler. It is inserted into every event bucket
     /// returned by `handler.events()`.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn register(&mut self, handler: Arc<dyn HookHandler>) {
         for event in handler.events() {
             self.handlers

@@ -583,9 +583,6 @@ pub async fn continue_session(
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
-    coord
-        .send_continue(&sid)
-        .await
-        .map_err(GuiError::kernel)?;
+    coord.send_continue(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }

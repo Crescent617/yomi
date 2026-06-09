@@ -1,7 +1,6 @@
 use crate::agent::AgentConfig;
 use crate::app::coordinator::CreateSessionInput;
 use crate::app::Coordinator;
-use crate::client::CoordinatorApi;
 use crate::config::Config;
 use crate::cron::CronJobId;
 use crate::skill::{deduplicate_skills, SkillLoader};

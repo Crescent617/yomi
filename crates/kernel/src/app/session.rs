@@ -434,10 +434,11 @@ impl Session {
     pub async fn start_goal(&mut self, state: crate::goal::GoalState) -> Result<()> {
         self.goal_store.save(&self.id.0, &state).await?;
         if let Some(ref handle) = self.main_agent {
-            handle.send_steer(vec![crate::types::ContentBlock::Text {
-                text: state.build_continue_prompt(),
-            }])
-            .map_err(|e| SessionError::SendFailed(format!("goal start steer: {e}")))?;
+            handle
+                .send_steer(vec![crate::types::ContentBlock::Text {
+                    text: state.build_continue_prompt(),
+                }])
+                .map_err(|e| SessionError::SendFailed(format!("goal start steer: {e}")))?;
             if handle.state() == AgentState::Idle {
                 if let Err(e) = handle.send_continue() {
                     tracing::warn!("Session {} goal start continue failed: {}", self.id.0, e);
