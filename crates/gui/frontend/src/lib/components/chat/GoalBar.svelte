@@ -227,10 +227,6 @@
         onpointerup={onPointerUp}
         class="flex items-center gap-3 px-3 py-1.5 rounded-full bg-background border border-border/80 shadow-sm hover:bg-background hover:border-border transition-all text-xs group cursor-move max-w-[80vw]"
       >
-        {#if loading}
-          <div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
-        {/if}
-
         <!-- Goal section -->
           {#if hasActiveGoal}
             <div class="flex items-center gap-1.5 shrink-0">
