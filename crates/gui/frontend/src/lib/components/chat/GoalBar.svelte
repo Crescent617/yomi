@@ -7,13 +7,12 @@
 
   let todoItems = $state<{ id: string; content: string; status: string }[]>([]);
   let expanded = $state(false);
-  let loadingTodos = $state(false);
-  let loadingGoal = $state(false);
+  let loading = $state(false);
   let editingGoal = $state(false);
   let editGoalText = $state("");
 
   let el: HTMLDivElement;
-  let handleEl: HTMLButtonElement;
+  let handleEl: HTMLDivElement;
 
   let posX = $state(0);
   let posY = $state(0);
@@ -29,20 +28,16 @@
       todoItems = [];
       return;
     }
-    loadingTodos = true;
     api.getTodos(id).then((result) => {
       todoItems = result.todos ?? [];
     }).catch(() => {
       todoItems = [];
-    }).finally(() => {
-      loadingTodos = false;
     });
   }
 
   function loadGoal() {
     const id = activeSession?.id;
     if (!id) return;
-    loadingGoal = true;
     const session = activeSession;
     api.getGoal(id).then((result) => {
       if (session) {
@@ -52,8 +47,6 @@
       if (session) {
         session.goal = null;
       }
-    }).finally(() => {
-      loadingGoal = false;
     });
   }
 
@@ -99,21 +92,44 @@
   }
 
   async function handlePauseGoal() {
-    if (!activeSession?.id || !goal) return;
-    await api.pauseGoal(activeSession.id);
-    loadGoal();
+    if (!activeSession?.id || !goal || loading) return;
+    loading = true;
+    try {
+      await api.pauseGoal(activeSession.id);
+    } catch (e) {
+      console.error("pause goal failed:", e);
+    } finally {
+      loading = false;
+      loadGoal();
+    }
   }
 
   async function handleResumeGoal() {
-    if (!activeSession?.id || !goal) return;
-    await api.resumeGoal(activeSession.id);
-    loadGoal();
+    if (!activeSession?.id || !goal || loading) return;
+    loading = true;
+    try {
+      await api.resumeGoal(activeSession.id);
+    } catch (e) {
+      console.error("resume goal failed:", e);
+    } finally {
+      loading = false;
+      loadGoal();
+    }
   }
 
   async function handleStopGoal() {
-    if (!activeSession?.id) return;
-    await api.stopGoal(activeSession.id);
-    loadGoal();
+    if (!activeSession?.id || loading) return;
+    const confirmed = confirm("Are you sure you want to stop the current goal?");
+    if (!confirmed) return;
+    loading = true;
+    try {
+      await api.stopGoal(activeSession.id);
+    } catch (e) {
+      console.error("stop goal failed:", e);
+    } finally {
+      loading = false;
+      loadGoal();
+    }
   }
 
   function startEditGoal() {
@@ -124,14 +140,16 @@
   }
 
   async function submitEditGoal() {
-    if (loadingGoal || !activeSession?.id || !editGoalText.trim()) return;
-    loadingGoal = true;
+    if (loading || !activeSession?.id || !editGoalText.trim()) return;
+    loading = true;
     try {
       await api.editGoal(activeSession.id, editGoalText.trim());
       editingGoal = false;
       loadGoal();
+    } catch (e) {
+      console.error("edit goal failed:", e);
     } finally {
-      loadingGoal = false;
+      loading = false;
     }
   }
 
@@ -192,6 +210,8 @@
       handleEl.releasePointerCapture(e.pointerId);
     }
     if (!hasDragged) {
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-action-btn]")) return;
       expanded = !expanded;
     }
   }
@@ -200,25 +220,63 @@
 {#if shouldShow}
   <div bind:this={el} class="absolute left-1/2 top-2 z-50 select-none" style="transform: translateX(-50%) translate({posX}px, {posY}px)">
     <div class="flex flex-col items-center gap-1">
-      <button
-        type="button"
+      <div
         bind:this={handleEl}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
         class="flex items-center gap-3 px-3 py-1.5 rounded-full bg-background border border-border/80 shadow-sm hover:bg-background hover:border-border transition-all text-xs group cursor-move max-w-[80vw]"
       >
-        {#if loadingTodos || loadingGoal}
-          <div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin"></div>
-        {:else}
-          <!-- Goal section -->
+        {#if loading}
+          <div class="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin shrink-0"></div>
+        {/if}
+
+        <!-- Goal section -->
           {#if hasActiveGoal}
             <div class="flex items-center gap-1.5 shrink-0">
               <Target size={13} class="text-primary shrink-0" />
-              <span class="truncate max-w-[180px] text-foreground font-medium" title={goal!.description}>
+              <span class="truncate max-w-[160px] text-foreground font-medium" title={goal!.description}>
                 {goal!.description}
               </span>
               <span class="w-1.5 h-1.5 rounded-full {statusDotClass(goal!.status)}"></span>
+              {#if goal!.status !== "completed"}
+                {#if goal!.status === "active"}
+                  <button
+                    type="button"
+                    data-action-btn
+                    disabled={loading}
+                    onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                    onclick={handlePauseGoal}
+                    class="p-0.5 rounded hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Pause"
+                  >
+                    <Pause size={11} />
+                  </button>
+                {:else if goal!.status === "paused"}
+                  <button
+                    type="button"
+                    data-action-btn
+                    disabled={loading}
+                    onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                    onclick={handleResumeGoal}
+                    class="p-0.5 rounded hover:bg-secondary transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Resume"
+                  >
+                    <Play size={11} />
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  data-action-btn
+                  disabled={loading}
+                  onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                  onclick={handleStopGoal}
+                  class="p-0.5 rounded hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Stop"
+                >
+                  <Square size={11} />
+                </button>
+              {/if}
             </div>
           {/if}
 
@@ -233,7 +291,6 @@
               <ListChecks size={13} class="text-muted-foreground" />
               <span class="text-muted-foreground font-medium tabular-nums">{completedCount}/{totalCount}</span>
               {#if inProgressItem}
-                <div class="h-3 w-px bg-border"></div>
                 <div class="flex items-center gap-1 max-w-[120px]">
                   <Clock size={12} class="text-amber-500 shrink-0 animate-pulse" />
                   <span class="truncate text-foreground">{inProgressItem.content}</span>
@@ -245,8 +302,7 @@
               {/if}
             </div>
           {/if}
-        {/if}
-      </button>
+      </div>
 
       {#if expanded}
         <div class="bg-background border border-border rounded-xl shadow-lg overflow-hidden w-80 max-w-[85vw]">
@@ -298,47 +354,53 @@
                 </div>
               {:else}
                 <p class="text-sm text-foreground leading-relaxed mb-2.5">{goal!.description}</p>
-                <div class="flex items-center gap-1.5">
-                  {#if goal!.status === "active"}
+                {#if goal!.status !== "completed"}
+                  <div class="flex items-center gap-1.5">
+                    {#if goal!.status === "active"}
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onclick={handlePauseGoal}
+                        class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Pause goal auto-continue"
+                      >
+                        <Pause size={12} />
+                        Pause
+                      </button>
+                    {:else if goal!.status === "paused"}
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onclick={handleResumeGoal}
+                        class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-green-500/30 hover:bg-green-500/10 transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Resume goal"
+                      >
+                        <Play size={12} />
+                        Resume
+                      </button>
+                    {/if}
                     <button
                       type="button"
-                      onclick={handlePauseGoal}
-                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground"
-                      title="Pause goal auto-continue"
+                      disabled={loading}
+                      onclick={startEditGoal}
+                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Edit goal description"
                     >
-                      <Pause size={12} />
-                      Pause
+                      <Pencil size={12} />
+                      Edit
                     </button>
-                  {:else if goal!.status === "paused"}
                     <button
                       type="button"
-                      onclick={handleResumeGoal}
-                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-green-500/30 hover:bg-green-500/10 transition-colors text-green-600"
-                      title="Resume goal"
+                      disabled={loading}
+                      onclick={handleStopGoal}
+                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-red-500/30 hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Stop and clear goal"
                     >
-                      <Play size={12} />
-                      Resume
+                      <Square size={12} />
+                      Stop
                     </button>
-                  {/if}
-                  <button
-                    type="button"
-                    onclick={startEditGoal}
-                    class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground"
-                    title="Edit goal description"
-                  >
-                    <Pencil size={12} />
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onclick={handleStopGoal}
-                    class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-red-500/30 hover:bg-red-500/10 transition-colors text-red-500"
-                    title="Stop and clear goal"
-                  >
-                    <Square size={12} />
-                    Stop
-                  </button>
-                </div>
+                  </div>
+                {/if}
               {/if}
             </div>
           {/if}

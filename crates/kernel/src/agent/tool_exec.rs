@@ -148,7 +148,7 @@ impl ToolExecutionHandler {
         // Send events and add messages to buffer
         for result in &all_results {
             if cancel_token.is_cancelled() {
-                return Err(super::AgentError::Cancelled);
+                return Err(super::AgentError::Cancelled("tool execution".into()));
             }
             let _ = self.event_tx.send(Event::Tool(result.event.clone())).await;
         }

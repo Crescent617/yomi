@@ -3,7 +3,7 @@ import { Send, Command, Square, Clock, Paperclip, X } from "lucide-svelte";
 import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
 import * as api from "../../api";
 import type { TaggedContentBlock } from "../../types";
-import { sessionState, getActiveSession, showNotification } from "../../state.svelte";
+import { sessionState, getActiveSession, showNotification, refreshSessions } from "../../state.svelte";
 import { SLASH_COMMANDS } from "../../commands";
 import type { FileEntry } from "../../fs/provider";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -233,6 +233,31 @@ async function handleCommand(text: string): Promise<boolean> {
           await api.sendSteer(sessionId, blocks);
           clearInlineImages();
           showNotification("Steer message queued for next turn", "info", 3000);
+        }
+        break;
+      case "/fork":
+        {
+          const parentId = sessionId;
+          try {
+            const newId = await api.forkSession(parentId, sessionState.sessions.find(s => s.id === parentId)?.permissionLevel ?? "safe");
+            showNotification(`Forked session: ${newId}`, "success", 3000);
+            // Refresh sessions list so new fork appears in sidebar
+            refreshSessions();
+          } catch (e) {
+            showNotification(`Fork failed: ${e instanceof Error ? e.message : String(e)}`, "error", 5000);
+            return false;
+          }
+        }
+        break;
+      case "/continue":
+        {
+          try {
+            await api.continueSession(sessionId);
+            showNotification("Agent continuing...", "info", 3000);
+          } catch (e) {
+            showNotification(`Continue failed: ${e instanceof Error ? e.message : String(e)}`, "error", 5000);
+            return false;
+          }
         }
         break;
       case "/goal:stop":

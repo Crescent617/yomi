@@ -328,12 +328,11 @@ pub(crate) fn init_logging(
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
 
-    let log_path = log_dir.join("app.log");
-    let file_appender = tracing_rolling_file::RollingFileAppenderBase::builder()
-        .filename(log_path.to_string_lossy().to_string())
-        .condition_max_file_size(10 * 1024 * 1024)
-        .max_filecount(5)
-        .build()
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("app")
+        .filename_suffix("log")
+        .build(&log_dir)
         .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {e}"))?;
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);

@@ -96,6 +96,26 @@ impl Coordinator {
             .expect("usage_store not configured")
     }
 
+    /// Get goal store from `agent_shared`
+    pub async fn goal_store(&self) -> Arc<dyn crate::goal::GoalStore> {
+        self.agent_shared
+            .read()
+            .await
+            .goal_store
+            .clone()
+            .expect("goal_store not configured")
+    }
+
+    /// Get todo store from `agent_shared`
+    pub async fn todo_store(&self) -> Arc<dyn crate::storage::TodoStore> {
+        self.agent_shared
+            .read()
+            .await
+            .todo_storage
+            .clone()
+            .expect("todo_storage not configured")
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: &StorageSet,
@@ -115,6 +135,7 @@ impl Coordinator {
         let checkpoint_store = storage.checkpoint_store();
         let data_dir = storage.data_dir().to_path_buf();
         let project_store = storage.project_store();
+        let goal_store = storage.goal_store();
         let agent_shared = AgentShared::with_data_dir(
             provider,
             Arc::new(agent_config.model.clone()),
@@ -130,6 +151,7 @@ impl Coordinator {
             Some(checkpoint_store),
             data_dir,
         )
+        .with_goal_store(goal_store)
         .with_message_interceptor(todo_interceptor);
         let agent_shared = agent_shared.with_tool_blocklist(agent_config.tool_blocklist.clone());
         let agent_shared = agent_shared.with_allow_command_hooks(agent_config.allow_command_hooks);
@@ -497,7 +519,7 @@ impl Coordinator {
     }
 
     /// Fork a session: create new session with copied history from parent.
-    /// `auto_approve_level` overrides the parent's level for the new session.
+    /// Also copies message history, goal state, todo list, file states, and checkpoints.
     pub async fn fork_session(
         &self,
         parent_id: &SessionId,
@@ -520,7 +542,64 @@ impl Coordinator {
             .await
             .update_auto_approve_level(&new_id, auto_approve_level.as_str())
             .await?;
+        // Set title: "Forked: <parent_title>"
+        let parent_title = parent_info.title.as_deref().unwrap_or("Untitled");
+        let new_title = format!("Forked: {}", parent_title);
+        self.rename_session(&new_id, new_title).await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
+
+        // Copy message history from parent to child
+        let message_store = self.message_store().await;
+        if let Ok(msgs) = message_store.get(&parent_id.0).await {
+            if !msgs.is_empty() {
+                if let Err(e) = message_store.replace(&new_id.0, &msgs).await {
+                    tracing::warn!("Failed to copy message history for fork {}: {}", new_id.0, e);
+                } else {
+                    tracing::info!("Copied {} messages for fork {}", msgs.len(), new_id.0);
+                }
+            }
+        }
+
+        // Copy goal state from parent to child
+        let goal_store = self.goal_store().await;
+        if let Ok(Some(goal)) = goal_store.load(&parent_id.0).await {
+            if let Err(e) = goal_store.save(&new_id.0, &goal).await {
+                tracing::warn!("Failed to copy goal state for fork {}: {}", new_id.0, e);
+            } else {
+                tracing::info!("Copied goal state for fork {}", new_id.0);
+            }
+        }
+
+        // Copy todo list from parent to child
+        let todo_store = self.todo_store().await;
+        if let Ok(Some(todos)) = todo_store.load(&parent_id.0).await {
+            if let Err(e) = todo_store.save(&new_id.0, &todos).await {
+                tracing::warn!("Failed to copy todo list for fork {}: {}", new_id.0, e);
+            } else {
+                tracing::info!("Copied todo list for fork {}", new_id.0);
+            }
+        }
+
+        // Copy file states from parent to child
+        let data_dir = self.data_dir().await;
+        let file_states_dir = data_dir.join("sessions").join("file_states");
+        let parent_file_state = file_states_dir.join(format!("{}.jsonl", parent_id.0.replace(['/', '\\'], "_")));
+        let child_file_state = file_states_dir.join(format!("{}.jsonl", new_id.0.replace(['/', '\\'], "_")));
+        if parent_file_state.exists() {
+            if let Err(e) = tokio::fs::copy(&parent_file_state, &child_file_state).await {
+                tracing::warn!("Failed to copy file state for fork {}: {}", new_id.0, e);
+            } else {
+                tracing::info!("Copied file state for fork {}", new_id.0);
+            }
+        }
+
+        // Copy checkpoints from parent to child
+        let checkpoint_store = self.checkpoint_store().await;
+        match checkpoint_store.copy_session_checkpoints(&parent_id.0, &new_id.0).await {
+            Ok(0) => tracing::debug!("No checkpoints to copy for fork {}", new_id.0),
+            Ok(n) => tracing::info!("Copied {} checkpoints for fork {}", n, new_id.0),
+            Err(e) => tracing::warn!("Failed to copy checkpoints for fork {}: {}", new_id.0, e),
+        }
 
         let project = match &parent_info.project_id {
             Some(pid) => self.project_store.get(pid).await?,
@@ -627,6 +706,17 @@ impl Coordinator {
         let result = session.read().await.send_steer(content);
         if let Err(ref e) = result {
             tracing::error!("Failed to send steer to session {}: {}", session_id.0, e);
+        }
+        result
+    }
+
+    /// Send a continue command to trigger the agent from Idle to Streaming
+    pub async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
+        tracing::debug!("Sending continue to session {}", session_id.0);
+        let session = self.require_session(session_id)?;
+        let result = session.read().await.send_continue().await;
+        if let Err(ref e) = result {
+            tracing::error!("Failed to send continue to session {}: {}", session_id.0, e);
         }
         result
     }

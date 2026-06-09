@@ -80,6 +80,8 @@ impl InputComponent {
 
         match parts[0] {
             "/new" => Some(Msg::CommandNew),
+            "/fork" => Some(Msg::CommandFork),
+            "/continue" => Some(Msg::CommandContinue),
             "/goal" => {
                 let description = parts[1..].join(" ");
                 if description.trim().is_empty() {

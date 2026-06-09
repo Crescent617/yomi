@@ -118,6 +118,7 @@ pub trait CoordinatorApi: Send + Sync {
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn reload_agent_config(&self) -> Result<()>;
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
+    async fn send_continue(&self, session_id: &SessionId) -> Result<()>;
 
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
@@ -162,7 +163,7 @@ pub trait CoordinatorApi: Send + Sync {
 #[async_trait]
 impl CoordinatorApi for Coordinator {
     async fn list_projects(&self) -> Result<Vec<Project>> {
-        self.list_projects().await
+        Self::list_projects(self).await
     }
 
     async fn create_project(
@@ -170,27 +171,27 @@ impl CoordinatorApi for Coordinator {
         dir: std::path::PathBuf,
         name: Option<String>,
     ) -> Result<Project> {
-        self.create_project(dir, name).await
+        Self::create_project(self, dir, name).await
     }
 
     async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
-        self.get_project(id).await
+        Self::get_project(self, id).await
     }
 
     async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
-        self.rename_project(id, name).await
+        Self::rename_project(self, id, name).await
     }
 
     async fn delete_project(&self, id: &ProjectId) -> Result<()> {
-        self.delete_project(id).await
+        Self::delete_project(self, id).await
     }
 
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
-        self.create_session(input).await
+        Self::create_session(self, input).await
     }
 
     async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
-        self.restore_session(id).await
+        Self::restore_session(self, id).await
     }
 
     async fn fork_session(
@@ -198,15 +199,15 @@ impl CoordinatorApi for Coordinator {
         parent: &SessionId,
         auto_approve_level: Level,
     ) -> Result<SessionId> {
-        self.fork_session(parent, auto_approve_level).await
+        Self::fork_session(self, parent, auto_approve_level).await
     }
 
     async fn send_message(&self, session_id: &SessionId, blocks: Vec<ContentBlock>) -> Result<()> {
-        self.send_message(session_id, blocks).await
+        Self::send_message(self, session_id, blocks).await
     }
 
     async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        self.cancel(session_id).await
+        Self::cancel(self, session_id).await
     }
 
     async fn send_permission_response(
@@ -216,16 +217,16 @@ impl CoordinatorApi for Coordinator {
         approved: bool,
         remember: bool,
     ) -> Result<()> {
-        self.send_permission_response(session_id, req_id, approved, remember)
+        Self::send_permission_response(self, session_id, req_id, approved, remember)
             .await
     }
 
     async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
-        self.set_permission_level(session_id, level).await
+        Self::set_permission_level(self, session_id, level).await
     }
 
     async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        self.compact_session(session_id).await
+        Self::compact_session(self, session_id).await
     }
 
     async fn rewind_session(
@@ -234,57 +235,57 @@ impl CoordinatorApi for Coordinator {
         message_id: MessageId,
         target: RewindTarget,
     ) -> Result<()> {
-        self.rewind_session(session_id, message_id, target).await
+        Self::rewind_session(self, session_id, message_id, target).await
     }
 
     async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
-        self.rename_session(session_id, title).await
+        Self::rename_session(self, session_id, title).await
     }
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
-        self.start_goal(session_id, state).await
+        Self::start_goal(self, session_id, state).await
     }
 
     async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.pause_goal(session_id).await
+        Self::pause_goal(self, session_id).await
     }
 
     async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.resume_goal(session_id).await
+        Self::resume_goal(self, session_id).await
     }
 
     async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
-        self.get_goal(session_id).await
+        Self::get_goal(self, session_id).await
     }
 
     async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
-        self.update_goal(session_id, description).await
+        Self::update_goal(self, session_id, description).await
     }
 
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        self.stop_goal(session_id).await
+        Self::stop_goal(self, session_id).await
     }
 
     async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
-        self.delete_session(session_id).await
+        Self::delete_session(self, session_id).await
     }
 
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
-        self.get_session_messages(session_id).await
+        Self::get_session_messages(self, session_id).await
     }
 
     async fn get_session_status(
         &self,
         session_id: &SessionId,
     ) -> Result<crate::types::SessionStatus> {
-        self.get_session_status(session_id).await
+        Self::get_session_status(self, session_id).await
     }
 
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
     ) -> Result<broadcast::Receiver<Event>> {
-        self.subscribe_session_events(session_id).ok_or_else(|| {
+        Self::subscribe_session_events(self, session_id).ok_or_else(|| {
             SessionError::NotFound {
                 session_id: session_id.0.clone(),
             }
@@ -298,7 +299,7 @@ impl CoordinatorApi for Coordinator {
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
-        let (sessions, has_more) = self.list_sessions(project_id, before, limit).await?;
+        let (sessions, has_more) = Self::list_sessions(self, project_id, before, limit).await?;
         Ok(PaginatedSessions { sessions, has_more })
     }
 
@@ -306,11 +307,11 @@ impl CoordinatorApi for Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::checkpoint::Checkpoint>> {
-        self.get_checkpoints(session_id).await
+        Self::get_checkpoints(self, session_id).await
     }
 
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
-        self.get_todos(session_id).await
+        Self::get_todos(self, session_id).await
     }
 
     async fn send_ask_user_response(
@@ -319,12 +320,12 @@ impl CoordinatorApi for Coordinator {
         req_id: &str,
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
-        self.send_ask_user_response(session_id, req_id, response)
+        Self::send_ask_user_response(self, session_id, req_id, response)
             .await
     }
 
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
-        self.shutdown_session(session_id).await
+        Self::shutdown_session(self, session_id).await
     }
 
     async fn reload_agent_config(&self) -> Result<()> {
@@ -334,29 +335,33 @@ impl CoordinatorApi for Coordinator {
     }
 
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
-        self.send_steer(session_id, content).await
+        Self::send_steer(self, session_id, content).await
+    }
+
+    async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
+        Self::send_continue(self, session_id).await
     }
 
     async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
-        self.get_usage_summary().await
+        Self::get_usage_summary(self).await
     }
 
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
-        self.get_daily_usage(days).await
+        Self::get_daily_usage(self, days).await
     }
 
     async fn get_session_usage(
         &self,
         session_id: &SessionId,
     ) -> Result<crate::storage::usage::UsageSummary> {
-        self.get_session_usage(session_id).await
+        Self::get_session_usage(self, session_id).await
     }
 
     async fn create_cron_job(
         &self,
         input: crate::cron::CreateCronJobInput,
     ) -> Result<crate::cron::CronJobId> {
-        self.create_cron_job(input).await
+        Self::create_cron_job(self, input).await
     }
 
     async fn list_cron_jobs(
@@ -364,14 +369,14 @@ impl CoordinatorApi for Coordinator {
         status: Option<crate::cron::CronJobStatus>,
         limit: usize,
     ) -> Result<Vec<crate::cron::CronJob>> {
-        self.list_cron_jobs(status, limit).await
+        Self::list_cron_jobs(self, status, limit).await
     }
 
     async fn get_cron_job(
         &self,
         id: &crate::cron::CronJobId,
     ) -> Result<Option<crate::cron::CronJob>> {
-        self.get_cron_job(id).await
+        Self::get_cron_job(self, id).await
     }
 
     async fn update_cron_job(
@@ -379,11 +384,11 @@ impl CoordinatorApi for Coordinator {
         id: &crate::cron::CronJobId,
         input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool> {
-        self.update_cron_job(id, input).await
+        Self::update_cron_job(self, id, input).await
     }
 
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
-        self.delete_cron_job(id).await
+        Self::delete_cron_job(self, id).await
     }
 }
 
@@ -1155,6 +1160,15 @@ impl CoordinatorApi for RemoteCoordinator {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
             cmd: ControlCommand::Steer { content },
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
+        self.call(RequestMethod::Command {
+            session_id: session_id.0.clone(),
+            cmd: ControlCommand::Continue,
         })
         .await?;
         Ok(())

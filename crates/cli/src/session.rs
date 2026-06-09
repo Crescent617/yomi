@@ -364,6 +364,14 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send steer: {}", e);
                     }
                 }
+                ControlCommand::Continue => {
+                    if let Err(e) = coord_for_ctrl
+                        .send_continue(&session_id_for_ctrl)
+                        .await
+                    {
+                        tracing::error!("Failed to send continue: {}", e);
+                    }
+                }
                 ControlCommand::GetGoal => {
                     // GetGoal is a query; no-op for CLI since it returns a value
                     tracing::debug!("GetGoal command received in CLI session — no action");

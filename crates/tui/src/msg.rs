@@ -68,6 +68,8 @@ pub enum Msg {
 
     // Slash commands (String = raw user input, e.g. "/goal do stuff")
     CommandNew,                      // /new - create new session
+    CommandFork,                     // /fork - fork current session
+    CommandContinue,                 // /continue - trigger agent to continue
     CommandGoal(String),             // /goal <description> - start autonomous goal mode
     CommandGoalStop,                 // /goal:stop - stop autonomous goal mode
     CommandYolo,                     // /yolo - toggle yolo mode

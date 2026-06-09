@@ -62,6 +62,7 @@ pub fn run() {
             commands::chat::edit_goal,
             commands::chat::get_goal,
             commands::chat::rename_session,
+            commands::chat::continue_session,
             commands::chat::send_steer,
             commands::chat::stop_goal,
             commands::automation::list_cron_jobs,
@@ -108,7 +109,7 @@ fn main() {
     run();
 }
 
-/// Initialise rolling-file logging to `~/.yomi/logs/app.log` **and stderr**.
+/// Initialise daily-rotating file logging to `~/.yomi/logs/gui-app.<date>.log` **and stderr**.
 /// Falls back to stderr-only if the log directory cannot be created.
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let config_file = kernel::config::Config::discover_file();
@@ -130,18 +131,17 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         return None;
     }
 
-    let log_path = log_dir.join("gui-app.log");
-    let file_appender = match tracing_rolling_file::RollingFileAppenderBase::builder()
-        .filename(log_path.to_string_lossy().to_string())
-        .condition_max_file_size(10 * 1024 * 1024)
-        .max_filecount(5)
-        .build()
+    let file_appender = match tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("gui-app")
+        .filename_suffix("log")
+        .build(&log_dir)
     {
         Ok(a) => a,
         Err(e) => {
             eprintln!(
-                "Failed to create rolling file appender for '{}': {e}. Logging to stderr only.",
-                log_path.display()
+                "Failed to create rolling file appender in '{}': {e}. Logging to stderr only.",
+                log_dir.display()
             );
             let _ = tracing_subscriber::fmt::try_init();
             return None;

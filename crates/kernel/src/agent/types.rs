@@ -404,6 +404,13 @@ impl AgentShared {
         self
     }
 
+    /// Set the goal store
+    #[must_use]
+    pub fn with_goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
+        self.goal_store = Some(store);
+        self
+    }
+
     /// Set the hook registry (wrapped for hot-reload)
     #[must_use]
     pub fn with_hook_registry(
@@ -451,8 +458,8 @@ pub enum AgentError {
     MaxIterationsExceeded { count: usize },
 
     /// Cancelled is a terminal error - agent was cancelled by user or parent
-    #[error("Agent was cancelled")]
-    Cancelled,
+    #[error("Cancelled: {0}")]
+    Cancelled(String),
 
     /// Input channel closed unexpectedly
     #[error("Input channel closed")]
@@ -494,7 +501,7 @@ impl AgentError {
             Provider(e) => e.is_retryable(),
             // These errors should NOT be retried
             MaxIterationsExceeded { .. }
-            | Cancelled
+            | Cancelled(_)
             | ChannelClosed
             | ChannelFull
             | PermissionCheckFailed(_)
@@ -507,7 +514,7 @@ impl AgentError {
 
     /// Check if this is a cancellation error (terminal, not a failure)
     pub fn is_cancelled(&self) -> bool {
-        matches!(self, AgentError::Cancelled)
+        matches!(self, AgentError::Cancelled(_))
     }
 }
 

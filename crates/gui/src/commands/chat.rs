@@ -574,3 +574,18 @@ pub async fn send_steer(
         .map_err(GuiError::kernel)?;
     Ok(())
 }
+// ── Continue command ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn continue_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .send_continue(&sid)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}

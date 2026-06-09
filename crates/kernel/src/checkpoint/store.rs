@@ -651,6 +651,101 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         info!("Deleted {} checkpoints for session {}", count, session_id);
         Ok(count)
     }
+
+    async fn copy_session_checkpoints(
+        &self,
+        from_session_id: &str,
+        to_session_id: &str,
+    ) -> Result<u64> {
+        let from_dir = self.session_dir(from_session_id);
+        if !from_dir.exists() {
+            return Ok(0);
+        }
+
+        let to_dir = self.session_dir(to_session_id);
+        let mut count = 0u64;
+
+        // Copy manifest
+        let from_manifest = self.manifest_path(from_session_id);
+        if from_manifest.exists() {
+            let to_manifest = self.manifest_path(to_session_id);
+            if let Some(parent) = to_manifest.parent() {
+                fs::create_dir_all(parent).await.map_err(|e| {
+                    KernelError::io(format!("Failed to create session directory: {e}"))
+                })?;
+            }
+            if !to_manifest.exists() {
+                fs::copy(&from_manifest, &to_manifest).await.map_err(|e| {
+                    KernelError::io(format!("Failed to copy manifest: {e}"))
+                })?;
+                count += 1;
+            }
+        }
+
+        // Copy checkpoint directories
+        let entries = fs::read_dir(&from_dir)
+            .await
+            .map_err(|e| KernelError::io(format!("Failed to read session directory: {e}")))?;
+        let mut entries = entries;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| KernelError::io(format!("Failed to read directory entry: {e}")))?
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                let to_path = to_dir.join(path.file_name().unwrap_or_default());
+                if !to_path.exists() {
+                    Self::copy_dir_recursive(&path, &to_path).await?;
+                    count += 1;
+                }
+            }
+        }
+
+        info!(
+            "Copied {} checkpoints from {} to {}",
+            count, from_session_id, to_session_id
+        );
+        Ok(count)
+    }
+
+}
+
+impl FilesystemCheckpointStore {
+    async fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+        fs::create_dir_all(to).await.map_err(|e| {
+            KernelError::io(format!("Failed to create directory: {e}"))
+        })?;
+
+        let mut stack = vec![(from.to_path_buf(), to.to_path_buf())];
+
+        while let Some((src_dir, dst_dir)) = stack.pop() {
+            let mut entries = fs::read_dir(&src_dir)
+                .await
+                .map_err(|e| KernelError::io(format!("Failed to read directory: {e}")))?;
+
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|e| KernelError::io(format!("Failed to read directory entry: {e}")))?
+            {
+                let path = entry.path();
+                let to_path = dst_dir.join(path.file_name().unwrap_or_default());
+                if path.is_dir() {
+                    fs::create_dir_all(&to_path).await.map_err(|e| {
+                        KernelError::io(format!("Failed to create directory: {e}"))
+                    })?;
+                    stack.push((path, to_path));
+                } else if !to_path.exists() {
+                    fs::copy(&path, &to_path).await.map_err(|e| {
+                        KernelError::io(format!("Failed to copy file: {e}"))
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -388,6 +388,10 @@ impl SimpleAgent {
             message_id: msg.id.clone(),
         }));
 
+        if result.finish_reason.is_none() {
+            tracing::error!("Agent {} model response has no finish_reason", self.agent_id);
+        }
+
         Ok((msg, result.token_usage))
     }
 
