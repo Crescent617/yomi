@@ -1,5 +1,5 @@
 use crate::agent::{AgentConfig, AgentShared, AgentState};
-use crate::app::session::{Session, SessionConfig, normalize_session_title};
+use crate::app::session::{normalize_session_title, Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
@@ -544,7 +544,7 @@ impl Coordinator {
             .await?;
         // Set title: "Forked: <parent_title>"
         let parent_title = parent_info.title.as_deref().unwrap_or("Untitled");
-        let new_title = format!("Forked: {}", parent_title);
+        let new_title = format!("Forked: {parent_title}");
         self.rename_session(&new_id, new_title).await?;
         tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
 
@@ -553,7 +553,11 @@ impl Coordinator {
         if let Ok(msgs) = message_store.get(&parent_id.0).await {
             if !msgs.is_empty() {
                 if let Err(e) = message_store.replace(&new_id.0, &msgs).await {
-                    tracing::warn!("Failed to copy message history for fork {}: {}", new_id.0, e);
+                    tracing::warn!(
+                        "Failed to copy message history for fork {}: {}",
+                        new_id.0,
+                        e
+                    );
                 } else {
                     tracing::info!("Copied {} messages for fork {}", msgs.len(), new_id.0);
                 }
@@ -583,8 +587,10 @@ impl Coordinator {
         // Copy file states from parent to child
         let data_dir = self.data_dir().await;
         let file_states_dir = data_dir.join("sessions").join("file_states");
-        let parent_file_state = file_states_dir.join(format!("{}.jsonl", parent_id.0.replace(['/', '\\'], "_")));
-        let child_file_state = file_states_dir.join(format!("{}.jsonl", new_id.0.replace(['/', '\\'], "_")));
+        let parent_file_state =
+            file_states_dir.join(format!("{}.jsonl", parent_id.0.replace(['/', '\\'], "_")));
+        let child_file_state =
+            file_states_dir.join(format!("{}.jsonl", new_id.0.replace(['/', '\\'], "_")));
         if parent_file_state.exists() {
             if let Err(e) = tokio::fs::copy(&parent_file_state, &child_file_state).await {
                 tracing::warn!("Failed to copy file state for fork {}: {}", new_id.0, e);
@@ -595,7 +601,10 @@ impl Coordinator {
 
         // Copy checkpoints from parent to child
         let checkpoint_store = self.checkpoint_store().await;
-        match checkpoint_store.copy_session_checkpoints(&parent_id.0, &new_id.0).await {
+        match checkpoint_store
+            .copy_session_checkpoints(&parent_id.0, &new_id.0)
+            .await
+        {
             Ok(0) => tracing::debug!("No checkpoints to copy for fork {}", new_id.0),
             Ok(n) => tracing::info!("Copied {} checkpoints for fork {}", n, new_id.0),
             Err(e) => tracing::warn!("Failed to copy checkpoints for fork {}: {}", new_id.0, e),

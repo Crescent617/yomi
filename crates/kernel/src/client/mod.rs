@@ -217,8 +217,7 @@ impl CoordinatorApi for Coordinator {
         approved: bool,
         remember: bool,
     ) -> Result<()> {
-        Self::send_permission_response(self, session_id, req_id, approved, remember)
-            .await
+        Self::send_permission_response(self, session_id, req_id, approved, remember).await
     }
 
     async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
@@ -320,8 +319,7 @@ impl CoordinatorApi for Coordinator {
         req_id: &str,
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
-        Self::send_ask_user_response(self, session_id, req_id, response)
-            .await
+        Self::send_ask_user_response(self, session_id, req_id, response).await
     }
 
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {

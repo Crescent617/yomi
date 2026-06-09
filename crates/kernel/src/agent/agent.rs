@@ -903,7 +903,12 @@ impl Agent {
             Some(fr) => fr,
             None => {
                 tracing::warn!("Agent {} model response has no finish_reason", self.id);
-                self.emit_error(crate::event::ErrorPhase::Streaming, "model response missing finish_reason", true).await;
+                self.emit_error(
+                    crate::event::ErrorPhase::Streaming,
+                    "model response missing finish_reason",
+                    true,
+                )
+                .await;
                 crate::types::FinishReason::Stop
             }
         };
