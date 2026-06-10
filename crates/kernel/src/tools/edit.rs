@@ -28,16 +28,126 @@ impl FileStateAwareTool for EditTool {
         self.file_state_store.as_ref()
     }
 }
-/// Find the actual string in file content.
+struct Normalized {
+    text: String,
+    // 规范化文本中每个字符位置对应的原始文本字节起始位置
+    byte_map: Vec<usize>,
+}
+
+impl Normalized {
+    fn build(content: &str, normalize: impl Fn(char) -> char) -> Self {
+        let mut text = String::with_capacity(content.len());
+        let mut byte_map = Vec::with_capacity(content.len());
+        let mut chars = content.char_indices().peekable();
+
+        while let Some((start_byte, c)) = chars.next() {
+            match c {
+                // CRLF 处理：把 \r\n 映射为 \n，但记录 \r 的起始位置
+                '\r' if matches!(chars.peek(), Some(&(_, '\n'))) => {
+                    chars.next(); // consume '\n'
+                    text.push('\n');
+                    byte_map.push(start_byte);
+                }
+                c => {
+                    let nc = normalize(c);
+                    text.push(nc);
+                    for _ in 0..nc.len_utf8() {
+                        byte_map.push(start_byte);
+                    }
+                }
+            }
+        }
+
+        Self { text, byte_map }
+    }
+
+    fn map_range(&self, start: usize, end: usize, orig_len: usize) -> Option<(usize, usize)> {
+        if self.byte_map.is_empty() {
+            return Some((0, 0));
+        }
+        let orig_start = self.byte_map[start.min(self.byte_map.len() - 1)];
+        let orig_end = if end >= self.byte_map.len() {
+            orig_len
+        } else {
+            self.byte_map[end]
+        };
+        if orig_end <= orig_start {
+            return None;
+        }
+        Some((orig_start, orig_end))
+    }
+}
+
+fn normalize_char_quotes(c: char) -> char {
+    match c {
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{2032}' | '\u{FF07}' => '\'',
+        '\u{201c}' | '\u{201d}' | '\u{201E}' | '\u{2033}' | '\u{FF02}' => '"',
+        _ => c,
+    }
+}
+
+fn normalize_char_full(c: char) -> char {
+    match c {
+        '\n' | '\r' | '\t' => c,
+        c if is_unicode_whitespace(c) => ' ',
+        c => normalize_char_quotes(c),
+    }
+}
+
+fn is_unicode_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00A0}'      // NBSP
+        | '\u{2000}'..='\u{200A}'  // En Quad / Em Quad / En Space / Em Space / Three-Per-Em / Four-Per-Em / Six-Per-Em / Figure / Punctuation / Thin / Hair
+        | '\u{202F}'     // Narrow No-Break Space
+        | '\u{205F}'     // Medium Mathematical Space
+        | '\u{3000}'     // Ideographic Space
+    )
+}
+
+/// Check if a string contains any characters that could be normalized
+/// (CRLF, curly quotes, or unicode whitespace).
+fn has_normalizable_chars(s: &str) -> bool {
+    s.contains('\r')
+        || s.chars()
+            .any(|c| normalize_char_quotes(c) != c || is_unicode_whitespace(c))
+}
+
+/// Find the actual string in file content, with quote/whitespace normalization.
 ///
-/// Returns `Some(search_string)` if found, None otherwise.
-/// This is a simple wrapper that may be extended for quote normalization in the future.
+/// Returns the original file substring if found, or None otherwise.
 fn find_actual_string(file_content: &str, search_string: &str) -> Option<String> {
     if file_content.contains(search_string) {
-        Some(search_string.to_string())
-    } else {
-        None
+        return Some(search_string.to_string());
     }
+
+    // Quick exit: if neither string contains any normalizable characters,
+    // no fallback stage will succeed (both are already in normalized form).
+    if !has_normalizable_chars(file_content) && !has_normalizable_chars(search_string) {
+        return None;
+    }
+
+    // Stage 1: quotes + newlines (CRLF handling)
+    let norm_file = Normalized::build(file_content, normalize_char_quotes);
+    let norm_search = Normalized::build(search_string, normalize_char_quotes);
+    if let Some(pos) = norm_file.text.find(norm_search.text.as_str()) {
+        let end = pos + norm_search.text.len();
+        if let Some((start, end)) = norm_file.map_range(pos, end, file_content.len()) {
+            return Some(file_content[start..end].to_string());
+        }
+    }
+
+    // Stage 2: + unicode whitespace
+    let norm_file = Normalized::build(file_content, normalize_char_full);
+    let norm_search = Normalized::build(search_string, normalize_char_full);
+    if let Some(pos) = norm_file.text.find(norm_search.text.as_str()) {
+        let end = pos + norm_search.text.len();
+        if let Some((start, end)) = norm_file.map_range(pos, end, file_content.len()) {
+            return Some(file_content[start..end].to_string());
+        }
+    }
+
+    None
 }
 
 #[async_trait]
@@ -286,5 +396,208 @@ mod tests {
 
         let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
         assert_eq!(new_content, "goodbye world\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_crlf() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "line1\r\nline2\r\n").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "line1\nline2",
+            "new_str": "foo\nbar"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "foo\nbar\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_curly_quotes() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "println!(\u{2018}hello\u{2019});").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "println!('hello');",
+            "new_str": "println!('world');"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "println!('world');");
+    }
+
+    #[tokio::test]
+    async fn test_edit_unicode_whitespace() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "let\u{00a0}x = 1;").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "let x = 1;",
+            "new_str": "let y = 2;"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "let y = 2;");
+    }
+
+    #[tokio::test]
+    async fn test_edit_crlf_multi() {
+        // 多个 CRLF 连续：文件 a\r\nb\r\nc\r\n，搜索 b\nc，替换 X\nY
+        // 验证映射不会越界，只替换中间一段
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "a\r\nb\r\nc\r\n").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "b\nc",
+            "new_str": "X\nY"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "a\r\nX\nY\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_edit_crlf_mixed_lf() {
+        // CRLF + 纯 LF 混合：文件 a\r\nb\nc，搜索 b\nc
+        // 验证匹配到纯 LF 段，映射提取的是 b\nc 而非 b\r\nc
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "a\r\nb\nc").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "b\nc",
+            "new_str": "X\nY"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "a\r\nX\nY");
+    }
+
+    #[tokio::test]
+    async fn test_edit_crlf_trailing() {
+        // 文件末尾 CRLF：a\r\n，搜索 a\n，替换 X
+        // 验证 end == byte_map.len() 的 map_range 边界（orig_end = orig_len）
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "a\r\n").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "a\n",
+            "new_str": "X"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "X");
+    }
+
+    #[tokio::test]
+    async fn test_edit_fullwidth_quotes() {
+        // 全角引号：\u{FF07} (') \u{FF02} (")
+        let mut temp_file = NamedTempFile::new().unwrap();
+        write!(temp_file, "say\u{FF07}hello\u{FF02}world\u{FF07}").unwrap();
+        let path = temp_file.path().parent().unwrap();
+        let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
+
+        let store = Arc::new(FileStateStore::new());
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        store
+            .record(temp_file.path().canonicalize().unwrap(), mtime)
+            .await;
+
+        let tool = EditTool::new(store);
+        let args = serde_json::json!({
+            "path": file_name,
+            "old_str": "say'hello\"world'",
+            "new_str": "print'goodbye\"earth'"
+        });
+
+        let ctx = ToolExecCtx::new("test_tool_call", path, "test-session");
+        let result = tool.exec(args, ctx).await.unwrap();
+        assert!(!result.is_error);
+
+        let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
+        assert_eq!(new_content, "print'goodbye\"earth'");
     }
 }

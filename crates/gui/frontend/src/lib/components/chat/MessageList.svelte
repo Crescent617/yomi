@@ -112,17 +112,10 @@
       }
 
       const hasText = hasTextContent(msg);
-      const hasAct = hasActions(msg);
-
-      if (hasAct) {
-        // 包含 thinking/tool 的助理消息，聚合到 group（content 留在后面露出）
+      if (hasActions(msg)) {
         group.push(msg);
-      } else if (hasText) {
-        // 纯文本助理消息
-        flush();
-        items.push({ type: "message", message: msg, isStreaming: streaming && isLast });
+        if (hasText) flush();
       } else {
-        // 空消息
         flush();
         items.push({ type: "message", message: msg, isStreaming: streaming && isLast });
       }
