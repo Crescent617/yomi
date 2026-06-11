@@ -147,14 +147,16 @@
       {/if}
 
       {#if isRunning && elapsedMs > 0}
-        <span class="text-muted-foreground/70 shrink-0">· calling {formatElapsed(elapsedMs)}</span>
+        <span class="text-muted-foreground/70 shrink-0">{formatElapsed(elapsedMs)}</span>
       {/if}
 
       {#if currentTool}
-        <span class="text-muted-foreground/70 truncate">· {currentTool.toolName}</span>
+        <span class="text-muted-foreground/70 truncate">· calling {currentTool.toolName}</span>
         {#if currentTool.progress}
           <span class="text-muted-foreground/50 truncate max-w-60">· {currentTool.progress}</span>
         {/if}
+      {:else if session?.phase === "streaming"}
+        <span class="text-muted-foreground/70 shrink-0">· generating</span>
       {/if}
     </div>
 
