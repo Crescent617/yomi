@@ -3,7 +3,6 @@ mod commands;
 mod daemon;
 mod error;
 mod state;
-mod terminal;
 
 use std::sync::Arc;
 
@@ -87,10 +86,8 @@ pub fn run() {
             commands::system::open_in_zed,
             commands::system::open_in_editor,
             commands::system::get_git_info,
-            commands::terminal::terminal_spawn,
-            commands::terminal::terminal_write,
-            commands::terminal::terminal_resize,
-            commands::terminal::terminal_kill,
+            commands::system::get_git_diff_summary,
+            commands::system::get_git_file_diff_raw,
         ]);
 
     #[cfg(debug_assertions)]

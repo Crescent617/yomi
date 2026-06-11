@@ -11,7 +11,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff, Command } from "lucide-svelte";
+  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff, Command } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
   import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
@@ -20,7 +20,7 @@
   import FilePicker from "../filePicker/FilePicker.svelte";
   import type { TaggedContentBlock } from "../../types";
 
-  let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void } = $props();
+  let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel, leftPanelCollapsed }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void; leftPanelCollapsed?: boolean } = $props();
 
   const activeSession = $derived(getActiveSession());
 
@@ -265,7 +265,7 @@
             projectId: s.projectId,
             alias: s.title ?? "Untitled",
             messages: [],
-            streaming: false,
+            phase: "idle",
             unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
@@ -553,15 +553,19 @@
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2 border-b border-border">
     <div class="flex items-center gap-2 min-w-0">
-      <!-- Mobile sidebar toggle -->
+      <!-- Left panel toggle -->
       {#if onToggleLeftPanel}
         <button
           type="button"
           onclick={() => onToggleLeftPanel()}
-          class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
-          title="Toggle sidebar"
+          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+          title={leftPanelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
-          <PanelLeftOpen size={16} />
+          {#if leftPanelCollapsed}
+            <PanelLeftOpen size={16} />
+          {:else}
+            <PanelLeftClose size={16} />
+          {/if}
         </button>
       {/if}
       {#if editingTitle}
@@ -605,7 +609,7 @@
         {/if}
       {/if}
     </div>
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-0.5">
       {#if activeSession.projectPath}
         <div class="relative">
           <button

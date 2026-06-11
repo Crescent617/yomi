@@ -12,11 +12,16 @@
 
   let mobileSidebarOpen = $state(false);
   let leftSidebarWidth = $state(256);
-  let rightSidebarWidth = $state(288);
+  let rightSidebarWidth = $state(560);
+  let hasInitializedWidth = $state(false);
   let isDraggingLeft = $state(false);
   let isDraggingRight = $state(false);
 
   onMount(() => {
+    if (!hasInitializedWidth) {
+      rightSidebarWidth = Math.max(300, window.innerWidth / 2);
+      hasInitializedWidth = true;
+    }
     loadProjects();
   });
 
@@ -43,6 +48,18 @@
 
   function toggleMobileSidebar() {
     mobileSidebarOpen = !mobileSidebarOpen;
+  }
+
+  function toggleLeftSidebar() {
+    appState.sidebarCollapsed = !appState.sidebarCollapsed;
+  }
+
+  function handleToggleLeft() {
+    if (window.innerWidth < 1024) {
+      toggleMobileSidebar();
+    } else {
+      toggleLeftSidebar();
+    }
   }
 
   function startDragLeft(e: MouseEvent) {
@@ -75,7 +92,7 @@
 
     function onMove(ev: MouseEvent) {
       const delta = startX - ev.clientX;
-      rightSidebarWidth = Math.max(200, Math.min(400, startWidth + delta));
+      rightSidebarWidth = Math.max(300, startWidth + delta);
     }
     function onUp() {
       isDraggingRight = false;
@@ -137,25 +154,45 @@
 
       <ChatView
         rightPanelCollapsed={appState.rightPanelCollapsed}
+        leftPanelCollapsed={appState.sidebarCollapsed}
         onToggleRightPanel={() => appState.rightPanelCollapsed = !appState.rightPanelCollapsed}
-        onToggleLeftPanel={toggleMobileSidebar}
+        onToggleLeftPanel={handleToggleLeft}
       />
 
-      {#if !appState.rightPanelCollapsed}
-        <aside
-          class="hidden lg:flex flex-col border-l border-border shrink-0 relative overflow-hidden
-                 {isDraggingRight ? '' : 'transition-all duration-300 ease-out'}"
-          style="width: {rightSidebarWidth}px"
-        >
+      <!-- Desktop right panel -->
+      <aside
+        class="hidden lg:flex flex-col border-l border-border shrink-0 relative overflow-hidden
+               {isDraggingRight ? '' : 'transition-[width] duration-300 ease-out'}
+               {appState.rightPanelCollapsed ? 'border-l-0' : ''}"
+        style="width: {appState.rightPanelCollapsed ? 0 : rightSidebarWidth}px"
+      >
+        {#if !appState.rightPanelCollapsed}
           <div
             class="absolute left-0 top-0 bottom-0 w-[2px] cursor-col-resize hover:bg-primary/50 z-10"
             onmousedown={startDragRight}
             role="separator"
             aria-label="Resize right panel"
           ></div>
-          <RightPanel session={activeSession} />
-        </aside>
-      {/if}
+        {/if}
+        <RightPanel session={activeSession} />
+      </aside>
+
+      <!-- Mobile right panel overlay -->
+      <div
+        class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
+               transition-opacity duration-200
+               {appState.rightPanelCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}"
+        onclick={() => appState.rightPanelCollapsed = true}
+        role="presentation"
+      ></div>
+      <div
+        class="fixed right-0 top-0 bottom-0 z-50 w-[90vw] border-l border-border bg-background shadow-xl
+               transition-transform duration-300 ease-out lg:hidden flex flex-col
+               {appState.rightPanelCollapsed ? 'translate-x-full' : 'translate-x-0'}"
+        style="max-width: 500px;"
+      >
+        <RightPanel session={activeSession} onClose={() => appState.rightPanelCollapsed = true} />
+      </div>
     {:else if appState.activePanel === "usage"}
       <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />
     {:else if appState.activePanel === "automation"}

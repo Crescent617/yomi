@@ -5,4 +5,3 @@ pub mod project;
 pub mod session;
 pub mod skill;
 pub mod system;
-pub mod terminal;

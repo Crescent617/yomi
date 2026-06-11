@@ -89,7 +89,7 @@
             projectId: s.projectId,
             alias: s.title ?? "Untitled",
             messages: [],
-            streaming: false,
+          phase: "idle",
             unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
@@ -187,7 +187,7 @@
         projectId,
         alias: "Untitled",
         messages: [],
-        streaming: false,
+        phase: "idle",
         unread: 0,
         checkpoints: [],
         tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
@@ -268,11 +268,15 @@
     {#if collapsed}
       {#each projectState.projects as project (project.id)}
         <div class="flex flex-col items-center gap-1">
+          <!-- Project divider -->
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold bg-transparent text-muted-foreground mt-1 mb-0.5" title={project.name}>
+            {project.name.slice(0, 2).toUpperCase()}
+          </div>
           {#each getSessions(project.id) as session (session.id)}
             <button
               class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id === sessionState.activeSessionId ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
               onclick={() => activateSession(session.id)}
-              title="{(session.alias ?? "Untitled").slice(0, 2)}"
+              title={session.alias ?? "Untitled"}
             >
               {(session.alias ?? "Untitled").slice(0, 2).toUpperCase()}
             </button>
@@ -302,8 +306,8 @@
               {:else}
                 <span class="truncate font-medium">{project.name}</span>
               {/if}
-              {#if getSessions(project.id).some((s) => s.streaming || s.compacting)}
-                <span class="w-1.5 h-1.5 rounded-full {getSessions(project.id).some((s) => s.streaming) ? 'bg-primary' : 'bg-amber-500'} animate-pulse shrink-0"></span>
+              {#if getSessions(project.id).some((s) => (s.phase !== "idle" && s.phase !== "closed") || s.compacting)}
+                <span class="w-1.5 h-1.5 rounded-full {getSessions(project.id).some((s) => s.phase === "streaming" || s.phase === "executing_tool") ? 'bg-primary' : 'bg-amber-500'} animate-pulse shrink-0"></span>
               {/if}
             </button>
 
@@ -351,8 +355,8 @@
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
-                    {#if session.streaming || session.compacting}
-                      <span class="w-1.5 h-1.5 rounded-full {session.streaming ? 'bg-primary' : 'bg-amber-500'} animate-pulse"></span>
+                    {#if (session.phase !== "idle" && session.phase !== "closed") || session.compacting}
+                      <span class="w-1.5 h-1.5 rounded-full {session.phase === "streaming" || session.phase === "executing_tool" ? 'bg-primary' : 'bg-amber-500'} animate-pulse"></span>
                     {/if}
                     <div class="relative">
                       <button class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100" onclick={(e: Event) => { e.stopPropagation(); showSessionMenu = showSessionMenu === session.id ? null : session.id; }}>

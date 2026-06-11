@@ -3,7 +3,7 @@
   import { sessionState, appState } from "../../state.svelte";
 
   const streamingCount = $derived(
-    sessionState.sessions.filter((s) => s.streaming).length
+    sessionState.sessions.filter((s) => s.phase === "streaming" || s.phase === "executing_tool").length
   );
 
   const anyStreaming = $derived(streamingCount > 0);

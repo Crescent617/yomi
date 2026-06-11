@@ -186,7 +186,7 @@ export async function getMessages(sessionId: string): Promise<unknown[]> {
   return invokeCmd("get_messages", { sessionId });
 }
 
-export async function getSessionStatus(sessionId: string): Promise<{ streaming: boolean; compacting: boolean }> {
+export async function getSessionStatus(sessionId: string): Promise<{ phase: string; compacting: boolean }> {
   return invokeCmd("get_session_status", { sessionId });
 }
 
@@ -333,6 +333,19 @@ export interface GitInfo {
   deletedLines: number;
   untracked: number;
   repoRoot?: string;
+}
+
+export interface GitDiffFileSummary {
+  path: string;
+  status: string;
+}
+
+export async function getGitDiffSummary(path: string, staged: boolean): Promise<GitDiffFileSummary[] | null> {
+  return invokeCmd<GitDiffFileSummary[] | null>("get_git_diff_summary", { path, staged });
+}
+
+export async function getGitFileDiffRaw(path: string, filePath: string, staged: boolean): Promise<string | null> {
+  return invokeCmd<string | null>("get_git_file_diff_raw", { path, filePath, staged });
 }
 
 const inflightGit = new Map<string, Promise<GitInfo | null>>();

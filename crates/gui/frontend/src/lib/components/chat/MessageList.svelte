@@ -8,8 +8,8 @@
   import ActionGroup from "./ActionGroup.svelte";
   import TextBlock from "./TextBlock.svelte";
   import GoalBar from "./GoalBar.svelte";
-  import OperationBar from "./OperationBar.svelte";
   import type { ChatMessage } from "../../state.svelte";
+  import { formatMessageTime } from "../../utils";
 
   const activeSession = $derived(getActiveSession());
   const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
@@ -126,7 +126,7 @@
   }
 
   const displayItems = $derived(
-    activeSession ? buildDisplayItems(displayMessages, activeSession.streaming) : []
+    activeSession ? buildDisplayItems(displayMessages, activeSession.phase === "streaming") : []
   );
 </script>
 
@@ -140,7 +140,7 @@
             {@const msg = item.message}
             <div class="group relative">
               {#if msg.role === "user"}
-                <UserBubble message={msg} />
+                <UserBubble message={msg} sessionId={activeSession.id} />
               {:else if msg.error || msg.role === "error"}
                 <ErrorBubble message={msg} />
               {:else if msg.role === "system"}
@@ -148,21 +148,28 @@
               {:else}
                 <AssistantBubble message={msg} isStreaming={item.isStreaming} />
               {/if}
-              {#if msg.role === "user"}
-                <div class="absolute right-0 bottom-0 translate-y-full opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                  <OperationBar message={msg} sessionId={activeSession.id} />
+              {#if msg.createdAt && !item.isStreaming}
+                <div class="absolute right-2 -bottom-5 text-[11px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                  {formatMessageTime(msg.createdAt)}
                 </div>
               {/if}
             </div>
           {:else}
-            <ActionGroup messages={item.messages} isStreaming={item.isStreaming} />
-            {#each item.messages as m (m.id)}
-              {#if m.content?.trim()}
-                <div class="w-full space-y-1 mt-1">
-                  <TextBlock content={m.content} isStreaming={item.isStreaming} />
+            <div class="group relative">
+              <ActionGroup messages={item.messages} isStreaming={item.isStreaming} />
+              {#each item.messages as m (m.id)}
+                {#if m.content?.trim()}
+                  <div class="w-full space-y-1 mt-3">
+                    <TextBlock content={m.content} isStreaming={item.isStreaming} />
+                  </div>
+                {/if}
+              {/each}
+              {#if item.messages[item.messages.length - 1]?.createdAt && !item.isStreaming}
+                <div class="absolute left-2 -bottom-4 text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                  {formatMessageTime(item.messages[item.messages.length - 1].createdAt)}
                 </div>
               {/if}
-            {/each}
+            </div>
           {/if}
         {/each}
       </div>

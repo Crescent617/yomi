@@ -5,13 +5,10 @@ use tokio_util::sync::CancellationToken;
 
 use kernel::client::CoordinatorApi;
 
-use crate::terminal::manager::TerminalManager;
-
 pub struct AppState {
     pub coordinator: Arc<dyn CoordinatorApi>,
     pub active_session: Arc<Mutex<Option<String>>>,
     pub event_tasks: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
-    pub terminal_manager: Arc<Mutex<TerminalManager>>,
     /// Shutdown token for the cron subsystem (only present in GUI in-process mode).
     cron_shutdown: Option<CancellationToken>,
     /// Direct access to cron store for automation CRUD commands.
@@ -33,7 +30,6 @@ impl AppState {
             coordinator,
             active_session: Arc::new(Mutex::new(None)),
             event_tasks: Arc::new(Mutex::new(HashMap::new())),
-            terminal_manager: Arc::new(Mutex::new(TerminalManager::new())),
             cron_shutdown,
             cron_store,
             cron_scheduler,

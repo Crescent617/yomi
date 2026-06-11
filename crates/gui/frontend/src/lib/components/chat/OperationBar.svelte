@@ -56,7 +56,7 @@
 
 </script>
 
-<div class="flex items-center gap-0 opacity-0 group-hover:opacity-100 transition-opacity">
+<div class="flex items-center gap-0 opacity-100 transition-opacity">
   <button
     type="button"
     onclick={copyText}
