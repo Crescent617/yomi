@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { ChatMessage } from "../../state.svelte";
   import { Marked } from "marked";
+  import OperationBar from "./OperationBar.svelte";
 
-  let { message }: { message: ChatMessage } = $props();
+  let { message, sessionId }: { message: ChatMessage; sessionId: string } = $props();
 
   const md = new Marked();
   md.setOptions({ gfm: true, breaks: true });
@@ -63,8 +64,8 @@
   }
 </style>
 
-<div class="flex justify-end">
-  <div class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm user-text space-y-2">
+<div class="flex justify-end group">
+  <div class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm user-text space-y-2 relative">
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
@@ -96,5 +97,8 @@
         </button>
       {/if}
     {/if}
+    <div class="absolute left-0 -bottom-6 pl-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+      <OperationBar message={message} sessionId={sessionId} />
+    </div>
   </div>
 </div>

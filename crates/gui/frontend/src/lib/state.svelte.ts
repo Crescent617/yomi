@@ -13,7 +13,7 @@ export function scheduleUnsubscribe(sessionId: string) {
   const session = getSession(sessionId);
   if (!session) return;
   if (session.id === sessionState.activeSessionId) return; // 当前活跃的，不清理
-  if (session.streaming) return; // 正在 streaming，不清理
+  if (session.phase !== "idle" && session.phase !== "closed") return; // 正在运行，不清理
   if (session.compacting) return; // 正在 compacting，不清理
 
   cancelPendingUnsubscribe(sessionId);
@@ -75,7 +75,7 @@ export interface ToolCall {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "error";
   content: string;
   contentBlocks?: TaggedContentBlock[];
   thinking?: { content: string; elapsedMs: number } | null;
@@ -83,6 +83,7 @@ export interface ChatMessage {
   error?: boolean;
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   raw?: unknown;
+  createdAt?: string;
 }
 
 export interface ProjectState {
@@ -131,7 +132,7 @@ export interface SessionState {
   projectId?: string;
   alias?: string;
   messages: ChatMessage[];
-  streaming: boolean;
+  phase: string;
   unread: number;
   checkpoints: unknown[];
   tabs: Tab[];
@@ -240,7 +241,7 @@ export function refreshSessions() {
           projectId: s.projectId,
           alias: s.title,
           messages: [],
-          streaming: false,
+          phase: "idle",
           unread: 0,
           checkpoints: [],
           tabs: [],
@@ -292,10 +293,10 @@ function upsertSession(session: SessionState) {
 
 
 
-export function syncSessionStatus(sessionId: string, status: { streaming: boolean; compacting: boolean }) {
+export function syncSessionStatus(sessionId: string, status: { phase: string; compacting: boolean }) {
   const session = getSession(sessionId);
   if (!session) return;
-  session.streaming = status.streaming;
+  session.phase = status.phase;
   session.compacting = status.compacting;
 }
 
@@ -348,16 +349,14 @@ function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" 
   return "assistant";
 }
 
-import type { TaggedContentBlock } from "./types";
-
-// ── State ────────────────────────────────────────────────────────────────
-
-export interface ChatMessage {
+export interface RawMessage {
   id?: unknown;
   role: unknown;
   content?: string | TaggedContentBlock[];
   toolCallId?: string;
   toolCalls?: RawToolCall[];
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  createdAt?: string;
 }
 
 interface RawToolCall {
@@ -432,6 +431,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         thinking: null,
         tools: [],
         raw: m,
+        createdAt: m.createdAt,
       });
     } else if (role === "system" || role === "error") {
       let text = "";
@@ -453,6 +453,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         thinking: null,
         tools: [],
         raw: m,
+        createdAt: m.createdAt,
       });
     } else {
       // Assistant message
@@ -521,6 +522,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
             }
           : undefined,
         raw: m,
+        createdAt: m.createdAt,
       });
     }
   }
@@ -682,8 +684,8 @@ export function handleEvent(sessionId: string, rawEvent: unknown) {
 
 /** Mark a session as streaming and cancel any pending unsubscribe. */
 function startStreaming(session: SessionState) {
-  if (!session.streaming) {
-    session.streaming = true;
+  if (session.phase !== "streaming") {
+    session.phase = "streaming";
   }
   cancelPendingUnsubscribe(session.id);
 }
@@ -732,7 +734,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.thinking && (!lastMsg.tools || lastMsg.tools.length === 0)) {
         lastMsg.content += text;
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [] });
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [], createdAt: new Date().toISOString() });
       }
       streamingMessages[session.id] = buf;
       return true;
@@ -743,7 +745,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
         if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsedMs: 0 };
         lastMsg.thinking.content += content.thinking.thinking ?? "";
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsedMs: 0 }, tools: [] });
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsedMs: 0 }, tools: [], createdAt: new Date().toISOString() });
       }
       streamingMessages[session.id] = buf;
       return true;
@@ -754,7 +756,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -823,12 +825,13 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     if (found) {
       found.tool.status = "running";
       if (start.arguments) found.tool.arguments = start.arguments;
+      session.phase = "executing_tool";
       return true;
     }
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -848,6 +851,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       if (start.arguments) tool.arguments = start.arguments;
     }
     streamingMessages[session.id] = buf;
+    session.phase = "executing_tool";
     return true;
   } else if (event.end) {
     const end = event.end;
@@ -867,7 +871,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -905,7 +909,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [] };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -931,12 +935,12 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
 function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.lifecycle) {
     const state = event.lifecycle.state;
-    if (state === "running" && !session.streaming) {
+    if (state === "running" && session.phase !== "streaming") {
       startStreaming(session);
       return true;
     } else if (typeof state === "object") {
-      if (state.stopped && session.streaming) {
-        session.streaming = false;
+      if (state.stopped && (session.phase === "streaming" || session.phase === "executing_tool")) {
+        session.phase = "idle";
         scheduleUnsubscribeIfInactive(session);
         const buf = streamingMessages[session.id] ?? [];
         if (buf.length > 0) {
@@ -999,8 +1003,8 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         return true;
       }
     }
-  } else if (event.error && session.streaming) {
-    session.streaming = false;
+  } else if (event.error && session.phase !== "idle" && session.phase !== "closed") {
+    session.phase = "idle";
     const buf = streamingMessages[session.id] ?? [];
     if (buf.length > 0) {
       session.messages = [...session.messages, ...buf];
@@ -1075,6 +1079,7 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
       contentBlocks: hasNonText ? msg.content : undefined,
       thinking: null,
       tools: [],
+      createdAt: new Date().toISOString(),
     });
     session.updatedAt = new Date().toISOString();
     startStreaming(session);
@@ -1103,7 +1108,7 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     if (event.rewound.sessionId !== session.id) return false;
     // Clear any streaming buffer since history changed
     streamingMessages[session.id] = [];
-    session.streaming = false;
+    session.phase = "idle";
     scheduleUnsubscribeIfInactive(session);
     loadSessionMessages(session.id, event.rewound.messages);
     // Refresh checkpoints list after rewind

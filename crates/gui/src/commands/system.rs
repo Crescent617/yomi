@@ -239,6 +239,70 @@ fn git_stdout(repo_root: &std::path::Path, args: &[&str]) -> Option<String> {
 }
 
 #[tauri::command]
+pub async fn get_git_diff_summary(
+    path: String,
+    staged: bool,
+) -> Result<serde_json::Value, GuiError> {
+    let start = std::path::Path::new(&path);
+    let Some(repo_root) = find_git_root(start) else {
+        return Ok(serde_json::json!(null));
+    };
+
+    let status_args = if staged {
+        &["diff", "--cached", "--name-status", "--no-renames"][..]
+    } else {
+        &["diff", "--name-status", "--no-renames"][..]
+    };
+
+    let status = git_stdout(&repo_root, status_args);
+    let Some(status) = status else {
+        return Ok(serde_json::json!(null));
+    };
+
+    let mut files = Vec::new();
+    for line in status.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let status_char = parts[0].chars().next().unwrap_or('M');
+        let file_path = parts[1];
+
+        files.push(serde_json::json!({
+            "path": file_path,
+            "status": match status_char {
+                'A' => "added",
+                'D' => "deleted",
+                'R' => "renamed",
+                _ => "modified",
+            },
+        }));
+    }
+
+    Ok(serde_json::json!(files))
+}
+
+#[tauri::command]
+pub async fn get_git_file_diff_raw(
+    path: String,
+    file_path: String,
+    staged: bool,
+) -> Result<Option<String>, GuiError> {
+    let start = std::path::Path::new(&path);
+    let Some(repo_root) = find_git_root(start) else {
+        return Ok(None);
+    };
+
+    let args: Vec<&str> = if staged {
+        vec!["diff", "--cached", "--", &file_path]
+    } else {
+        vec!["diff", "--", &file_path]
+    };
+
+    Ok(git_stdout(&repo_root, &args))
+}
+
+#[tauri::command]
 pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
     let start = std::path::Path::new(&path);
     let Some(repo_root) = find_git_root(start) else {

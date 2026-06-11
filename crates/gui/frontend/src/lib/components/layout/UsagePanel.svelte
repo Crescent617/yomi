@@ -220,7 +220,7 @@
         formatter: (params: { value: [string, number] }) => {
           const day = data.find((d) => d.date === params.value[0]);
           if (!day) return params.value[0];
-          const total = day.promptTokens + day.cachedTokens + day.completionTokens;
+          const total = day.promptTokens + day.completionTokens;
           let html = `<div style="font-weight:600;margin-bottom:4px;">${formatFullDate(day.date)}</div>`;
           if (total > 0) {
             html += `<div>Prompt: <b>${formatNumber(day.promptTokens)}</b></div>`;

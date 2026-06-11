@@ -67,6 +67,18 @@ export function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
+export function formatMessageTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (isToday) return timeStr;
+  const dateStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${dateStr} ${timeStr}`;
+}
+
 /**
  * Collapse the user's home directory prefix to `~`.
  * Compatible with both Unix (`/home/user/...`) and Windows (`C:\Users\user\...`).

@@ -98,10 +98,11 @@ fn is_unicode_whitespace(c: char) -> bool {
     matches!(
         c,
         '\u{00A0}'      // NBSP
-        | '\u{2000}'..='\u{200A}'  // En Quad / Em Quad / En Space / Em Space / Three-Per-Em / Four-Per-Em / Six-Per-Em / Figure / Punctuation / Thin / Hair
+        | '\u{2000}'
+            ..='\u{200A}'  // En Quad / Em Quad / En Space / Em Space / Three-Per-Em / Four-Per-Em / Six-Per-Em / Figure / Punctuation / Thin / Hair
         | '\u{202F}'     // Narrow No-Break Space
         | '\u{205F}'     // Medium Mathematical Space
-        | '\u{3000}'     // Ideographic Space
+        | '\u{3000}' // Ideographic Space
     )
 }
 

@@ -40,7 +40,7 @@ let inlineImages = $state<InlineImage[]>([]);
 let inlineImageCounter = $state(0);
 
 const activeSession = $derived(getActiveSession());
-const isStreaming = $derived(activeSession?.streaming ?? false);
+const isStreaming = $derived(activeSession?.phase === "streaming" || activeSession?.phase === "executing_tool");
 
 // detect completion triggers
 function detectCompletion() {

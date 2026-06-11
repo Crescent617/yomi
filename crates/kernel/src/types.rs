@@ -99,11 +99,20 @@ impl SessionId {
 }
 
 /// Session runtime status for UI state syncing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStatus {
-    pub streaming: bool,
+    pub phase: String,
     pub compacting: bool,
+}
+
+impl Default for SessionStatus {
+    fn default() -> Self {
+        Self {
+            phase: "idle".to_string(),
+            compacting: false,
+        }
+    }
 }
 
 impl Default for SessionId {

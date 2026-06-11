@@ -160,7 +160,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 - Explain what to do and why
 - State what you've already ruled out
 - Give exact commands for lookups, open-ended questions for investigations
-- Set inherit_context to true when the agent needs this conversation history
+- Set inherit_context to true when the task needs this conversation history
 - Request short responses explicitly when needed ("report in under 200 words")"#
     }
 

@@ -652,8 +652,14 @@ impl Coordinator {
     pub async fn get_session_status(&self, id: &SessionId) -> Result<crate::types::SessionStatus> {
         let session = self.require_session(id)?;
         let session = session.read().await;
+        let phase = match session.agent_state() {
+            Some(crate::agent::AgentState::Streaming) => "streaming",
+            Some(crate::agent::AgentState::ExecutingTool) => "executing_tool",
+            Some(crate::agent::AgentState::Closed) => "closed",
+            _ => "idle",
+        };
         Ok(crate::types::SessionStatus {
-            streaming: session.is_streaming(),
+            phase: phase.to_string(),
             compacting: session.is_compacting(),
         })
     }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, CheckCircle2, Database } from "lucide-svelte";
+  import { Loader2, CheckCircle2, Database, Zap } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import { getDisplayMessages } from "../../state.svelte";
   import { formatElapsed, formatTokens, utf8ByteLength } from "../../utils";
@@ -21,8 +21,13 @@
   let elapsedMs = $state(0);
   let timerInterval: ReturnType<typeof setInterval> | null = null;
 
+  const isRunning = $derived.by(() => {
+    if (!session) return false;
+    return session.phase !== "idle" && session.phase !== "closed" || session.compacting;
+  });
+
   $effect(() => {
-    if (session?.streaming || session?.compacting) {
+    if (isRunning) {
       startTime = Date.now();
       elapsedMs = 0;
       timerInterval = setInterval(() => {
@@ -41,6 +46,7 @@
         timerInterval = null;
       }
       startTime = null;
+      elapsedMs = 0;
     }
   });
 
@@ -87,7 +93,7 @@
 
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
-    if (!session?.streaming) return null;
+    if (session?.phase !== "streaming" && session?.phase !== "executing_tool") return null;
 
     // Find latest assistant message with content/thinking
     // If model is already outputting text/thinking, don't show "calling"
@@ -122,12 +128,14 @@
   });
 </script>
 
-{#if session?.streaming || session?.compacting || streamingTokens > 0 || totalTokens > 0}
-  <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-[28px] font-mono">
-    <!-- Left: streaming status -->
+{#if isRunning || streamingTokens > 0 || totalTokens > 0}
+  <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-7 font-mono">
+    <!-- Left: phase status -->
     <div class="flex items-center gap-1.5 min-w-0">
-      {#if session?.streaming}
+      {#if session?.phase === "streaming"}
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
+      {:else if session?.phase === "executing_tool"}
+        <Zap size={12} class="animate-pulse text-amber-500 shrink-0" />
       {:else if session?.compacting}
         <Database size={12} class="animate-spin text-amber-500 shrink-0" />
       {:else if streamingTokens > 0}
@@ -138,18 +146,14 @@
         <span class="text-muted-foreground shrink-0">{formatTokens(streamingTokens)} tokens</span>
       {/if}
 
-      {#if (session?.streaming || session?.compacting) && elapsedMs > 0}
-        <span class="text-muted-foreground/70 shrink-0">· {formatElapsed(elapsedMs)}</span>
-      {/if}
-
-      {#if session?.compacting}
-        <span class="text-amber-500/80 shrink-0">· compacting</span>
+      {#if isRunning && elapsedMs > 0}
+        <span class="text-muted-foreground/70 shrink-0">· calling {formatElapsed(elapsedMs)}</span>
       {/if}
 
       {#if currentTool}
-        <span class="text-muted-foreground/70 truncate">· calling {currentTool.toolName}</span>
+        <span class="text-muted-foreground/70 truncate">· {currentTool.toolName}</span>
         {#if currentTool.progress}
-          <span class="text-muted-foreground/50 truncate max-w-[180px]">· {currentTool.progress}</span>
+          <span class="text-muted-foreground/50 truncate max-w-60">· {currentTool.progress}</span>
         {/if}
       {/if}
     </div>
