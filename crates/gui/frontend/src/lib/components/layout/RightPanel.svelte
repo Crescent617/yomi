@@ -594,7 +594,7 @@
                               <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
                                 {line.type !== 'add' ? (line.oldLine ?? '') : ''}
                               </span>
-                              <span class="whitespace-pre {leftLineText(line.type)}">
+                              <span class="whitespace-pre-wrap {leftLineText(line.type)}">
                                 {line.type === 'add' ? '' : line.type === 'del' ? '-' : ' '}{line.type === 'add' ? '' : line.text}
                               </span>
                             </div>
@@ -602,7 +602,7 @@
                               <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
                                 {line.type !== 'del' ? (line.newLine ?? '') : ''}
                               </span>
-                              <span class="whitespace-pre {rightLineText(line.type)}">
+                              <span class="whitespace-pre-wrap {rightLineText(line.type)}">
                                 {line.type === 'del' ? '' : line.type === 'add' ? '+' : ' '}{line.type === 'del' ? '' : line.text}
                               </span>
                             </div>

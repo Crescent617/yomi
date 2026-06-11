@@ -551,14 +551,14 @@
 <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
   {#if activeSession}
   <!-- Header -->
-  <div class="flex items-center justify-between px-4 py-2 border-b border-border">
-    <div class="flex items-center gap-2 min-w-0">
+  <div class="flex items-center justify-between p-2 border-b border-border">
+    <div class="flex items-center gap-1 min-w-0">
       <!-- Left panel toggle -->
       {#if onToggleLeftPanel}
         <button
           type="button"
           onclick={() => onToggleLeftPanel()}
-          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
           title={leftPanelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {#if leftPanelCollapsed}
