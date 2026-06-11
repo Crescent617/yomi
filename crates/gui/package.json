@@ -1,6 +1,6 @@
 {
   "name": "yomi-gui",
-  "version": "0.2.36",
+  "version": "0.2.37",
   "description": "Yomi GUI — Tauri v2 + Svelte 5",
   "private": true,
   "scripts": {
