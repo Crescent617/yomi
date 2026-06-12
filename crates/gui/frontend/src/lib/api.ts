@@ -344,8 +344,8 @@ export async function getGitDiffSummary(path: string, staged: boolean): Promise<
   return invokeCmd<GitDiffFileSummary[] | null>("get_git_diff_summary", { path, staged });
 }
 
-export async function getGitFileDiffRaw(path: string, filePath: string, staged: boolean): Promise<string | null> {
-  return invokeCmd<string | null>("get_git_file_diff_raw", { path, filePath, staged });
+export async function getGitFileDiffRaw(path: string, file_path: string, staged: boolean): Promise<string | null> {
+  return invokeCmd<string | null>("get_git_file_diff_raw", { path, file_path, staged });
 }
 
 const inflightGit = new Map<string, Promise<GitInfo | null>>();
