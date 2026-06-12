@@ -55,9 +55,9 @@ pub struct TuiArgs {
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
 
-    /// Run in-process without daemon (local coordinator)
-    #[arg(long, visible_alias = "fg")]
-    pub no_daemon: bool,
+    /// Run with background daemon (external coordinator)
+    #[arg(long, visible_alias = "bg")]
+    pub daemon: bool,
 }
 
 impl TuiArgs {
@@ -147,18 +147,18 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
     let _log_guard = init_logging(&config)?;
 
-    let coordinator: Arc<dyn CoordinatorApi> = if args.no_daemon {
-        create_local_coordinator(&config, &working_dir).await?
-    } else {
+    let coordinator: Arc<dyn CoordinatorApi> = if args.daemon {
         daemon::spawn_daemon().await?;
         Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
+    } else {
+        create_local_coordinator(&config, &working_dir).await?
     };
 
     print_startup_info(&config);
 
     // Initialize global config for TUI
     tui::init_config(config.clone(), feature_gates);
-    tui::init_daemon_mode(!args.no_daemon);
+    tui::init_daemon_mode(args.daemon);
 
     let session_ctx = SessionContext {
         working_dir: working_dir.clone(),

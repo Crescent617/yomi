@@ -1,3 +1,4 @@
+use kernel::client::PaginatedSessions;
 use kernel::permissions::Level;
 use kernel::types::SessionId;
 use tauri::State;
@@ -5,28 +6,7 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionInfo {
-    pub id: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub parent_id: Option<String>,
-    pub title: Option<String>,
-    pub message_count: i64,
-    pub project_id: Option<String>,
-    pub working_dir: Option<String>,
-    pub auto_approve_level: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaginatedSessions {
-    pub sessions: Vec<SessionInfo>,
-    pub has_more: bool,
-}
-
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_sessions(
     state: State<'_, AppState>,
     project_id: Option<String>,
@@ -51,27 +31,10 @@ pub async fn list_sessions(
         .await
         .map_err(GuiError::kernel)?;
 
-    Ok(PaginatedSessions {
-        sessions: result
-            .sessions
-            .into_iter()
-            .map(|s| SessionInfo {
-                id: s.id.0,
-                created_at: s.created_at.to_rfc3339(),
-                updated_at: s.updated_at.to_rfc3339(),
-                parent_id: s.parent_id.map(|p| p.0),
-                title: s.title,
-                message_count: s.message_count,
-                project_id: s.project_id.map(|p| p.0),
-                working_dir: s.working_dir,
-                auto_approve_level: s.auto_approve_level,
-            })
-            .collect(),
-        has_more: result.has_more,
-    })
+    Ok(result)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_session(
     state: State<'_, AppState>,
     project_id: Option<String>,
@@ -92,7 +55,7 @@ pub async fn create_session(
     Ok(session_id.0)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn restore_session(
     state: State<'_, AppState>,
     session_id: String,
@@ -106,7 +69,7 @@ pub async fn restore_session(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn fork_session(
     state: State<'_, AppState>,
     parent_id: String,
@@ -122,7 +85,7 @@ pub async fn fork_session(
     Ok(new_id.0)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_session(
     state: State<'_, AppState>,
     session_id: String,
@@ -133,7 +96,7 @@ pub async fn delete_session(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn shutdown_session(
     state: State<'_, AppState>,
     session_id: String,

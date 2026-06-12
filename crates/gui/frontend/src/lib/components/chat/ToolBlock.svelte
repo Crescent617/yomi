@@ -34,11 +34,11 @@
     }
   }
 
-  function extractTarget(toolName: string, args: string): string {
+  function extractTarget(tool_name: string, args: string): string {
     if (!args) return "";
     try {
       const parsed = JSON.parse(args);
-      switch (toolName.toLowerCase()) {
+      switch (tool_name.toLowerCase()) {
         case "read": case "edit": return parsed.path ?? "";
         case "write": return parsed.file_path ?? "";
         case "shell": return parsed.command ?? "";
@@ -51,12 +51,12 @@
     } catch { return ""; }
   }
 
-  function extraMeta(toolName: string, args: string): string {
+  function extraMeta(tool_name: string, args: string): string {
     if (!args) return "";
     try {
       const parsed = JSON.parse(args);
       const extras: string[] = [];
-      switch (toolName.toLowerCase()) {
+      switch (tool_name.toLowerCase()) {
         case "shell": {
           if (parsed.background) extras.push("async");
           const timeout = parsed.timeout;
@@ -80,8 +80,8 @@
     } catch { return ""; }
   }
 
-  const target = $derived(extractTarget(tool.toolName, tool.arguments ?? ""));
-  const meta = $derived(extraMeta(tool.toolName, tool.arguments ?? ""));
+  const target = $derived(extractTarget(tool.tool_name, tool.arguments ?? ""));
+  const meta = $derived(extraMeta(tool.tool_name, tool.arguments ?? ""));
 </script>
 
 <div class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}">
@@ -103,7 +103,7 @@
       <AlertCircle class="w-4 h-4 shrink-0" />
     {/if}
 
-    <span class="font-semibold capitalize shrink-0">{tool.toolName}</span>
+    <span class="font-semibold capitalize shrink-0">{tool.tool_name}</span>
 
     {#if target}
       <span class="text-xs opacity-70 truncate">{target}</span>
@@ -114,8 +114,8 @@
       <span class="text-xs opacity-50 shrink-0">· {meta}</span>
     {/if}
 
-    {#if tool.elapsedMs && tool.elapsedMs > 1000}
-      <span class="text-xs opacity-60 shrink-0">{formatElapsed(tool.elapsedMs)}</span>
+    {#if tool.elapsed_ms && tool.elapsed_ms > 1000}
+      <span class="text-xs opacity-60 shrink-0">{formatElapsed(tool.elapsed_ms)}</span>
     {/if}
     {#if tool.progress && tool.status === "running"}
       <span class="text-xs opacity-60 truncate">· {tool.progress}</span>

@@ -4,50 +4,12 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-// ── GUI-layer camelCase wrappers for CronJob ───────────────────────────
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CronJobInfo {
-    id: String,
-    name: String,
-    schedule: String,
-    action: CronAction,
-    status: String,
-    created_at: String,
-    updated_at: String,
-    next_run_at: Option<String>,
-    last_run_at: Option<String>,
-    run_count: u32,
-    max_runs: Option<u32>,
-    expires_at: Option<String>,
-    last_error: Option<String>,
-}
-
-fn cron_job_info(job: &CronJob) -> CronJobInfo {
-    CronJobInfo {
-        id: job.id.0.clone(),
-        name: job.name.clone(),
-        schedule: job.schedule.clone(),
-        action: job.action.clone(),
-        status: job.status.as_str().to_string(),
-        created_at: job.created_at.to_rfc3339(),
-        updated_at: job.updated_at.to_rfc3339(),
-        next_run_at: job.next_run_at.map(|d| d.to_rfc3339()),
-        last_run_at: job.last_run_at.map(|d| d.to_rfc3339()),
-        run_count: job.run_count,
-        max_runs: job.max_runs,
-        expires_at: job.expires_at.map(|d| d.to_rfc3339()),
-        last_error: job.last_error.clone(),
-    }
-}
-
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_cron_jobs(
     state: State<'_, AppState>,
     status: Option<String>,
     limit: usize,
-) -> Result<Vec<serde_json::Value>, GuiError> {
+) -> Result<Vec<CronJob>, GuiError> {
     let store = state
         .cron_store
         .as_ref()
@@ -63,18 +25,10 @@ pub async fn list_cron_jobs(
         .await
         .map_err(|e| GuiError::kernel(format!("list cron jobs failed: {e}")))?;
 
-    let values: Vec<serde_json::Value> = jobs
-        .into_iter()
-        .map(|job| {
-            let info = cron_job_info(&job);
-            serde_json::to_value(info).map_err(GuiError::unknown)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(values)
+    Ok(jobs)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_cron_job(
     state: State<'_, AppState>,
     name: String,
@@ -88,7 +42,6 @@ pub async fn create_cron_job(
         .as_ref()
         .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
 
-    // Validate schedule syntax
     let _ = kernel::cron::CronSchedule::parse(&schedule)
         .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
 
@@ -138,7 +91,7 @@ pub async fn create_cron_job(
     Ok(job_id.0)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub async fn update_cron_job(
     state: State<'_, AppState>,
@@ -155,7 +108,6 @@ pub async fn update_cron_job(
         .as_ref()
         .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
 
-    // Validate schedule if provided
     if let Some(ref s) = schedule {
         let _ = kernel::cron::CronSchedule::parse(s)
             .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
@@ -205,7 +157,7 @@ pub async fn update_cron_job(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
     let store = state
         .cron_store
@@ -224,7 +176,7 @@ pub async fn delete_cron_job(state: State<'_, AppState>, job_id: String) -> Resu
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn trigger_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
     let store = state
         .cron_store
@@ -237,7 +189,6 @@ pub async fn trigger_cron_job(state: State<'_, AppState>, job_id: String) -> Res
         .map_err(|e| GuiError::kernel(format!("get cron job failed: {e}")))?
         .ok_or_else(|| GuiError::unknown("cron job not found"))?;
 
-    // Execute the action directly (mirrors CronWorker::execute)
     let result = execute_cron_action(state.coordinator.as_ref(), &job.action).await;
 
     let error = match &result {
@@ -266,7 +217,16 @@ async fn execute_cron_action(
             content,
         } => {
             let sid = kernel::types::SessionId(session_id.clone());
-            let text = render_template(content);
+            let text = content
+                .replace("{{timestamp}}", &chrono::Utc::now().to_rfc3339())
+                .replace(
+                    "{{date}}",
+                    &chrono::Utc::now().format("%Y-%m-%d").to_string(),
+                )
+                .replace(
+                    "{{time}}",
+                    &chrono::Utc::now().format("%H:%M:%S").to_string(),
+                );
             let blocks = vec![kernel::types::ContentBlock::Text { text }];
             coordinator
                 .send_message(&sid, blocks)
@@ -297,12 +257,4 @@ async fn execute_cron_action(
         }
     }
     Ok(())
-}
-
-fn render_template(template: &str) -> String {
-    let now = chrono::Utc::now();
-    template
-        .replace("{{timestamp}}", &now.to_rfc3339())
-        .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
-        .replace("{{time}}", &now.format("%H:%M:%S").to_string())
 }

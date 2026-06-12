@@ -4,12 +4,12 @@
 
   let {
     tabs,
-    activeTabId,
+    active_tab_id,
     onSwitch,
     onClose,
   }: {
     tabs: Tab[];
-    activeTabId: string;
+    active_tab_id: string;
     onSwitch: (id: string) => void;
     onClose: (id: string) => void;
   } = $props();
@@ -27,7 +27,7 @@
   {#each tabs.filter(t => t.type !== "chat") as tab (tab.id)}
     {@const Icon = getIcon(tab)}
     <button
-      class="group flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors min-w-0 {tab.id === activeTabId
+      class="group flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors min-w-0 {tab.id === active_tab_id
         ? 'border-primary bg-background text-foreground'
         : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary'}"
       onclick={() => onSwitch(tab.id)}

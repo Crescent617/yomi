@@ -25,16 +25,16 @@
 
   interface DayData {
     date: string;
-    promptTokens: number;
-    completionTokens: number;
-    cachedTokens: number;
-    totalTokens: number;
-    requestCount: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens: number;
+    total_tokens: number;
+    request_count: number;
     models: string[];
   }
 
-  let config = $state<{ model: string; contextWindow: number; provider: string } | null>(null);
-  let summary = $state<{ promptTokens: number; completionTokens: number; cachedTokens: number; totalTokens: number; requestCount: number } | null>(null);
+  let config = $state<{ model: string; context_window: number; provider: string } | null>(null);
+  let summary = $state<{ prompt_tokens: number; completion_tokens: number; cached_tokens: number; total_tokens: number; request_count: number } | null>(null);
   let daily = $state<DayData[]>([]);
   let loading = $state(true);
 
@@ -49,21 +49,21 @@
     if (daily.length === 0) return summary;
     return daily.reduce(
       (acc, d) => ({
-        promptTokens: acc.promptTokens + d.promptTokens,
-        completionTokens: acc.completionTokens + d.completionTokens,
-        cachedTokens: acc.cachedTokens + d.cachedTokens,
-        totalTokens: acc.totalTokens + d.totalTokens,
-        requestCount: acc.requestCount + d.requestCount,
+        prompt_tokens: acc.prompt_tokens + d.prompt_tokens,
+        completion_tokens: acc.completion_tokens + d.completion_tokens,
+        cached_tokens: acc.cached_tokens + d.cached_tokens,
+        total_tokens: acc.total_tokens + d.total_tokens,
+        request_count: acc.request_count + d.request_count,
       }),
-      { promptTokens: 0, completionTokens: 0, cachedTokens: 0, totalTokens: 0, requestCount: 0 }
+      { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, total_tokens: 0, request_count: 0 }
     );
   });
 
-  const activeDays = $derived.by(() => daily.filter((d) => d.totalTokens > 0).length);
+  const activeDays = $derived.by(() => daily.filter((d) => d.total_tokens > 0).length);
 
   const streaks = $derived.by(() => {
     if (daily.length === 0) return { current: 0, longest: 0 };
-    const activeSet = new Set(daily.filter((d) => d.totalTokens > 0).map((d) => d.date));
+    const activeSet = new Set(daily.filter((d) => d.total_tokens > 0).map((d) => d.date));
 
     // Current streak from today backwards
     let current = 0;
@@ -81,7 +81,7 @@
 
     // Longest streak
     const sorted = [...daily]
-      .filter((d) => d.totalTokens > 0)
+      .filter((d) => d.total_tokens > 0)
       .sort((a, b) => a.date.localeCompare(b.date));
     let longest = 0;
     let cur = 0;
@@ -108,17 +108,17 @@
   });
 
   const topDays = $derived.by(() =>
-    [...daily].sort((a, b) => b.totalTokens - a.totalTokens).slice(0, 10)
+    [...daily].sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 10)
   );
 
   const busiestDay = $derived.by(() => {
     if (daily.length === 0) return null;
-    return daily.reduce((max, d) => (d.totalTokens > max.totalTokens ? d : max), daily[0]);
+    return daily.reduce((max, d) => (d.total_tokens > max.total_tokens ? d : max), daily[0]);
   });
 
   const mostRequestsDay = $derived.by(() => {
     if (daily.length === 0) return null;
-    return daily.reduce((max, d) => (d.requestCount > max.requestCount ? d : max), daily[0]);
+    return daily.reduce((max, d) => (d.request_count > max.request_count ? d : max), daily[0]);
   });
 
   // ── helpers ──
@@ -129,9 +129,9 @@
     return `${n}`;
   }
 
-  function cacheRate(d: { promptTokens: number; cachedTokens: number }): string {
-    if (d.promptTokens === 0) return "0%";
-    return `${Math.round((d.cachedTokens / d.promptTokens) * 100)}%`;
+  function cacheRate(d: { prompt_tokens: number; cached_tokens: number }): string {
+    if (d.prompt_tokens === 0) return "0%";
+    return `${Math.round((d.cached_tokens / d.prompt_tokens) * 100)}%`;
   }
 
   function formatDateLabel(d: string): string {
@@ -164,11 +164,11 @@
       result.push(
         map.get(iso) ?? {
           date: iso,
-          promptTokens: 0,
-          completionTokens: 0,
-          cachedTokens: 0,
-          totalTokens: 0,
-          requestCount: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cached_tokens: 0,
+          total_tokens: 0,
+          request_count: 0,
           models: [],
         }
       );
@@ -204,8 +204,8 @@
     const borderColor = getBorderColor(dark);
     const textColor = dark ? "#94a3b8" : "#64748b";
 
-    const maxTokens = Math.max(...data.map((d) => d.totalTokens), 1);
-    const chartData = data.map((d) => [d.date, d.totalTokens]);
+    const maxTokens = Math.max(...data.map((d) => d.total_tokens), 1);
+    const chartData = data.map((d) => [d.date, d.total_tokens]);
     const start = data[0]?.date ?? "";
     const end = data[data.length - 1]?.date ?? "";
 
@@ -220,14 +220,14 @@
         formatter: (params: { value: [string, number] }) => {
           const day = data.find((d) => d.date === params.value[0]);
           if (!day) return params.value[0];
-          const total = day.promptTokens + day.completionTokens;
+          const total = day.prompt_tokens + day.completion_tokens;
           let html = `<div style="font-weight:600;margin-bottom:4px;">${formatFullDate(day.date)}</div>`;
           if (total > 0) {
-            html += `<div>Prompt: <b>${formatNumber(day.promptTokens)}</b></div>`;
-            html += `<div>Cached: <b style="color:${getTooltipCacheColor(dark)}">${formatNumber(day.cachedTokens)}</b> (${cacheRate(day)})</div>`;
-            html += `<div>Completion: <b>${formatNumber(day.completionTokens)}</b></div>`;
+            html += `<div>Prompt: <b>${formatNumber(day.prompt_tokens)}</b></div>`;
+            html += `<div>Cached: <b style="color:${getTooltipCacheColor(dark)}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
+            html += `<div>Completion: <b>${formatNumber(day.completion_tokens)}</b></div>`;
             html += `<div>Total: <b>${formatNumber(total)}</b></div>`;
-            html += `<div>Requests: <b>${formatNumber(day.requestCount)}</b></div>`;
+            html += `<div>Requests: <b>${formatNumber(day.request_count)}</b></div>`;
             if (day.models.length) html += `<div style="margin-top:4px;opacity:0.7">${day.models.join(", ")}</div>`;
           } else {
             html += `<div style="opacity:0.7">No activity</div>`;
@@ -425,7 +425,7 @@
                 <Zap class="w-3.5 h-3.5" />
                 Total
               </div>
-              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.totalTokens)}</div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.total_tokens)}</div>
               <div class="text-[10px] text-muted-foreground">tokens</div>
             </div>
 
@@ -434,7 +434,7 @@
                 <Hash class="w-3.5 h-3.5" />
                 Requests
               </div>
-              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.requestCount)}</div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.request_count)}</div>
               <div class="text-[10px] text-muted-foreground">calls</div>
             </div>
 
@@ -443,7 +443,7 @@
                 <ArrowUpRight class="w-3.5 h-3.5" />
                 Prompt
               </div>
-              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.promptTokens)}</div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.prompt_tokens)}</div>
               <div class="text-[10px] text-muted-foreground">
                 {cacheRate(filteredSummary)} cache
               </div>
@@ -454,7 +454,7 @@
                 <ArrowDownLeft class="w-3.5 h-3.5" />
                 Completion
               </div>
-              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.completionTokens)}</div>
+              <div class="text-lg font-semibold font-mono">{formatNumber(filteredSummary.completion_tokens)}</div>
               <div class="text-[10px] text-muted-foreground">tokens</div>
             </div>
 
@@ -510,7 +510,7 @@
               <div class="text-[10px] text-muted-foreground">best ever</div>
             </div>
 
-            {#if busiestDay && busiestDay.totalTokens > 0}
+            {#if busiestDay && busiestDay.total_tokens > 0}
               <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
                 <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Zap class="w-3.5 h-3.5 text-primary" />
@@ -518,12 +518,12 @@
                 </div>
                 <div class="text-sm font-medium">{formatDateLabel(busiestDay.date)}</div>
                 <div class="text-xs text-muted-foreground">
-                  {formatNumber(busiestDay.totalTokens)} tokens · {formatNumber(busiestDay.requestCount)} req
+                  {formatNumber(busiestDay.total_tokens)} tokens · {formatNumber(busiestDay.request_count)} req
                 </div>
               </div>
             {/if}
 
-            {#if mostRequestsDay && mostRequestsDay.requestCount > 0}
+            {#if mostRequestsDay && mostRequestsDay.request_count > 0}
               <div class="rounded-xl border border-border bg-card p-3 space-y-1.5">
                 <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Hash class="w-3.5 h-3.5 text-blue-500" />
@@ -531,7 +531,7 @@
                 </div>
                 <div class="text-sm font-medium">{formatDateLabel(mostRequestsDay.date)}</div>
                 <div class="text-xs text-muted-foreground">
-                  {formatNumber(mostRequestsDay.requestCount)} req · {formatNumber(mostRequestsDay.totalTokens)} tok
+                  {formatNumber(mostRequestsDay.request_count)} req · {formatNumber(mostRequestsDay.total_tokens)} tok
                 </div>
               </div>
             {/if}
@@ -567,13 +567,13 @@
                         <div class="text-sm font-medium">{formatDateLabel(day.date)}</div>
                         <div class="text-[10px] text-muted-foreground">{day.date}</div>
                       </td>
-                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.requestCount)}</td>
-                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.promptTokens)}</td>
-                      <td class="px-4 py-2 text-right font-mono text-green-600">{formatNumber(day.cachedTokens)}</td>
-                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.completionTokens)}</td>
-                      <td class="px-4 py-2 text-right font-mono font-medium">{formatNumber(day.totalTokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.request_count)}</td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.prompt_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono text-green-600">{formatNumber(day.cached_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono">{formatNumber(day.completion_tokens)}</td>
+                      <td class="px-4 py-2 text-right font-mono font-medium">{formatNumber(day.total_tokens)}</td>
                       <td class="px-4 py-2 text-right">
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {day.promptTokens > 0 && day.cachedTokens / day.promptTokens > 0.5 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-muted text-muted-foreground'}">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {day.prompt_tokens > 0 && day.cached_tokens / day.prompt_tokens > 0.5 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-muted text-muted-foreground'}">
                           {cacheRate(day)}
                         </span>
                       </td>
@@ -608,7 +608,7 @@
           </div>
           <div class="flex items-center justify-between py-2">
             <span class="text-sm text-muted-foreground">Context Window</span>
-            <span class="text-sm font-medium">{formatNumber(config.contextWindow)}</span>
+            <span class="text-sm font-medium">{formatNumber(config.context_window)}</span>
           </div>
         </div>
       </div>

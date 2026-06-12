@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Current status of a goal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
     /// Goal is actively being pursued (auto-continue via `PreStop` hook)
     Active,

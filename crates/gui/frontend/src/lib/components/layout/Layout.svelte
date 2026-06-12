@@ -33,8 +33,8 @@
         id: p.id,
         name: p.name,
         dir: p.dir,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
       }));
     } catch (e) {
       console.error("Failed to load projects:", e);

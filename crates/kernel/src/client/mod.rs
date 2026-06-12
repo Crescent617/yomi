@@ -36,7 +36,7 @@ type PendingMap = dashmap::DashMap<
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Event>>;
 
 /// Paginated session list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PaginatedSessions {
     pub sessions: Vec<crate::storage::session::SessionInfo>,
     pub has_more: bool,

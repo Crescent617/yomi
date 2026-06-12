@@ -4,14 +4,14 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, GuiError> {
     let coord = state.coordinator.clone();
     let projects = coord.list_projects().await.map_err(GuiError::kernel)?;
     Ok(projects)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn create_project(
     state: State<'_, AppState>,
     dir: String,
@@ -25,7 +25,7 @@ pub async fn create_project(
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_project(
     state: State<'_, AppState>,
     project_id: String,
@@ -38,7 +38,7 @@ pub async fn get_project(
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn rename_project(
     state: State<'_, AppState>,
     project_id: String,
@@ -52,7 +52,7 @@ pub async fn rename_project(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_project(
     state: State<'_, AppState>,
     project_id: String,

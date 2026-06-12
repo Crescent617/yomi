@@ -4,7 +4,7 @@
   import * as api from "../../api";
 
   const activeSession = $derived(getActiveSession());
-  const askUser = $derived(activeSession?.pendingAskUser);
+  const askUser = $derived(activeSession?.pending_ask_user);
 
   // Map question header -> selected option labels
   let selections = $state<Record<string, string[]>>({});
@@ -37,8 +37,8 @@
       answers.push([q.header, answer || "(skipped)"]);
     }
     try {
-      await api.respondAskUser(activeSession.id, askUser.reqId, answers);
-      activeSession.pendingAskUser = null;
+      await api.respondAskUser(activeSession.id, askUser.req_id, answers);
+      activeSession.pending_ask_user = null;
       selections = {};
       customInputs = {};
     } catch (e: unknown) {
@@ -50,9 +50,9 @@
     if (!activeSession || !askUser) return;
     // Send empty response to unblock the agent
     try {
-      await api.respondAskUser(activeSession.id, askUser.reqId, []);
+      await api.respondAskUser(activeSession.id, askUser.req_id, []);
     } catch { /* ignore */ }
-    activeSession.pendingAskUser = null;
+    activeSession.pending_ask_user = null;
     selections = {};
     customInputs = {};
   }
@@ -70,7 +70,7 @@
                 {@const selected = (selections[question.header] ?? []).includes(opt.label)}
                 <button
                   type="button"
-                  onclick={() => toggleOption(question.header, opt.label, question.multiSelect)}
+                  onclick={() => toggleOption(question.header, opt.label, question.multi_select)}
                   class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"

@@ -68,7 +68,7 @@ impl std::fmt::Display for ProjectId {
 
 /// Project entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct Project {
     pub id: ProjectId,
     pub name: String,
@@ -100,7 +100,7 @@ impl SessionId {
 
 /// Session runtime status for UI state syncing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct SessionStatus {
     pub phase: String,
     pub compacting: bool,
@@ -176,6 +176,8 @@ pub enum FinishReason {
     ContentFilter,
     /// `ToolCall` finished (custom reason for tool calls)
     ToolCalls,
+    /// `Unknown` finish reason
+    Unknown,
 }
 
 impl FinishReason {
@@ -185,7 +187,11 @@ impl FinishReason {
             "length" | "max_tokens" => Some(Self::MaxTokens), // length is used by OpenAI, max_tokens by Anthropic
             "content_filter" => Some(Self::ContentFilter),
             "tool_calls" | "tool_use" => Some(Self::ToolCalls), // Custom reasons for tool calls
-            _ => Some(Self::Stop), // Default to Stop for unknown reasons for backward compatibility
+            "stop" | "end_turn" => Some(Self::Stop),
+            _ => {
+                tracing::warn!("unknown finish_reason {s}");
+                Some(Self::Unknown)
+            } // Default to Stop for unknown reasons for backward compatibility
         }
     }
 }

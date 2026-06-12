@@ -16,7 +16,7 @@
   let saving = $state(false);
   let dirty = $state(false);
   let saved = $state(false);
-  let fullConfig = $state("");
+  let full_config = $state("");
 
   async function load() {
     loading = true;
@@ -27,7 +27,7 @@
       ]);
       content = toml.content;
       filePath = toml.path;
-      fullConfig = config?.fullConfig ?? "";
+      full_config = config?.full_config ?? "";
       dirty = false;
     } catch (e: unknown) {
       console.error("Failed to load config:", e);
@@ -62,7 +62,7 @@
       showNotification("Config saved", "success", 2000);
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
-      fullConfig = c?.fullConfig ?? "";
+      full_config = c?.full_config ?? "";
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
       showNotification(`Failed to save: ${e instanceof Error ? e.message : ""}`, "error", 4000);
@@ -145,8 +145,8 @@
           <div class="flex items-center justify-center py-8">
             <div class="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
           </div>
-        {:else if fullConfig}
-          <pre class="text-xs font-mono text-muted-foreground leading-relaxed whitespace-pre-wrap">{fullConfig}</pre>
+        {:else if full_config}
+          <pre class="text-xs font-mono text-muted-foreground leading-relaxed whitespace-pre-wrap">{full_config}</pre>
         {:else}
           <div class="text-sm text-muted-foreground">Failed to load runtime config</div>
         {/if}

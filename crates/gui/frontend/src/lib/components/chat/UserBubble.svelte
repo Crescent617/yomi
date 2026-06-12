@@ -3,7 +3,7 @@
   import { Marked } from "marked";
   import OperationBar from "./OperationBar.svelte";
 
-  let { message, sessionId }: { message: ChatMessage; sessionId: string } = $props();
+  let { message, session_id }: { message: ChatMessage; session_id: string } = $props();
 
   const md = new Marked();
   md.setOptions({ gfm: true, breaks: true });
@@ -33,7 +33,7 @@
   );
 
   const hasImages = $derived(
-    message.contentBlocks?.some((b) => b.type === "imageUrl" && b.imageUrl?.url) ?? false
+    message.content_blocks?.some((b) => b.type === "image_url" && b.image_url?.url) ?? false
   );
 </script>
 
@@ -69,13 +69,13 @@
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
-        {#each message.contentBlocks ?? [] as block (block.type + (block.imageUrl?.url ?? block.text ?? ''))}
-          {#if block.type === "imageUrl" && block.imageUrl?.url}
+        {#each message.content_blocks ?? [] as block (block.type + (block.image_url?.url ?? block.text ?? ''))}
+          {#if block.type === "image_url" && block.image_url?.url}
             <img
-              src={block.imageUrl.url}
+              src={block.image_url.url}
               alt="Uploaded image"
               class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-              onclick={() => window.open(block.imageUrl!.url, "_blank")}
+              onclick={() => window.open(block.image_url!.url, "_blank")}
             />
           {/if}
         {/each}
@@ -98,7 +98,7 @@
       {/if}
     {/if}
     <div class="absolute left-0 -bottom-6 pl-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-      <OperationBar message={message} sessionId={sessionId} />
+      <OperationBar message={message} session_id={session_id} />
     </div>
   </div>
 </div>

@@ -122,7 +122,7 @@
               <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                 <code class="font-mono bg-black/5 dark:bg-white/5 rounded px-1">{job.schedule}</code>
                 <span>·</span>
-                <span>{timeUntil(job.nextRunAt)}</span>
+                <span>{timeUntil(job.next_run_at)}</span>
               </div>
             </button>
           {/each}
@@ -194,8 +194,8 @@
                   <span class="text-base">💬</span>
                   <span class="font-medium">Send Message</span>
                 </div>
-                {#if job.action.sessionId}
-                  <div class="text-muted-foreground">Session: <span class="font-mono">{job.action.sessionId}</span></div>
+                {#if job.action.session_id}
+                  <div class="text-muted-foreground">Session: <span class="font-mono">{job.action.session_id}</span></div>
                 {/if}
                 {#if job.action.content}
                   <pre class="mt-1 bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap text-xs">{job.action.content}</pre>
@@ -208,8 +208,8 @@
                 {#if job.action.command}
                   <pre class="mt-1 bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap text-xs">{job.action.command}</pre>
                 {/if}
-                {#if job.action.workingDir}
-                  <div class="text-muted-foreground text-xs">Working dir: <span class="font-mono">{job.action.workingDir}</span></div>
+                {#if job.action.working_dir}
+                  <div class="text-muted-foreground text-xs">Working dir: <span class="font-mono">{job.action.working_dir}</span></div>
                 {/if}
               {:else}
                 <div>Unknown action type: {job.action.ty}</div>
@@ -223,28 +223,28 @@
             <div class="grid grid-cols-2 gap-3 text-sm">
               <div class="bg-muted/30 rounded-lg p-3">
                 <div class="text-muted-foreground text-xs mb-1">Next run</div>
-                <div class="font-medium">{formatDate(job.nextRunAt)}</div>
+                <div class="font-medium">{formatDate(job.next_run_at)}</div>
               </div>
               <div class="bg-muted/30 rounded-lg p-3">
                 <div class="text-muted-foreground text-xs mb-1">Last run</div>
-                <div class="font-medium">{formatDate(job.lastRunAt)}</div>
+                <div class="font-medium">{formatDate(job.last_run_at)}</div>
               </div>
               <div class="bg-muted/30 rounded-lg p-3">
                 <div class="text-muted-foreground text-xs mb-1">Runs</div>
-                <div class="font-medium">{job.runCount}{#if job.maxRuns} / {job.maxRuns}{/if}</div>
+                <div class="font-medium">{job.run_count}{#if job.max_runs} / {job.max_runs}{/if}</div>
               </div>
               <div class="bg-muted/30 rounded-lg p-3">
                 <div class="text-muted-foreground text-xs mb-1">Expires</div>
-                <div class="font-medium">{formatDate(job.expiresAt)}</div>
+                <div class="font-medium">{formatDate(job.expires_at)}</div>
               </div>
             </div>
           </section>
 
           <!-- Last error -->
-          {#if job.lastError}
+          {#if job.last_error}
             <section>
               <h3 class="text-xs font-semibold uppercase tracking-wider text-red-500 mb-2">Last Error</h3>
-              <div class="bg-red-500/5 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">{job.lastError}</div>
+              <div class="bg-red-500/5 border border-red-500/20 rounded-lg p-3 text-sm text-red-600">{job.last_error}</div>
             </section>
           {/if}
         </div>

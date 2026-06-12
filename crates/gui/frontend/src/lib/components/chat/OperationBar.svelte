@@ -7,18 +7,18 @@
 
   let {
     message,
-    sessionId,
+    session_id,
   }: {
     message: ChatMessage;
-    sessionId: string;
+    session_id: string;
   } = $props();
 
-  const checkpoints = $derived(getSession(sessionId)?.checkpoints ?? []);
+  const checkpoints = $derived(getSession(session_id)?.checkpoints ?? []);
 
   const hasCheckpoint = $derived(
     Array.isArray(checkpoints) &&
       checkpoints.some(
-        (cp: any) => cp.messageId === message.id || cp.id === message.id,
+        (cp: { message_id?: string; id?: string }) => cp.message_id === message.id || cp.id === message.id,
       ),
   );
 
@@ -35,7 +35,7 @@
   async function doRevert() {
     showConfirm = false;
     try {
-      await api.rewind(sessionId, message.id);
+      await api.rewind(session_id, message.id);
     } catch (e) {
       showNotification(
         "Failed to revert: " + (e instanceof Error ? e.message : ""),

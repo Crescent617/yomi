@@ -10,11 +10,11 @@
   onMount(async () => {
     await initSettings();
     startThemeListener();
-    const unlisten = listen("kernel:event", (e: { payload: { sessionId: string; event: unknown } }) => {
-      const { sessionId, event } = e.payload;
-      const session = getSession(sessionId);
+    const unlisten = listen("kernel:event", (e: { payload: { session_id: string; event: unknown } }) => {
+      const { session_id, event } = e.payload;
+      const session = getSession(session_id);
       if (session) {
-        handleEvent(sessionId, event);
+        handleEvent(session_id, event);
       }
     });
     const appWindow = getCurrentWindow();

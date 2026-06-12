@@ -144,12 +144,12 @@
                   class="rounded"
                 />
                 <span class="text-muted-foreground">
-                  @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
+                  @@ -{hunk.old_start},{hunk.old_lines} +{hunk.new_start},{hunk.new_lines} @@
                 </span>
               </div>
 
               <!-- Lines -->
-              {#each hunk.lines as line, lineIdx (`${line.oldLineNum}-${line.newLineNum}-${lineIdx}`)}
+              {#each hunk.lines as line, lineIdx (`${line.old_line_num}-${line.new_line_num}-${lineIdx}`)}
                 <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add'
                   ? 'bg-emerald-500/10'
                   : line.type === 'remove'
@@ -157,10 +157,10 @@
                     : ''}"
                 >
                   <span class="w-8 text-right text-muted-foreground select-none shrink-0">
-                    {line.oldLineNum ?? ''}
+                    {line.old_line_num ?? ''}
                   </span>
                   <span class="w-8 text-right text-muted-foreground select-none shrink-0">
-                    {line.newLineNum ?? ''}
+                    {line.new_line_num ?? ''}
                   </span>
                   <span class="w-4 shrink-0 select-none {line.type === 'add'
                     ? 'text-emerald-600'
@@ -171,8 +171,8 @@
                     {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
                   </span>
                   <span class="flex-1 break-all">
-                    {#if line.intraLineSegments}
-                      {#each line.intraLineSegments as seg, segIdx (segIdx)}
+                    {#if line.intra_line_segments}
+                      {#each line.intra_line_segments as seg, segIdx (segIdx)}
                         <span class={seg.type === 'add'
                           ? 'bg-emerald-500/30'
                           : seg.type === 'remove'
@@ -195,10 +195,10 @@
             <div class="flex-1 border-r border-border">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">Old</div>
               {#each activeFile.hunks as hunk (hunk.id)}
-                {#each hunk.lines as line, lineIdx (`old-${line.oldLineNum}-${lineIdx}`)}
+                {#each hunk.lines as line, lineIdx (`old-${line.old_line_num}-${lineIdx}`)}
                   {#if line.type !== 'add'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'remove' ? 'bg-red-500/10' : ''}">
-                      <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.oldLineNum ?? ''}</span>
+                      <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.old_line_num ?? ''}</span>
                       <span class="w-4 shrink-0 select-none {line.type === 'remove' ? 'text-red-600' : 'text-muted-foreground'}">-</span>
                       <span class="flex-1 break-all">{line.content}</span>
                     </div>
@@ -209,14 +209,14 @@
             <div class="flex-1">
               <div class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1">New</div>
               {#each activeFile.hunks as hunk (hunk.id)}
-                {#each hunk.lines as line, lineIdx (`new-${line.newLineNum}-${lineIdx}`)}
+                {#each hunk.lines as line, lineIdx (`new-${line.new_line_num}-${lineIdx}`)}
                   {#if line.type !== 'remove'}
                     <div class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add' ? 'bg-emerald-500/10' : ''}">
-                      <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.newLineNum ?? ''}</span>
+                      <span class="w-8 text-right text-muted-foreground select-none shrink-0">{line.new_line_num ?? ''}</span>
                       <span class="w-4 shrink-0 select-none {line.type === 'add' ? 'text-emerald-600' : 'text-muted-foreground'}">+</span>
                       <span class="flex-1 break-all">
-                        {#if line.intraLineSegments}
-                          {#each line.intraLineSegments as seg, segIdx (segIdx)}
+                        {#if line.intra_line_segments}
+                          {#each line.intra_line_segments as seg, segIdx (segIdx)}
                             <span class={seg.type === 'add' ? 'bg-emerald-500/30' : ''}>{seg.text}</span>
                           {/each}
                         {:else}

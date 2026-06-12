@@ -140,7 +140,7 @@
             {@const msg = item.message}
             <div class="group relative">
               {#if msg.role === "user"}
-                <UserBubble message={msg} sessionId={activeSession.id} />
+                <UserBubble message={msg} session_id={activeSession.id} />
               {:else if msg.error || msg.role === "error"}
                 <ErrorBubble message={msg} />
               {:else if msg.role === "system"}
@@ -148,9 +148,9 @@
               {:else}
                 <AssistantBubble message={msg} isStreaming={item.isStreaming} />
               {/if}
-              {#if msg.createdAt && !item.isStreaming}
+              {#if msg.created_at && !item.isStreaming}
                 <div class="absolute right-2 -bottom-5 text-[11px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                  {formatMessageTime(msg.createdAt)}
+                  {formatMessageTime(msg.created_at)}
                 </div>
               {/if}
             </div>
@@ -164,9 +164,9 @@
                   </div>
                 {/if}
               {/each}
-              {#if item.messages[item.messages.length - 1]?.createdAt && !item.isStreaming}
+              {#if item.messages[item.messages.length - 1]?.created_at && !item.isStreaming}
                 <div class="absolute left-2 -bottom-4 text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                  {formatMessageTime(item.messages[item.messages.length - 1].createdAt)}
+                  {formatMessageTime(item.messages[item.messages.length - 1].created_at)}
                 </div>
               {/if}
             </div>

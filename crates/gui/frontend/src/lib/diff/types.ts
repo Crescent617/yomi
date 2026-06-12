@@ -1,26 +1,26 @@
 export interface FileDiff {
   path: string;
-  oldContent: string;
-  newContent: string;
+  old_content: string;
+  new_content: string;
   hunks: Hunk[];
 }
 
 export interface Hunk {
   id: string;
-  oldStart: number;
-  oldLines: number;
-  newStart: number;
-  newLines: number;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
   lines: DiffLine[];
   applied: boolean;
 }
 
 export interface DiffLine {
   type: "context" | "add" | "remove";
-  oldLineNum: number | null;
-  newLineNum: number | null;
+  old_line_num: number | null;
+  new_line_num: number | null;
   content: string;
-  intraLineSegments?: IntraSegment[];
+  intra_line_segments?: IntraSegment[];
 }
 
 export interface IntraSegment {

@@ -14,12 +14,12 @@
   let name = $state(editingJob?.name ?? "");
   let schedule = $state(editingJob?.schedule ?? "");
   let actionType = $state(editingJob?.action.ty ?? "sendMessage");
-  let sessionId = $state(editingJob?.action.sessionId ?? "");
+  let session_id = $state(editingJob?.action.session_id ?? "");
   let content = $state(editingJob?.action.content ?? "");
   let command = $state(editingJob?.action.command ?? "");
-  let workingDir = $state(editingJob?.action.workingDir ?? "");
-  let maxRuns = $state(editingJob?.maxRuns ?? "");
-  let expiresAt = $state(editingJob?.expiresAt ? utcToLocalDatetimeLocal(editingJob.expiresAt) : "");
+  let working_dir = $state(editingJob?.action.working_dir ?? "");
+  let max_runs = $state(editingJob?.max_runs ?? "");
+  let expires_at = $state(editingJob?.expires_at ? utcToLocalDatetimeLocal(editingJob.expires_at) : "");
 
   let showAdvanced = $state(false);
   let scheduleValid = $state<boolean | null>(null);
@@ -61,11 +61,11 @@
 
     const action: Record<string, unknown> = { ty: actionType };
     if (actionType === "sendMessage") {
-      action.sessionId = sessionId.trim() || undefined;
+      action.session_id = session_id.trim() || undefined;
       action.content = content;
     } else if (actionType === "shell") {
       action.command = command;
-      action.workingDir = workingDir.trim() || undefined;
+      action.working_dir = working_dir.trim() || undefined;
     }
 
     const payload: Record<string, unknown> = {
@@ -74,19 +74,19 @@
       action,
     };
 
-    const maxRunsNum = maxRuns ? parseInt(String(maxRuns), 10) : undefined;
-    if (maxRunsNum !== undefined && !Number.isNaN(maxRunsNum)) {
-      payload.maxRuns = maxRunsNum;
+    const max_runsNum = max_runs ? parseInt(String(max_runs), 10) : undefined;
+    if (max_runsNum !== undefined && !Number.isNaN(max_runsNum)) {
+      payload.max_runs = max_runsNum;
     }
-    if (expiresAt) {
-      payload.expiresAt = new Date(expiresAt).toISOString();
+    if (expires_at) {
+      payload.expires_at = new Date(expires_at).toISOString();
     }
 
     try {
       if (editingJob) {
         await updateCronJob(editingJob.id, payload);
       } else {
-        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; maxRuns?: number; expiresAt?: string });
+        await createCronJob(payload as { name: string; schedule: string; action: Record<string, unknown>; max_runs?: number; expires_at?: string });
       }
       onSaved();
     } catch (e: unknown) {
@@ -183,7 +183,7 @@
           <label class="block text-sm font-medium mb-1">Session ID</label>
           <input
             type="text"
-            bind:value={sessionId}
+            bind:value={session_id}
             placeholder="project-alpha"
             class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
@@ -214,7 +214,7 @@
           <label class="block text-sm font-medium mb-1">Working Directory</label>
           <input
             type="text"
-            bind:value={workingDir}
+            bind:value={working_dir}
             placeholder="."
             class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
@@ -237,7 +237,7 @@
             <label class="block text-sm font-medium mb-1">Max Runs</label>
             <input
               type="number"
-              bind:value={maxRuns}
+              bind:value={max_runs}
               placeholder="Unlimited"
               min="1"
               class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -248,7 +248,7 @@
             <label class="block text-sm font-medium mb-1">Expires At</label>
             <input
               type="datetime-local"
-              bind:value={expiresAt}
+              bind:value={expires_at}
               class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <p class="text-xs text-muted-foreground mt-1">Leave empty for never</p>

@@ -47,77 +47,77 @@
     }
   });
 
-  function getSessions(projectId: string) {
+  function getSessions(project_id: string) {
     return sessionState.sessions
-      .filter((s) => s.projectId === projectId)
-      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+      .filter((s) => s.project_id === project_id)
+      .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
 
-  function hasMore(projectId: string) {
+  function has_more(project_id: string) {
     // Only show "Load more" when we have an actual page token (cursor is a string).
     // Cursor lifecycle:
     //   undefined = not loaded yet (initial load triggered by expand)
     //   string    = has next page
     //   null      = no more pages
-    return typeof sessionCursors.get(projectId) === "string";
+    return typeof sessionCursors.get(project_id) === "string";
   }
 
-  async function toggle(projectId: string) {
-    const next = { ...expanded, [projectId]: !expanded[projectId] };
+  async function toggle(project_id: string) {
+    const next = { ...expanded, [project_id]: !expanded[project_id] };
     expanded = next;
-    if (next[projectId]) {
-      await loadSessions(projectId);
+    if (next[project_id]) {
+      await loadSessions(project_id);
     }
   }
 
-  async function loadSessions(projectId: string) {
-    if (loading[projectId]) return;
-    const cursor = sessionCursors.get(projectId);
+  async function loadSessions(project_id: string) {
+    if (loading[project_id]) return;
+    const cursor = sessionCursors.get(project_id);
     // cursor === null  → already reached end, skip
     // cursor === undefined → first load (triggered by expand), load page 1
     if (cursor === null) return;
 
-    loading = { ...loading, [projectId]: true };
+    loading = { ...loading, [project_id]: true };
     try {
-      const result = await api.listSessions(projectId, cursor, 20);
+      const result = await api.listSessions(project_id, cursor, 20);
       for (const s of result.sessions) {
         const existing = sessionState.sessions.find((sess) => sess.id === s.id);
         if (!existing) {
           sessionState.sessions.push({
             id: s.id,
-            projectPath: s.projectPath ?? "",
-            projectId: s.projectId,
+            project_path: s.project_path ?? "",
+            project_id: s.project_id,
             alias: s.title ?? "Untitled",
             messages: [],
           phase: "idle",
             unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-            activeTabId: "chat",
-            pendingPermissions: [],
-            pendingAskUser: null,
-            queuedInput: null,
-            updatedAt: s.endedAt ?? s.createdAt,
-            permissionLevel: s.autoApproveLevel ?? "caution",
+            active_tab_id: "chat",
+            pending_permissions: [],
+            pending_ask_user: null,
+            queued_input: null,
+            updated_at: s.ended_at ?? s.created_at,
+            permission_level: s.auto_approve_level ?? "caution",
           });
         } else {
           existing.alias = s.title ?? existing.alias ?? "Untitled";
-          existing.permissionLevel = s.autoApproveLevel ?? existing.permissionLevel;
-          existing.updatedAt = s.endedAt ?? s.createdAt ?? existing.updatedAt;
+          existing.permission_level = s.auto_approve_level ?? existing.permission_level;
+          existing.updated_at = s.ended_at ?? s.created_at ?? existing.updated_at;
         }
       }
       const last = result.sessions[result.sessions.length - 1];
-      if (result.hasMore && last) {
-        sessionCursors.set(projectId, last.endedAt ?? last.createdAt);
+      if (result.has_more && last) {
+        sessionCursors.set(project_id, last.ended_at ?? last.created_at);
       } else {
-        sessionCursors.set(projectId, null);
+        sessionCursors.set(project_id, null);
       }
     } catch (e: unknown) {
       console.error("Failed to load sessions:", e instanceof Error ? e.message : e);
       // Keep cursor as-is so user can retry. If this was the first load,
       // cursor is still undefined and expand will retry on next toggle.
     } finally {
-      loading = { ...loading, [projectId]: false };
+      loading = { ...loading, [project_id]: false };
     }
   }
 
@@ -175,28 +175,28 @@
     }
   }
 
-  async function quickCreateSession(projectId: string) {
-    const project = projectState.projects.find((p) => p.id === projectId);
+  async function quickCreateSession(project_id: string) {
+    const project = projectState.projects.find((p) => p.id === project_id);
     if (!project) return;
     try {
       const config = await api.getConfig();
-      const id = await api.createSession(project.dir, config?.autoApprove ?? "caution", projectId);
+      const id = await api.createSession(project.dir, config?.auto_approve ?? "caution", project_id);
       sessionState.sessions.push({
         id,
-        projectPath: project.dir,
-        projectId,
+        project_path: project.dir,
+        project_id,
         alias: "Untitled",
         messages: [],
         phase: "idle",
         unread: 0,
         checkpoints: [],
         tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-        activeTabId: "chat",
-        pendingPermissions: [],
-        pendingAskUser: null,
-        queuedInput: null,
-        updatedAt: new Date().toISOString(),
-        permissionLevel: config?.autoApprove ?? "caution",
+        active_tab_id: "chat",
+        pending_permissions: [],
+        pending_ask_user: null,
+        queued_input: null,
+        updated_at: new Date().toISOString(),
+        permission_level: config?.auto_approve ?? "caution",
       });
       await activateSession(id);
     } catch (e: unknown) {
@@ -205,12 +205,12 @@
     }
   }
 
-  async function confirmRenameProject(projectId: string) {
+  async function confirmRenameProject(project_id: string) {
     const name = renameValue.trim();
     if (!name) { renamingProjectId = null; return; }
     try {
-      await api.renameProject(projectId, name);
-      const p = projectState.projects.find((x) => x.id === projectId);
+      await api.renameProject(project_id, name);
+      const p = projectState.projects.find((x) => x.id === project_id);
       if (p) p.name = name;
       showNotification("Project renamed", "success", 2000);
     } catch (e: unknown) {
@@ -220,12 +220,12 @@
     renamingProjectId = null;
   }
 
-  async function confirmRenameSession(sessionId: string) {
+  async function confirmRenameSession(session_id: string) {
     const name = renameValue.trim();
     if (!name) { renamingSessionId = null; return; }
     try {
-      await api.renameSession(sessionId, name);
-      const s = sessionState.sessions.find((x) => x.id === sessionId);
+      await api.renameSession(session_id, name);
+      const s = sessionState.sessions.find((x) => x.id === session_id);
       if (s) s.alias = name;
       showNotification("Session renamed", "success", 2000);
     } catch (e: unknown) {
@@ -285,7 +285,7 @@
       {/each}
     {:else}
       {#each projectState.projects as project (project.id)}
-        {@const isActive = getSession(sessionState.activeSessionId ?? "")?.projectId === project.id}
+        {@const isActive = getSession(sessionState.activeSessionId ?? "")?.project_id === project.id}
         <div class="rounded-md mb-0.5">
           <div class="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs transition-colors select-none {isActive ? 'text-foreground bg-secondary/60' : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'}">
             <button class="flex items-center gap-1.5 flex-1 min-w-0 text-left" onclick={() => toggle(project.id)}>
@@ -383,7 +383,7 @@
               {#if loading[project.id]}
                 <div class="px-3 py-1.5 text-xs text-muted-foreground">Loading...</div>
               {/if}
-              {#if hasMore(project.id)}
+              {#if has_more(project.id)}
                 <button class="w-full text-left px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors" onclick={() => loadSessions(project.id)}>
                   Load more...
                 </button>
