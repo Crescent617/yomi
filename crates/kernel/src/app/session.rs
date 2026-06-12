@@ -141,17 +141,15 @@ impl Session {
                     }
                     skills = merged.into_values().collect();
                     tracing::info!(
-                        "Session {} loaded {} skill(s) from workspace {}",
-                        id.0,
+                        "loaded {} skill(s) from workspace {}",
                         skills.len(),
                         dir.display()
                     );
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to load workspace skills from {} for session {}: {}",
+                        "Failed to load workspace skills from {}: {}",
                         dir.display(),
-                        id.0,
                         e
                     );
                 }
@@ -186,18 +184,15 @@ impl Session {
         ));
 
         let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args).await;
-        tracing::info!("Main agent {} spawned for session {}", handle.id, id.0);
+        tracing::info!("main agent {} spawned", handle.id);
 
         Ok((handle, event_rx))
     }
 
     /// Send a multi-modal message with content blocks
+    #[tracing::instrument(skip(self))]
     pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
-        tracing::debug!(
-            "Session {} sending {} content blocks",
-            self.id.0,
-            blocks.len()
-        );
+        tracing::debug!("sending {} content blocks", blocks.len());
 
         // Update session title from first text block of user message
         self.update_title(&blocks).await;
@@ -215,6 +210,7 @@ impl Session {
     /// If the session was started with a workspace skill directory, the workspace
     /// skills are re-loaded and merged with the provided (global) skills — workspace
     /// skills take precedence on name collision.
+    #[tracing::instrument(skip(self))]
     pub async fn refresh_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
         let merged = if let Some(ref dir) = self.workspace_skill_dir {
             match SkillLoader::new(vec![dir.clone()]).load_all() {
@@ -229,8 +225,7 @@ impl Session {
                     }
                     let result: Vec<_> = merged.into_values().collect();
                     tracing::info!(
-                        "Session {} refreshed with {} skill(s) ({} global + {} workspace, merged)",
-                        self.id.0,
+                        "refreshed with {} skill(s) ({} global + {} workspace, merged)",
                         result.len(),
                         skills.len(),
                         ws_count
@@ -239,9 +234,8 @@ impl Session {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to reload workspace skills from {} for session {}: {}, using global skills only",
+                        "Failed to reload workspace skills from {}: {}, using global skills only",
                         dir.display(),
-                        self.id.0,
                         e
                     );
                     skills
@@ -276,7 +270,7 @@ impl Session {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to update title for session {}: {}", self.id.0, e);
+                        tracing::warn!("Failed to update title: {}", e);
                     }
                 }
             }
@@ -288,17 +282,19 @@ impl Session {
         self.event_tx = Some(tx);
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn cancel(&self) {
         if let Some(handle) = &self.main_agent {
-            tracing::info!("Cancelling session {}", self.id.0);
+            tracing::info!("cancelling session");
             handle.cancel();
         }
     }
 
     /// Gracefully shut down the main agent (sends Shutdown signal).
+    #[tracing::instrument(skip(self))]
     pub async fn close(&self) {
         if let Some(handle) = &self.main_agent {
-            tracing::info!("Closing session {}", self.id.0);
+            tracing::info!("closing session");
             let _ = handle.close().await;
         }
     }
@@ -359,16 +355,13 @@ impl Session {
     }
 
     /// Update permission level at runtime
+    #[tracing::instrument(skip(self))]
     pub async fn set_permission_level(&self, level: Level) {
         if let Some(ref ps) = self.permission_state {
             ps.set_auto_approve_level(level).await;
-            tracing::info!(
-                "Session {} permission level updated to {:?}",
-                self.id.0,
-                level
-            );
+            tracing::info!("permission level updated to {:?}", level);
         } else {
-            tracing::warn!("Session {} has no permission state to update", self.id.0);
+            tracing::warn!("has no permission state to update");
         }
     }
 
@@ -392,8 +385,9 @@ impl Session {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn compact(&self) -> Result<()> {
-        tracing::debug!("Session {} requesting compaction", self.id.0);
+        tracing::debug!("requesting compaction");
         match &self.main_agent {
             Some(handle) => {
                 handle.force_compact().await?;
@@ -404,14 +398,14 @@ impl Session {
     }
 
     /// Rewind to a specific checkpoint
+    #[tracing::instrument(skip(self))]
     pub async fn rewind(
         &self,
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     ) -> Result<()> {
         tracing::info!(
-            "Session {} rewinding to message {} (target: {:?})",
-            self.id.0,
+            "rewinding to message {} (target: {:?})",
             message_id.as_str(),
             target
         );
@@ -431,6 +425,7 @@ impl Session {
     /// 1. Persist the goal state.
     /// 2. Inject the goal continuation prompt as a steer message.
     /// 3. Send Continue to trigger the agent from Idle to Streaming.
+    #[tracing::instrument(skip(self))]
     pub async fn start_goal(&mut self, state: crate::goal::GoalState) -> Result<()> {
         self.goal_store.save(&self.id.0, &state).await?;
         if let Some(ref handle) = self.main_agent {
@@ -441,16 +436,17 @@ impl Session {
                 .map_err(|e| SessionError::SendFailed(format!("goal start steer: {e}")))?;
             if handle.state() == AgentState::Idle {
                 if let Err(e) = handle.send_continue() {
-                    tracing::warn!("Session {} goal start continue failed: {}", self.id.0, e);
+                    tracing::warn!("goal start continue failed: {}", e);
                 }
             }
         }
         self.emit_goal_updated(&state);
-        tracing::info!("Session {} goal mode started", self.id.0);
+        tracing::info!("goal mode started");
         Ok(())
     }
 
     /// Pause goal auto-continue. The agent will stop after the current turn.
+    #[tracing::instrument(skip(self))]
     pub async fn pause_goal(&mut self) -> Result<()> {
         let mut state = self
             .goal_store
@@ -460,11 +456,12 @@ impl Session {
         state.status = crate::goal::GoalStatus::Paused;
         self.goal_store.save(&self.id.0, &state).await?;
         self.emit_goal_updated(&state);
-        tracing::info!("Session {} goal paused", self.id.0);
+        tracing::info!("goal paused");
         Ok(())
     }
 
     /// Resume goal auto-continue. Does not trigger agent — next turn will PreStop-continue.
+    #[tracing::instrument(skip(self))]
     pub async fn resume_goal(&mut self) -> Result<()> {
         let mut state = self
             .goal_store
@@ -474,7 +471,7 @@ impl Session {
         state.status = crate::goal::GoalStatus::Active;
         self.goal_store.save(&self.id.0, &state).await?;
         self.emit_goal_updated(&state);
-        tracing::info!("Session {} goal resumed", self.id.0);
+        tracing::info!("goal resumed");
         Ok(())
     }
 
@@ -485,6 +482,7 @@ impl Session {
 
     /// Update an active goal's description and inject an objective-updated prompt.
     /// If no goal exists, creates a new active goal.
+    #[tracing::instrument(skip(self, description))]
     pub async fn update_goal(&mut self, description: impl Into<String>) -> Result<()> {
         let description = description.into();
 
@@ -509,17 +507,18 @@ impl Session {
             .map_err(|e| SessionError::SendFailed(format!("update goal steer: {e}")))?;
 
         self.emit_goal_updated(&state);
-        tracing::info!("Session {} goal updated: {}", self.id.0, state.description);
+        tracing::info!("goal updated: {}", state.description);
         Ok(())
     }
 
     /// Stop autonomous goal-mode execution
+    #[tracing::instrument(skip(self))]
     pub async fn stop_goal(&mut self) -> Result<()> {
         // Always clear storage first so that resume never restores a stale goal,
         // even if the agent handle is already closed.
         self.goal_store.delete(&self.id.0).await?;
         self.emit_goal_stopped();
-        tracing::info!("Session {} goal mode stopped", self.id.0);
+        tracing::info!("goal mode stopped");
         Ok(())
     }
 

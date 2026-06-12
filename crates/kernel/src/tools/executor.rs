@@ -5,8 +5,8 @@ use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, To
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
-
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 /// Tool execution result
 pub struct ToolExecutionResult {
@@ -176,11 +176,7 @@ pub async fn execute_tools_parallel(
     skills: &[Arc<crate::skill::Skill>],
 ) -> Vec<ToolExecutionResult> {
     let tool_count = tool_calls.len();
-    tracing::info!(
-        "Executing {} tool(s) in parallel for agent {}",
-        tool_count,
-        agent_id
-    );
+    tracing::info!("Executing {} tool(s) in parallel", tool_count);
 
     let mut join_set = JoinSet::new();
 
@@ -207,40 +203,43 @@ pub async fn execute_tools_parallel(
         let turn_for_task = turn.clone();
         let skills_for_task: Vec<Arc<crate::skill::Skill>> = skills.to_vec();
 
-        join_set.spawn(async move {
-            let start = std::time::Instant::now();
-            let mut ctx = ToolExecCtx::with_parent_ctx(
-                &call_id,
-                parent_messages_for_task.as_deref(),
-                cancel_token_for_task,
-                &working_dir,
-                session_id,
-                message_id.clone(),
-            )
-            .with_skills(skills_for_task);
-            ctx.turn = turn_for_task;
-            let result = match tool_opt {
-                Some(tool) => execute_single_tool_with_ctx(tool, arguments, ctx).await,
-                None => ToolOutput::error(format!("Unknown tool: {call_name}")),
-            };
-            let elapsed = start.elapsed().as_millis() as u64;
+        join_set.spawn(
+            async move {
+                let start = std::time::Instant::now();
+                let mut ctx = ToolExecCtx::with_parent_ctx(
+                    &call_id,
+                    parent_messages_for_task.as_deref(),
+                    cancel_token_for_task,
+                    &working_dir,
+                    session_id,
+                    message_id.clone(),
+                )
+                .with_skills(skills_for_task);
+                ctx.turn = turn_for_task;
+                let result = match tool_opt {
+                    Some(tool) => execute_single_tool_with_ctx(tool, arguments, ctx).await,
+                    None => ToolOutput::error(format!("Unknown tool: {call_name}")),
+                };
+                let elapsed = start.elapsed().as_millis() as u64;
 
-            let (event, message) = build_tool_result(
-                &agent_id,
-                &call_id,
-                &call_name,
-                &result,
-                elapsed,
-                message_id.clone(),
-            );
+                let (event, message) = build_tool_result(
+                    &agent_id,
+                    &call_id,
+                    &call_name,
+                    &result,
+                    elapsed,
+                    message_id.clone(),
+                );
 
-            ToolExecutionResult {
-                tool_call_id: call_id,
-                message_id,
-                message,
-                event,
+                ToolExecutionResult {
+                    tool_call_id: call_id,
+                    message_id,
+                    message,
+                    event,
+                }
             }
-        });
+            .instrument(tracing::Span::current()),
+        );
     }
 
     let mut results = Vec::new();

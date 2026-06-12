@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{info, info_span, warn, Instrument};
 
 /// Input messages that can be sent to an Agent
 #[derive(Debug)]
@@ -133,11 +133,7 @@ impl Agent {
             .build()
             .await;
 
-        tracing::debug!(
-            "Agent {} spawning with system prompt: {}",
-            id,
-            system_prompt
-        );
+        tracing::debug!("spawning with system prompt: {}", system_prompt);
         let mut messages: Vec<Arc<Message>> = vec![Arc::new(Message::system(system_prompt))];
         messages.extend(args.history.into_iter().filter(|m| m.role != Role::System));
         let message_buffer = MessageBuffer::from_arc_messages(&messages);
@@ -196,6 +192,7 @@ impl Agent {
         let data_dir = shared.data_dir.clone();
         let compacting = Arc::new(AtomicBool::new(false));
 
+        let session_id = args.session_id.clone();
         let agent = Self {
             id: id.clone(),
             shared,
@@ -220,15 +217,19 @@ impl Agent {
             compacting: Arc::clone(&compacting),
         };
 
-        let handle_id = id.clone();
-        tokio::spawn(async move {
-            let result = agent.start_loop().await;
-            if let Err(ref e) = result {
-                tracing::error!("Agent {} failed: {}", handle_id, e);
+        let span = info_span!("agent", session_id = %session_id);
+
+        tokio::spawn(
+            async move {
+                let result = agent.start_loop().await;
+                if let Err(ref e) = result {
+                    tracing::error!("Agent failed: {}", e);
+                }
+                // Note: Session shutdown is detected by coordinator when event_rx closes
+                info!("agent closed");
             }
-            // Note: Session shutdown is detected by coordinator when event_rx closes
-            info!("Agent {} closed", handle_id);
-        });
+            .instrument(span),
+        );
 
         let handle = AgentHandle::new(
             id,
@@ -266,10 +267,10 @@ impl Agent {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn start_loop(mut self) -> Result<(), AgentError> {
         tracing::info!(
-            "Agent {} started with {} initial message(s), max_iterations={}",
-            self.id,
+            "started with {} initial message(s), max_iterations={}",
             self.message_buffer.len(),
             self.max_iterations
         );
@@ -294,8 +295,7 @@ impl Agent {
                 };
                 if !skip_max_iterations {
                     tracing::warn!(
-                        "Agent {} reached max iterations during streaming, cancelling and returning to waiting for input",
-                        self.id
+                        "reached max iterations during streaming, cancelling and returning to waiting for input"
                     );
                     // Notify TUI that max iterations reached
                     if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
@@ -322,7 +322,7 @@ impl Agent {
                 AgentState::Streaming => {
                     // Start new turn when entering Streaming
                     self.start_turn_if_needed().await;
-                    tracing::debug!("Agent {} starting streaming", self.id);
+                    tracing::debug!("starting streaming");
                     // Notify UI that streaming has started
                     if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
@@ -333,7 +333,7 @@ impl Agent {
                     self.handle_streaming_with_retry().await
                 }
                 AgentState::ExecutingTool => {
-                    tracing::debug!("Agent {} executing tools", self.id);
+                    tracing::debug!("executing tools");
                     self.handle_execute_tool().await
                 }
                 AgentState::Closed => break,
@@ -390,7 +390,7 @@ impl Agent {
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
-        tracing::info!("Agent {} {} cancelled", self.id, context);
+        tracing::info!("{} cancelled", context);
         // Emit cancellation event with operation name
         self.emit_operation_cancelled(context).await;
         self.context.transition_to(AgentState::Idle);
@@ -400,7 +400,7 @@ impl Agent {
     /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return error
     async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
-        tracing::error!("Agent {} failed: {}", self.id, error_msg);
+        tracing::error!("failed: {}", error_msg);
         let _n = self
             .event_tx
             .send(Event::Agent(AgentEvent::Lifecycle {
@@ -416,14 +416,9 @@ impl Agent {
     /// Emit error event (recoverable or not) and log it
     async fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
         if is_recoverable {
-            tracing::warn!(
-                "Agent {} {:?} error (recoverable): {}",
-                self.id,
-                phase,
-                error
-            );
+            tracing::warn!("{:?} error (recoverable): {}", phase, error);
         } else {
-            tracing::error!("Agent {} {:?} error: {}", self.id, phase, error);
+            tracing::error!("{:?} error: {}", phase, error);
         }
 
         if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Error {
@@ -517,6 +512,7 @@ impl Agent {
     }
 
     /// Shared rewind handler used by both normal input loop and goal idle.
+    #[tracing::instrument(skip(self))]
     async fn process_rewind(
         &mut self,
         message_id: MessageId,
@@ -591,6 +587,7 @@ impl Agent {
     /// Drains pending external inputs. If an active goal exists and no user input
     /// is pending, auto-continue by injecting the goal continuation prompt.
     /// Handle idle state: block until a user input arrives.
+    #[tracing::instrument(skip(self))]
     async fn handle_idle(&mut self) -> Result<(), AgentError> {
         if self.cancel_token.is_cancelled() {
             self.cancel_token.reset_if_cancelled();
@@ -604,8 +601,7 @@ impl Agent {
                 let current_gen = self.input_stale_since.load(Ordering::Relaxed);
                 if generation < current_gen {
                     tracing::info!(
-                        "Agent {} discarding stale user input (generation {} < {})",
-                        self.id,
+                        "discarding stale user input (generation {} < {})",
                         generation,
                         current_gen
                     );
@@ -626,11 +622,11 @@ impl Agent {
                 req_id,
                 approved: _,
             }) => {
-                tracing::warn!("Agent {} received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", self.id, req_id);
+                tracing::warn!("received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", req_id);
                 Ok(())
             }
             Some(AgentInput::Shutdown) => {
-                tracing::info!("Agent {} received close signal", self.id);
+                tracing::info!("received close signal");
                 if let Some(turn) = self.current_turn.take() {
                     if let Err(e) = turn.cancel().await {
                         tracing::warn!("Failed to cancel turn on shutdown: {}", e);
@@ -640,9 +636,9 @@ impl Agent {
                 Ok(())
             }
             Some(AgentInput::Compact) => {
-                tracing::info!("Agent {} received compact request", self.id);
+                tracing::info!("received compact request");
                 if let Err(e) = self.force_full_compact().await {
-                    tracing::warn!("Agent {} force_full_compact failed: {}", self.id, e);
+                    tracing::warn!("force_full_compact failed: {}", e);
                 }
                 Ok(())
             }
@@ -652,11 +648,7 @@ impl Agent {
                 Ok(())
             }
             Some(AgentInput::RefreshSkills(skills)) => {
-                tracing::info!(
-                    "Agent {} received refresh-skills request ({} skills)",
-                    self.id,
-                    skills.len()
-                );
+                tracing::info!("received refresh-skills request ({} skills)", skills.len());
                 self.apply_skills_refresh(skills).await;
                 Ok(())
             }
@@ -665,16 +657,12 @@ impl Agent {
                 target,
                 result_tx,
             }) => {
-                tracing::info!(
-                    "Agent {} received rewind to {}",
-                    self.id,
-                    message_id.as_str()
-                );
+                tracing::info!("received rewind to {}", message_id.as_str());
                 self.process_rewind(message_id, target, result_tx).await?;
                 Ok(())
             }
             None => {
-                tracing::info!("Agent {} input channel closed (clean shutdown)", self.id);
+                tracing::info!("input channel closed (clean shutdown)");
                 self.context.transition_to(AgentState::Closed);
                 Ok(())
             }
@@ -683,6 +671,7 @@ impl Agent {
 
     /// Apply a dynamic skills refresh: rebuild system prompt and hook registry.
     /// Tool registry stays intact because `SubagentTool` now reads skills from `ToolExecCtx`.
+    #[tracing::instrument(skip(self))]
     async fn apply_skills_refresh(&mut self, skills: Vec<Arc<crate::skill::Skill>>) {
         // 1. Rebuild system prompt
         let new_prompt = SystemPromptBuilder::new()
@@ -702,12 +691,9 @@ impl Agent {
             self.message_buffer.update_message(idx, |msg| {
                 msg.content = vec![ContentBlock::Text { text: new_prompt }];
             });
-            tracing::debug!("Agent {} system prompt refreshed", self.id);
+            tracing::debug!("system prompt refreshed");
         } else {
-            tracing::warn!(
-                "Agent {} has no system message, skipping prompt refresh",
-                self.id
-            );
+            tracing::warn!("has no system message, skipping prompt refresh");
         }
 
         // 2. Update local skills list (used by ToolExecCtx for SubagentTool)
@@ -721,11 +707,12 @@ impl Agent {
             self.shared.goal_store.clone(),
         )
         .await;
-        tracing::info!("Agent {} refreshed {} skill(s)", self.id, skills.len());
+        tracing::info!("refreshed {} skill(s)", skills.len());
     }
 
     /// Inject a user message (with interceptors) and transition to Streaming.
     /// Also creates a checkpoint for rewind support.
+    #[tracing::instrument(skip(self))]
     async fn inject_user_message(
         &mut self,
         mut content: Vec<ContentBlock>,
@@ -760,6 +747,7 @@ impl Agent {
     /// Truncate messages at the given message ID (remove it and everything after).
     /// This rewinds to the state just before this message was sent.
     /// Returns true if truncation was performed, false if message not found.
+    #[tracing::instrument(skip(self))]
     fn truncate_at(&mut self, message_id: &MessageId) -> bool {
         let messages = self.message_buffer.messages_mut();
 
@@ -781,20 +769,17 @@ impl Agent {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
         // 1. Check and run compaction if needed (at the very beginning)
         if self.maybe_compact_messages().await {
-            tracing::info!(
-                "Agent {} performed auto-compaction before streaming",
-                self.id
-            );
+            tracing::info!("performed auto-compaction before streaming");
         }
 
         // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
         tracing::debug!(
-            "Agent {} iteration {}/{}",
-            self.id,
+            "iteration {}/{}",
             self.context.iteration_count(),
             self.max_iterations,
         );
@@ -815,8 +800,7 @@ impl Agent {
         }
         if !steer_blocks.is_empty() {
             tracing::info!(
-                "Agent {} injecting {} steer block(s) before streaming",
-                self.id,
+                "injecting {} steer block(s) before streaming",
                 steer_blocks.len()
             );
             let steer_msg = Message::with_blocks(Role::User, steer_blocks);
@@ -842,11 +826,13 @@ impl Agent {
         // Spawn provider request in a separate task to allow cancellation
         let provider = self.shared.provider.clone();
         let model_config = self.shared.model_config.clone();
-        let stream_task =
-            tokio::spawn(async move { provider.stream(&messages, &tools, &model_config).await });
+        let stream_task = tokio::spawn(
+            async move { provider.stream(&messages, &tools, &model_config).await }
+                .instrument(tracing::Span::current()),
+        );
         let abort_handle = stream_task.abort_handle();
 
-        tracing::debug!("Agent {} waiting for model stream to start", self.id);
+        tracing::debug!("waiting for model stream to start");
 
         let mut stream = tokio::select! {
             biased;
@@ -902,7 +888,7 @@ impl Agent {
         let finish_reason = match result.finish_reason {
             Some(fr) => fr,
             None => {
-                tracing::warn!("Agent {} model response has no finish_reason", self.id);
+                tracing::warn!("model response has no finish_reason");
                 self.emit_error(
                     crate::event::ErrorPhase::Streaming,
                     "model response missing finish_reason",
@@ -917,6 +903,7 @@ impl Agent {
     }
 
     /// Collect all output from the stream until completion
+    #[tracing::instrument(skip(self, stream))]
     async fn collect_stream_output(
         &mut self,
         stream: &mut crate::providers::ModelStream,
@@ -974,8 +961,7 @@ impl Agent {
                         ModelStreamItem::TokenUsage(usage) => {
                             // NOTE: this is right because each response's prompt_tokens will contain whole history
                             tracing::info!(
-                                "Agent {} received token usage update: prompt={}, completion={}, total={}",
-                                self.id,
+                                "received token usage update: prompt={}, completion={}, total={}",
                                 usage.prompt_tokens,
                                 usage.completion_tokens,
                                 usage.total_tokens()
@@ -1012,8 +998,7 @@ impl Agent {
                         }
                         ModelStreamItem::ResponseMeta { response_id, finish_reason } => {
                             tracing::debug!(
-                                "Agent {} received response meta: id={}, finish_reason={:?}",
-                                self.id,
+                                "received response meta: id={}, finish_reason={:?}",
                                 response_id,
                                 finish_reason
                             );
@@ -1032,6 +1017,7 @@ impl Agent {
     }
 
     /// Force compaction regardless of threshold.
+    #[tracing::instrument(skip(self))]
     pub async fn force_compact(&mut self) -> Result<String, String> {
         let compactor = self
             .shared
@@ -1055,6 +1041,7 @@ impl Agent {
     }
 
     /// Force full compaction (skip micro-compaction).
+    #[tracing::instrument(skip(self))]
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
         let compactor = self
             .shared
@@ -1080,57 +1067,58 @@ impl Agent {
 
     /// Handle compaction result, update state, and return user message.
     /// Clears file state store only if messages were actually reduced (real compaction).
+    #[tracing::instrument(skip(self))]
     async fn handle_compaction_result(
         &mut self,
         result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
         old_count: usize,
     ) -> Result<String, String> {
-        let compact_result =
-            match result {
-                Ok(None) => Ok("No compaction needed".to_string()),
-                Ok(Some(compaction_result)) => {
-                    // Record compactor token usage
-                    self.record_compactor_token_usage(compaction_result.token_usage)
-                        .await;
+        let compact_result = match result {
+            Ok(None) => Ok("No compaction needed".to_string()),
+            Ok(Some(compaction_result)) => {
+                // Record compactor token usage
+                self.record_compactor_token_usage(compaction_result.token_usage)
+                    .await;
 
-                    self.apply_compacted_messages(compaction_result.messages)
-                        .await;
-                    let new_count = self.message_buffer.len();
-                    let compacted_count = old_count.saturating_sub(new_count);
+                self.apply_compacted_messages(compaction_result.messages)
+                    .await;
+                let new_count = self.message_buffer.len();
+                let compacted_count = old_count.saturating_sub(new_count);
 
-                    // Clear file state only if messages were actually reduced (real compaction)
-                    if compacted_count > 0 {
-                        if let Some(ref file_state_store) = self.shared.file_state_store {
-                            tracing::info!(
-                            "Agent {} clearing file state due to compaction ({} -> {} messages)",
-                            self.id, old_count, new_count
+                // Clear file state only if messages were actually reduced (real compaction)
+                if compacted_count > 0 {
+                    if let Some(ref file_state_store) = self.shared.file_state_store {
+                        tracing::info!(
+                            "clearing file state due to compaction ({} -> {} messages)",
+                            old_count,
+                            new_count
                         );
-                            file_state_store.clear().await;
-                        }
+                        file_state_store.clear().await;
                     }
+                }
 
-                    Ok(if compacted_count > 0 {
-                        info!(
-                            "Agent {} compaction completed: {} -> {} messages (compacted {})",
-                            self.id, old_count, new_count, compacted_count
-                        );
-                        format!("Compacted {compacted_count} messages")
-                    } else {
-                        "Micro-compaction completed".to_string()
-                    })
-                }
-                Err(CompactionError::Cancelled) => {
-                    tracing::info!("Agent {} compaction cancelled", self.id);
-                    self.emit_operation_cancelled("compaction").await;
-                    Err("Compaction was cancelled".to_string())
-                }
-                Err(CompactionError::Api(e)) => {
-                    tracing::warn!("Agent {} compaction failed: {}", self.id, e);
-                    self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false)
-                        .await;
-                    Err(format!("Compaction failed: {e}"))
-                }
-            };
+                Ok(if compacted_count > 0 {
+                    info!(
+                        "compaction completed: {} -> {} messages (compacted {})",
+                        old_count, new_count, compacted_count
+                    );
+                    format!("Compacted {compacted_count} messages")
+                } else {
+                    "Micro-compaction completed".to_string()
+                })
+            }
+            Err(CompactionError::Cancelled) => {
+                tracing::info!("compaction cancelled");
+                self.emit_operation_cancelled("compaction").await;
+                Err("Compaction was cancelled".to_string())
+            }
+            Err(CompactionError::Api(e)) => {
+                tracing::warn!("compaction failed: {}", e);
+                self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false)
+                    .await;
+                Err(format!("Compaction failed: {e}"))
+            }
+        };
 
         self.emit_compaction_event(false).await;
         compact_result
@@ -1190,11 +1178,7 @@ impl Agent {
                 .map(|m| (*m).clone())
                 .collect();
             if let Err(e) = store.replace(&self.session_id, &to_persist).await {
-                tracing::warn!(
-                    "Agent {} failed to persist compacted messages: {}",
-                    self.id,
-                    e
-                );
+                tracing::warn!("failed to persist compacted messages: {}", e);
             }
         }
     }
@@ -1213,13 +1197,14 @@ impl Agent {
         match self.force_compact().await {
             Ok(_) => true,
             Err(e) => {
-                tracing::warn!("Agent {} auto-compaction failed: {}", self.id, e);
+                tracing::warn!("auto-compaction failed: {}", e);
                 false
             }
         }
     }
 
     /// Transition to appropriate state after streaming completes
+    #[tracing::instrument(skip(self))]
     async fn transition_after_streaming(
         &mut self,
         finish_reason: Option<crate::types::FinishReason>,
@@ -1239,8 +1224,7 @@ impl Agent {
                 .and_then(|m| m.tool_calls.as_ref())
                 .map_or(0, |v| v.len());
             tracing::debug!(
-                "Agent {} detected {} tool call(s), transitioning to ExecutingTool",
-                self.id,
+                "detected {} tool call(s), transitioning to ExecutingTool",
                 tool_count
             );
             self.context.transition_to(AgentState::ExecutingTool);
@@ -1260,8 +1244,7 @@ impl Agent {
                     self.message_buffer.push(msg);
                 }
                 tracing::info!(
-                    "Agent {} PreStop hooks decided to continue session, transitioning to Streaming",
-                    self.id
+                    "PreStop hooks decided to continue session, transitioning to Streaming"
                 );
                 self.context.transition_to(AgentState::Streaming);
                 return Ok(());
@@ -1288,6 +1271,7 @@ impl Agent {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
         // Early-out if cancelled before doing any work
         if self.cancel_token.is_cancelled() {
@@ -1435,10 +1419,7 @@ impl Agent {
         }
 
         if !continue_session {
-            tracing::info!(
-                "Agent {} stopping after tool execution (hook requested)",
-                self.id
-            );
+            tracing::info!("stopping after tool execution (hook requested)");
             self.context.transition_to(AgentState::Idle);
             return Ok(());
         }
@@ -1454,6 +1435,7 @@ impl Agent {
         self.message_buffer.messages()
     }
 
+    #[tracing::instrument(skip(self))]
     async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
         let max_retries = 10;
         let mut attempt = 0;

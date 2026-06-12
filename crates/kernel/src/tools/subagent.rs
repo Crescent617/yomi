@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, Instrument};
 
 pub const SUBAGENT_TOOL_NAME: &str = "agent";
 
@@ -231,10 +231,9 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         }
 
         tracing::info!(
-            "Spawning sub-agent {} for parent {}: {} (inherit_context: {}, preset: {:?})",
+            "spawning sub-agent {} for parent {} (inherit_context: {}, preset: {:?})",
             ctx.tool_call_id,
             self.parent_id,
-            description,
             inherit_context,
             preset
         );
@@ -254,15 +253,11 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 .await
             {
                 Ok(()) => {
-                    tracing::debug!(
-                        "Created sub-agent session: {} for agent {}",
-                        sid.0,
-                        self.parent_id
-                    );
+                    tracing::debug!("created sub-agent session for parent {}", self.parent_id);
                     sid.0
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to create sub-agent session: {}", e);
+                    tracing::warn!("failed to create sub-agent session: {}", e);
                     return Ok(ToolOutput::error(
                         "Failed to create storage session for sub-agent",
                     ));
@@ -309,31 +304,35 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 let shared = self.shared.clone();
                 let parent_session_id = self.parent_session_id.clone();
                 let message_id = ctx.message_id.clone();
-                tokio::spawn(async move {
-                    let (output, status) = Self::execute_simple_agent_with_shared(
-                        &mut simple_agent,
-                        system_prompt,
-                        history,
-                        prompt,
-                        cancel_token,
-                        &parent_event_tx,
-                        &parent_id,
-                        &tool_id,
-                        shared,
-                        parent_session_id,
-                        message_id,
-                    )
-                    .await;
-
-                    // Format and send result back to parent
-                    let result_text = Self::format_result_text(&desc, &sub_id, &output, &status);
-                    let _ = parent_tx
-                        .send(crate::agent::AgentInput::TaskResult {
-                            task_id: sub_id.to_string(),
-                            content: vec![ContentBlock::Text { text: result_text }],
-                        })
+                tokio::spawn(
+                    async move {
+                        let (output, status) = Self::execute_simple_agent_with_shared(
+                            &mut simple_agent,
+                            system_prompt,
+                            history,
+                            prompt,
+                            cancel_token,
+                            &parent_event_tx,
+                            &parent_id,
+                            &tool_id,
+                            shared,
+                            parent_session_id,
+                            message_id,
+                        )
                         .await;
-                });
+
+                        // Format and send result back to parent
+                        let result_text =
+                            Self::format_result_text(&desc, &sub_id, &output, &status);
+                        let _ = parent_tx
+                            .send(crate::agent::AgentInput::TaskResult {
+                                task_id: sub_id.to_string(),
+                                content: vec![ContentBlock::Text { text: result_text }],
+                            })
+                            .await;
+                    }
+                    .instrument(tracing::Span::current()),
+                );
 
                 let result = format!(
                     "Sub-agent({sub_agent_id}) with task '{description}' spawned in async mode. Results will be sent automatically when complete."
@@ -420,7 +419,7 @@ impl SubagentTool {
             message,
             tokens,
         })) {
-            tracing::warn!("Failed to send progress event: {}", e);
+            tracing::warn!("failed to send progress event: {}", e);
         }
     }
 

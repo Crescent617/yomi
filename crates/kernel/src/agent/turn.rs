@@ -40,6 +40,7 @@ pub struct Turn {
 }
 
 impl Turn {
+    #[tracing::instrument(skip(summary, store, data_dir, session_id), fields(user_msg_id = %user_msg_id.as_str()))]
     pub fn new(
         user_msg_id: MessageId,
         session_id: String,
@@ -52,12 +53,7 @@ impl Turn {
             .join(&session_id)
             .join(user_msg_id.as_str());
 
-        debug!(
-            "Turn started: {}/{} -> {:?}",
-            session_id,
-            user_msg_id.as_str(),
-            checkpoint_dir
-        );
+        debug!("Turn started -> {:?}", checkpoint_dir);
 
         // Create checkpoint directory (will be populated during the turn)
         // We don't create it here to allow lazy creation in track_file
@@ -171,10 +167,7 @@ impl Turn {
         Ok(Some(hash_str))
     }
 
-    /// Complete turn - create checkpoint with all tracked files.
-    ///
-    /// This copies `messages/file_states/todos` to the checkpoint directory
-    /// and registers the checkpoint in the manifest.
+    #[tracing::instrument(skip(self))]
     pub async fn complete(&self) -> Result<()> {
         // Convert tracked files to TrackedFileInfo
         let files: Vec<TrackedFile> = {
@@ -203,12 +196,8 @@ impl Turn {
             .await?;
 
         info!(
-            "Turn completed: {}/{} (checkpoint seq={}, {} files, summary: {})",
-            self.session_id,
-            self.user_msg_id.as_str(),
-            cp.sequence,
-            cp.files_changed,
-            cp.summary
+            "Turn completed (checkpoint seq={}, {} files, summary: {})",
+            cp.sequence, cp.files_changed, cp.summary
         );
 
         Ok(())
@@ -217,6 +206,7 @@ impl Turn {
     /// Cancel turn - discard tracked files and cleanup checkpoint directory.
     ///
     /// This removes any file backups that were created during this turn.
+    #[tracing::instrument(skip(self))]
     pub async fn cancel(&self) -> Result<()> {
         let files = self.take_tracked_files();
 
@@ -232,9 +222,7 @@ impl Turn {
         }
 
         debug!(
-            "Turn cancelled: {}/{} ({} files tracked, directory cleaned)",
-            self.session_id,
-            self.user_msg_id.as_str(),
+            "Turn cancelled ({} files tracked, directory cleaned)",
             files.len()
         );
         Ok(())
@@ -249,6 +237,7 @@ impl Turn {
     ///
     /// This delegates to the `CheckpointStore` implementation.
     /// Returns the number of checkpoints deleted.
+    #[tracing::instrument(skip(store))]
     pub async fn rewind_to_checkpoint(
         session_id: &str,
         target_message_id: &MessageId,
@@ -295,8 +284,8 @@ impl Turn {
         let deleted_count = checkpoints.len() - remaining.len();
 
         info!(
-            "Rewind completed for session {} to seq={} ({} checkpoints deleted)",
-            session_id, target_cp.sequence, deleted_count
+            "Rewind completed to seq={} ({} checkpoints deleted)",
+            target_cp.sequence, deleted_count
         );
 
         Ok(deleted_count)
@@ -307,12 +296,7 @@ impl Drop for Turn {
     fn drop(&mut self) {
         let files = self.take_tracked_files();
         if !files.is_empty() {
-            debug!(
-                "Turn dropped with {} files: {}/{}",
-                files.len(),
-                self.session_id,
-                self.user_msg_id.as_str()
-            );
+            debug!("Turn dropped with {} tracked files", files.len(),);
         }
         // NOTE: We intentionally do NOT delete the checkpoint directory here.
         // The directory holds file backups (in objects/) that are referenced by
