@@ -23,15 +23,18 @@ pub use skill::SkillHookHandler;
 
 /// Lifecycle events that can trigger hooks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "PascalCase")]
+#[serde(rename_all = "snake_case")]
 pub enum HookEvent {
     /// Before a tool is executed (after permission check).
     #[default]
+    #[serde(alias = "PreToolUse")]
     PreToolUse,
     /// After a tool has executed, before result is committed to message buffer.
+    #[serde(alias = "PostToolUse")]
     PostToolUse,
     /// When the agent is about to stop after a streaming turn (no tool calls).
     /// Hook can decide to continue the session by injecting steer messages.
+    #[serde(alias = "PreStop")]
     PreStop,
 }
 
@@ -39,7 +42,7 @@ pub enum HookEvent {
 ///
 /// Serialized as camelCase to match Claude Code / Codex hook conventions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct HookContext {
     pub event: HookEvent,
     pub session_id: String,
@@ -75,7 +78,7 @@ impl From<&ToolOutput> for HookToolOutput {
 /// Compatible with Claude Code / Codex hook output schema.
 /// `permissionDecision` is accepted as an alias for `action`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PreToolDecision {
     /// What to do with the tool call (`allow` or `block`).
     #[serde(default, alias = "permissionDecision")]
@@ -109,7 +112,7 @@ pub enum PreToolAction {
 
 /// Decision returned by a `PostToolUse` hook.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PostToolDecision {
     /// If false, the session stops after this turn.
     #[serde(default = "default_true")]
@@ -128,7 +131,7 @@ pub struct PostToolDecision {
 
 /// Decision returned by a `PreStop` hook.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct PreStopDecision {
     /// If true, the agent continues to another streaming turn instead of stopping.
     #[serde(default = "default_true")]
@@ -144,7 +147,7 @@ fn default_true() -> bool {
 
 /// Unified result type for hook handlers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub enum HookResult {
     PreTool(PreToolDecision),
     PostTool(PostToolDecision),

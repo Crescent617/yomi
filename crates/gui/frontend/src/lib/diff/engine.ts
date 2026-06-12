@@ -5,24 +5,24 @@ const dmp = new diffMatchPatch();
 
 export function computeFileDiff(
   path: string,
-  oldContent: string,
-  newContent: string
+  old_content: string,
+  new_content: string
 ): FileDiff {
   // Simple line-level diff using LCS-like approach
   const hunks = computeHunks(
-    oldContent.split("\n"),
-    newContent.split("\n")
+    old_content.split("\n"),
+    new_content.split("\n")
   );
 
   return {
     path,
-    oldContent,
-    newContent,
+    old_content: old_content,
+    new_content: new_content,
     hunks,
   };
 }
 
-function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
+function computeHunks(old_lines: string[], new_lines: string[]): Hunk[] {
   const hunks: Hunk[] = [];
   let oldIdx = 0;
   let newIdx = 0;
@@ -32,9 +32,9 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
   let inHunk = false;
 
   // Simple diff: compare line by line
-  while (oldIdx < oldLines.length || newIdx < newLines.length) {
-    const oldLine = oldIdx < oldLines.length ? oldLines[oldIdx] : undefined;
-    const newLine = newIdx < newLines.length ? newLines[newIdx] : undefined;
+  while (oldIdx < old_lines.length || newIdx < new_lines.length) {
+    const oldLine = oldIdx < old_lines.length ? old_lines[oldIdx] : undefined;
+    const newLine = newIdx < new_lines.length ? new_lines[newIdx] : undefined;
 
     if (oldLine === newLine) {
       // Same line
@@ -65,9 +65,9 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
         for (let i = ctxStart; i < oldIdx; i++) {
           hunkLines.push({
             type: "context",
-            oldLineNum: i + 1,
-            newLineNum: i + 1,
-            content: oldLines[i],
+            old_line_num: i + 1,
+            new_line_num: i + 1,
+            content: old_lines[i],
           });
         }
       }
@@ -76,14 +76,14 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
         // Check if this is a modification (same position)
         hunkLines.push({
           type: "remove",
-          oldLineNum: oldIdx + 1,
-          newLineNum: null,
+          old_line_num: oldIdx + 1,
+          new_line_num: null,
           content: oldLine,
         });
         hunkLines.push({
           type: "add",
-          oldLineNum: null,
-          newLineNum: newIdx + 1,
+          old_line_num: null,
+          new_line_num: newIdx + 1,
           content: newLine,
         });
         oldIdx++;
@@ -92,8 +92,8 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
         // Deleted line
         hunkLines.push({
           type: "remove",
-          oldLineNum: oldIdx + 1,
-          newLineNum: null,
+          old_line_num: oldIdx + 1,
+          new_line_num: null,
           content: oldLine,
         });
         oldIdx++;
@@ -101,8 +101,8 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
         // Added line
         hunkLines.push({
           type: "add",
-          oldLineNum: null,
-          newLineNum: newIdx + 1,
+          old_line_num: null,
+          new_line_num: newIdx + 1,
           content: newLine!,
         });
         newIdx++;
@@ -120,8 +120,8 @@ function computeHunks(oldLines: string[], newLines: string[]): Hunk[] {
 }
 
 function createHunk(
-  oldStart: number,
-  newStart: number,
+  old_start: number,
+  new_start: number,
   lines: DiffLine[]
 ): Hunk {
   const oldCount = lines.filter((l) => l.type !== "add").length;
@@ -133,7 +133,7 @@ function createHunk(
       // Find corresponding remove line
       const prevLine = lines[idx - 1];
       if (prevLine && prevLine.type === "remove") {
-        line.intraLineSegments = computeIntraLineDiff(
+        line.intra_line_segments = computeIntraLineDiff(
           prevLine.content,
           line.content
         );
@@ -143,11 +143,11 @@ function createHunk(
   });
 
   return {
-    id: `hunk-${oldStart}-${newStart}`,
-    oldStart,
-    oldLines: oldCount,
-    newStart,
-    newLines: newCount,
+    id: `hunk-${old_start}-${new_start}`,
+    old_start: old_start,
+    old_lines: oldCount,
+    new_start: new_start,
+    new_lines: newCount,
     lines: processedLines,
     applied: true,
   };
@@ -171,14 +171,14 @@ export function filterAppliedHunks(diff: FileDiff): FileDiff {
 }
 
 export function reconstructContent(diff: FileDiff): string {
-  const oldLines = diff.oldContent.split("\n");
+  const old_lines = diff.old_content.split("\n");
   const lines: string[] = [];
   let lineIdx = 0;
 
   for (const hunk of diff.hunks) {
     // Skip to hunk start
-    while (lineIdx < hunk.newStart - 1) {
-      lines.push(oldLines[lineIdx] ?? "");
+    while (lineIdx < hunk.new_start - 1) {
+      lines.push(old_lines[lineIdx] ?? "");
       lineIdx++;
     }
 

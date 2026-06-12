@@ -3,19 +3,19 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn ping(_state: State<'_, AppState>) -> Result<bool, GuiError> {
     Ok(true)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_cwd() -> Result<String, GuiError> {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| GuiError::unknown(format!("Failed to get cwd: {e}")))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_config_toml(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let path = kernel::config::Config::discover_file();
     let (content, file_path) = match &path {
@@ -35,7 +35,7 @@ pub async fn get_config_toml(_state: State<'_, AppState>) -> Result<serde_json::
     }))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_config_toml(
     _state: State<'_, AppState>,
     content: String,
@@ -62,7 +62,7 @@ pub async fn save_config_toml(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let working_dir = std::env::current_dir()
         .map_err(|e| GuiError::unknown(format!("Failed to get cwd: {e}")))?;
@@ -86,27 +86,27 @@ pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value
 
     Ok(serde_json::json!({
         "model": model,
-        "contextWindow": context_window,
+        "context_window": context_window,
         "provider": provider,
-        "autoApprove": auto_approve,
-        "fullConfig": full_config,
+        "auto_approve": auto_approve,
+        "full_config": full_config,
     }))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_usage_summary(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let coord = state.coordinator.clone();
     let summary = coord.get_usage_summary().await.map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
-        "promptTokens": summary.prompt_tokens,
-        "completionTokens": summary.completion_tokens,
-        "cachedTokens": summary.cached_tokens,
-        "totalTokens": summary.total_tokens(),
-        "requestCount": summary.request_count,
+        "prompt_tokens": summary.prompt_tokens,
+        "completion_tokens": summary.completion_tokens,
+        "cached_tokens": summary.cached_tokens,
+        "total_tokens": summary.total_tokens(),
+        "request_count": summary.request_count,
     }))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_daily_usage(
     state: State<'_, AppState>,
     days: i64,
@@ -123,11 +123,11 @@ pub async fn get_daily_usage(
         .map(|d| {
             serde_json::json!({
                 "date": d.date,
-                "promptTokens": d.prompt_tokens,
-                "completionTokens": d.completion_tokens,
-                "cachedTokens": d.cached_tokens,
-                "totalTokens": d.total_tokens(),
-                "requestCount": d.request_count,
+                "prompt_tokens": d.prompt_tokens,
+                "completion_tokens": d.completion_tokens,
+                "cached_tokens": d.cached_tokens,
+                "total_tokens": d.total_tokens(),
+                "request_count": d.request_count,
                 "models": d.models,
             })
         })
@@ -135,7 +135,7 @@ pub async fn get_daily_usage(
     Ok(serde_json::Value::Array(items))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_session_usage(
     state: State<'_, AppState>,
     session_id: String,
@@ -147,22 +147,22 @@ pub async fn get_session_usage(
         .await
         .map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
-        "promptTokens": usage.prompt_tokens,
-        "completionTokens": usage.completion_tokens,
-        "cachedTokens": usage.cached_tokens,
-        "totalTokens": usage.total_tokens(),
-        "requestCount": usage.request_count,
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "cached_tokens": usage.cached_tokens,
+        "total_tokens": usage.total_tokens(),
+        "request_count": usage.request_count,
     }))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_explorer(path: String) -> Result<(), GuiError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| GuiError::unknown(format!("Failed to open explorer: {e}")))?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
     #[cfg(target_os = "macos")]
     {
@@ -181,7 +181,7 @@ pub async fn open_in_vscode(path: String) -> Result<(), GuiError> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_zed(path: String) -> Result<(), GuiError> {
     #[cfg(target_os = "macos")]
     {
@@ -200,7 +200,7 @@ pub async fn open_in_zed(path: String) -> Result<(), GuiError> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
     tauri_plugin_opener::open_path(&path, None::<&str>)
         .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;
@@ -238,7 +238,7 @@ fn git_stdout(repo_root: &std::path::Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_git_diff_summary(
     path: String,
     staged: bool,
@@ -282,7 +282,7 @@ pub async fn get_git_diff_summary(
     Ok(serde_json::json!(files))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_git_file_diff_raw(
     path: String,
     file_path: String,
@@ -302,7 +302,7 @@ pub async fn get_git_file_diff_raw(
     Ok(git_stdout(&repo_root, &args))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
     let start = std::path::Path::new(&path);
     let Some(repo_root) = find_git_root(start) else {
@@ -363,9 +363,9 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
 
     Ok(serde_json::json!({
         "branch": branch,
-        "addedLines": added_lines,
-        "deletedLines": deleted_lines,
+        "added_lines": added_lines,
+        "deleted_lines": deleted_lines,
         "untracked": untracked,
-        "repoRoot": repo_root.to_string_lossy().to_string(),
+        "repo_root": repo_root.to_string_lossy().to_string(),
     }))
 }

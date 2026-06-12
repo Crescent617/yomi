@@ -7,20 +7,20 @@ export interface CronJob {
   schedule: string;
   action: {
     ty: string;
-    sessionId?: string;
+    session_id?: string;
     content?: string;
     command?: string;
-    workingDir?: string;
+    working_dir?: string;
   };
-  status: string; // "active" | "paused" | "completed" | "deleted" | "error"
-  createdAt: string;
-  updatedAt: string;
-  nextRunAt: string | null;
-  lastRunAt: string | null;
-  runCount: number;
-  maxRuns: number | null;
-  expiresAt: string | null;
-  lastError: string | null;
+  status: "active" | "paused" | "completed" | "failed";
+  created_at: string;
+  updated_at: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  run_count: number;
+  max_runs: number | null;
+  expires_at: string | null;
+  last_error: string | null;
 }
 
 function extractErrorMessage(e: unknown): string {
@@ -53,7 +53,7 @@ export class AutomationStore {
       const raw = await listCronJobs(undefined, 100);
       this.jobs = (raw as CronJob[]).sort(
         (a, b) =>
-          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
     } catch (e: unknown) {
       this.error = extractErrorMessage(e);
@@ -62,11 +62,11 @@ export class AutomationStore {
     }
   }
 
-  async delete(jobId: string) {
+  async delete(job_id: string) {
     try {
-      await deleteCronJob(jobId);
-      this.jobs = this.jobs.filter((j) => j.id !== jobId);
-      if (this.selectedJobId === jobId) this.selectedJobId = null;
+      await deleteCronJob(job_id);
+      this.jobs = this.jobs.filter((j) => j.id !== job_id);
+      if (this.selectedJobId === job_id) this.selectedJobId = null;
     } catch (e: unknown) {
       this.error = extractErrorMessage(e);
     }
@@ -82,23 +82,23 @@ export class AutomationStore {
     }
   }
 
-  async trigger(jobId: string) {
+  async trigger(job_id: string) {
     try {
-      await triggerCronJob(jobId);
+      await triggerCronJob(job_id);
       await this.load();
-      const job = this.jobs.find((j) => j.id === jobId);
-      const sessionId = job?.action?.sessionId;
-      sendDesktopNotification("Yomi", `Task "${job?.name ?? jobId}" completed`, sessionId);
+      const job = this.jobs.find((j) => j.id === job_id);
+      const session_id = job?.action?.session_id;
+      sendDesktopNotification("Yomi", `Task "${job?.name ?? job_id}" completed`, session_id);
     } catch (e: unknown) {
       this.error = extractErrorMessage(e);
-      const job = this.jobs.find((j) => j.id === jobId);
-      const sessionId = job?.action?.sessionId;
-      sendDesktopNotification("Yomi", `Task "${jobId}" failed: ${this.error}`, sessionId);
+      const job = this.jobs.find((j) => j.id === job_id);
+      const session_id = job?.action?.session_id;
+      sendDesktopNotification("Yomi", `Task "${job_id}" failed: ${this.error}`, session_id);
     }
   }
 
-  select(jobId: string | null) {
-    this.selectedJobId = jobId;
+  select(job_id: string | null) {
+    this.selectedJobId = job_id;
   }
 
   openCreate() {
@@ -106,8 +106,8 @@ export class AutomationStore {
     this.showCreateModal = true;
   }
 
-  openEdit(jobId: string) {
-    this.editingJobId = jobId;
+  openEdit(job_id: string) {
+    this.editingJobId = job_id;
     this.showCreateModal = true;
   }
 

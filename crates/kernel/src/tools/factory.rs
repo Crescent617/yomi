@@ -25,6 +25,7 @@ pub struct ToolRegistryConfig<'a> {
     pub enable_sub_agents: bool,
     pub enable_reminder: bool,
     pub enable_sleep: bool,
+    pub enable_update_goal: bool,
     pub ask_user_state: Option<crate::tools::AskUserState>,
     pub tool_blocklist: Vec<String>,
 }
@@ -49,6 +50,7 @@ impl<'a> ToolRegistryConfig<'a> {
             enable_sub_agents: true,
             enable_reminder: false,
             enable_sleep: true,
+            enable_update_goal: true,
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
         }
@@ -73,6 +75,7 @@ impl<'a> ToolRegistryConfig<'a> {
             enable_sub_agents: false,
             enable_reminder: false,
             enable_sleep: false,
+            enable_update_goal: false,
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
         }
@@ -174,8 +177,10 @@ impl ToolRegistryFactory {
         }
 
         // Register update_goal tool if goal store is available
-        if let Some(ref store) = config.shared.goal_store {
-            registry.register(crate::tools::UpdateGoalTool::new(Arc::clone(store)));
+        if config.enable_update_goal {
+            if let Some(ref store) = config.shared.goal_store {
+                registry.register(crate::tools::UpdateGoalTool::new(Arc::clone(store)));
+            }
         }
 
         // Register Sleep tool if enabled

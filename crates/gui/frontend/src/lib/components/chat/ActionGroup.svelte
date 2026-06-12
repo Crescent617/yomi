@@ -29,9 +29,9 @@
           toolCount++;
           if (t.status === "running") {
             runningCount++;
-            if (!seenNames.has(t.toolName)) {
-              seenNames.add(t.toolName);
-              runningNames.push(t.toolName);
+            if (!seenNames.has(t.tool_name)) {
+              seenNames.add(t.tool_name);
+              runningNames.push(t.tool_name);
             }
           } else if (t.status === "failed") {
             failedCount++;
@@ -95,7 +95,7 @@
     <div class="p-2 space-y-2 border-t border-border/30 bg-muted/20 w-full">
       {#each messages as msg (`msg-${msg.id}`)}
         {#if msg.thinking}
-          <ThinkingBlock content={msg.thinking.content} elapsedMs={msg.thinking.elapsedMs} />
+          <ThinkingBlock content={msg.thinking.content} elapsed_ms={msg.thinking.elapsed_ms} />
         {/if}
         {#if msg.tools && msg.tools.length > 0}
           {#each msg.tools as tool (`${msg.id}-${tool.id}`)}

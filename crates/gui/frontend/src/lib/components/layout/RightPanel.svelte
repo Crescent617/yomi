@@ -34,10 +34,10 @@
   }
 
   interface DiffHunk {
-    oldStart: number;
-    oldLines: number;
-    newStart: number;
-    newLines: number;
+    old_start: number;
+    old_lines: number;
+    new_start: number;
+    new_lines: number;
     header: string;
     lines: DiffLine[];
   }
@@ -60,7 +60,7 @@
   let diffLoadVersion = 0;
   let lastPath = "";
   let lastStaged = false;
-  let lastRawDiff = "";
+  let _lastRawDiff = "";
   let expandedDirs = $state<Set<string>>(new Set());
   let showFileTree = $state(true);
 
@@ -105,20 +105,20 @@
         if (currentHunk) currentFile.hunks.push(currentHunk);
         const match = line.match(/^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@(.*)/);
         if (match) {
-          const oldStart = parseInt(match[1], 10);
-          const oldLines = match[2] ? parseInt(match[2], 10) : 1;
-          const newStart = parseInt(match[3], 10);
-          const newLines = match[4] ? parseInt(match[4], 10) : 1;
+          const old_start = parseInt(match[1], 10);
+          const old_lines = match[2] ? parseInt(match[2], 10) : 1;
+          const new_start = parseInt(match[3], 10);
+          const new_lines = match[4] ? parseInt(match[4], 10) : 1;
           currentHunk = {
-            oldStart,
-            oldLines,
-            newStart,
-            newLines,
+            old_start,
+            old_lines,
+            new_start,
+            new_lines,
             header: match[5] || "",
             lines: [],
           };
-          oldLine = oldStart;
-          newLine = newStart;
+          oldLine = old_start;
+          newLine = new_start;
         }
         i++;
         continue;
@@ -273,7 +273,7 @@
   }
 
   async function loadFileList() {
-    const path = session?.projectPath;
+    const path = session?.project_path;
     if (!path) return;
     const staged = showStaged;
     const currentVersion = ++loadVersion;
@@ -285,7 +285,7 @@
       files = result ?? [];
       activeFilePath = null;
       diffFiles = [];
-      lastRawDiff = "";
+      _lastRawDiff = "";
       expandedDirs = new Set();
       if (files.length > 0) {
         loadFileDiff(files[0].path);
@@ -301,7 +301,7 @@
   }
 
   async function loadFileDiff(filePath: string) {
-    const path = session?.projectPath;
+    const path = session?.project_path;
     if (!path) return;
 
     const idx = files.findIndex((f) => f.path === filePath);
@@ -320,27 +320,27 @@
 
       if (!raw) {
         diffFiles = [];
-        lastRawDiff = "";
+        _lastRawDiff = "";
         return;
       }
 
-      lastRawDiff = raw;
+      _lastRawDiff = raw;
       diffFiles = parseDiff(raw);
     } catch (e) {
       console.error("Failed to load file diff:", e);
       diffFiles = [];
-      lastRawDiff = "";
+      _lastRawDiff = "";
     } finally {
       if (loadingFile === filePath) loadingFile = null;
     }
   }
 
   function maybeLoad() {
-    const path = session?.projectPath;
+    const path = session?.project_path;
     if (!path) {
       files = [];
       diffFiles = [];
-      lastRawDiff = "";
+      _lastRawDiff = "";
       return;
     }
     if (path === lastPath && showStaged === lastStaged) return;
@@ -354,7 +354,7 @@
   });
 
   $effect(() => {
-    const path = session?.projectPath;
+    const path = session?.project_path;
     if (path && path !== lastPath) {
       maybeLoad();
     }
@@ -556,17 +556,17 @@
                 No diff available
               </div>
             {:else}
-              {#each diffFiles as file}
+              {#each diffFiles as file, i (file.newPath || file.oldPath || i)}
                 <div class="mb-4 overflow-hidden">
                   {#if viewMode === "unified"}
                     <div class="font-mono text-xs leading-relaxed">
-                      {#each file.hunks as hunk}
+                      {#each file.hunks as hunk, i (hunk.header || i)}
                         <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
                           <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
                           <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
                           <span class="text-[10px]">{hunk.header}</span>
                         </div>
-                        {#each hunk.lines as line}
+                        {#each hunk.lines as line, i (i)}
                           <div class="flex items-start gap-2 px-2 py-0.5 {lineBg(line.type)}">
                             <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
                               {line.oldLine ?? ""}
@@ -584,11 +584,11 @@
                   {:else}
                     <!-- Split view -->
                     <div class="font-mono text-xs leading-relaxed">
-                      {#each file.hunks as hunk}
+                      {#each file.hunks as hunk, i (hunk.header || i)}
                         <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
                           <span class="text-[10px]">@@ {hunk.header}</span>
                         </div>
-                        {#each hunk.lines as line}
+                        {#each hunk.lines as line, i (i)}
                           <div class="flex border-b border-border/5">
                             <div class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {leftLineBg(line.type)}">
                               <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">

@@ -10,7 +10,7 @@
 
   const displayMessages = $derived(getDisplayMessages(session?.id ?? ""));
 
-  let config = $state<{ model: string; contextWindow: number } | null>(null);
+  let config = $state<{ model: string; context_window: number } | null>(null);
 
   onMount(() => {
     api.getConfig().then(c => config = c).catch(() => {});
@@ -18,7 +18,7 @@
 
   // ── Timer ──
   let startTime = $state<number | null>(null);
-  let elapsedMs = $state(0);
+  let elapsed_ms = $state(0);
   let timerInterval: ReturnType<typeof setInterval> | null = null;
 
   const isRunning = $derived.by(() => {
@@ -29,9 +29,9 @@
   $effect(() => {
     if (isRunning) {
       startTime = Date.now();
-      elapsedMs = 0;
+      elapsed_ms = 0;
       timerInterval = setInterval(() => {
-        if (startTime) elapsedMs = Date.now() - startTime;
+        if (startTime) elapsed_ms = Date.now() - startTime;
       }, 100);
       return () => {
         if (timerInterval) {
@@ -46,16 +46,16 @@
         timerInterval = null;
       }
       startTime = null;
-      elapsedMs = 0;
+      elapsed_ms = 0;
     }
   });
 
   // ── Total tokens: prefer backend real usage, fallback to estimation ──
-  const totalTokens = $derived.by(() => {
+  const total_tokens = $derived.by(() => {
     if (!session) return 0;
     // Use backend-reported token usage (aligns with TUI status bar)
-    if (session.tokenUsage?.totalTokens != null) {
-      return session.tokenUsage.totalTokens;
+    if (session.token_usage?.total_tokens != null) {
+      return session.token_usage.total_tokens;
     }
     // Fallback to client-side estimation
     let bytes = 0;
@@ -128,7 +128,7 @@
   });
 </script>
 
-{#if isRunning || streamingTokens > 0 || totalTokens > 0}
+{#if isRunning || streamingTokens > 0 || total_tokens > 0}
   <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-7 font-mono">
     <!-- Left: phase status -->
     <div class="flex items-center gap-1.5 min-w-0">
@@ -146,12 +146,12 @@
         <span class="text-muted-foreground shrink-0">{formatTokens(streamingTokens)} tokens</span>
       {/if}
 
-      {#if isRunning && elapsedMs > 0}
-        <span class="text-muted-foreground/70 shrink-0">{formatElapsed(elapsedMs)}</span>
+      {#if isRunning && elapsed_ms > 0}
+        <span class="text-muted-foreground/70 shrink-0">{formatElapsed(elapsed_ms)}</span>
       {/if}
 
       {#if currentTool}
-        <span class="text-muted-foreground/70 truncate">· calling {currentTool.toolName}</span>
+        <span class="text-muted-foreground/70 truncate">· calling {currentTool.tool_name}</span>
         {#if currentTool.progress}
           <span class="text-muted-foreground/50 truncate max-w-60">· {currentTool.progress}</span>
         {/if}
@@ -163,13 +163,13 @@
     <!-- Right: model + ctx -->
     <div class="flex items-center gap-2 shrink-0">
       {#if config}
-        {@const pct = (totalTokens / config.contextWindow) * 100}
+        {@const pct = (total_tokens / config.context_window) * 100}
         <span class="text-muted-foreground/60">{config.model}</span>
         <span class="text-muted-foreground/40">·</span>
         <span class="text-muted-foreground/60"
           class:text-amber-500={pct >= 70}
           class:text-red-500={pct >= 90}>
-          {pct.toFixed(1)}% ({(config.contextWindow / 1000).toFixed(0)}K)
+          {pct.toFixed(1)}% ({(config.context_window / 1000).toFixed(0)}K)
         </span>
       {/if}
     </div>

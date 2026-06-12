@@ -3,14 +3,14 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_skills(_state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, GuiError> {
     // TODO: Kernel wire protocol does not expose list_skills yet.
     // Return empty until a remote API is added.
     Ok(vec![])
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn reload_config(state: State<'_, AppState>) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     coord

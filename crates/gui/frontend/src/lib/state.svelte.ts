@@ -9,33 +9,33 @@ const INACTIVE_UNSUBSCRIBE_DELAY = 60_000;
 
 const pendingUnsubscribeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
-export function scheduleUnsubscribe(sessionId: string) {
-  const session = getSession(sessionId);
+export function scheduleUnsubscribe(session_id: string) {
+  const session = getSession(session_id);
   if (!session) return;
   if (session.id === sessionState.activeSessionId) return; // 当前活跃的，不清理
   if (session.phase !== "idle" && session.phase !== "closed") return; // 正在运行，不清理
   if (session.compacting) return; // 正在 compacting，不清理
 
-  cancelPendingUnsubscribe(sessionId);
+  cancelPendingUnsubscribe(session_id);
 
-  pendingUnsubscribeTimers[sessionId] = setTimeout(() => {
-    api.unsubscribe(sessionId).catch(() => {});
-    delete pendingUnsubscribeTimers[sessionId];
+  pendingUnsubscribeTimers[session_id] = setTimeout(() => {
+    api.unsubscribe(session_id).catch(() => {});
+    delete pendingUnsubscribeTimers[session_id];
   }, INACTIVE_UNSUBSCRIBE_DELAY);
 }
 
-export function cancelPendingUnsubscribe(sessionId: string) {
-  const timer = pendingUnsubscribeTimers[sessionId];
+export function cancelPendingUnsubscribe(session_id: string) {
+  const timer = pendingUnsubscribeTimers[session_id];
   if (timer) {
     clearTimeout(timer);
-    delete pendingUnsubscribeTimers[sessionId];
+    delete pendingUnsubscribeTimers[session_id];
   }
 }
 
 export function unsubscribeAllInactive() {
-  for (const sessionId of Object.keys(pendingUnsubscribeTimers)) {
-    clearTimeout(pendingUnsubscribeTimers[sessionId]);
-    delete pendingUnsubscribeTimers[sessionId];
+  for (const session_id of Object.keys(pendingUnsubscribeTimers)) {
+    clearTimeout(pendingUnsubscribeTimers[session_id]);
+    delete pendingUnsubscribeTimers[session_id];
   }
   for (const session of sessionState.sessions) {
     if (session.id !== sessionState.activeSessionId) {
@@ -47,8 +47,8 @@ export function unsubscribeAllInactive() {
 export interface TabEntry {
   name: string;
   path: string;
-  isDirectory: boolean;
-  isFile: boolean;
+  is_directory: boolean;
+  is_file: boolean;
 }
 
 export interface Tab {
@@ -61,15 +61,15 @@ export interface Tab {
 
 export interface ToolCall {
   id: string;
-  toolName: string;
+  tool_name: string;
   status: "running" | "completed" | "failed" | "cancelled";
   arguments?: string;
-  parsedArgs?: Record<string, unknown>;
+  parsed_args?: Record<string, unknown>;
   output?: string;
   error?: string;
   progress?: string;
   tokens?: number;
-  elapsedMs?: number;
+  elapsed_ms?: number;
   folded?: boolean;
 }
 
@@ -77,28 +77,28 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "error";
   content: string;
-  contentBlocks?: TaggedContentBlock[];
-  thinking?: { content: string; elapsedMs: number } | null;
+  content_blocks?: TaggedContentBlock[];
+  thinking?: { content: string; elapsed_ms: number } | null;
   tools?: ToolCall[];
   error?: boolean;
-  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   raw?: unknown;
-  createdAt?: string;
+  created_at?: string;
 }
 
 export interface ProjectState {
   id: string;
   name: string;
   dir: string;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PendingPermission {
-  reqId: string;
-  toolName: string;
-  toolArgs: string;
-  toolLevel: string;
+  req_id: string;
+  tool_name: string;
+  tool_args: string;
+  tool_level: string;
   reason: string;
 }
 
@@ -112,12 +112,12 @@ export interface AskQuestion {
   question: string;
   header: string;
   options: AskOption[];
-  multiSelect: boolean;
+  multi_select: boolean;
 }
 
 export interface PendingAskUser {
-  reqId: string;
-  agentId: string;
+  req_id: string;
+  agent_id: string;
   questions: AskQuestion[];
 }
 
@@ -128,23 +128,23 @@ export interface QueuedInput {
 
 export interface SessionState {
   id: string;
-  projectPath: string;
-  projectId?: string;
+  project_path: string;
+  project_id?: string;
   alias?: string;
   messages: ChatMessage[];
   phase: string;
   unread: number;
   checkpoints: unknown[];
   tabs: Tab[];
-  activeTabId: string;
-  pendingPermissions: PendingPermission[];
-  pendingAskUser: PendingAskUser | null;
-  queuedInput: QueuedInput | null;
-  updatedAt: string;
-  permissionLevel?: string;
+  active_tab_id: string;
+  pending_permissions: PendingPermission[];
+  pending_ask_user: PendingAskUser | null;
+  queued_input: QueuedInput | null;
+  updated_at: string;
+  permission_level?: string;
   compacting?: boolean;
-  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
-  gitInfo?: GitInfo | null;
+  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  git_info?: GitInfo | null;
   goal?: { description: string; status: string } | null;
 }
 
@@ -180,16 +180,16 @@ export function showNotification(
   pushToast(text, typeMap[level] ?? "info", durationMs);
 }
 
-export function sendDesktopNotification(title: string, body: string, sessionId?: string) {
+export function sendDesktopNotification(title: string, body: string, session_id?: string) {
   try {
-    if (sessionId && typeof Notification !== "undefined") {
+    if (session_id && typeof Notification !== "undefined") {
       try {
-        const n = new Notification(title, { body, tag: sessionId });
+        const n = new Notification(title, { body, tag: session_id });
         n.onclick = () => {
           getCurrentWindow().setFocus().catch(() => {});
           appState.activePanel = "chat";
-          if (getSession(sessionId)) {
-            setActiveSession(sessionId);
+          if (getSession(session_id)) {
+            setActiveSession(session_id);
           }
         };
         return;
@@ -210,10 +210,10 @@ export const sessionState = $state({
 
 export const streamingMessages = $state<Record<string, ChatMessage[]>>({});
 
-export function getDisplayMessages(sessionId: string): ChatMessage[] {
-  const session = getSession(sessionId);
+export function getDisplayMessages(session_id: string): ChatMessage[] {
+  const session = getSession(session_id);
   if (!session) return [];
-  const streamBuf = streamingMessages[sessionId] ?? [];
+  const streamBuf = streamingMessages[session_id] ?? [];
   if (streamBuf.length === 0) return session.messages;
   return [...session.messages, ...streamBuf];
 }
@@ -222,9 +222,9 @@ export function getSession(id: string): SessionState | undefined {
   return sessionState.sessions.find((s) => s.id === id);
 }
 
-export function refreshCheckpoints(sessionId: string) {
-  api.getCheckpoints(sessionId).then((cps) => {
-    const session = getSession(sessionId);
+export function refreshCheckpoints(session_id: string) {
+  api.getCheckpoints(session_id).then((cps) => {
+    const session = getSession(session_id);
     if (session) session.checkpoints = cps;
   }).catch((e: Error) => console.error("Failed to reload checkpoints:", e));
 }
@@ -237,25 +237,25 @@ export function refreshSessions() {
       if (!current) {
         sessionState.sessions.push({
           id: s.id,
-          projectPath: s.projectPath,
-          projectId: s.projectId,
+          project_path: s.project_path,
+          project_id: s.project_id,
           alias: s.title,
           messages: [],
           phase: "idle",
           unread: 0,
           checkpoints: [],
           tabs: [],
-          activeTabId: "chat",
-          pendingPermissions: [],
-          pendingAskUser: null,
-          queuedInput: null,
-          updatedAt: s.createdAt,
-          permissionLevel: s.autoApproveLevel,
+          active_tab_id: "chat",
+          pending_permissions: [],
+          pending_ask_user: null,
+          queued_input: null,
+          updated_at: s.created_at,
+          permission_level: s.auto_approve_level,
         });
       } else {
         current.alias = s.title ?? current.alias;
-        current.updatedAt = s.createdAt ?? current.updatedAt;
-        current.permissionLevel = s.autoApproveLevel ?? current.permissionLevel;
+        current.updated_at = s.created_at ?? current.updated_at;
+        current.permission_level = s.auto_approve_level ?? current.permission_level;
       }
     }
   }).catch((e: Error) => console.error("Failed to refresh sessions:", e));
@@ -293,8 +293,8 @@ function upsertSession(session: SessionState) {
 
 
 
-export function syncSessionStatus(sessionId: string, status: { phase: string; compacting: boolean }) {
-  const session = getSession(sessionId);
+export function syncSessionStatus(session_id: string, status: { phase: string; compacting: boolean }) {
+  const session = getSession(session_id);
   if (!session) return;
   session.phase = status.phase;
   session.compacting = status.compacting;
@@ -309,7 +309,7 @@ export function openFileTab(
     (t) => t.type === type && t.entry?.path === entry.path
   );
   if (existing) {
-    session.activeTabId = existing.id;
+    session.active_tab_id = existing.id;
     return;
   }
   const newTab: Tab = {
@@ -319,7 +319,7 @@ export function openFileTab(
     entry,
   };
   session.tabs = [...session.tabs, newTab];
-  session.activeTabId = newTab.id;
+  session.active_tab_id = newTab.id;
 }
 
 export function closeTab(session: SessionState, tabId: string) {
@@ -327,8 +327,8 @@ export function closeTab(session: SessionState, tabId: string) {
   const idx = session.tabs.findIndex((t) => t.id === tabId);
   if (idx === -1) return;
   session.tabs = session.tabs.filter((t) => t.id !== tabId);
-  if (session.activeTabId === tabId) {
-    session.activeTabId = session.tabs[Math.min(idx, session.tabs.length - 1)]?.id ?? "chat";
+  if (session.active_tab_id === tabId) {
+    session.active_tab_id = session.tabs[Math.min(idx, session.tabs.length - 1)]?.id ?? "chat";
   }
 }
 
@@ -353,21 +353,21 @@ export interface RawMessage {
   id?: unknown;
   role: unknown;
   content?: string | TaggedContentBlock[];
-  toolCallId?: string;
-  toolCalls?: RawToolCall[];
-  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
-  createdAt?: string;
+  tool_call_id?: string;
+  tool_calls?: RawToolCall[];
+  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  created_at?: string;
 }
 
 interface RawToolCall {
   id?: string;
   name?: string;
-  toolName?: string;
+  tool_name?: string;
   arguments?: string | Record<string, unknown>;
 }
 
-export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
-  const session = getSession(sessionId);
+export function loadSessionMessages(session_id: string, rawMessages: unknown[]) {
+  const session = getSession(session_id);
   if (!session) return;
 
   // First pass: collect all tool outputs from tool result messages
@@ -386,13 +386,13 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
     } else if (typeof m.content === "string") {
       output = m.content;
     }
-    if (m.toolCallId) {
-      toolOutputs[m.toolCallId] = output;
-      const cleanId = m.toolCallId.replace(/^functions\./, "");
-      if (cleanId !== m.toolCallId) {
+    if (m.tool_call_id) {
+      toolOutputs[m.tool_call_id] = output;
+      const cleanId = m.tool_call_id.replace(/^functions\./, "");
+      if (cleanId !== m.tool_call_id) {
         toolOutputs[cleanId] = output;
       }
-      const match = m.toolCallId.match(/^functions\.(\w+):/);
+      const match = m.tool_call_id.match(/^functions\.(\w+):/);
       if (match) {
         toolOutputByName[match[1].toLowerCase()] = output;
       }
@@ -427,11 +427,11 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         id: extractId(m.id),
         role: "user",
         content: textContent,
-        contentBlocks: blocks,
+        content_blocks: blocks,
         thinking: null,
         tools: [],
         raw: m,
-        createdAt: m.createdAt,
+        created_at: m.created_at,
       });
     } else if (role === "system" || role === "error") {
       let text = "";
@@ -453,23 +453,23 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         thinking: null,
         tools: [],
         raw: m,
-        createdAt: m.createdAt,
+        created_at: m.created_at,
       });
     } else {
       // Assistant message
       let text = "";
-      let thinking: { content: string; elapsedMs: number } | null = null;
+      let thinking: { content: string; elapsed_ms: number } | null = null;
 
       if (Array.isArray(m.content)) {
         for (const block of m.content) {
           if (typeof block === "string") {
             text += block;
-          } else if (block.type === "text" || block.Text || block.text) {
-            text += block.text || block.Text || "";
-          } else if (block.type === "thinking" || block.Thinking) {
+          } else if (block.type === "text" || (block as Record<string, unknown>).text) {
+            text += (block as Record<string, unknown>).text as string || "";
+          } else if (block.type === "thinking" || (block as Record<string, unknown>).thinking) {
             thinking = {
-              content: block.thinking || block.Thinking?.thinking || "",
-              elapsedMs: 0,
+              content: (block as Record<string, unknown>).thinking as string || "",
+              elapsed_ms: 0,
             };
           }
         }
@@ -477,29 +477,29 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         text = m.content;
       }
 
-      // Extract toolCalls from the message
+      // Extract tool_calls from the message
       const tools: ToolCall[] = [];
-      if (Array.isArray(m.toolCalls)) {
-        for (const tc of m.toolCalls) {
-          const toolId = tc.id || "";
-          const toolName = tc.name || tc.toolName || "";
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          const tool_id = tc.id || "";
+          const tool_name = tc.name || tc.tool_name || "";
           let args = "";
           if (tc.arguments) {
             args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
           }
           const output =
-            toolOutputs[toolId]
-            || toolOutputs[toolId.replace(/^functions\./, "")]
-            || toolOutputByName[toolName.toLowerCase()]
+            toolOutputs[tool_id]
+            || toolOutputs[tool_id.replace(/^functions\./, "")]
+            || toolOutputByName[tool_name.toLowerCase()]
             || "";
           const hasOutput =
             output !== ""
-            || toolId in toolOutputs
-            || toolId.replace(/^functions\./, "") in toolOutputs
-            || toolName.toLowerCase() in toolOutputByName;
+            || tool_id in toolOutputs
+            || tool_id.replace(/^functions\./, "") in toolOutputs
+            || tool_name.toLowerCase() in toolOutputByName;
           tools.push({
-            id: toolId,
-            toolName,
+            id: tool_id,
+            tool_name,
             status: hasOutput ? "completed" : "running",
             arguments: args,
             output: output || undefined,
@@ -514,25 +514,25 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
         content: text,
         thinking,
         tools,
-        tokenUsage: m.tokenUsage
+        token_usage: m.token_usage
           ? {
-              promptTokens: m.tokenUsage.promptTokens,
-              completionTokens: m.tokenUsage.completionTokens,
-              totalTokens: m.tokenUsage.totalTokens,
+              prompt_tokens: m.token_usage.prompt_tokens,
+              completion_tokens: m.token_usage.completion_tokens,
+              total_tokens: m.token_usage.total_tokens,
             }
           : undefined,
         raw: m,
-        createdAt: m.createdAt,
+        created_at: m.created_at,
       });
     }
   }
 
   // Find the latest token usage from assistant messages (aligns with TUI logic)
-  let latestTokenUsage = session.tokenUsage;
+  let latestTokenUsage = session.token_usage;
   for (let i = parsedMessages.length - 1; i >= 0; i--) {
     const msg = parsedMessages[i];
-    if (msg.role === "assistant" && msg.tokenUsage) {
-      latestTokenUsage = msg.tokenUsage;
+    if (msg.role === "assistant" && msg.token_usage) {
+      latestTokenUsage = msg.token_usage;
       break;
     }
   }
@@ -540,7 +540,7 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
   upsertSession({
     ...session,
     messages: parsedMessages,
-    tokenUsage: latestTokenUsage,
+    token_usage: latestTokenUsage,
   });
 }
 
@@ -548,41 +548,44 @@ export function loadSessionMessages(sessionId: string, rawMessages: unknown[]) {
 
 interface ChunkContent {
   text?: string;
-  thinking?: { thinking?: string };
+  thinking?: { thinking?: string; signature?: string };
+  redacted_thinking?: null;
 }
 
 interface ModelChunk {
-  chunk?: { content: ChunkContent };
-  toolCallDelta?: { toolId: string; toolName: string; argumentsDelta?: string };
-  completed?: Record<string, never>;
-  error?: { message: string };
-  compacting?: { active: boolean };
-  tokenUsage?: {
-    agentId: string;
-    messageId: string;
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-    contextWindow: number;
+  request?: { agent_id: string; message_id: string; message_count: number };
+  chunk?: { agent_id: string; message_id: string; content: ChunkContent };
+  tool_call_delta?: { agent_id: string; message_id: string; tool_id: string; tool_name: string; arguments_delta: string };
+  completed?: { agent_id: string; message_id: string };
+  error?: { agent_id: string; message_id: string; error: string };
+  fallback?: { agent_id: string; message_id: string; from: string; to: string };
+  compacting?: { agent_id: string; active: boolean };
+  token_usage?: {
+    agent_id: string;
+    message_id: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    context_window: number;
   };
 }
 
 interface ToolStart {
-  toolId: string;
-  toolName: string;
+  tool_id: string;
+  tool_name: string;
   arguments?: string;
 }
 
 interface ToolEnd {
-  toolId: string;
-  toolName: string;
-  isError: boolean;
-  elapsedMs: number;
-  contentBlocks?: TaggedContentBlock[];
+  tool_id: string;
+  tool_name: string;
+  is_error: boolean;
+  elapsed_ms: number;
+  content_blocks?: TaggedContentBlock[];
 }
 
 interface ToolProgress {
-  toolId: string;
+  tool_id: string;
   message?: string;
   tokens?: number;
 }
@@ -599,7 +602,7 @@ interface AgentLifecycleStopped {
       reason:
         | { cancelled: { operation?: string } }
         | { failed: { error: string } }
-        | { maxIterations: { reached: number } }
+        | { max_iterations: { reached: number } }
         | { completed: true };
     };
   };
@@ -613,40 +616,41 @@ type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
   lifecycle?: AgentLifecycle;
-  error?: { agentId: string; phase: string; error: string; isRecoverable: boolean };
-  permissionRequest?: {
-    reqId: string;
-    toolName: string;
-    toolArgs?: string;
-    toolLevel?: string;
+  error?: { agent_id: string; phase: string; error: string; is_recoverable: boolean };
+  permission_request?: {
+    req_id: string;
+    tool_name: string;
+    tool_args?: string;
+    tool_level?: string;
     reason?: string;
   };
-  askUserQuestion?: {
-    reqId: string;
-    agentId: string;
+  ask_user_question?: {
+    req_id: string;
+    agent_id: string;
     questions: AskQuestion[];
   };
   retrying?: {
-    agentId: string;
+    agent_id: string;
     attempt: number;
-    maxAttempts: number;
+    max_attempts: number;
     reason: string;
   };
 }
 
 interface SystemEvent {
   connected?: Record<string, never>;
-  disconnected?: Record<string, never>;
-  sessionSwitched?: { sessionId: string };
-  titleUpdated?: { sessionId: string; title: string };
-  rewound?: { sessionId: string; messages: RawMessage[] };
-  goalUpdated?: { sessionId: string; description: string; status: string };
-  goalStopped?: { sessionId: string };
+  connection_lost?: Record<string, never>;
+  shutdown?: { error?: string };
+  session_switched?: { session_id: string };
+  title_updated?: { session_id: string; title: string };
+  rewound?: { session_id: string; messages: RawMessage[] };
+  goal_updated?: { session_id: string; description: string; status: string };
+  goal_stopped?: { session_id: string };
 }
 
 interface UserEvent {
   message?: {
-    messageId: string;
+    message_id: string;
     content: TaggedContentBlock[];
   };
 }
@@ -658,8 +662,8 @@ type KernelEvent =
   | { tool: ToolEvent }
   | { user: UserEvent };
 
-export function handleEvent(sessionId: string, rawEvent: unknown) {
-  let session = getSession(sessionId);
+export function handleEvent(session_id: string, rawEvent: unknown) {
+  let session = getSession(session_id);
   if (!session) return;
 
   const ev = rawEvent as KernelEvent;
@@ -676,8 +680,8 @@ export function handleEvent(sessionId: string, rawEvent: unknown) {
   }
 
   // Re-fetch session in case an event handler replaced it in sessionState.sessions
-  session = getSession(sessionId) ?? session;
-  if (sessionState.activeSessionId !== sessionId) {
+  session = getSession(session_id) ?? session;
+  if (sessionState.activeSessionId !== session_id) {
     session.unread++;
   }
 }
@@ -698,12 +702,12 @@ function scheduleUnsubscribeIfInactive(session: SessionState) {
 }
 
 /** Search all messages for a tool with the given id. */
-function findToolById(session: SessionState, toolId: string): { msg: ChatMessage; tool: ToolCall } | null {
+function findToolById(session: SessionState, tool_id: string): { msg: ChatMessage; tool: ToolCall } | null {
   const allMessages = [...session.messages, ...(streamingMessages[session.id] ?? [])];
   for (let i = allMessages.length - 1; i >= 0; i--) {
     const msg = allMessages[i];
     if (msg.role === "assistant" && msg.tools) {
-      const tool = msg.tools.find((t) => t.id === toolId);
+      const tool = msg.tools.find((t) => t.id === tool_id);
       if (tool) return { msg, tool };
     }
   }
@@ -711,12 +715,12 @@ function findToolById(session: SessionState, toolId: string): { msg: ChatMessage
 }
 
 function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
-  if (event.tokenUsage) {
-    const u = event.tokenUsage;
-    session.tokenUsage = {
-      promptTokens: u.promptTokens,
-      completionTokens: u.completionTokens,
-      totalTokens: u.totalTokens,
+  if (event.token_usage) {
+    const u = event.token_usage;
+    session.token_usage = {
+      prompt_tokens: u.prompt_tokens,
+      completion_tokens: u.completion_tokens,
+      total_tokens: u.total_tokens,
     };
     return true;
   }
@@ -724,7 +728,6 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
   if (event.chunk) {
     const chunk = event.chunk;
     const content = chunk.content;
-    // Any chunk from the model means streaming is active
     startStreaming(session);
 
     if (content?.text) {
@@ -734,7 +737,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.thinking && (!lastMsg.tools || lastMsg.tools.length === 0)) {
         lastMsg.content += text;
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [], createdAt: new Date().toISOString() });
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [], created_at: new Date().toISOString() });
       }
       streamingMessages[session.id] = buf;
       return true;
@@ -742,33 +745,36 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content && (!lastMsg.tools || lastMsg.tools.length === 0)) {
-        if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsedMs: 0 };
+        if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsed_ms: 0 };
         lastMsg.thinking.content += content.thinking.thinking ?? "";
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsedMs: 0 }, tools: [], createdAt: new Date().toISOString() });
+        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsed_ms: 0 }, tools: [], created_at: new Date().toISOString() });
       }
       streamingMessages[session.id] = buf;
       return true;
+    } else if (content?.redacted_thinking !== undefined) {
+      // Redacted thinking - no content to display, just mark streaming
+      return true;
     }
     return true;
-  } else if (event.toolCallDelta) {
-    const delta = event.toolCallDelta;
+  } else if (event.tool_call_delta) {
+    const delta = event.tool_call_delta;
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === delta.toolId);
+    let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
     if (!tool) {
-      tool = { id: delta.toolId, toolName: delta.toolName, status: "running", arguments: "", folded: true };
+      tool = { id: delta.tool_id, tool_name: delta.tool_name, status: "running", arguments: "", folded: true };
       lastMsg.tools.push(tool);
-    } else if (delta.toolName) {
-      tool.toolName = delta.toolName;
+    } else if (delta.tool_name) {
+      tool.tool_name = delta.tool_name;
     }
-    if (delta.argumentsDelta) {
-      tool.arguments = (tool.arguments ?? "") + delta.argumentsDelta;
+    if (delta.arguments_delta) {
+      tool.arguments = (tool.arguments ?? "") + delta.arguments_delta;
     }
     streamingMessages[session.id] = buf;
     startStreaming(session);
@@ -796,24 +802,32 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     }
     return true;
   } else if (event.error) {
-    // Model-level streaming error — Stopped::Failed will end streaming
+    const err = event.error;
+    showNotification(`Model error: ${err.error}`, "error", 3000);
     return false;
+  } else if (event.request) {
+    // Model request started - no UI action needed
+    return true;
+  } else if (event.fallback) {
+    const fb = event.fallback;
+    showNotification(`Fallback from ${fb.from} to ${fb.to}`, "info", 2000);
+    return true;
   }
   return false;
 }
 
 function maybeRefreshGitInfo(session: SessionState) {
-  if (!session.projectPath || session.id !== sessionState.activeSessionId) return;
-  const { id, projectPath } = session;
-  api.getGitInfo(projectPath).then((info) => {
+  if (!session.project_path || session.id !== sessionState.activeSessionId) return;
+  const { id, project_path } = session;
+  api.getGitInfo(project_path).then((info) => {
     const current = getSession(id);
     if (current && current.id === sessionState.activeSessionId) {
-      current.gitInfo = info;
+      current.git_info = info;
     }
   }).catch(() => {
     const current = getSession(id);
     if (current && current.id === sessionState.activeSessionId) {
-      current.gitInfo = null;
+      current.git_info = null;
     }
   });
 }
@@ -821,7 +835,7 @@ function maybeRefreshGitInfo(session: SessionState) {
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
     const start = event.start;
-    const found = findToolById(session, start.toolId);
+    const found = findToolById(session, start.tool_id);
     if (found) {
       found.tool.status = "running";
       if (start.arguments) found.tool.arguments = start.arguments;
@@ -831,21 +845,21 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === start.toolId);
+    let tool = lastMsg.tools.find((t) => t.id === start.tool_id);
     if (!tool) {
       tool = {
-        id: start.toolId,
-        toolName: start.toolName,
+        id: start.tool_id,
+        tool_name: start.tool_name,
         status: "running",
         arguments: start.arguments ?? "",
         folded: true,
       };
       lastMsg.tools.push(tool);
-      showNotification(`Calling ${start.toolName}...`, "info", 2000);
+      showNotification(`Calling ${start.tool_name}...`, "info", 2000);
     } else {
       tool.status = "running";
       if (start.arguments) tool.arguments = start.arguments;
@@ -855,11 +869,11 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     return true;
   } else if (event.end) {
     const end = event.end;
-    const found = findToolById(session, end.toolId);
+    const found = findToolById(session, end.tool_id);
     if (found) {
-      found.tool.status = end.isError ? "failed" : "completed";
-      found.tool.elapsedMs = end.elapsedMs;
-      found.tool.output = end.contentBlocks
+      found.tool.status = end.is_error ? "failed" : "completed";
+      found.tool.elapsed_ms = end.elapsed_ms;
+      found.tool.output = end.content_blocks
         ?.map((b: TaggedContentBlock) => {
           if (typeof b === "string") return b;
           return b.type === "text" && b.text ? b.text : "";
@@ -871,25 +885,25 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === end.toolId);
+    let tool = lastMsg.tools.find((t) => t.id === end.tool_id);
     if (!tool) {
       // Tool 的 Start 事件可能丢失，从 End 重建
       tool = {
-        id: end.toolId,
-        toolName: end.toolName,
-        status: end.isError ? "failed" : "completed",
+        id: end.tool_id,
+        tool_name: end.tool_name,
+        status: end.is_error ? "failed" : "completed",
         arguments: "",
         folded: true,
       };
       lastMsg.tools.push(tool);
     }
-    tool.status = end.isError ? "failed" : "completed";
-    tool.elapsedMs = end.elapsedMs;
-    tool.output = end.contentBlocks
+    tool.status = end.is_error ? "failed" : "completed";
+    tool.elapsed_ms = end.elapsed_ms;
+    tool.output = end.content_blocks
       ?.map((b: TaggedContentBlock) => {
         if (typeof b === "string") return b;
         return b.type === "text" && b.text ? b.text : "";
@@ -900,7 +914,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     return true;
   } else if (event.progress) {
     const progress = event.progress;
-    const found = findToolById(session, progress.toolId);
+    const found = findToolById(session, progress.tool_id);
     if (found) {
       found.tool.progress = progress.message;
       found.tool.tokens = progress.tokens;
@@ -909,15 +923,15 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], createdAt: new Date().toISOString() };
+      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
-    let tool = lastMsg.tools.find((t) => t.id === progress.toolId);
+    let tool = lastMsg.tools.find((t) => t.id === progress.tool_id);
     if (!tool) {
       tool = {
-        id: progress.toolId,
-        toolName: "",
+        id: progress.tool_id,
+        tool_name: "",
         status: "running",
         arguments: "",
         folded: true,
@@ -950,9 +964,9 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         // Refresh checkpoints after a turn completes
         refreshCheckpoints(session.id);
         // Auto-send queued message when the agent actually stops.
-        if (session.queuedInput) {
-          const { text, blocks } = session.queuedInput;
-          session.queuedInput = null;
+        if (session.queued_input) {
+          const { text, blocks } = session.queued_input;
+          session.queued_input = null;
           if (blocks && blocks.length > 0) {
             api.sendMessageBlocks(session.id, blocks).catch((e: Error) => console.error("Failed to send queued message:", e));
           } else {
@@ -970,7 +984,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             thinking: null,
             tools: [],
           }];
-          showNotification(msg, "warning", 3000);
+          showNotification(msg, "warn", 3000);
           sendDesktopNotification("Yomi", msg, session.id);
           return true;
         } else if ("failed" in stopReason) {
@@ -982,11 +996,11 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             thinking: null,
             tools: [],
           }];
-          showNotification(errorMsg, "error", 5000);
+          showNotification(errorMsg, "warn", 5000);
           sendDesktopNotification("Yomi", errorMsg, session.id);
           return true;
-        } else if ("maxIterations" in stopReason) {
-          const msg = `Max iterations reached (${stopReason.maxIterations.reached})`;
+        } else if ("max_iterations" in stopReason) {
+          const msg = `Max iterations reached (${stopReason.max_iterations.reached})`;
           session.messages = [...session.messages, {
             id: crypto.randomUUID(),
             role: "error",
@@ -994,7 +1008,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
             thinking: null,
             tools: [],
           }];
-          showNotification(msg, "warning", 5000);
+          showNotification(msg, "warn", 5000);
           sendDesktopNotification("Yomi", msg, session.id);
           return true;
         }
@@ -1019,14 +1033,14 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       thinking: null,
       tools: [],
     }];
-    const level = event.error.isRecoverable ? "warning" : "error";
+    const level = event.error.is_recoverable ? "warn" : "error";
     showNotification(errorMsg, level, 5000);
     sendDesktopNotification("Yomi", errorMsg, session.id);
     scheduleUnsubscribeIfInactive(session);
     return true;
   } else if (event.retrying) {
     const retry = event.retrying;
-    const msg = `Agent retrying (${retry.attempt}/${retry.maxAttempts})`;
+    const msg = `Agent retrying (${retry.attempt}/${retry.max_attempts})`;
     session.messages = [...session.messages, {
       id: crypto.randomUUID(),
       role: "error",
@@ -1034,24 +1048,24 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       thinking: null,
       tools: [],
     }];
-    showNotification(msg, "warning", 3000);
+    showNotification(msg, "warn", 3000);
     return true;
-  } else if (event.permissionRequest) {
-    const req = event.permissionRequest;
-    session.pendingPermissions.push({
-      reqId: req.reqId,
-      toolName: req.toolName,
-      toolArgs: req.toolArgs ?? "",
-      toolLevel: req.toolLevel ?? "safe",
+  } else if (event.permission_request) {
+    const req = event.permission_request;
+    session.pending_permissions.push({
+      req_id: req.req_id,
+      tool_name: req.tool_name,
+      tool_args: req.tool_args ?? "",
+      tool_level: req.tool_level ?? "safe",
       reason: req.reason ?? "",
     });
-    showNotification(`${req.toolName} needs approval`, "warn", 5000);
+    showNotification(`${req.tool_name} needs approval`, "warn", 5000);
     return true;
-  } else if (event.askUserQuestion) {
-    const req = event.askUserQuestion;
-    session.pendingAskUser = {
-      reqId: req.reqId,
-      agentId: req.agentId,
+  } else if (event.ask_user_question) {
+    const req = event.ask_user_question;
+    session.pending_ask_user = {
+      req_id: req.req_id,
+      agent_id: req.agent_id,
       questions: req.questions,
     };
     showNotification("Agent has a question for you", "info", 5000);
@@ -1073,15 +1087,15 @@ function handleUserEvent(session: SessionState, event: UserEvent): boolean {
     const hasNonText = Array.isArray(msg.content) && msg.content.some((b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text");
 
     session.messages.push({
-      id: msg.messageId,
+      id: msg.message_id,
       role: "user",
       content,
-      contentBlocks: hasNonText ? msg.content : undefined,
+      content_blocks: hasNonText ? msg.content : undefined,
       thinking: null,
       tools: [],
-      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     });
-    session.updatedAt = new Date().toISOString();
+    session.updated_at = new Date().toISOString();
     startStreaming(session);
     return true;
   }
@@ -1092,20 +1106,30 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
   if (event.connected) {
     showNotification("Connected", "success", 2000);
     return true;
-  } else if (event.disconnected) {
-    showNotification("Disconnected", "error", 3000);
+  } else if (event.connection_lost) {
+    showNotification("Connection lost", "warn", 3000);
     return true;
-  } else if (event.sessionSwitched) {
+  } else if (event.shutdown) {
+    if (event.shutdown.error) {
+      showNotification(`Session error: ${event.shutdown.error}`, "error", 5000);
+    } else {
+      showNotification("Session ended", "info", 2000);
+    }
+    session.phase = "idle";
+    streamingMessages[session.id] = [];
+    scheduleUnsubscribeIfInactive(session);
     return true;
-  } else if (event.titleUpdated) {
-    if (event.titleUpdated.sessionId !== session.id) return false;
+  } else if (event.session_switched) {
+    return true;
+  } else if (event.title_updated) {
+    if (event.title_updated.session_id !== session.id) return false;
     const idx = sessionState.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
-      sessionState.sessions[idx] = { ...sessionState.sessions[idx], alias: event.titleUpdated.title };
+      sessionState.sessions[idx] = { ...sessionState.sessions[idx], alias: event.title_updated.title };
     }
     return true;
   } else if (event.rewound) {
-    if (event.rewound.sessionId !== session.id) return false;
+    if (event.rewound.session_id !== session.id) return false;
     // Clear any streaming buffer since history changed
     streamingMessages[session.id] = [];
     session.phase = "idle";
@@ -1115,15 +1139,15 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     refreshCheckpoints(session.id);
     showNotification("Session rewound", "info", 3000);
     return true;
-  } else if (event.goalUpdated) {
-    if (event.goalUpdated.sessionId !== session.id) return false;
+  } else if (event.goal_updated) {
+    if (event.goal_updated.session_id !== session.id) return false;
     session.goal = {
-      description: event.goalUpdated.description,
-      status: event.goalUpdated.status,
+      description: event.goal_updated.description,
+      status: event.goal_updated.status,
     };
     return true;
-  } else if (event.goalStopped) {
-    if (event.goalStopped.sessionId !== session.id) return false;
+  } else if (event.goal_stopped) {
+    if (event.goal_stopped.session_id !== session.id) return false;
     session.goal = null;
     return true;
   }

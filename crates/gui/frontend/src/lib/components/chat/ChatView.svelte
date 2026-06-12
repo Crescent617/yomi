@@ -29,7 +29,7 @@
   let selectedProjectId = $state<string | "new">("");
   let newProjectPath = $state("");
   let newProjectName = $state("");
-  let permissionLevel = $state("");
+  let permission_level = $state("");
   let chatInputRef: { setContent?: (text: string) => void; focus?: () => void } | null = $state(null);
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
@@ -109,8 +109,8 @@
     const blocks: TaggedContentBlock[] = [];
     for (const img of homeInlineImages) {
       blocks.push({
-        type: "imageUrl",
-        imageUrl: { url: img.url, detail: "auto" },
+        type: "image_url",
+        image_url: { url: img.url, detail: "auto" },
       });
     }
     const trimmed = text.trim();
@@ -166,20 +166,20 @@
         id: p.id,
         name: p.name,
         dir: p.dir,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
       }));
     }).catch(() => {});
     api.getConfig().then(c => {
       if (cancelled) return;
-      if (c?.autoApprove) {
-        permissionLevel = c.autoApprove;
+      if (c?.auto_approve) {
+        permission_level = c.auto_approve;
       } else {
-        permissionLevel = "caution";
+        permission_level = "caution";
       }
     }).catch(() => {
       if (cancelled) return;
-      permissionLevel = "caution";
+      permission_level = "caution";
     });
     homeDir().then(h => {
       if (!cancelled) homeDirPath = h;
@@ -201,18 +201,18 @@
       }
     }
 
-    let level = permissionLevel;
+    let level = permission_level;
     if (!level) {
       try {
         const c = await api.getConfig();
-        level = c.autoApprove || "caution";
+        level = c.auto_approve || "caution";
       } catch {
         level = "caution";
       }
     }
 
-    let projectId: string | undefined;
-    let workingDir: string;
+    let project_id: string | undefined;
+    let working_dir: string;
 
     if (selectedProjectId === "") {
       showNotification("Please select a project", "error", 3000);
@@ -228,14 +228,14 @@
       submitting = true;
       try {
         const project = await api.createProject(dir, newProjectName.trim() || undefined);
-        projectId = project.id;
-        workingDir = project.dir;
+        project_id = project.id;
+        working_dir = project.dir;
         projectState.projects.push({
           id: project.id,
           name: project.name,
           dir: project.dir,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt,
+          created_at: project.created_at,
+          updated_at: project.updated_at,
         });
       } catch (e: unknown) {
         console.error("Failed to create project:", e instanceof Error ? e.message : e);
@@ -249,32 +249,32 @@
         showNotification("Please select a project", "error", 3000);
         return;
       }
-      projectId = project.id;
-      workingDir = project.dir;
+      project_id = project.id;
+      working_dir = project.dir;
       submitting = true;
     }
 
     try {
-      const id = await api.createSession(workingDir, level, projectId);
-      const result = await api.listSessions(projectId, undefined, 20);
+      const id = await api.createSession(working_dir, level, project_id);
+      const result = await api.listSessions(project_id, undefined, 20);
       for (const s of result.sessions) {
         if (!sessionState.sessions.find(sess => sess.id === s.id)) {
           sessionState.sessions.push({
             id: s.id,
-            projectPath: s.projectPath ?? "",
-            projectId: s.projectId,
+            project_path: s.project_path ?? "",
+            project_id: s.project_id,
             alias: s.title ?? "Untitled",
             messages: [],
             phase: "idle",
             unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-            activeTabId: "chat",
-            pendingPermissions: [],
-            pendingAskUser: null,
-            queuedInput: null,
-            updatedAt: s.endedAt ?? s.createdAt,
-            permissionLevel: s.autoApproveLevel ?? level ?? "caution",
+            active_tab_id: "chat",
+            pending_permissions: [],
+            pending_ask_user: null,
+            queued_input: null,
+            updated_at: s.ended_at ?? s.created_at,
+            permission_level: s.auto_approve_level ?? level ?? "caution",
             goal: null,
           });
         }
@@ -350,7 +350,7 @@
 
   function switchTab(id: string) {
     if (!activeSession) return;
-    activeSession.activeTabId = id;
+    activeSession.active_tab_id = id;
   }
 
   function handleCloseTab(id: string) {
@@ -381,17 +381,17 @@
   }
 
   // ── Git info sync ──
-  async function syncGitInfo(sessionId: string, projectPath: string) {
+  async function syncGitInfo(session_id: string, project_path: string) {
     try {
-      const info = await api.getGitInfo(projectPath);
-      const session = getSession(sessionId);
+      const info = await api.getGitInfo(project_path);
+      const session = getSession(session_id);
       if (session && session.id === activeSession?.id) {
-        session.gitInfo = info;
+        session.git_info = info;
       }
     } catch {
-      const session = getSession(sessionId);
+      const session = getSession(session_id);
       if (session && session.id === activeSession?.id) {
-        session.gitInfo = null;
+        session.git_info = null;
       }
     }
   }
@@ -399,8 +399,8 @@
   // Refresh immediately when active session changes
   $effect(() => {
     const session = activeSession;
-    if (!session?.projectPath) return;
-    syncGitInfo(session.id, session.projectPath);
+    if (!session?.project_path) return;
+    syncGitInfo(session.id, session.project_path);
   });
 
   function closeProjectDropdown(e: MouseEvent) {
@@ -589,28 +589,28 @@
           {activeSession.alias ?? activeSession.id.slice(-8)}
         </span>
       {/if}
-      {#if activeSession.projectPath}
-        {@const displayPath = collapseHome(activeSession.projectPath, homeDirPath)}
-        <span class="text-xs text-muted-foreground truncate" title={activeSession.projectPath}>{displayPath}</span>
+      {#if activeSession.project_path}
+        {@const displayPath = collapseHome(activeSession.project_path, homeDirPath)}
+        <span class="text-xs text-muted-foreground truncate" title={activeSession.project_path}>{displayPath}</span>
       {/if}
-      {#if activeSession.gitInfo?.branch}
+      {#if activeSession.git_info?.branch}
         <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/80 bg-muted rounded px-1.5 py-0.5 ml-1">
           <GitBranch size={10} />
-          {activeSession.gitInfo.branch}
+          {activeSession.git_info.branch}
         </span>
-        {@const g = activeSession.gitInfo}
-        {#if g.addedLines > 0 || g.deletedLines > 0 || g.untracked > 0}
+        {@const g = activeSession.git_info}
+        {#if g.added_lines > 0 || g.deleted_lines > 0 || g.untracked > 0}
           <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/70 font-mono bg-muted rounded px-1.5 py-0.5 ml-1">
             <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
-            {#if g.addedLines > 0}{#key g.addedLines}<span class="roll-num text-green-700/80 dark:text-green-400/80">+{g.addedLines}</span>{/key}{/if}
-            {#if g.deletedLines > 0}{#key g.deletedLines}<span class="roll-num text-red-700/80 dark:text-red-400/80">-{g.deletedLines}</span>{/key}{/if}
+            {#if g.added_lines > 0}{#key g.added_lines}<span class="roll-num text-green-700/80 dark:text-green-400/80">+{g.added_lines}</span>{/key}{/if}
+            {#if g.deleted_lines > 0}{#key g.deleted_lines}<span class="roll-num text-red-700/80 dark:text-red-400/80">-{g.deleted_lines}</span>{/key}{/if}
             {#if g.untracked > 0}{#key g.untracked}<span class="roll-num text-slate-500 dark:text-slate-400">?{g.untracked}</span>{/key}{/if}
           </span>
         {/if}
       {/if}
     </div>
     <div class="flex items-center gap-0.5">
-      {#if activeSession.projectPath}
+      {#if activeSession.project_path}
         <div class="relative">
           <button
             type="button"
@@ -622,13 +622,13 @@
           </button>
           {#if openDropdownOpen}
             <div class="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-popover shadow-md py-1">
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInExplorer(activeSession.projectPath); openDropdownOpen = false; }}>
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInExplorer(activeSession.project_path); openDropdownOpen = false; }}>
                 <FolderOpen size={12} /> Open in Explorer
               </button>
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.projectPath); openDropdownOpen = false; }}>
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.project_path); openDropdownOpen = false; }}>
                 <Code size={12} /> Open in VS Code
               </button>
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInZed(activeSession.projectPath); openDropdownOpen = false; }}>
+              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInZed(activeSession.project_path); openDropdownOpen = false; }}>
                 <Zap size={12} /> Open in Zed
               </button>
             </div>
@@ -658,7 +658,7 @@
   {#if activeSession && hasNonChatTabs}
     <TabBar
       tabs={activeSession.tabs}
-      activeTabId={activeSession.activeTabId}
+      active_tab_id={activeSession.active_tab_id}
       onSwitch={switchTab}
       onClose={handleCloseTab}
     />
@@ -818,8 +818,8 @@
                     {@const Icon = levelIcon(level)}
                     <button
                       type="button"
-                      onclick={() => permissionLevel = level}
-                      class="p-1 rounded transition-colors {permissionLevel === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
+                      onclick={() => permission_level = level}
+                      class="p-1 rounded transition-colors {permission_level === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
                       title={levelDescription(level)}
                     >
                       <Icon class="w-4 h-4" />
@@ -875,7 +875,7 @@
           {/if}
         </div>
       </div>
-    {:else if activeSession?.activeTabId === "chat"}
+    {:else if activeSession?.active_tab_id === "chat"}
       <div class="flex h-full relative">
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
@@ -902,7 +902,7 @@
         </div>
       </div>
     {:else if activeSession}
-      {@const activeTab = activeSession.tabs.find((t: { id: string }) => t.id === activeSession.activeTabId)}
+      {@const activeTab = activeSession.tabs.find((t: { id: string }) => t.id === activeSession.active_tab_id)}
       {#if activeTab?.type === "preview" && activeTab.entry}
         <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">

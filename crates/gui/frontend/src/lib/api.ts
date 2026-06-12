@@ -45,8 +45,8 @@ export interface ProjectInfo {
   id: string;
   name: string;
   dir: string;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export async function listProjects(): Promise<ProjectInfo[]> {
@@ -57,82 +57,82 @@ export async function createProject(dir: string, name?: string): Promise<Project
   return invokeCmd("create_project", { dir, name });
 }
 
-export async function getProject(projectId: string): Promise<ProjectInfo | null> {
-  return invokeCmd("get_project", { projectId });
+export async function getProject(project_id: string): Promise<ProjectInfo | null> {
+  return invokeCmd("get_project", { project_id: project_id });
 }
 
-export async function renameProject(projectId: string, name: string): Promise<void> {
-  return invokeCmd("rename_project", { projectId, name });
+export async function renameProject(project_id: string, name: string): Promise<void> {
+  return invokeCmd("rename_project", { project_id: project_id, name });
 }
 
-export async function deleteProject(projectId: string): Promise<void> {
-  return invokeCmd("delete_project", { projectId });
+export async function deleteProject(project_id: string): Promise<void> {
+  return invokeCmd("delete_project", { project_id: project_id });
 }
 
 // ── Session API ──────────────────────────────────────────────────────────
 
 export interface SessionInfo {
   id: string;
-  projectPath: string;
-  createdAt: string;
-  endedAt?: string;
+  project_path: string;
+  created_at: string;
+  ended_at?: string;
   title?: string;
-  projectId?: string;
-  autoApproveLevel?: string;
+  project_id?: string;
+  auto_approve_level?: string;
 }
 
 export interface PaginatedSessions {
   sessions: SessionInfo[];
-  hasMore: boolean;
+  has_more: boolean;
 }
 
 export async function listSessions(
-  projectId?: string,
+  project_id?: string,
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
-  const result = await invokeCmd<{ sessions: unknown[]; hasMore: boolean }>(
+  const result = await invokeCmd<{ sessions: unknown[]; has_more: boolean }>(
     "list_sessions",
-    { projectId, before, limit }
+    { project_id: project_id, before, limit }
   );
   return {
     sessions: result.sessions.map((s: unknown) => {
       const session = s as Record<string, unknown>;
       return {
         id: String(session.id ?? ""),
-        projectPath: String(session.workingDir ?? ""),
-        createdAt: String(session.createdAt ?? ""),
-        endedAt: session.updatedAt ? String(session.updatedAt) : undefined,
+        project_path: String(session.working_dir ?? ""),
+        created_at: String(session.created_at ?? ""),
+        ended_at: session.updated_at ? String(session.updated_at) : undefined,
         title: session.title ? String(session.title) : undefined,
-        projectId: session.projectId ? String(session.projectId) : undefined,
-        autoApproveLevel: session.autoApproveLevel
-          ? String(session.autoApproveLevel)
+        project_id: session.project_id ? String(session.project_id) : undefined,
+        auto_approve_level: session.auto_approve_level
+          ? String(session.auto_approve_level)
           : undefined,
       };
     }),
-    hasMore: result.hasMore,
+    has_more: result.has_more,
   };
 }
 
-export async function cancelSession(sessionId: string): Promise<void> {
-  return invokeCmd("cancel_session", { sessionId });
+export async function cancelSession(session_id: string): Promise<void> {
+  return invokeCmd("cancel_session", { session_id: session_id });
 }
 
 export async function respondPermission(
-  sessionId: string,
-  reqId: string,
+  session_id: string,
+  req_id: string,
   approved: boolean,
   remember: boolean = false,
 ): Promise<void> {
-  return invokeCmd("respond_permission", { sessionId, reqId, approved, remember });
+  return invokeCmd("respond_permission", { session_id: session_id, req_id: req_id, approved, remember });
 }
 
 export async function respondAskUser(
-  sessionId: string,
-  reqId: string,
+  session_id: string,
+  req_id: string,
   answers: [string, string][],
 ): Promise<void> {
-  return invokeCmd("respond_ask_user", { sessionId, reqId, answers });
+  return invokeCmd("respond_ask_user", { session_id: session_id, req_id: req_id, answers });
 }
 
 export async function getCwd(): Promise<string> {
@@ -140,62 +140,62 @@ export async function getCwd(): Promise<string> {
 }
 
 export async function createSession(
-  workingDir: string,
+  working_dir: string,
   level: string = "safe",
-  projectId?: string,
+  project_id?: string,
 ): Promise<string> {
-  return invokeCmd("create_session", { projectId, workingDir, autoApproveLevel: level });
+  return invokeCmd("create_session", { project_id: project_id, working_dir: working_dir, auto_approve_level: level });
 }
 
-export async function restoreSession(sessionId: string): Promise<void> {
-  return invokeCmd("restore_session", { sessionId });
+export async function restoreSession(session_id: string): Promise<void> {
+  return invokeCmd("restore_session", { session_id: session_id });
 }
 
 export async function forkSession(
-  parentId: string,
+  parent_id: string,
   level: string = "safe",
 ): Promise<string> {
-  return invokeCmd("fork_session", { parentId, autoApproveLevel: level });
+  return invokeCmd("fork_session", { parent_id: parent_id, auto_approve_level: level });
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
-  return invokeCmd("delete_session", { sessionId });
+export async function deleteSession(session_id: string): Promise<void> {
+  return invokeCmd("delete_session", { session_id: session_id });
 }
 
-export async function shutdownSession(sessionId: string): Promise<void> {
-  return invokeCmd("shutdown_session", { sessionId });
+export async function shutdownSession(session_id: string): Promise<void> {
+  return invokeCmd("shutdown_session", { session_id: session_id });
 }
 
-export async function sendMessage(sessionId: string, content: string): Promise<void> {
-  return invokeCmd("send_message", { sessionId, content });
+export async function sendMessage(session_id: string, content: string): Promise<void> {
+  return invokeCmd("send_message", { session_id: session_id, content });
 }
 
-export async function sendMessageBlocks(sessionId: string, blocks: TaggedContentBlock[]): Promise<void> {
-  return invokeCmd("send_message_blocks", { sessionId, blocks });
+export async function sendMessageBlocks(session_id: string, blocks: TaggedContentBlock[]): Promise<void> {
+  return invokeCmd("send_message_blocks", { session_id: session_id, blocks });
 }
 
-export async function subscribe(sessionId: string): Promise<void> {
-  return invokeCmd("subscribe", { sessionId });
+export async function subscribe(session_id: string): Promise<void> {
+  return invokeCmd("subscribe", { session_id: session_id });
 }
 
-export async function unsubscribe(sessionId: string): Promise<void> {
-  return invokeCmd("unsubscribe", { sessionId });
+export async function unsubscribe(session_id: string): Promise<void> {
+  return invokeCmd("unsubscribe", { session_id: session_id });
 }
 
-export async function getMessages(sessionId: string): Promise<unknown[]> {
-  return invokeCmd("get_messages", { sessionId });
+export async function getMessages(session_id: string): Promise<unknown[]> {
+  return invokeCmd("get_messages", { session_id: session_id });
 }
 
-export async function getSessionStatus(sessionId: string): Promise<{ phase: string; compacting: boolean }> {
-  return invokeCmd("get_session_status", { sessionId });
+export async function getSessionStatus(session_id: string): Promise<{ phase: string; compacting: boolean }> {
+  return invokeCmd("get_session_status", { session_id: session_id });
 }
 
-export async function getCheckpoints(sessionId: string): Promise<unknown[]> {
-  return invokeCmd("get_checkpoints", { sessionId });
+export async function getCheckpoints(session_id: string): Promise<unknown[]> {
+  return invokeCmd("get_checkpoints", { session_id: session_id });
 }
 
-export async function rewind(sessionId: string, messageId: string): Promise<void> {
-  return invokeCmd("rewind", { sessionId, messageId });
+export async function rewind(session_id: string, message_id: string): Promise<void> {
+  return invokeCmd("rewind", { session_id: session_id, message_id: message_id });
 }
 
 export async function listSkills(): Promise<unknown[]> {
@@ -206,44 +206,44 @@ export async function reloadConfig(): Promise<void> {
   return invokeCmd("reload_config");
 }
 
-export async function compactSession(sessionId: string): Promise<void> {
-  return invokeCmd("compact_session", { sessionId });
+export async function compactSession(session_id: string): Promise<void> {
+  return invokeCmd("compact_session", { session_id: session_id });
 }
 
-export async function setPermissionLevel(sessionId: string, level: string): Promise<void> {
-  return invokeCmd("set_permission_level", { sessionId, level });
+export async function setPermissionLevel(session_id: string, level: string): Promise<void> {
+  return invokeCmd("set_permission_level", { session_id: session_id, level });
 }
 
-export async function startGoal(sessionId: string, description: string): Promise<void> {
-  return invokeCmd("start_goal", { sessionId, description });
+export async function startGoal(session_id: string, description: string): Promise<void> {
+  return invokeCmd("start_goal", { session_id: session_id, description });
 }
 
-export async function getGoal(sessionId: string): Promise<{ description: string; status: string } | null> {
-  return invokeCmd("get_goal", { sessionId });
+export async function getGoal(session_id: string): Promise<{ description: string; status: string } | null> {
+  return invokeCmd("get_goal", { session_id: session_id });
 }
 
-export async function stopGoal(sessionId: string): Promise<void> {
-  return invokeCmd("stop_goal", { sessionId });
+export async function stopGoal(session_id: string): Promise<void> {
+  return invokeCmd("stop_goal", { session_id: session_id });
 }
 
-export async function pauseGoal(sessionId: string): Promise<void> {
-  return invokeCmd("pause_goal", { sessionId });
+export async function pauseGoal(session_id: string): Promise<void> {
+  return invokeCmd("pause_goal", { session_id: session_id });
 }
 
-export async function resumeGoal(sessionId: string): Promise<void> {
-  return invokeCmd("resume_goal", { sessionId });
+export async function resumeGoal(session_id: string): Promise<void> {
+  return invokeCmd("resume_goal", { session_id: session_id });
 }
 
-export async function editGoal(sessionId: string, description: string): Promise<void> {
-  return invokeCmd("edit_goal", { sessionId, description });
+export async function editGoal(session_id: string, description: string): Promise<void> {
+  return invokeCmd("edit_goal", { session_id: session_id, description });
 }
 
-export async function sendSteer(sessionId: string, blocks: TaggedContentBlock[]): Promise<void> {
-  return invokeCmd("send_steer", { sessionId, blocks });
+export async function sendSteer(session_id: string, blocks: TaggedContentBlock[]): Promise<void> {
+  return invokeCmd("send_steer", { session_id: session_id, blocks });
 }
 
-export async function continueSession(sessionId: string): Promise<void> {
-  return invokeCmd("continue_session", { sessionId });
+export async function continueSession(session_id: string): Promise<void> {
+  return invokeCmd("continue_session", { session_id: session_id });
 }
 
 export async function getConfigToml(): Promise<{ content: string; path: string }> {
@@ -256,20 +256,20 @@ export async function saveConfigToml(content: string): Promise<void> {
 
 export async function getConfig(): Promise<{
   model: string;
-  contextWindow: number;
+  context_window: number;
   provider: string;
-  autoApprove: string;
-  fullConfig: string;
+  auto_approve: string;
+  full_config: string;
 }> {
   return invokeCmd("get_config");
 }
 
 export async function getUsageSummary(): Promise<{
-  promptTokens: number;
-  completionTokens: number;
-  cachedTokens: number;
-  totalTokens: number;
-  requestCount: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  request_count: number;
 }> {
   return invokeCmd("get_usage_summary");
 }
@@ -277,35 +277,35 @@ export async function getUsageSummary(): Promise<{
 export async function getDailyUsage(days: number): Promise<
   {
     date: string;
-    promptTokens: number;
-    completionTokens: number;
-    cachedTokens: number;
-    totalTokens: number;
-    requestCount: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens: number;
+    total_tokens: number;
+    request_count: number;
     models: string[];
   }[]
 > {
   return invokeCmd("get_daily_usage", { days });
 }
 
-export async function getSessionUsage(sessionId: string): Promise<{
-  promptTokens: number;
-  completionTokens: number;
-  cachedTokens: number;
-  totalTokens: number;
-  requestCount: number;
+export async function getSessionUsage(session_id: string): Promise<{
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  request_count: number;
 }> {
-  return invokeCmd("get_session_usage", { sessionId });
+  return invokeCmd("get_session_usage", { session_id: session_id });
 }
 
-export async function getTodos(sessionId: string): Promise<{
+export async function getTodos(session_id: string): Promise<{
   todos: { id: string; content: string; status: string }[];
 }> {
-  return invokeCmd("get_todos", { sessionId });
+  return invokeCmd("get_todos", { session_id: session_id });
 }
 
-export async function renameSession(sessionId: string, title: string): Promise<void> {
-  return invokeCmd("rename_session", { sessionId, title });
+export async function renameSession(session_id: string, title: string): Promise<void> {
+  return invokeCmd("rename_session", { session_id: session_id, title });
 }
 
 export async function ping(): Promise<boolean> {
@@ -329,10 +329,10 @@ export async function openInEditor(path: string): Promise<void> {
 
 export interface GitInfo {
   branch?: string | null;
-  addedLines: number;
-  deletedLines: number;
+  added_lines: number;
+  deleted_lines: number;
   untracked: number;
-  repoRoot?: string;
+  repo_root?: string;
 }
 
 export interface GitDiffFileSummary {
@@ -374,30 +374,30 @@ export async function createCronJob(input: {
   name: string;
   schedule: string;
   action: Record<string, unknown>;
-  maxRuns?: number;
-  expiresAt?: string;
+  max_runs?: number;
+  expires_at?: string;
 }): Promise<string> {
   return invokeCmd("create_cron_job", input);
 }
 
 export async function updateCronJob(
-  jobId: string,
+  job_id: string,
   input: {
     name?: string;
     schedule?: string;
     action?: Record<string, unknown>;
     status?: string;
-    maxRuns?: number;
-    expiresAt?: string;
+    max_runs?: number;
+    expires_at?: string;
   },
 ): Promise<void> {
-  return invokeCmd("update_cron_job", { jobId, ...input });
+  return invokeCmd("update_cron_job", { job_id: job_id, ...input });
 }
 
-export async function deleteCronJob(jobId: string): Promise<void> {
-  return invokeCmd("delete_cron_job", { jobId });
+export async function deleteCronJob(job_id: string): Promise<void> {
+  return invokeCmd("delete_cron_job", { job_id: job_id });
 }
 
-export async function triggerCronJob(jobId: string): Promise<void> {
-  return invokeCmd("trigger_cron_job", { jobId });
+export async function triggerCronJob(job_id: string): Promise<void> {
+  return invokeCmd("trigger_cron_job", { job_id: job_id });
 }

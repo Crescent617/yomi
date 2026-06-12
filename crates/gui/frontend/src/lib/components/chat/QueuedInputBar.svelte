@@ -7,30 +7,30 @@
   let { session, onEdit, onSteer }: { session: SessionState; onEdit: (text: string) => void; onSteer: (blocks: TaggedContentBlock[]) => void } = $props();
 
   function handleSteer() {
-    if (!session.queuedInput) return;
-    const blocks = session.queuedInput.blocks ?? [{ type: "text", text: session.queuedInput.text }];
+    if (!session.queued_input) return;
+    const blocks = session.queued_input.blocks ?? [{ type: "text", text: session.queued_input.text }];
     onSteer(blocks);
-    session.queuedInput = null;
+    session.queued_input = null;
   }
 
   function handleEdit() {
-    if (!session.queuedInput) return;
-    onEdit(session.queuedInput.text);
-    session.queuedInput = null;
+    if (!session.queued_input) return;
+    onEdit(session.queued_input.text);
+    session.queued_input = null;
   }
 
   function handleCancel() {
-    session.queuedInput = null;
+    session.queued_input = null;
     showNotification("Queued message cancelled", "info", 2000);
   }
 </script>
 
-{#if session.queuedInput}
+{#if session.queued_input}
   <div class="mx-4 mb-2 rounded-lg border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3">
     <Send class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
     <div class="flex-1 min-w-0">
       <div class="text-xs text-muted-foreground mb-0.5">Queued — will send when streaming ends</div>
-      <div class="text-sm truncate">{session.queuedInput.text}</div>
+      <div class="text-sm truncate">{session.queued_input.text}</div>
     </div>
     <button
       type="button"

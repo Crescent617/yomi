@@ -72,7 +72,7 @@ function detectCompletion() {
     // @ must not be followed by a space (still typing the path)
     if (!afterAt.includes(" ")) {
       showCommands = false; // mutually exclusive with / picker
-      const root = getActiveSession()?.projectPath || "";
+      const root = getActiveSession()?.project_path || "";
       filePicker.open(lastAt, afterAt, root);
     } else {
       filePicker.close();
@@ -131,7 +131,7 @@ export function setContent(text: string) {
 function queueInput() {
   const session = activeSession;
   if (!session || !content.trim()) return;
-  session.queuedInput = { text: content.trim(), blocks: inlineImages.length > 0 ? buildContentBlocks(content.trim()) : undefined };
+  session.queued_input = { text: content.trim(), blocks: inlineImages.length > 0 ? buildContentBlocks(content.trim()) : undefined };
   content = "";
   clearInlineImages();
   fileAttachments = [];
@@ -174,8 +174,8 @@ function onAcceptFile(entry: FileEntry) {
 }
 
 async function handleCommand(text: string): Promise<boolean> {
-  const sessionId = sessionState.activeSessionId;
-  if (!sessionId) return false;
+  const session_id = sessionState.activeSessionId;
+  if (!session_id) return false;
 
   const parts = text.split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -183,39 +183,39 @@ async function handleCommand(text: string): Promise<boolean> {
   try {
     switch (cmd) {
       case "/cancel":
-        await api.cancelSession(sessionId);
+        await api.cancelSession(session_id);
         showNotification("Session cancelled", "info", 3000);
         break;
       case "/yolo":
-        await api.setPermissionLevel(sessionId, "dangerous");
+        await api.setPermissionLevel(session_id, "dangerous");
         showNotification("YOLO mode enabled — all tools will be auto-approved", "info", 5000);
         break;
       case "/undo":
         {
-          const checkpoints = await api.getCheckpoints(sessionId) as Array<{ messageId?: string }>;
+          const checkpoints = await api.getCheckpoints(session_id) as Array<{ message_id?: string }>;
           if (!Array.isArray(checkpoints) || checkpoints.length < 1) {
             showNotification("No checkpoint to undo", "error", 3000);
             return false;
           }
           const target = checkpoints[checkpoints.length - 1];
-          if (!target?.messageId) {
+          if (!target?.message_id) {
             showNotification("No checkpoint to undo", "error", 3000);
             return false;
           }
-          await api.rewind(sessionId, target.messageId as string);
+          await api.rewind(session_id, target.message_id as string);
           showNotification("Undo last turn", "info", 3000);
         }
         break;
       case "/safe":
-        await api.setPermissionLevel(sessionId, "safe");
+        await api.setPermissionLevel(session_id, "safe");
         showNotification("Permission level set to Safe", "info", 3000);
         break;
       case "/caution":
-        await api.setPermissionLevel(sessionId, "caution");
+        await api.setPermissionLevel(session_id, "caution");
         showNotification("Permission level set to Caution", "info", 3000);
         break;
       case "/compact":
-        await api.compactSession(sessionId);
+        await api.compactSession(session_id);
         showNotification("Session compaction requested", "info", 3000);
         break;
       case "/reload":
@@ -230,16 +230,16 @@ async function handleCommand(text: string): Promise<boolean> {
             return false;
           }
           const blocks = buildContentBlocks(steerText);
-          await api.sendSteer(sessionId, blocks);
+          await api.sendSteer(session_id, blocks);
           clearInlineImages();
           showNotification("Steer message queued for next turn", "info", 3000);
         }
         break;
       case "/fork":
         {
-          const parentId = sessionId;
+          const parent_id = session_id;
           try {
-            const newId = await api.forkSession(parentId, sessionState.sessions.find(s => s.id === parentId)?.permissionLevel ?? "safe");
+            const newId = await api.forkSession(parent_id, sessionState.sessions.find(s => s.id === parent_id)?.permission_level ?? "safe");
             showNotification(`Forked session: ${newId}`, "success", 3000);
             // Refresh sessions list so new fork appears in sidebar
             refreshSessions();
@@ -252,7 +252,7 @@ async function handleCommand(text: string): Promise<boolean> {
       case "/continue":
         {
           try {
-            await api.continueSession(sessionId);
+            await api.continueSession(session_id);
             showNotification("Agent continuing...", "info", 3000);
           } catch (e) {
             showNotification(`Continue failed: ${e instanceof Error ? e.message : String(e)}`, "error", 5000);
@@ -261,11 +261,11 @@ async function handleCommand(text: string): Promise<boolean> {
         }
         break;
       case "/goal:stop":
-        await api.stopGoal(sessionId);
+        await api.stopGoal(session_id);
         {
           const session = getActiveSession();
           if (session) {
-            api.getGoal(sessionId).then((g) => { session.goal = g; }).catch(() => { session.goal = null; });
+            api.getGoal(session_id).then((g) => { session.goal = g; }).catch(() => { session.goal = null; });
           }
         }
         console.log("Goal mode stopped");
@@ -277,16 +277,16 @@ async function handleCommand(text: string): Promise<boolean> {
             showNotification("Please provide a goal description: /goal <description>", "error", 5000);
             return false;
           }
-          await api.startGoal(sessionId, description);
+          await api.startGoal(session_id, description);
           {
             const session = getActiveSession();
             if (session) {
-              api.getGoal(sessionId).then((g) => { session.goal = g; }).catch(() => {});
+              api.getGoal(session_id).then((g) => { session.goal = g; }).catch(() => {});
             }
           }
           // rename_session will emit TitleUpdated event — alias is synced there
           try {
-            await api.renameSession(sessionId, description);
+            await api.renameSession(session_id, description);
           } catch {
             // ignore rename failure
           }
@@ -303,7 +303,7 @@ async function handleCommand(text: string): Promise<boolean> {
         break;
       default:
         // Unknown command — treat as normal message
-        await api.sendMessage(sessionId, text);
+        await api.sendMessage(session_id, text);
     }
     return true;
   } catch (e: unknown) {
@@ -317,7 +317,7 @@ async function handleCommand(text: string): Promise<boolean> {
 async function handleSubmit() {
   if (!content.trim() || !sessionState.activeSessionId) return;
 
-  const sessionId = sessionState.activeSessionId;
+  const session_id = sessionState.activeSessionId;
   const baseText = content.trim();
 
   if (baseText.startsWith("/")) {
@@ -349,7 +349,7 @@ async function handleSubmit() {
     // Message with inline images: build content blocks
     try {
       const blocks = buildContentBlocks(text);
-      await api.sendMessageBlocks(sessionId, blocks);
+      await api.sendMessageBlocks(session_id, blocks);
       clearInlineImages();
     } catch (e: unknown) {
       console.error("Failed to send message with images:", e instanceof Error ? e.message : e);
@@ -357,7 +357,7 @@ async function handleSubmit() {
     }
   } else {
     try {
-      await api.sendMessage(sessionId, text);
+      await api.sendMessage(session_id, text);
     } catch (e: unknown) {
       console.error("Failed to send message:", e instanceof Error ? e.message : e);
     }
@@ -374,13 +374,13 @@ async function handleCancel() {
 }
 
 async function handlePermissionSet(level: string) {
-  const sessionId = sessionState.activeSessionId;
-  if (!sessionId) return;
-  const session = getSession(sessionId);
+  const session_id = sessionState.activeSessionId;
+  if (!session_id) return;
+  const session = getSession(session_id);
   if (!session) return;
   try {
-    await api.setPermissionLevel(sessionId, level);
-    session.permissionLevel = level;
+    await api.setPermissionLevel(session_id, level);
+    session.permission_level = level;
     showNotification(`Permission level: ${level}`, "info", 2000);
   } catch (e: unknown) {
     console.error("Failed to set permission level:", e instanceof Error ? e.message : e);
@@ -474,8 +474,8 @@ function buildContentBlocks(text: string): TaggedContentBlock[] {
   // First add all inline images
   for (const img of inlineImages) {
     blocks.push({
-      type: "imageUrl",
-      imageUrl: { url: img.url, detail: "auto" },
+      type: "image_url",
+      image_url: { url: img.url, detail: "auto" },
     });
   }
 
@@ -637,8 +637,8 @@ $effect(() => {
 });
 
 
-function getSession(sessionId: string) {
-  return sessionState.sessions.find((s) => s.id === sessionId) ?? null;
+function getSession(session_id: string) {
+  return sessionState.sessions.find((s) => s.id === session_id) ?? null;
 }
 
 function handleFocusOut(e: FocusEvent) {
@@ -797,7 +797,7 @@ function handleFocusOut(e: FocusEvent) {
           <button
             type="button"
             onclick={() => handlePermissionSet(level)}
-            class="p-0.5 rounded transition-colors {activeSession.permissionLevel === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
+            class="p-0.5 rounded transition-colors {activeSession.permission_level === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
             title={levelDescription(level)}
           >
             <Icon class="w-4 h-4" />

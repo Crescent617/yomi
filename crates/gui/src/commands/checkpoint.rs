@@ -6,7 +6,7 @@ use tauri::State;
 use crate::error::GuiError;
 use crate::state::AppState;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_checkpoints(
     state: State<'_, AppState>,
     session_id: String,
@@ -20,7 +20,7 @@ pub async fn get_checkpoints(
     Ok(checkpoints)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn rewind(
     state: State<'_, AppState>,
     session_id: String,

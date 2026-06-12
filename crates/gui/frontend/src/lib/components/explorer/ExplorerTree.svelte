@@ -18,8 +18,8 @@
     Explorer
   </div>
   <div class="flex-1 overflow-y-auto py-1">
-    {#if activeSession?.projectPath}
-      <FileTree path={activeSession.projectPath} onFileClick={handleFileClick} />
+    {#if activeSession?.project_path}
+      <FileTree path={activeSession.project_path} onFileClick={handleFileClick} />
     {:else if activeSession}
       <div class="px-3 py-4 text-sm text-muted-foreground text-center">
         No project path
