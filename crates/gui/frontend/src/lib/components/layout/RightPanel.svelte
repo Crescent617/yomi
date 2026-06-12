@@ -560,7 +560,7 @@
                 <div class="mb-4 overflow-hidden">
                   {#if viewMode === "unified"}
                     <div class="font-mono text-xs leading-relaxed">
-                      {#each file.hunks as hunk, i (hunk.header || i)}
+                      {#each file.hunks as hunk, i (i)}
                         <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
                           <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
                           <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
@@ -584,7 +584,7 @@
                   {:else}
                     <!-- Split view -->
                     <div class="font-mono text-xs leading-relaxed">
-                      {#each file.hunks as hunk, i (hunk.header || i)}
+                      {#each file.hunks as hunk, i (i)}
                         <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
                           <span class="text-[10px]">@@ {hunk.header}</span>
                         </div>
