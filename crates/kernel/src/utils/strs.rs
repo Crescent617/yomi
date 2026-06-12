@@ -54,6 +54,49 @@ pub fn truncate_with_suffix(s: &str, max_bytes: usize, suffix: &str) -> String {
     format!("{}{}", &s[..byte_idx], suffix)
 }
 
+/// Truncate a string by keeping head and tail, omitting the middle.
+///
+/// # Behavior
+/// - If `s.len() <= max_bytes`: returns `s` as-is (no allocation)
+/// - If `s.len() > max_bytes`: keeps the first ~`max_bytes/2` bytes and the
+///   last ~`max_bytes/2` bytes, joined by `sep`
+///
+/// This is UTF-8 safe: it never splits a multi-byte character.
+pub fn truncate_keep_edges(s: &str, max_bytes: usize, sep: &str) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+
+    if max_bytes <= sep.len() {
+        // Can't fit both content and separator, return truncated separator
+        return truncate_with_suffix(sep, max_bytes, "");
+    }
+
+    let content_budget = max_bytes.saturating_sub(sep.len());
+    let head_budget = content_budget / 2;
+    let tail_budget = content_budget - head_budget;
+
+    // Find head boundary (valid UTF-8)
+    let mut head = 0;
+    for (i, c) in s.char_indices() {
+        if i + c.len_utf8() > head_budget {
+            break;
+        }
+        head = i + c.len_utf8();
+    }
+
+    // Find tail start boundary (valid UTF-8)
+    let mut tail_start = s.len();
+    for (i, _) in s.char_indices() {
+        if i >= s.len() - tail_budget {
+            tail_start = i;
+            break;
+        }
+    }
+
+    format!("{}{}{}", &s[..head], sep, &s[tail_start..])
+}
+
 #[macro_export]
 macro_rules! const_concat {
     ($a:expr $(,)?) => {
@@ -107,6 +150,107 @@ pub const fn push_str<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_truncate_keep_edges_no_truncation() {
+        assert_eq!(truncate_keep_edges("hello", 10, "..."), "hello");
+        assert_eq!(truncate_keep_edges("hello", 5, "..."), "hello");
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_basic() {
+        let text = "0123456789abcdefghij"; // 20 chars
+        let result = truncate_keep_edges(text, 10, "|");
+        // content_budget = 9, head_budget = 4, tail_budget = 5
+        // head = "0123", tail = "fghij" (starts at byte 15)
+        assert_eq!(result, "0123|fghij");
+        assert!(result.len() <= 10);
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_uneven_budget() {
+        let text = "0123456789ABCDEF"; // 16 chars
+        let result = truncate_keep_edges(text, 9, "|");
+        // content_budget = 8, head_budget = 4, tail_budget = 4
+        assert_eq!(result, "0123|CDEF");
+        assert!(result.len() <= 9);
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_boundary() {
+        // max_bytes exactly equals separator length
+        assert_eq!(truncate_keep_edges("hello", 3, "..."), "...");
+        // max_bytes smaller than separator
+        assert_eq!(truncate_keep_edges("hello", 2, "..."), "..");
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_unicode() {
+        // CJK: 3 bytes each
+        let text = "你好世界欢迎"; // 18 bytes, 6 chars
+        let result = truncate_keep_edges(text, 10, "|");
+        // head_budget = 4 bytes -> "你" (3 bytes) fits, "你" + "好" = 6 > 4, so head = "你"
+        // tail_budget = 5 bytes -> "迎" (3 bytes) fits, "迎" + "欢" = 6 > 5, so tail = "迎"
+        assert_eq!(result, "你|迎");
+        assert!(result.len() <= 10);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_emoji() {
+        // Emoji: 4 bytes each
+        let text = "🎉🎊🎁🎂🎃"; // 20 bytes
+        let result = truncate_keep_edges(text, 10, "|");
+        // head_budget = 4 bytes -> "🎉" fits exactly (4 bytes)
+        // tail_budget = 5 bytes -> "🎃" fits (4 bytes)
+        assert_eq!(result, "🎉|🎃");
+        assert!(result.len() <= 10);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_mixed_unicode() {
+        let text = "Hello世界World宇宙"; // "Hello" (5) + "世界" (6) + "World" (5) + "宇宙" (6) = 22 bytes
+        let result = truncate_keep_edges(text, 12, "...");
+        // sep = "..." (3 bytes), content_budget = 9, head_budget = 4, tail_budget = 5
+        // head: "Hell" = 4 bytes fits, "Hello" = 5 > 4, so head = "Hell"
+        // tail: start at byte >= 22-5=17, "宙" starts at 19, so tail = "宙" (3 bytes)
+        assert_eq!(result, "Hell...宙");
+        assert!(result.len() <= 12);
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_length_constraints() {
+        let test_cases = vec![
+            ("hello world", 8, "|"),
+            ("你好世界", 6, "|"),
+            ("🎉🎊🎁", 7, "|"),
+            ("αβγδ", 5, "|"),
+            ("", 10, "|"),
+            ("test", 100, "|"),
+        ];
+
+        for (text, max_bytes, sep) in test_cases {
+            let result = truncate_keep_edges(text, max_bytes, sep);
+            assert!(
+                result.len() <= max_bytes,
+                "Result '{}' ({} bytes) exceeds max_bytes {} for input '{}'",
+                result,
+                result.len(),
+                max_bytes,
+                text
+            );
+            assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_exact_fit() {
+        // When content exactly fits max_bytes
+        assert_eq!(truncate_keep_edges("hello", 5, "..."), "hello");
+        // When content + sep exactly fits... but content is exactly max_bytes, so no truncation
+        assert_eq!(truncate_keep_edges("hello", 5, "..."), "hello");
+    }
 
     #[test]
     fn test_truncate_no_truncation_needed() {

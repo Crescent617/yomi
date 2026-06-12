@@ -4,6 +4,9 @@
 
 use crate::utils::strs;
 
+/// Maximum tool output length shared across tools (20 KB)
+pub(crate) const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
+
 /// Default truncation message
 pub const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to limit]";
 

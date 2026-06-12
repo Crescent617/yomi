@@ -1,8 +1,10 @@
 use crate::agent::AgentInput;
 use crate::const_concat;
+use crate::tools::helper::truncate::MAX_TOOL_OUTPUT_LENGTH;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;
+use crate::utils::strs::truncate_keep_edges;
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -219,6 +221,16 @@ impl ShellTool {
             format!("[stderr]\n{stderr}")
         } else {
             format!("[stdout]\n{stdout}\n\n[stderr]\n{stderr}")
+        };
+
+        let output_text = if output_text.len() > MAX_TOOL_OUTPUT_LENGTH {
+            truncate_keep_edges(
+                &output_text,
+                MAX_TOOL_OUTPUT_LENGTH,
+                "\n\n... [output truncated] ...\n\n",
+            )
+        } else {
+            output_text
         };
 
         if exit_code == 0 {

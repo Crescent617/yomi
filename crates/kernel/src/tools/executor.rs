@@ -1,15 +1,12 @@
 use crate::event::ToolEvent;
-use crate::tools::helper::truncate::{truncate_output, TRUNCATION_MESSAGE};
-use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME};
+use crate::tools::helper::truncate::{truncate_output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE};
+use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use tokio_util::sync::CancellationToken;
-
-/// Maximum tool output length (20 KB)
-const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
 
 /// Tool execution result
 pub struct ToolExecutionResult {
@@ -21,7 +18,7 @@ pub struct ToolExecutionResult {
 
 /// Check if a tool handles its own truncation
 fn tool_handles_truncation(tool_name: &str) -> bool {
-    tool_name == READ_TOOL_NAME
+    tool_name == READ_TOOL_NAME || tool_name == SHELL_TOOL_NAME
 }
 
 /// Truncate and convert `ToolOutputBlock` to `ContentBlock`
