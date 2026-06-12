@@ -38,7 +38,7 @@ impl HookHandler for GoalPreStopHandler {
     }
 
     async fn run(&self, ctx: &HookContext) -> Result<HookResult> {
-        tracing::info!("Running GoalPreStopHandler for session {}", ctx.session_id);
+        tracing::info!("running GoalPreStopHandler");
         match self.store.load(&ctx.session_id).await {
             Ok(Some(goal)) => {
                 if matches!(goal.status, GoalStatus::Active) {
@@ -52,11 +52,7 @@ impl HookHandler for GoalPreStopHandler {
             }
             Ok(None) => {}
             Err(e) => {
-                tracing::warn!(
-                    "GoalPreStopHandler failed to load goal for session {}: {}",
-                    ctx.session_id,
-                    e
-                );
+                tracing::warn!("GoalPreStopHandler failed to load goal: {}", e);
             }
         }
         Ok(HookResult::Passthrough)

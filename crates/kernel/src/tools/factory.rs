@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Configuration for creating a tool registry.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ToolRegistryConfig<'a> {
     pub agent_id: &'a AgentId,
     pub shared: &'a Arc<crate::agent::AgentShared>,

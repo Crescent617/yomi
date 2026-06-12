@@ -216,7 +216,7 @@ impl Coordinator {
                     }
                 }
                 for sid in to_shutdown {
-                    tracing::info!("Session {} idle with no subscribers — shutting down", sid.0);
+                    tracing::info!("idle with no subscribers — shutting down");
                     // Close the agent so it exits cleanly (Shutdown transitions
                     // to Closed, which breaks the agent loop). Then remove
                     // directly from the maps so memory is freed regardless
@@ -232,12 +232,13 @@ impl Coordinator {
     }
 
     /// Shut down a running session (close agent + remove from memory).
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.close().await;
         self.sessions.remove(session_id);
         self.session_event_senders.remove(session_id);
-        tracing::info!("Session {} shut down", session_id.0);
+        tracing::info!("shut down");
         Ok(())
     }
 
@@ -325,6 +326,7 @@ impl Coordinator {
     // ── Session API ──────────────────────────────────────────────────────
 
     /// Create a new session with the given input.
+    #[tracing::instrument(skip(self, input))]
     pub async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         let project = match &input.project_id {
             Some(pid) => Some(
@@ -370,7 +372,7 @@ impl Coordinator {
         if let Some(ref pid) = input.project_id {
             let _ = self.project_store.touch(pid).await;
         }
-        tracing::info!("Session {} created", id.0);
+        tracing::info!("created");
         Ok(id)
     }
 
@@ -427,6 +429,7 @@ impl Coordinator {
     }
 
     /// Forward events from agent to broadcast channel and handle cleanup
+    #[tracing::instrument(skip(agent_rx, broadcast_tx, sessions, senders, last_activity_at), fields(session_id = %session_id.0))]
     async fn forward_session_events(
         session_id: SessionId,
         mut agent_rx: mpsc::Receiver<Event>,
@@ -435,20 +438,19 @@ impl Coordinator {
         senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
         last_activity_at: Arc<AtomicU64>,
     ) {
-        let sid_str = session_id.0.clone();
-        tracing::info!("Event forwarding started for session {}", sid_str);
+        tracing::info!("event forwarding started");
 
         // Forward events until the channel closes (agent ended)
         while let Some(event) = agent_rx.recv().await {
             last_activity_at.store(Self::now_epoch(), Ordering::Relaxed);
             if broadcast_tx.send(event).is_err() {
                 // No active subscribers (this is ok, receivers can come and go)
-                tracing::trace!("No active subscribers for session {} events", sid_str);
+                tracing::trace!("No active subscribers for events");
             }
         }
 
         // Agent channel closed - session is shutting down
-        tracing::info!("Main agent for session {} closed", sid_str);
+        tracing::info!("main agent closed");
 
         // Broadcast shutdown event
         let shutdown_event = Event::System(SystemEvent::Shutdown {
@@ -460,16 +462,17 @@ impl Coordinator {
         // Remove session from coordinator
         sessions.remove(&session_id);
         senders.remove(&session_id);
-        tracing::info!("Session {} removed from coordinator", sid_str);
+        tracing::info!("removed from coordinator");
     }
 
     /// Restore a session from storage by its ID.
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn restore_session(&self, session_id: &SessionId) -> Result<SessionId> {
         let live = self.get_session(session_id).is_some();
-        tracing::info!("restore_session: {} live={}", session_id.0, live);
+        tracing::info!("restore_session: live={}", live);
 
         if live {
-            tracing::info!("Session {} already live, re-attaching", session_id.0);
+            tracing::info!("already live, re-attaching");
             return Ok(session_id.clone());
         }
 
@@ -503,23 +506,21 @@ impl Coordinator {
             auto_approve_level,
             data_dir: self.data_dir().await.clone(),
         };
-        tracing::info!("Restoring session {} from storage", session_id.0);
+        tracing::info!("Restoring from storage");
         if let Err(e) = self.init_session(info.id.clone(), config).await {
             if e.is_session_already_exists() {
-                tracing::debug!(
-                    "Session {} already initialized — treating as restored",
-                    session_id.0
-                );
+                tracing::debug!("already initialized — treating as restored");
                 return Ok(info.id);
             }
             return Err(e);
         }
-        tracing::info!("Session {} restored", info.id.0);
+        tracing::info!("restored");
         Ok(info.id)
     }
 
     /// Fork a session: create new session with copied history from parent.
     /// Also copies message history, goal state, todo list, file states, and checkpoints.
+    #[tracing::instrument(skip(self, auto_approve_level), fields(parent_id = %parent_id.0))]
     pub async fn fork_session(
         &self,
         parent_id: &SessionId,
@@ -546,20 +547,16 @@ impl Coordinator {
         let parent_title = parent_info.title.as_deref().unwrap_or("Untitled");
         let new_title = format!("Forked: {parent_title}");
         self.rename_session(&new_id, new_title).await?;
-        tracing::info!("Forked session {} from {}", new_id.0, parent_id.0);
+        tracing::info!("forked session {}", new_id.0);
 
         // Copy message history from parent to child
         let message_store = self.message_store().await;
         if let Ok(msgs) = message_store.get(&parent_id.0).await {
             if !msgs.is_empty() {
                 if let Err(e) = message_store.replace(&new_id.0, &msgs).await {
-                    tracing::warn!(
-                        "Failed to copy message history for fork {}: {}",
-                        new_id.0,
-                        e
-                    );
+                    tracing::warn!("failed to copy message history: {}", e);
                 } else {
-                    tracing::info!("Copied {} messages for fork {}", msgs.len(), new_id.0);
+                    tracing::info!("copied {} messages", msgs.len());
                 }
             }
         }
@@ -568,9 +565,9 @@ impl Coordinator {
         let goal_store = self.goal_store().await;
         if let Ok(Some(goal)) = goal_store.load(&parent_id.0).await {
             if let Err(e) = goal_store.save(&new_id.0, &goal).await {
-                tracing::warn!("Failed to copy goal state for fork {}: {}", new_id.0, e);
+                tracing::warn!("failed to copy goal state: {}", e);
             } else {
-                tracing::info!("Copied goal state for fork {}", new_id.0);
+                tracing::info!("copied goal state");
             }
         }
 
@@ -578,9 +575,9 @@ impl Coordinator {
         let todo_store = self.todo_store().await;
         if let Ok(Some(todos)) = todo_store.load(&parent_id.0).await {
             if let Err(e) = todo_store.save(&new_id.0, &todos).await {
-                tracing::warn!("Failed to copy todo list for fork {}: {}", new_id.0, e);
+                tracing::warn!("failed to copy todo list: {}", e);
             } else {
-                tracing::info!("Copied todo list for fork {}", new_id.0);
+                tracing::info!("copied todo list");
             }
         }
 
@@ -593,9 +590,9 @@ impl Coordinator {
             file_states_dir.join(format!("{}.jsonl", new_id.0.replace(['/', '\\'], "_")));
         if parent_file_state.exists() {
             if let Err(e) = tokio::fs::copy(&parent_file_state, &child_file_state).await {
-                tracing::warn!("Failed to copy file state for fork {}: {}", new_id.0, e);
+                tracing::warn!("failed to copy file state: {}", e);
             } else {
-                tracing::info!("Copied file state for fork {}", new_id.0);
+                tracing::info!("copied file state");
             }
         }
 
@@ -605,9 +602,9 @@ impl Coordinator {
             .copy_session_checkpoints(&parent_id.0, &new_id.0)
             .await
         {
-            Ok(0) => tracing::debug!("No checkpoints to copy for fork {}", new_id.0),
-            Ok(n) => tracing::info!("Copied {} checkpoints for fork {}", n, new_id.0),
-            Err(e) => tracing::warn!("Failed to copy checkpoints for fork {}: {}", new_id.0, e),
+            Ok(0) => tracing::debug!("no checkpoints to copy"),
+            Ok(n) => tracing::info!("copied {} checkpoints", n),
+            Err(e) => tracing::warn!("failed to copy checkpoints: {}", e),
         }
 
         let project = match &parent_info.project_id {
@@ -627,7 +624,7 @@ impl Coordinator {
             let _ = self.session_store().await.delete(&new_id).await;
             return Err(e);
         }
-        tracing::info!("Forked session {} initialized", new_id.0);
+        tracing::info!("forked session {} initialized", new_id.0);
         Ok(new_id)
     }
 
@@ -679,20 +676,17 @@ impl Coordinator {
     }
 
     /// Send a multi-modal message with content blocks
+    #[tracing::instrument(skip(self, blocks), fields(session_id = %session_id.0))]
     pub async fn send_message(
         &self,
         session_id: &SessionId,
         blocks: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
-        tracing::debug!(
-            "Sending {} content blocks to session {}",
-            blocks.len(),
-            session_id.0
-        );
+        tracing::debug!("sending {} content blocks", blocks.len());
         let session = self.require_session(session_id)?;
         let result = session.read().await.send_blocks(blocks).await;
         if let Err(ref e) = result {
-            tracing::error!("Failed to send blocks to session {}: {}", session_id.0, e);
+            tracing::error!("failed to send blocks: {}", e);
         }
         result
     }
@@ -710,38 +704,41 @@ impl Coordinator {
         )
     }
 
-    /// Send a steer message to a session (injected before next streaming turn)
+    #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]
     pub async fn send_steer(
         &self,
         session_id: &SessionId,
         content: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
-        tracing::debug!("Sending steer to session {}", session_id.0);
+        tracing::debug!("sending steer");
         let session = self.require_session(session_id)?;
         let result = session.read().await.send_steer(content);
         if let Err(ref e) = result {
-            tracing::error!("Failed to send steer to session {}: {}", session_id.0, e);
+            tracing::error!("failed to send steer: {}", e);
         }
         result
     }
 
     /// Send a continue command to trigger the agent from Idle to Streaming
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
-        tracing::debug!("Sending continue to session {}", session_id.0);
+        tracing::debug!("sending continue");
         let session = self.require_session(session_id)?;
         let result = session.read().await.send_continue().await;
         if let Err(ref e) = result {
-            tracing::error!("Failed to send continue to session {}: {}", session_id.0, e);
+            tracing::error!("failed to send continue: {}", e);
         }
         result
     }
 
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         session.read().await.cancel();
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn send_permission_response(
         &self,
         session_id: &SessionId,
@@ -758,6 +755,7 @@ impl Coordinator {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, response), fields(session_id = %session_id.0))]
     pub async fn send_ask_user_response(
         &self,
         session_id: &SessionId,
@@ -773,6 +771,7 @@ impl Coordinator {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         // Update in-memory state if session is currently live
         if let Some(session) = self.get_session(session_id) {
@@ -785,34 +784,32 @@ impl Coordinator {
             .update_auto_approve_level(session_id, level.as_str())
             .await?;
         if rows == 0 {
-            tracing::warn!(
-                "set_permission_level: no rows updated for session {} — session may not exist in DB",
-                session_id.0
-            );
+            tracing::warn!("set_permission_level: no rows updated — session may not exist in DB");
         } else {
             tracing::info!(
-                "Permission level persisted to DB as {:?} for session {} ({} row(s) affected)",
+                "permission level persisted to DB as {:?} ({} row(s) affected)",
                 level,
-                session_id.0,
-                rows
+                rows,
             );
         }
         Ok(())
     }
 
     /// Request compaction for a session's message buffer
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         let result = session.read().await.compact().await;
         if let Err(ref e) = result {
-            tracing::error!("Failed to compact session {}: {}", session_id.0, e);
+            tracing::error!("failed to compact: {}", e);
         } else {
-            tracing::info!("Compaction requested for session {}", session_id.0);
+            tracing::info!("compaction requested");
         }
         result
     }
 
     /// Rewind a session to a specific checkpoint
+    #[tracing::instrument(skip(self, target), fields(session_id = %session_id.0))]
     pub async fn rewind_session(
         &self,
         session_id: &SessionId,
@@ -822,14 +819,14 @@ impl Coordinator {
         let session = self.require_session(session_id)?;
         let result = session.read().await.rewind(message_id, target).await;
         if let Err(ref e) = result {
-            tracing::error!("Failed to rewind session {}: {}", session_id.0, e);
+            tracing::error!("failed to rewind: {}", e);
         } else {
-            tracing::info!("Session {} rewound successfully", session_id.0);
+            tracing::info!("rewound successfully");
         }
         result
     }
 
-    /// Start autonomous goal-mode for a session
+    #[tracing::instrument(skip(self, state), fields(session_id = %session_id.0))]
     pub async fn start_goal(
         &self,
         session_id: &SessionId,
@@ -840,28 +837,28 @@ impl Coordinator {
         session_guard.start_goal(state).await
     }
 
-    /// Pause goal auto-continue for a session
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
         session_guard.pause_goal().await
     }
 
-    /// Resume goal auto-continue for a session
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
         session_guard.resume_goal().await
     }
 
-    /// Get current goal state for a session
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
         let session = self.require_session(session_id)?;
         let session_guard = session.read().await;
         session_guard.get_goal().await
     }
 
-    /// Update an active goal's description (or create one if missing)
+    #[tracing::instrument(skip(self, description), fields(session_id = %session_id.0))]
     pub async fn update_goal(
         &self,
         session_id: &SessionId,
@@ -872,7 +869,7 @@ impl Coordinator {
         session_guard.update_goal(description).await
     }
 
-    /// Stop autonomous goal-mode for a session
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
         let session = self.require_session(session_id)?;
         let mut session_guard = session.write().await;
@@ -958,7 +955,7 @@ impl Coordinator {
             let session = session.read().await;
             if let Err(e) = session.refresh_skills(skills.clone()).await {
                 let sid = session.id().clone();
-                tracing::warn!("Failed to refresh skills for session {}: {}", sid.0, e);
+                tracing::warn!("Failed to refresh skills for {}: {}", sid.0, e);
             }
         }
 
