@@ -2,7 +2,10 @@ use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
 use crate::event::{Event, ModelEvent, ToolEvent};
 use crate::skill::Skill;
 use crate::storage::SessionStore;
-use crate::tools::{SubagentPreset, Tool, ToolExecCtx, ToolRegistry};
+use crate::tools::{
+    edit::EDIT_TOOL_NAME, reminder::REMINDER_TOOL_NAME, todo::TODO_TOOL_NAME,
+    write::WRITE_TOOL_NAME, Tool, ToolExecCtx, ToolRegistry,
+};
 use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
 use crate::utils::tokens::format_actual_tokens;
 use async_trait::async_trait;
@@ -26,6 +29,21 @@ pub struct SubagentTool {
     /// Parent's `event_tx` for forwarding permission requests and progress
     /// Subagent's permission requests and progress will be sent here so TUI can show dialogs
     parent_event_tx: mpsc::Sender<Event>,
+}
+
+/// Parameters for executing a sub-agent.
+struct SubAgentExecParams<'a> {
+    simple_agent: &'a mut SimpleAgent,
+    system_prompt: String,
+    history: Option<Vec<Arc<Message>>>,
+    task: String,
+    cancel_token: tokio_util::sync::CancellationToken,
+    parent_event_tx: &'a mpsc::Sender<Event>,
+    parent_id: &'a AgentId,
+    tool_id: &'a str,
+    shared: Arc<AgentShared>,
+    parent_session_id: String,
+    message_id: crate::types::MessageId,
 }
 
 impl SubagentTool {
@@ -60,6 +78,7 @@ impl SubagentTool {
 
 Complete the task fully — don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.",
             parent_id = self.parent_id,
+            context_note = context_note,
         );
 
         if let Some(p) = preset {
@@ -80,7 +99,8 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
         preset: Option<SubagentPreset>,
     ) -> SimpleAgent {
         use crate::permissions::Checker;
-        let mut tool_registry = self.create_tool_registry(session_id);
+        let agent_id = crate::types::AgentId::new();
+        let mut tool_registry = self.create_tool_registry(session_id, &agent_id);
 
         // Remove tools disallowed by the preset
         if let Some(p) = preset {
@@ -88,8 +108,6 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
                 tool_registry.remove(tool_name);
             }
         }
-
-        let agent_id = crate::types::AgentId::new();
 
         // Create permission checker if permission state is available
         let permission_checker = self.shared.permission_state.as_ref().map(|state| {
@@ -114,15 +132,14 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
     }
 
     /// Create tool registry for the subagent
-    fn create_tool_registry(&self, session_id: &str) -> ToolRegistry {
+    fn create_tool_registry(&self, session_id: &str, agent_id: &AgentId) -> ToolRegistry {
         // Subagent doesn't need input_tx since it doesn't receive AgentInput.
         // Subagents get a fresh file state store (not shared with parent).
         crate::tools::ToolRegistryFactory::create(crate::tools::ToolRegistryConfig::for_subagent(
-            &self.parent_id,
+            agent_id,
             &self.shared,
             &self.parent_event_tx,
             session_id,
-            &self.parent_session_id,
         ))
     }
 }
@@ -307,17 +324,19 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 tokio::spawn(
                     async move {
                         let (output, status) = Self::execute_simple_agent_with_shared(
-                            &mut simple_agent,
-                            system_prompt,
-                            history,
-                            prompt,
-                            cancel_token,
-                            &parent_event_tx,
-                            &parent_id,
-                            &tool_id,
-                            shared,
-                            parent_session_id,
-                            message_id,
+                            SubAgentExecParams {
+                                simple_agent: &mut simple_agent,
+                                system_prompt,
+                                history,
+                                task: prompt,
+                                cancel_token,
+                                parent_event_tx: &parent_event_tx,
+                                parent_id: &parent_id,
+                                tool_id: &tool_id,
+                                shared,
+                                parent_session_id,
+                                message_id,
+                            }
                         )
                         .await;
 
@@ -340,19 +359,22 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 Ok(ToolOutput::text(result))
             }
             SubAgentMode::Sync => {
-                let (output, status) = self
-                    .execute_simple_agent(
-                        &mut simple_agent,
+                let (output, status) = Self::execute_simple_agent_with_shared(
+                    SubAgentExecParams {
+                        simple_agent: &mut simple_agent,
                         system_prompt,
                         history,
-                        prompt,
+                        task: prompt,
                         cancel_token,
-                        &self.parent_event_tx,
-                        &self.parent_id,
-                        ctx.tool_call_id,
-                        ctx.message_id.clone(),
-                    )
-                    .await;
+                        parent_event_tx: &self.parent_event_tx,
+                        parent_id: &self.parent_id,
+                        tool_id: ctx.tool_call_id,
+                        shared: self.shared.clone(),
+                        parent_session_id: self.parent_session_id.clone(),
+                        message_id: ctx.message_id.clone(),
+                    }
+                )
+                .await;
 
                 info!(
                     "Sub-agent {} completed with status: {:?}",
@@ -490,34 +512,24 @@ impl SubagentTool {
     }
 
     /// Execute a `SimpleAgent` with shared resources (for async mode)
-    #[allow(clippy::too_many_arguments)]
     async fn execute_simple_agent_with_shared(
-        simple_agent: &mut SimpleAgent,
-        system_prompt: String,
-        history: Option<Vec<Arc<Message>>>,
-        task: String,
-        cancel_token: tokio_util::sync::CancellationToken,
-        parent_event_tx: &mpsc::Sender<Event>,
-        parent_id: &AgentId,
-        tool_id: &str,
-        shared: Arc<AgentShared>,
-        parent_session_id: String,
-        message_id: crate::types::MessageId,
+        params: SubAgentExecParams<'_>,
     ) -> (String, SubAgentStatus) {
-        let event_tx = parent_event_tx.clone();
-        let agent_id = parent_id.clone();
-        let tool_id_owned = tool_id.to_string();
+        let event_tx = params.parent_event_tx.clone();
+        let agent_id = params.parent_id.clone();
+        let tool_id_owned = params.tool_id.to_string();
         let mut iteration_count = 0usize;
 
-        let result = simple_agent
-            .execute(system_prompt, history, task, cancel_token, |event| {
+        let result = params
+            .simple_agent
+            .execute(params.system_prompt, params.history, params.task, params.cancel_token, |event| {
                 Self::handle_model_event(
                     &event,
                     &mut iteration_count,
                     &event_tx,
                     agent_id.clone(),
                     &tool_id_owned,
-                    &message_id,
+                    &params.message_id,
                 );
             })
             .await;
@@ -528,30 +540,30 @@ impl SubagentTool {
                 let total = metrics.token_usage.total_tokens();
 
                 // Record token usage for subagent
-                Self::do_record_token_usage(shared, &parent_session_id, parent_id, &metrics).await;
+                Self::do_record_token_usage(params.shared, &params.parent_session_id, params.parent_id, &metrics).await;
 
                 let status = if metrics.completed {
                     Self::send_progress(
-                        parent_event_tx,
-                        parent_id.clone(),
-                        tool_id,
+                        params.parent_event_tx,
+                        params.parent_id.clone(),
+                        params.tool_id,
                         format!("completed · {} tokens", format_actual_tokens(total)),
                         Some(total),
-                        message_id.clone(),
+                        params.message_id.clone(),
                     );
                     SubAgentStatus::Completed
                 } else {
                     // Max iterations reached without completing
                     Self::send_progress(
-                        parent_event_tx,
-                        parent_id.clone(),
-                        tool_id,
+                        params.parent_event_tx,
+                        params.parent_id.clone(),
+                        params.tool_id,
                         format!(
                             "partial (max iter) · {} tokens",
                             format_actual_tokens(total)
                         ),
                         Some(total),
-                        message_id.clone(),
+                        params.message_id.clone(),
                     );
                     SubAgentStatus::Failed(format!(
                         "Task did not complete within {} iterations. \
@@ -573,45 +585,179 @@ impl SubagentTool {
                     )
                 };
                 Self::send_progress(
-                    parent_event_tx,
-                    parent_id.clone(),
-                    tool_id,
+                    params.parent_event_tx,
+                    params.parent_id.clone(),
+                    params.tool_id,
                     msg,
                     None,
-                    message_id.clone(),
+                    params.message_id.clone(),
                 );
                 (String::new(), status)
             }
         }
     }
+}
 
-    /// Execute a `SimpleAgent` and collect output with progress events
-    #[allow(clippy::too_many_arguments)]
-    async fn execute_simple_agent(
-        &self,
-        simple_agent: &mut SimpleAgent,
-        system_prompt: String,
-        history: Option<Vec<Arc<Message>>>,
-        task: String,
-        cancel_token: tokio_util::sync::CancellationToken,
-        parent_event_tx: &mpsc::Sender<Event>,
-        parent_id: &AgentId,
-        tool_id: &str,
-        message_id: crate::types::MessageId,
-    ) -> (String, SubAgentStatus) {
-        Self::execute_simple_agent_with_shared(
-            simple_agent,
-            system_prompt,
-            history,
-            task,
-            cancel_token,
-            parent_event_tx,
-            parent_id,
-            tool_id,
-            self.shared.clone(),
-            self.parent_session_id.clone(),
-            message_id,
-        )
-        .await
+
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentPreset {
+    /// Default sub-agent — full toolkit, generic instructions.
+    GeneralPurpose,
+    /// Read-only codebase exploration specialist. Fast, parallel searches.
+    Explorer,
+    /// Code review specialist — examines changes for correctness, security,
+    /// performance and maintainability without editing files.
+    Reviewer,
+    /// Architecture planner — explores existing code and produces step-by-step
+    /// implementation plans.
+    Planner,
+    /// Verification specialist — runs builds, tests, and adversarial probes.
+    /// May write ephemeral scripts outside the project directory.
+    Tester,
+}
+
+impl std::str::FromStr for SubagentPreset {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        // Avoid allocating via to_lowercase() by matching case-insensitively.
+        match s {
+            s if s.eq_ignore_ascii_case("general-purpose")
+                || s.eq_ignore_ascii_case("general_purpose")
+                || s.eq_ignore_ascii_case("default") =>
+            {
+                Ok(Self::GeneralPurpose)
+            }
+            s if s.eq_ignore_ascii_case("explorer") || s.eq_ignore_ascii_case("explore") => {
+                Ok(Self::Explorer)
+            }
+            s if s.eq_ignore_ascii_case("reviewer") || s.eq_ignore_ascii_case("review") => {
+                Ok(Self::Reviewer)
+            }
+            s if s.eq_ignore_ascii_case("planner") || s.eq_ignore_ascii_case("plan") => {
+                Ok(Self::Planner)
+            }
+            s if s.eq_ignore_ascii_case("tester")
+                || s.eq_ignore_ascii_case("test")
+                || s.eq_ignore_ascii_case("verification") =>
+            {
+                Ok(Self::Tester)
+            }
+            _ => std::result::Result::Err(()),
+        }
     }
 }
+
+impl SubagentPreset {
+    /// Returns the text to append to the sub-agent's base system prompt,
+    /// or `None` for the default preset.
+    pub fn prompt(&self) -> Option<&'static str> {
+        match self {
+            Self::GeneralPurpose => None,
+            Self::Explorer => Some(EXPLORER_PROMPT),
+            Self::Reviewer => Some(REVIEWER_PROMPT),
+            Self::Planner => Some(PLANNER_PROMPT),
+            Self::Tester => Some(TESTER_PROMPT),
+        }
+    }
+
+    /// Tool names that should be removed from the sub-agent's registry for
+    /// this preset.
+    pub fn disallowed_tools(&self) -> &'static [&'static str] {
+        match self {
+            Self::GeneralPurpose => &[],
+            Self::Explorer | Self::Reviewer | Self::Planner | Self::Tester => &[
+                WRITE_TOOL_NAME,
+                EDIT_TOOL_NAME,
+                SUBAGENT_TOOL_NAME,
+                TODO_TOOL_NAME,
+                REMINDER_TOOL_NAME,
+            ],
+        }
+    }
+}
+
+static EXPLORER_PROMPT: &str = r"
+# Role: Read-Only Exploration Specialist
+
+Your role is EXCLUSIVELY to search and analyze existing code.
+
+STRICT PROHIBITIONS:
+- Do NOT create, modify, or delete any files.
+- Do NOT use shell commands that change system state (no git add/commit, no mkdir/rm/touch/cp/mv in the project, no install commands).
+- Do NOT run redirects (>, >>) or heredocs that write files.
+
+Guidelines:
+- Search broadly and efficiently. Use multiple parallel searches when possible.
+- Read code carefully to understand patterns and architecture.
+- Report findings concisely with file paths and key insights.
+";
+
+static REVIEWER_PROMPT: &str = r"
+# Role: Code Review Specialist
+
+Your job is to critically examine code and provide actionable feedback.
+You do NOT modify files — your output is a review report only.
+
+Focus areas:
+- Correctness: logic errors, edge cases, off-by-one, race conditions
+- Security: injection risks, unsafe operations, secret leakage
+- Performance: unnecessary allocations, O(n²) patterns, blocking I/O
+- Maintainability: readability, naming, test coverage, documentation
+- Consistency: adherence to project conventions and existing patterns
+
+STRICT PROHIBITIONS:
+- Do NOT modify any files.
+- Do NOT create files.
+";
+
+static PLANNER_PROMPT: &str = r"
+# Role: Software Architect & Planning Specialist
+
+Your role is to explore the codebase and design implementation plans.
+
+STRICT PROHIBITIONS:
+- Do NOT create, modify, or delete any files.
+- Do NOT use shell commands that change system state in the project.
+
+Your Process:
+1. Understand the requirements provided in the user's message.
+2. Explore thoroughly: find existing patterns, conventions, and similar features.
+3. Design a solution that follows existing architecture.
+4. Output a step-by-step implementation plan.
+5. Identify 3-5 critical files for implementation.
+
+REMEMBER: You can ONLY explore and plan. You CANNOT write, edit, or modify files.
+";
+
+static TESTER_PROMPT: &str = r"
+# Role: Verification & Testing Specialist
+
+Your job is to verify that implementations are correct by trying to break them.
+
+STRICT PROHIBITIONS on the PROJECT DIRECTORY:
+- Do NOT create, modify, or delete files IN the project directory.
+- Do NOT run git write operations (add, commit, push).
+
+You MAY write ephemeral test scripts to /tmp or $TMPDIR when inline commands
+are insufficient. Clean up after yourself.
+
+Verification Strategy:
+1. Read project docs (README, CLAUDE.md, package.json, Makefile, etc.) for build/test commands.
+2. Run the build. A broken build is automatic FAIL.
+3. Run the test suite. Failing tests are automatic FAIL.
+4. Run linters / type-checkers if configured.
+5. Apply adversarial probes: boundary values, concurrency, invalid inputs.
+6. Check for regressions in related code.
+
+OUTPUT FORMAT:
+End with exactly one of:
+VERDICT: PASS
+VERDICT: FAIL
+VERDICT: PARTIAL
+
+For each check, show the exact command run and the actual output observed.
+";
+

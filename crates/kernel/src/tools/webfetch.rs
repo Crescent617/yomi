@@ -3,9 +3,9 @@
 //! Filters out scripts, styles, navigation, and other noise before converting
 //! to clean text using html2text.
 
+use crate::tools::helper::truncate::truncate_output;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
-use crate::utils::strs::truncate_with_suffix;
 use async_trait::async_trait;
 use lru::LruCache;
 use serde_json::Value;
@@ -104,7 +104,7 @@ impl WebFetchTool {
         let host = parsed.host_str().ok_or("URL must have a hostname")?;
 
         let parts: Vec<&str> = host.split('.').collect();
-        if parts.len() < 2 {
+        if parts.len() < 2 && !host.eq_ignore_ascii_case("localhost") && host != "127.0.0.1" {
             return Err("Invalid hostname".to_string());
         }
 
@@ -174,7 +174,7 @@ impl WebFetchTool {
         };
 
         // Truncate if too long (UTF-8 safe)
-        let final_content = truncate_with_suffix(
+        let final_content = truncate_output(
             &processed_content,
             MAX_RESULT_LENGTH,
             &format!(

@@ -30,7 +30,7 @@ impl ReminderTool {
 #[async_trait]
 impl Tool for ReminderTool {
     fn name(&self) -> &'static str {
-        "reminder"
+        REMINDER_TOOL_NAME
     }
 
     fn desc(&self) -> &'static str {
@@ -60,6 +60,12 @@ impl Tool for ReminderTool {
         let delay = args["delay_seconds"]
             .as_u64()
             .ok_or_else(|| KernelError::tool("delay_seconds must be a positive integer"))?;
+
+        if !(30..=3600).contains(&delay) {
+            return Err(KernelError::tool(
+                "delay_seconds must be between 30 and 3600 (inclusive)",
+            ));
+        }
 
         let message = args["message"]
             .as_str()

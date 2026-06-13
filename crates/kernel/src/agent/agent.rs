@@ -7,10 +7,10 @@ use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::executor::ToolExecutionResult;
+use crate::tools::executor::{ToolExecutionResult, ToolExecParams};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
 use futures::TryStreamExt;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -500,7 +500,9 @@ impl Agent {
             {
                 tracing::warn!("Failed to send rewind error result: {:?}", e);
             }
-            return Ok(());
+            return Err(AgentError::Serialization(
+                format!("Message {} not found", message_id.as_str()),
+            ));
         }
 
         let result = super::turn::Turn::rewind_to_checkpoint(
@@ -515,7 +517,7 @@ impl Agent {
             if let Err(e) = result_tx.send(Err(e.to_string())) {
                 tracing::warn!("Failed to send rewind error result: {:?}", e);
             }
-            return Ok(());
+            return Err(AgentError::Serialization(e.to_string()));
         }
 
         let remaining_messages: Vec<Message> = self
@@ -1290,7 +1292,7 @@ impl Agent {
 
         // Pre-generate MessageId for each tool call so Start/End events and
         // the resulting Message all share the same identifier.
-        let mut tool_message_ids: HashMap<String, MessageId> = HashMap::new();
+        let mut tool_message_ids: BTreeMap<String, MessageId> = BTreeMap::new();
         for call in &tool_calls {
             tool_message_ids.insert(call.id.clone(), MessageId::new());
         }
@@ -1369,16 +1371,18 @@ impl Agent {
             Vec::new()
         } else {
             crate::tools::execute_tools_parallel(
-                &self.id,
-                &approved_calls,
-                &self.tool_registry,
-                Some(&cancel_token),
-                Some(self.message_buffer.messages()),
-                &self.working_dir,
-                &self.session_id,
-                &tool_message_ids,
-                turn_for_tools,
-                &self.skills,
+                &ToolExecParams {
+                    agent_id: &self.id,
+                    tool_calls: &approved_calls,
+                    tool_registry: &self.tool_registry,
+                    cancel_token: Some(&cancel_token),
+                    parent_messages: Some(self.message_buffer.messages()),
+                    working_dir: &self.working_dir,
+                    session_id: &self.session_id,
+                    message_ids: &tool_message_ids,
+                    turn: turn_for_tools,
+                    skills: &self.skills,
+                },
             )
             .await
         };

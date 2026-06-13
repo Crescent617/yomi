@@ -5,7 +5,7 @@
 use crate::utils::strs;
 
 /// Maximum tool output length shared across tools (20 KB)
-pub(crate) const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
+pub const MAX_TOOL_OUTPUT_LENGTH: usize = 20_000;
 
 /// Default truncation message
 pub const TRUNCATION_MESSAGE: &str = "\n\n[Output truncated due to limit]";
@@ -33,11 +33,6 @@ pub fn maybe_truncate_output(text: String, max_len: usize, offset: usize) -> Str
     result
 }
 
-/// Truncate text with default max length (`MAX_TOOL_OUTPUT_LENGTH`).
-/// Convenience wrapper for tools that use the standard limit.
-pub fn maybe_truncate(text: String, offset: usize, max_len: usize) -> String {
-    maybe_truncate_output(text, max_len, offset)
-}
 
 /// Find a valid UTF-8 boundary at or before the target byte position.
 fn find_utf8_boundary(text: &str, target: usize) -> usize {
@@ -51,6 +46,12 @@ fn find_utf8_boundary(text: &str, target: usize) -> usize {
 /// Uses the strs utility for consistent truncation.
 pub fn truncate_output(text: &str, max_len: usize, suffix: &str) -> String {
     strs::truncate_with_suffix(text, max_len, suffix)
+}
+
+/// Truncate text keeping both head and tail, joined by a separator.
+/// Useful for shell output where you want to see both beginning and end.
+pub fn truncate_keep_edges(text: &str, max_len: usize, sep: &str) -> String {
+    strs::truncate_keep_edges(text, max_len, sep)
 }
 
 /// Truncate output with the default truncation message.

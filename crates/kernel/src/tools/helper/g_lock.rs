@@ -21,9 +21,23 @@ static G_LOCKS: std::sync::LazyLock<DashMap<String, Arc<Mutex<()>>>> =
     std::sync::LazyLock::new(DashMap::new);
 
 /// A guard that holds a process-level lock on a key.
-/// The lock is released when this guard is dropped.
+/// The lock is released when this guard is dropped, and the entry is removed
+/// from `G_LOCKS` if no other tasks are waiting.
 pub struct GLockGuard {
-    _guard: tokio::sync::OwnedMutexGuard<()>,
+    key: String,
+    mutex: Arc<Mutex<()>>,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for GLockGuard {
+    fn drop(&mut self) {
+        // Release the mutex guard first so try_lock can succeed
+        self.guard.take();
+        // If no other task is holding or waiting for this key, clean up the entry
+        if self.mutex.try_lock().is_ok() {
+            G_LOCKS.remove(&self.key);
+        }
+    }
 }
 
 /// Error type for key lock operations
@@ -59,14 +73,18 @@ pub async fn g_lock(key: impl Into<String>) -> GLockGuard {
     let key = key.into();
     // Get or create the mutex for this key
     let mutex = G_LOCKS
-        .entry(key)
+        .entry(key.clone())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone();
 
     // Acquire the lock
-    let guard = mutex.lock_owned().await;
+    let guard = mutex.clone().lock_owned().await;
 
-    GLockGuard { _guard: guard }
+    GLockGuard {
+        key,
+        mutex,
+        guard: Some(guard),
+    }
 }
 
 /// Acquire a key lock with timeout.
@@ -78,12 +96,16 @@ pub async fn g_lock_timeout(
 ) -> Result<GLockGuard, GLockError> {
     let key = key.into();
     let mutex = G_LOCKS
-        .entry(key)
+        .entry(key.clone())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone();
 
-    match tokio::time::timeout(timeout, mutex.lock_owned()).await {
-        Ok(guard) => Ok(GLockGuard { _guard: guard }),
+    match tokio::time::timeout(timeout, mutex.clone().lock_owned()).await {
+        Ok(guard) => Ok(GLockGuard {
+            key,
+            mutex,
+            guard: Some(guard),
+        }),
         Err(_) => Err(GLockError::Timeout),
     }
 }

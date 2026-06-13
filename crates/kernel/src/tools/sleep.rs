@@ -55,6 +55,12 @@ impl Tool for SleepTool {
             .as_u64()
             .ok_or_else(|| crate::types::KernelError::tool("seconds must be a positive integer"))?;
 
+        if delay > 3600 {
+            return Err(crate::types::KernelError::tool(
+                "seconds must be between 1 and 3600 (inclusive)",
+            ));
+        }
+
         let start = tokio::time::Instant::now();
         tokio::select! {
             () = sleep(Duration::from_secs(delay)) => {

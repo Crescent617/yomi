@@ -3,7 +3,7 @@ use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
@@ -74,7 +74,7 @@ impl Tool for WriteTool {
 
         // Note: file_path is expected to be absolute from the agent
         // But we also support relative paths for convenience
-        let path = if file_path_str.starts_with('/') {
+        let path = if Path::new(file_path_str).is_absolute() {
             PathBuf::from(file_path_str)
         } else {
             ctx.working_dir.join(file_path_str)
@@ -119,7 +119,7 @@ impl Tool for WriteTool {
         ctx.track_edit(&path).await;
 
         // Write file: acquire lock to serialize concurrent tool calls
-        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
 
         if is_append {
             let mut file = tokio::fs::OpenOptions::new()
@@ -134,7 +134,9 @@ impl Tool for WriteTool {
 
         // Update file state store
         if let Some(ref store) = self.file_state_store {
-            store.record(path.clone(), get_mtime(&path).await).await;
+            if let Some(mtime) = get_mtime(&path).await {
+                store.record(path.clone(), mtime).await;
+            }
         }
 
         Ok(ToolOutput::text_with_summary(
@@ -234,7 +236,7 @@ mod tests {
         let store = Arc::new(FileStateStore::new());
 
         // Record the file as read with the current mtime
-        let mtime = crate::tools::helper::get_mtime(&file_path).await;
+        let mtime = crate::tools::helper::get_mtime(&file_path).await.unwrap();
         store.record(file_path.clone(), mtime).await;
 
         let tool = WriteTool::new(store);

@@ -5,6 +5,7 @@ use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::path::Path;
 use std::sync::Arc;
 
 pub const EDIT_TOOL_NAME: &str = "edit";
@@ -199,7 +200,11 @@ impl Tool for EditTool {
             .ok_or_else(|| KernelError::tool("Missing 'new_str' argument"))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = ctx.working_dir.join(path_str);
+        let path = if Path::new(path_str).is_absolute() {
+            std::path::PathBuf::from(path_str)
+        } else {
+            ctx.working_dir.join(path_str)
+        };
 
         tracing::debug!("Edit: replace in {}", path.display());
 
@@ -238,7 +243,7 @@ impl Tool for EditTool {
         ctx.track_edit(&path).await;
 
         // Acquire lock to serialize concurrent tool calls
-        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
 
         // Read file content (now protected by exclusive lock)
         let content = tokio::fs::read_to_string(&path).await?;
@@ -293,8 +298,9 @@ impl Tool for EditTool {
 
         // Update file mtime in store
         if let Some(ref store) = self.file_state_store {
-            let mtime = get_mtime(&path).await;
-            store.record(path.clone(), mtime).await;
+            if let Some(mtime) = get_mtime(&path).await {
+                store.record(path.clone(), mtime).await;
+            }
         }
 
         // Build success message
@@ -328,7 +334,7 @@ mod tests {
         let _content = "hello world".to_string();
 
         // Get actual file mtime
-        let mtime = crate::tools::helper::get_mtime(&full_path).await;
+        let mtime = crate::tools::helper::get_mtime(&full_path).await.unwrap();
 
         store.record(full_path.clone(), mtime).await;
 
@@ -407,7 +413,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -435,7 +441,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -463,7 +469,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -493,7 +499,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -523,7 +529,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -553,7 +559,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -582,7 +588,7 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await;
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;

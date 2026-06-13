@@ -12,21 +12,21 @@ const DEFAULT_MAX_CONCURRENT_MTIME_OPS: usize = 100;
 /// Maximum file size (10 MB)
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
-/// Get file modification time in milliseconds since epoch
+/// Get file modification time in milliseconds since epoch.
 ///
-/// Returns 0 if the file metadata cannot be read.
-pub async fn get_mtime(path: &Path) -> u64 {
+/// Returns `None` if the file metadata cannot be read.
+pub async fn get_mtime(path: &Path) -> Option<u64> {
     match tokio::fs::metadata(path).await {
         Ok(metadata) => metadata
             .modified()
             .ok()
             .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as u64),
-        Err(_) => 0,
+            .map(|d| d.as_millis() as u64),
+        Err(_) => None,
     }
 }
 
-/// Get modification times for multiple files concurrently with limited concurrency
+/// Get modification times for multiple files concurrently with limited concurrency.
 ///
 /// This prevents file descriptor exhaustion when processing directories with many files.
 /// Uses a semaphore to limit concurrent filesystem operations to `max_concurrent`
@@ -46,8 +46,7 @@ pub async fn get_mtimes_concurrent(
             let sem = Arc::clone(&semaphore);
             async move {
                 let _permit = sem.acquire().await.ok()?;
-                let mtime = get_mtime(&path).await;
-                Some((path, mtime))
+                get_mtime(&path).await.map(|mtime| (path, mtime))
             }
         })
         .collect();
@@ -77,7 +76,7 @@ mod tests {
 
         let mtime = get_mtime(&file_path).await;
         assert!(
-            mtime > 0,
+            mtime.is_some() && mtime.unwrap() > 0,
             "mtime should be greater than 0 for existing file"
         );
     }
@@ -85,7 +84,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_mtime_nonexistent_file() {
         let mtime = get_mtime(Path::new("/nonexistent/file.txt")).await;
-        assert_eq!(mtime, 0, "mtime should be 0 for nonexistent file");
+        assert_eq!(mtime, None, "mtime should be None for nonexistent file");
     }
 
     #[tokio::test]
@@ -106,11 +105,10 @@ mod tests {
 
         let results = get_mtimes_concurrent(paths, None).await;
 
-        // Should have 3 results (including non-existent file with mtime=0)
-        assert_eq!(results.len(), 3);
+        // Should have 2 results (non-existent file skipped)
+        assert_eq!(results.len(), 2);
         assert!(results[0].1 > 0); // file1 exists
         assert!(results[1].1 > 0); // file2 exists
-        assert_eq!(results[2].1, 0); // file3 doesn't exist, mtime=0
     }
 
     #[tokio::test]
