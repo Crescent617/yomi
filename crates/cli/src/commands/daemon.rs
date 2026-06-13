@@ -169,7 +169,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             let coord =
                 kernel::client::RemoteCoordinator::connect(&crate::daemon::socket_addr()).await?;
             coord.reload_agent_config().await?;
-            println!("Skills reloaded in daemon");
+            println!("Agent configuration reloaded in daemon");
         }
     }
     Ok(())

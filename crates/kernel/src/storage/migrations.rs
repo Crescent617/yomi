@@ -149,7 +149,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 
             // Execute each SQL statement in the migration
             for sql in migration.sqls {
-                sqlx::query(sql).execute(&mut *tx).await.map_err(|e| {
+                sqlx::query(*sql).execute(&mut *tx).await.map_err(|e| {
                     KernelError::storage(format!(
                         "Failed to apply migration {} ({}): SQL: {}: {e}",
                         migration.version,

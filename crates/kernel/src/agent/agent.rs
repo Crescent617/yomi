@@ -1,7 +1,7 @@
 use super::message_buffer::MessageBuffer;
 use super::{
-    AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
-    CancelToken, InterceptCtx,
+    AgentConfig, AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs,
+    AgentState, CancelToken, InterceptCtx,
 };
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
@@ -17,7 +17,6 @@ use tokio::sync::mpsc;
 use tracing::{info, info_span, warn, Instrument};
 
 /// Input messages that can be sent to an Agent
-#[derive(Debug)]
 pub enum AgentInput {
     /// User message with multi-modal content blocks
     User {
@@ -38,8 +37,10 @@ pub enum AgentInput {
     Shutdown,
     /// Force compaction of message buffer
     Compact,
-    /// Dynamically refresh skills list, system prompt, and hooks
-    RefreshSkills(Vec<Arc<crate::skill::Skill>>),
+    /// Dynamically reload skills list, system prompt, and hooks
+    ReloadSkills(Vec<Arc<crate::skill::Skill>>),
+    /// Dynamically reload full agent configuration (model, skills, hooks, etc.)
+    ReloadConfig(Box<AgentConfig>, Arc<AgentShared>),
     /// Rewind to a specific checkpoint
     Rewind {
         message_id: MessageId,
@@ -47,34 +48,6 @@ pub enum AgentInput {
         /// Channel to send the result back
         result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
-}
-
-impl Clone for AgentInput {
-    fn clone(&self) -> Self {
-        match self {
-            Self::User {
-                content,
-                generation,
-            } => Self::User {
-                content: content.clone(),
-                generation: *generation,
-            },
-            Self::TaskResult { task_id, content } => Self::TaskResult {
-                task_id: task_id.clone(),
-                content: content.clone(),
-            },
-            Self::PermissionResponse { req_id, approved } => Self::PermissionResponse {
-                req_id: req_id.clone(),
-                approved: *approved,
-            },
-            Self::Shutdown => Self::Shutdown,
-            Self::Compact => Self::Compact,
-            Self::Continue => Self::Continue,
-            Self::RefreshSkills(skills) => Self::RefreshSkills(skills.clone()),
-            // Rewind cannot be cloned due to oneshot sender, panic if attempted
-            Self::Rewind { .. } => panic!("Rewind input cannot be cloned"),
-        }
-    }
 }
 
 pub struct Agent {
@@ -340,31 +313,10 @@ impl Agent {
             };
 
             // Handle state transition after execution
-            let next_state = self.context.current_state();
-
-            // Turn lifecycle: complete on transition to Idle
-            if state != AgentState::Idle && next_state == AgentState::Idle {
-                if let Some(turn) = self.current_turn.take() {
-                    if let Err(e) = turn.complete().await {
-                        tracing::warn!("Failed to complete turn: {}", e);
-                    }
-                }
-            }
-
             if let Err(e) = result {
                 if let AgentError::Cancelled(ctx) = &e {
                     if let Err(e) = self.handle_cancel(ctx).await {
                         tracing::warn!("Failed to handle cancel: {}", e);
-                    }
-                    // After cancellation, state transitions to Idle. Handle turn
-                    // lifecycle the same way as a normal transition.
-                    let next_state = self.context.current_state();
-                    if state != AgentState::Idle && next_state == AgentState::Idle {
-                        if let Some(turn) = self.current_turn.take() {
-                            if let Err(e) = turn.complete().await {
-                                tracing::warn!("Failed to complete turn: {}", e);
-                            }
-                        }
                     }
                 } else {
                     let phase = match state {
@@ -376,12 +328,13 @@ impl Agent {
                     self.emit_error(phase, &e.to_string(), false).await;
 
                     // Recover to Idle for non-Idle states
-                    if next_state != AgentState::Idle {
+                    if self.context.current_state() != AgentState::Idle {
                         self.context.transition_to(AgentState::Idle);
                     }
                 }
             }
 
+            self.complete_turn_if_needed(state).await;
             self.context.increment_iteration();
         }
 
@@ -395,6 +348,21 @@ impl Agent {
         self.emit_operation_cancelled(context).await;
         self.context.transition_to(AgentState::Idle);
         Ok(())
+    }
+
+    /// Complete current turn if transitioning from non-Idle to Idle.
+    async fn complete_turn_if_needed(&mut self, from_state: AgentState) {
+        if from_state == AgentState::Idle {
+            return;
+        }
+        if self.context.current_state() != AgentState::Idle {
+            return;
+        }
+        if let Some(turn) = self.current_turn.take() {
+            if let Err(e) = turn.complete().await {
+                tracing::warn!("Failed to complete turn: {}", e);
+            }
+        }
     }
 
     /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return error
@@ -647,9 +615,14 @@ impl Agent {
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
-            Some(AgentInput::RefreshSkills(skills)) => {
-                tracing::info!("received refresh-skills request ({} skills)", skills.len());
-                self.apply_skills_refresh(skills).await;
+            Some(AgentInput::ReloadSkills(skills)) => {
+                tracing::info!("received reload-skills request ({} skills)", skills.len());
+                self.handle_reload_skills(skills).await;
+                Ok(())
+            }
+            Some(AgentInput::ReloadConfig(config, shared)) => {
+                tracing::info!("received reload-config request");
+                self.handle_reload_config(config, shared).await;
                 Ok(())
             }
             Some(AgentInput::Rewind {
@@ -669,19 +642,54 @@ impl Agent {
         }
     }
 
-    /// Apply a dynamic skills refresh: rebuild system prompt and hook registry.
+    /// Handle a skills reload: replace local skill list, rebuild system prompt and hooks.
     /// Tool registry stays intact because `SubagentTool` now reads skills from `ToolExecCtx`.
     #[tracing::instrument(skip(self))]
-    async fn apply_skills_refresh(&mut self, skills: Vec<Arc<crate::skill::Skill>>) {
-        // 1. Rebuild system prompt
+    async fn handle_reload_skills(&mut self, skills: Vec<Arc<crate::skill::Skill>>) {
+        self.skills.clone_from(&skills);
+        self.rebuild_prompt_and_hooks(&skills).await;
+        tracing::info!("reloaded {} skill(s)", skills.len());
+    }
+
+    /// Handle a full agent configuration reload: replace `shared`, update `max_iterations`,
+    /// `base_prompt`, skills, hooks.
+    #[tracing::instrument(skip(self, shared))]
+    async fn handle_reload_config(&mut self, config: Box<AgentConfig>, shared: Arc<AgentShared>) {
+        // 1. Replace shared (contains new provider, model_config, etc.)
+        self.shared = shared;
+        tracing::debug!("shared replaced");
+
+        // 2. Update max_iterations
+        self.max_iterations = config.max_iterations;
+
+        // 3. Update base_prompt if it changed
+        if self.base_prompt != config.system_prompt {
+            self.base_prompt = config.system_prompt;
+            tracing::debug!("base prompt updated");
+        }
+
+        // 4. Rebuild everything with new skills
+        let skills = config.skills.clone();
+        self.skills.clone_from(&skills);
+        self.rebuild_prompt_and_hooks(&skills).await;
+
+        tracing::info!(
+            "reloaded agent config (max_iterations={}, skills={}, subagent={})",
+            self.max_iterations,
+            self.skills.len(),
+            config.enable_subagent
+        );
+    }
+
+    /// Rebuild system prompt and hook registry from current state.
+    async fn rebuild_prompt_and_hooks(&mut self, skills: &[Arc<crate::skill::Skill>]) {
         let new_prompt = SystemPromptBuilder::new()
             .base_prompt(&self.base_prompt)
-            .with_skills(&skills)
+            .with_skills(skills)
             .with_working_dir(&self.working_dir)
             .build()
             .await;
 
-        // Replace the first system message if it exists
         if let Some(idx) = self
             .message_buffer
             .messages()
@@ -696,18 +704,13 @@ impl Agent {
             tracing::warn!("has no system message, skipping prompt refresh");
         }
 
-        // 2. Update local skills list (used by ToolExecCtx for SubagentTool)
-        self.skills.clone_from(&skills);
-
-        // 3. Rebuild hook registry (same logic as spawn)
         self.hook_registry = crate::hooks::build_hook_registry_with_skills(
             self.shared.hook_registry.as_deref(),
-            &skills,
+            skills,
             self.shared.allow_command_hooks,
             self.shared.goal_store.clone(),
         )
         .await;
-        tracing::info!("refreshed {} skill(s)", skills.len());
     }
 
     /// Inject a user message (with interceptors) and transition to Streaming.
@@ -1430,11 +1433,6 @@ impl Agent {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn messages(&self) -> &[Arc<Message>] {
-        self.message_buffer.messages()
-    }
-
     #[tracing::instrument(skip(self))]
     async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {
         let max_retries = 10;
@@ -1449,29 +1447,21 @@ impl Agent {
                         .fail_agent("Streaming failed after max retries", e)
                         .await;
                 }
-                Err(e) if !Self::is_retryable_error(&e) => {
+                Err(e) if !e.is_retryable() => {
                     return self
                         .fail_agent("Streaming failed with non-retryable error", e)
                         .await;
                 }
                 Err(e) => {
                     attempt += 1;
-                    // Emit retry event
+                    tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
                     self.emit_retrying(attempt, max_retries, &e.to_string())
                         .await;
-                    // Emit recoverable error event
                     self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true)
                         .await;
-                    tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
                     tokio::time::sleep(tokio::time::Duration::from_secs(u64::from(attempt))).await;
                 }
             }
         }
-    }
-
-    /// Check if an error is retryable.
-    fn is_retryable_error(error: &AgentError) -> bool {
-        warn!("Streaming error: {}", error);
-        error.is_retryable()
     }
 }

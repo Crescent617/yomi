@@ -915,14 +915,14 @@ impl Coordinator {
         hook_registry: Option<crate::hooks::HookRegistry>,
         provider: Option<Arc<dyn Provider>>,
         model_config: Option<Arc<ModelConfig>>,
+        skill_folders: Option<Vec<std::path::PathBuf>>,
     ) {
         let model_id = agent_config.model.model_id.clone();
         let skills = agent_config.skills.clone();
         let skill_count = skills.len();
-        *self.agent_config.write().await = agent_config;
 
-        // Hot-reload shared provider and model config if provided
-        if provider.is_some() || model_config.is_some() {
+        // 1. Update global agent_shared first, so sessions get the latest.
+        if provider.is_some() || model_config.is_some() || skill_folders.is_some() {
             let mut guard = self.agent_shared.write().await;
             let mut updated = guard.clone();
             if let Some(p) = provider {
@@ -931,21 +931,29 @@ impl Coordinator {
             if let Some(m) = model_config {
                 updated = updated.with_model_config(m);
             }
+            if let Some(s) = skill_folders {
+                updated = updated.with_skill_folders(s);
+            }
             *guard = updated;
         }
 
-        // Hot-reload shared hook registry if it was originally enabled
         if let Some(registry) = hook_registry {
-            if let Some(ref existing) = self.agent_shared.read().await.hook_registry {
+            let existing = self.agent_shared.read().await.hook_registry.clone();
+            if let Some(existing) = existing {
                 let mut guard = existing.write().await;
                 *guard = registry;
                 tracing::info!("Hot-reloaded shared hook registry");
             } else {
-                tracing::warn!("Cannot hot-reload hooks: hooks were disabled at daemon startup");
+                let mut guard = self.agent_shared.write().await;
+                guard.hook_registry = Some(Arc::new(tokio::sync::RwLock::new(registry)));
+                tracing::info!("Initialized shared hook registry on reload");
             }
         }
 
-        // Propagate skill refresh to all live sessions.
+        // 2. Update global agent_config.
+        *self.agent_config.write().await = agent_config.clone();
+
+        // 3. Propagate to all live sessions.
         let handles: Vec<_> = self
             .sessions
             .iter()
@@ -953,9 +961,19 @@ impl Coordinator {
             .collect();
         for session in handles {
             let session = session.read().await;
-            if let Err(e) = session.refresh_skills(skills.clone()).await {
+            let ws_dir = session.workspace_skill_dir().cloned();
+            let mut new_shared = self.agent_shared.read().await.clone();
+            if let Some(dir) = ws_dir {
+                if !new_shared.skill_folders.contains(&dir) {
+                    new_shared.skill_folders.push(dir);
+                }
+            }
+            if let Err(e) = session
+                .reload_config(agent_config.clone(), Arc::new(new_shared))
+                .await
+            {
                 let sid = session.id().clone();
-                tracing::warn!("Failed to refresh skills for {}: {}", sid.0, e);
+                tracing::warn!("Failed to reload config for {}: {}", sid.0, e);
             }
         }
 
@@ -1027,6 +1045,7 @@ impl Coordinator {
             hook_registry,
             Some(provider),
             Some(Arc::new(config.agent.model)),
+            Some(_skill_folders),
         )
         .await;
         tracing::info!("Reloaded agent configuration from disk");

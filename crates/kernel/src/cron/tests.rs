@@ -87,7 +87,7 @@ mod tests {
             content: "Hello {{date}}".to_string(),
         };
         let json = serde_json::to_string(&action).unwrap();
-        assert!(json.contains("sendMessage"));
+        assert!(json.contains("send_message"));
         assert!(json.contains("test-session"));
 
         let decoded: CronAction = serde_json::from_str(&json).unwrap();

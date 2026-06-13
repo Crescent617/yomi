@@ -298,62 +298,43 @@ impl SqliteTaskStorage {
         }
 
         // Build dynamic UPDATE - atomic single statement
-        let mut set_clauses = vec!["updated_at = ?".to_string()];
-        let mut params_count = 1;
+        let mut has_changes = false;
+        let mut builder = sqlx::QueryBuilder::new("UPDATE tasks SET updated_at = ");
+        builder.push_bind(&now);
 
-        if updates.subject.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("subject = ?{params_count}"));
+        if let Some(subject) = &updates.subject {
+            has_changes = true;
+            builder.push(", subject = ");
+            builder.push_bind(subject);
         }
-        if updates.description.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("description = ?{params_count}"));
+        if let Some(description) = &updates.description {
+            has_changes = true;
+            builder.push(", description = ");
+            builder.push_bind(description);
         }
-        if updates.owner.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("owner = ?{params_count}"));
+        if let Some(owner) = &updates.owner {
+            has_changes = true;
+            builder.push(", owner = ");
+            builder.push_bind(owner);
         }
-        if updates.status.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("status = ?{params_count}"));
+        if let Some(status) = &updates.status {
+            has_changes = true;
+            builder.push(", status = ");
+            builder.push_bind(status.to_string());
         }
-        if updates.metadata.is_some() {
-            params_count += 1;
-            set_clauses.push(format!("metadata = ?{params_count}"));
+        if let Some(metadata) = &updates.metadata {
+            has_changes = true;
+            builder.push(", metadata = ");
+            builder.push_bind(serde_json::to_string(metadata)?);
         }
 
-        // Only update if there are actual changes
-        if params_count > 1 {
-            let sql = format!(
-                "UPDATE tasks SET {} WHERE task_index = ?{} AND task_list_id = ?{}",
-                set_clauses.join(", "),
-                params_count + 1,
-                params_count + 2
-            );
+        if has_changes {
+            builder.push(" WHERE task_index = ");
+            builder.push_bind(task_index);
+            builder.push(" AND task_list_id = ");
+            builder.push_bind(task_list_id);
 
-            let mut query = sqlx::query(&sql).bind(&now);
-
-            if let Some(subject) = &updates.subject {
-                query = query.bind(subject);
-            }
-            if let Some(description) = &updates.description {
-                query = query.bind(description);
-            }
-            if let Some(owner) = &updates.owner {
-                query = query.bind(owner);
-            }
-            if let Some(status) = &updates.status {
-                query = query.bind(status.to_string());
-            }
-            if let Some(metadata) = &updates.metadata {
-                query = query.bind(serde_json::to_string(metadata)?);
-            }
-
-            query
-                .bind(task_index)
-                .bind(task_list_id)
-                .execute(&mut *tx)
-                .await?;
+            builder.build().execute(&mut *tx).await?;
         }
 
         // Update dependencies within same transaction
