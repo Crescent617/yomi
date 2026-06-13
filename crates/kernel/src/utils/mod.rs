@@ -7,6 +7,7 @@ pub mod image;
 pub mod line_numbers;
 pub mod path;
 pub mod rg_helper;
+pub mod search;
 pub mod strs;
 pub mod tokens;
 

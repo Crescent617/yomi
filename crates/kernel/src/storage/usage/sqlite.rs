@@ -17,31 +17,6 @@ impl SqliteUsageStore {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
-
-    /// Append filter conditions to SQL string and return bound values.
-    fn push_filter(
-        sql: &mut String,
-        filter: Option<&super::UsageFilter>,
-    ) -> (Option<String>, Option<String>, Option<String>) {
-        let (model, provider, usage_type) = match filter {
-            Some(f) => (
-                f.model.clone(),
-                f.provider.clone(),
-                f.usage_type.map(|t| t.as_str().to_string()),
-            ),
-            None => (None, None, None),
-        };
-        if model.is_some() {
-            sql.push_str(" AND model = ?");
-        }
-        if provider.is_some() {
-            sql.push_str(" AND provider = ?");
-        }
-        if usage_type.is_some() {
-            sql.push_str(" AND usage_type = ?");
-        }
-        (model, provider, usage_type)
-    }
 }
 
 #[async_trait]
@@ -76,30 +51,38 @@ impl UsageStore for SqliteUsageStore {
         end: DateTime<Utc>,
         filter: Option<&super::UsageFilter>,
     ) -> Result<UsageSummary> {
-        let mut sql = String::from(
+        let mut builder = sqlx::QueryBuilder::new(
             "SELECT 
                 COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                 COALESCE(SUM(cached_tokens), 0) as cached_tokens,
                 COUNT(*) as request_count
              FROM token_usage 
-             WHERE created_at >= ? AND created_at <= ?",
+             WHERE 1=1",
         );
 
-        let (model, provider, usage_type) = Self::push_filter(&mut sql, filter);
+        builder.push(" AND created_at >= ");
+        builder.push_bind(start);
+        builder.push(" AND created_at <= ");
+        builder.push_bind(end);
 
-        let mut query = sqlx::query_as::<_, SummaryRow>(&sql).bind(start).bind(end);
-        if let Some(v) = model {
-            query = query.bind(v);
-        }
-        if let Some(v) = provider {
-            query = query.bind(v);
-        }
-        if let Some(v) = usage_type {
-            query = query.bind(v);
+        if let Some(f) = filter {
+            if let Some(model) = &f.model {
+                builder.push(" AND model = ");
+                builder.push_bind(model);
+            }
+            if let Some(provider) = &f.provider {
+                builder.push(" AND provider = ");
+                builder.push_bind(provider);
+            }
+            if let Some(usage_type) = f.usage_type {
+                builder.push(" AND usage_type = ");
+                builder.push_bind(usage_type.as_str());
+            }
         }
 
-        let row = query
+        let row = builder
+            .build_query_as::<SummaryRow>()
             .fetch_one(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to summarize usage: {e}")))?;
@@ -118,7 +101,7 @@ impl UsageStore for SqliteUsageStore {
         end: DateTime<Utc>,
         filter: Option<&super::UsageFilter>,
     ) -> Result<Vec<DailyUsage>> {
-        let mut sql = String::from(
+        let mut builder = sqlx::QueryBuilder::new(
             "SELECT 
                 date(created_at, 'localtime') as date,
                 COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
@@ -127,26 +110,35 @@ impl UsageStore for SqliteUsageStore {
                 COUNT(*) as request_count,
                 COALESCE(GROUP_CONCAT(DISTINCT model), '') as models
              FROM token_usage 
-             WHERE created_at >= ? AND created_at <= ?",
+             WHERE 1=1",
         );
 
-        let (model, provider, usage_type) = Self::push_filter(&mut sql, filter);
-        sql.push_str(
+        builder.push(" AND created_at >= ");
+        builder.push_bind(start);
+        builder.push(" AND created_at <= ");
+        builder.push_bind(end);
+
+        if let Some(f) = filter {
+            if let Some(model) = &f.model {
+                builder.push(" AND model = ");
+                builder.push_bind(model);
+            }
+            if let Some(provider) = &f.provider {
+                builder.push(" AND provider = ");
+                builder.push_bind(provider);
+            }
+            if let Some(usage_type) = f.usage_type {
+                builder.push(" AND usage_type = ");
+                builder.push_bind(usage_type.as_str());
+            }
+        }
+
+        builder.push(
             " GROUP BY date(created_at, 'localtime') ORDER BY date(created_at, 'localtime') ASC",
         );
 
-        let mut query = sqlx::query_as::<_, DailyRow>(&sql).bind(start).bind(end);
-        if let Some(v) = model {
-            query = query.bind(v);
-        }
-        if let Some(v) = provider {
-            query = query.bind(v);
-        }
-        if let Some(v) = usage_type {
-            query = query.bind(v);
-        }
-
-        let rows = query
+        let rows = builder
+            .build_query_as::<DailyRow>()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to get daily summary: {e}")))?;

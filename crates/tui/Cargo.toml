@@ -42,6 +42,9 @@ chrono = { workspace = true }
 
 # Desktop notifications (cross-platform via notify-rust)
 notify-rust = { workspace = true }
+# Pin transitive `time` dep to avoid E0119 conflict with mac-notification-sys.
+# See: https://github.com/time-rs/time/issues/783
+time = { workspace = true }
 
 # Unix signal handling for Ctrl-Z (suspend)
 [target.'cfg(unix)'.dependencies]

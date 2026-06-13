@@ -56,10 +56,11 @@
     saving = true;
     try {
       await api.saveConfigToml(content);
+      await api.reloadConfig(); // apply to running agents
       dirty = false;
       saved = true;
       setTimeout(() => saved = false, 2000);
-      showNotification("Config saved", "success", 2000);
+      showNotification("Config saved and reloaded", "success", 2000);
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
       full_config = c?.full_config ?? "";

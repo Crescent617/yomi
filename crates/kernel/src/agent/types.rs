@@ -448,6 +448,13 @@ impl AgentShared {
         self.model_config = model_config;
         self
     }
+
+    /// Set the skill folders
+    #[must_use]
+    pub fn with_skill_folders(mut self, skill_folders: Vec<std::path::PathBuf>) -> Self {
+        self.skill_folders = skill_folders;
+        self
+    }
 }
 
 /// Agent error type using thiserror

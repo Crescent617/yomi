@@ -37,8 +37,9 @@ tracing-subscriber = "0.3"
 
 reqwest = { version = "0.13", features = ["stream", "json", "multipart"] }
 eventsource-stream = "0.2"
-sqlx = { version = "0.8", features = [
-    "runtime-tokio-rustls",
+sqlx = { version = "0.9", features = [
+    "runtime-tokio",
+    "tls-rustls",
     "sqlite",
     "migrate",
     "chrono",
@@ -74,6 +75,22 @@ scraper = "0.27"
 urlencoding = "2.1"
 dashmap = "6.1"
 nucleo = "0.5"
-tokio-tungstenite = "0.26"
-cron = "0.15"
+tokio-tungstenite = "0.29"
+cron = "0.16"
+duckduckgo = { version = "0.3", default-features = false }
 notify-rust = "4.11"
+# Pin time to 0.3.47 to avoid E0119 conflict with mac-notification-sys blanket `From` impl.
+# time 0.3.48 added `From<HourBase>` which conflicts with `impl<I: ToString> From<I> for Sound`.
+# See: https://github.com/time-rs/time/issues/783
+time = "=0.3.47"
+blake3 = "1.5"
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d50" }
+portable-pty = "0.9"
+tauri = "2"
+tauri-build = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
+tauri-plugin-store = "2"

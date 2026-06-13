@@ -206,12 +206,16 @@ impl Session {
         }
     }
 
-    /// Refresh skills for the main agent of this session.
+    /// Reload skills for the main agent of this session.
     /// If the session was started with a workspace skill directory, the workspace
     /// skills are re-loaded and merged with the provided (global) skills — workspace
     /// skills take precedence on name collision.
     #[tracing::instrument(skip(self))]
-    pub async fn refresh_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
+    pub fn workspace_skill_dir(&self) -> Option<&PathBuf> {
+        self.workspace_skill_dir.as_ref()
+    }
+
+    pub async fn reload_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
         let merged = if let Some(ref dir) = self.workspace_skill_dir {
             match SkillLoader::new(vec![dir.clone()]).load_all() {
                 Ok(mut ws_skills) => {
@@ -225,7 +229,7 @@ impl Session {
                     }
                     let result: Vec<_> = merged.into_values().collect();
                     tracing::info!(
-                        "refreshed with {} skill(s) ({} global + {} workspace, merged)",
+                        "reloaded with {} skill(s) ({} global + {} workspace, merged)",
                         result.len(),
                         skills.len(),
                         ws_count
@@ -247,7 +251,60 @@ impl Session {
 
         match &self.main_agent {
             Some(handle) => {
-                handle.refresh_skills(merged).await?;
+                handle.reload_skills(merged).await?;
+                Ok(())
+            }
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
+    /// Reload full agent configuration for the main agent of this session.
+    /// The caller (coordinator) provides the new `shared`, which already includes
+    /// the latest provider, `model_config`, and (if applicable) workspace skill folders.
+    #[tracing::instrument(skip(self, shared))]
+    pub async fn reload_config(
+        &self,
+        mut config: AgentConfig,
+        shared: Arc<AgentShared>,
+    ) -> Result<()> {
+        let merged = if let Some(ref dir) = self.workspace_skill_dir {
+            match SkillLoader::new(vec![dir.clone()]).load_all() {
+                Ok(mut ws_skills) => {
+                    let ws_count = ws_skills.len();
+                    let mut merged = std::collections::HashMap::new();
+                    for skill in &config.skills {
+                        merged.insert(skill.name.clone(), skill.clone());
+                    }
+                    for skill in ws_skills.drain(..) {
+                        merged.insert(skill.name.clone(), skill);
+                    }
+                    let result: Vec<_> = merged.into_values().collect();
+                    tracing::info!(
+                        "reloaded with {} skill(s) ({} global + {} workspace, merged)",
+                        result.len(),
+                        config.skills.len(),
+                        ws_count
+                    );
+                    result
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to reload workspace skills from {}: {}, using global skills only",
+                        dir.display(),
+                        e
+                    );
+                    config.skills
+                }
+            }
+        } else {
+            config.skills
+        };
+
+        config.skills = merged;
+
+        match &self.main_agent {
+            Some(handle) => {
+                handle.reload_config(config, shared).await?;
                 Ok(())
             }
             None => Err(SessionError::NotInitialized.into()),

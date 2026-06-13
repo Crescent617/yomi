@@ -58,3 +58,4 @@ dist/
 # Tauri CLI auto-generated symlink (workaround)
 node_modules
 .direnv
+/result

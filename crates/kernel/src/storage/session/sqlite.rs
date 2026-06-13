@@ -83,31 +83,25 @@ impl SessionStore for SqliteSessionStore {
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, bool)> {
-        let mut conditions = vec!["1=1"];
-        let mut binds: Vec<String> = Vec::new();
-
-        if let Some(pid) = project_id {
-            conditions.push("project_id = ?");
-            binds.push(pid.0.clone());
-        }
-        if let Some(before) = before {
-            conditions.push("updated_at < ?");
-            binds.push(before.format("%Y-%m-%d %H:%M:%S").to_string());
-        }
-
-        let query = format!(
+        let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level
-             FROM sessions WHERE {} ORDER BY updated_at DESC LIMIT {}",
-            conditions.join(" AND "),
-            limit + 1,
+             FROM sessions WHERE 1=1",
         );
 
-        let mut sql_query = sqlx::query_as::<_, SessionRow>(&query);
-        for bind in binds {
-            sql_query = sql_query.bind(bind);
+        if let Some(pid) = project_id {
+            builder.push(" AND project_id = ");
+            builder.push_bind(&pid.0);
+        }
+        if let Some(before) = before {
+            builder.push(" AND updated_at < ");
+            builder.push_bind(before.format("%Y-%m-%d %H:%M:%S").to_string());
         }
 
-        let rows = sql_query
+        builder.push(" ORDER BY updated_at DESC LIMIT ");
+        builder.push_bind((limit + 1) as i64);
+
+        let rows = builder
+            .build_query_as::<SessionRow>()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to list sessions: {e}")))?;
@@ -183,15 +177,15 @@ impl SessionStore for SqliteSessionStore {
 
         // Delete in chunks to avoid too many parameters
         for chunk in ids.chunks(CHUNK_SIZE) {
-            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let query = format!("DELETE FROM sessions WHERE id IN ({placeholders})");
-
-            let mut sql_query = sqlx::query(&query);
+            let mut builder = sqlx::QueryBuilder::new("DELETE FROM sessions WHERE id IN (");
+            let mut separated = builder.separated(", ");
             for id in chunk {
-                sql_query = sql_query.bind(id);
+                separated.push_bind(id);
             }
+            separated.push_unseparated(")");
 
-            sql_query
+            builder
+                .build()
                 .execute(&self.pool)
                 .await
                 .map_err(|e| storage_err(format!("failed to delete old sessions: {e}")))?;

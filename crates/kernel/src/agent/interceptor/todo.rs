@@ -102,7 +102,7 @@ impl UserMessageInterceptor for TodoReminderInterceptor {
         // The current user message is not yet in history, so this call represents
         // the (since + 1)-th user message since the todo tool.
         let current = since + 1;
-        if current % self.interval != 0 {
+        if !current.is_multiple_of(self.interval) {
             return;
         }
 

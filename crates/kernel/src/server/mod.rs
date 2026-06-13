@@ -143,7 +143,7 @@ impl KernelServer {
         let _guard = self.reload_lock.lock().await;
         let file_path = self.config_file_path.clone();
         let base_dir = self.base_dir.clone();
-        let (new_agent, hook_registry, provider, model_config) =
+        let (new_agent, hook_registry, provider, model_config, skill_folders) =
             match tokio::task::spawn_blocking(move || {
                 let config = reload_config(file_path.as_ref(), &base_dir);
                 let agent = build_agent_config(&config, &base_dir);
@@ -156,8 +156,8 @@ impl KernelServer {
                             match crate::providers::OpenAIProvider::new() {
                                 Ok(p) => Arc::new(p),
                                 Err(e) => {
-                                    tracing::error!("Failed to create OpenAI provider: {e}");
-                                    return None;
+                                    tracing::error!("Failed to create OpenAI provider: {e}, falling back to NoKeyProvider");
+                                    Arc::new(crate::providers::NoKeyProvider)
                                 }
                             }
                         }
@@ -165,8 +165,8 @@ impl KernelServer {
                             match crate::providers::AnthropicProvider::new() {
                                 Ok(p) => Arc::new(p),
                                 Err(e) => {
-                                    tracing::error!("Failed to create Anthropic provider: {e}");
-                                    return None;
+                                    tracing::error!("Failed to create Anthropic provider: {e}, falling back to NoKeyProvider");
+                                    Arc::new(crate::providers::NoKeyProvider)
                                 }
                             }
                         }
@@ -176,7 +176,13 @@ impl KernelServer {
                     Arc::new(crate::providers::NoKeyProvider)
                 };
                 let model_config = Arc::new(config.agent.model.clone());
-                Some((agent, hooks, provider, model_config))
+                let skill_folders = config
+                    .skill_folders()
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
+                    .collect::<Vec<_>>();
+                Some((agent, hooks, provider, model_config, skill_folders))
             })
             .await
             {
@@ -190,9 +196,22 @@ impl KernelServer {
         let model_id = new_agent.model.model_id.clone();
         let skill_count = new_agent.skills.len();
         self.coordinator
-            .update_agent_config(new_agent, hook_registry, Some(provider), Some(model_config))
+            .update_agent_config(
+                new_agent,
+                hook_registry,
+                Some(provider),
+                Some(model_config),
+                Some(skill_folders),
+            )
             .await;
         tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
+
+        // Reload cron scheduler if it is active
+        if let Some(ref scheduler) = self.cron_scheduler {
+            scheduler.reload();
+            tracing::info!("Reloaded cron scheduler");
+        }
+
         true
     }
 
