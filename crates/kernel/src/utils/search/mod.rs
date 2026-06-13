@@ -45,13 +45,13 @@ pub(crate) fn available_engines() -> Vec<Box<dyn SearchEngine>> {
 
     let mut engines: Vec<Box<dyn SearchEngine>> = Vec::new();
 
-    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY, "YOMI_BRAVE_API_KEY"]) {
+    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY, env_names::YOMI_BRAVE_API_KEY]) {
         if !key.trim().is_empty() {
             engines.push(Box::new(brave::BraveEngine::new(key)));
         }
     }
 
-    if let Some(url) = env_first(&[env_names::SEARXNG_URL, "YOMI_SEARXNG_URL"]) {
+    if let Some(url) = env_first(&[env_names::SEARXNG_URL, env_names::YOMI_SEARXNG_URL]) {
         let url = url.trim();
         if !url.is_empty() {
             engines.push(Box::new(searxng::SearxngEngine::new(url.to_string())));

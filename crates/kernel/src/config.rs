@@ -66,6 +66,10 @@ pub mod env_names {
     pub const BRAVE_API_KEY: &str = "BRAVE_API_KEY";
     /// `SearXNG` instance base URL (optional, no prefix)
     pub const SEARXNG_URL: &str = "SEARXNG_URL";
+    /// Prefixed Brave Search API key fallback
+    pub const YOMI_BRAVE_API_KEY: &str = env_name!("BRAVE_API_KEY");
+    /// Prefixed `SearXNG` URL fallback
+    pub const YOMI_SEARXNG_URL: &str = env_name!("SEARXNG_URL");
 }
 
 /// Provider type
