@@ -33,20 +33,22 @@ impl GrepTool {
     }
 }
 
+/// Parameters for building ripgrep command arguments
+struct RgParams<'a> {
+    pattern: &'a str,
+    output_mode: &'a str,
+    context_before: usize,
+    context_after: usize,
+    show_line_numbers: bool,
+    case_insensitive: bool,
+    multiline: bool,
+    glob_pattern: Option<&'a str>,
+    file_type: Option<&'a str>,
+}
+
 impl GrepTool {
     /// Build ripgrep command arguments
-    #[allow(clippy::too_many_arguments)]
-    fn build_rg_args(
-        pattern: &str,
-        output_mode: &str,
-        context_before: usize,
-        context_after: usize,
-        show_line_numbers: bool,
-        case_insensitive: bool,
-        multiline: bool,
-        glob_pattern: Option<&str>,
-        file_type: Option<&str>,
-    ) -> Vec<String> {
+    fn build_rg_args(params: &RgParams<'_>) -> Vec<String> {
         let mut args = Vec::new();
 
         // Always include hidden files
@@ -57,18 +59,18 @@ impl GrepTool {
         args.push("500".to_string());
 
         // Multiline mode
-        if multiline {
+        if params.multiline {
             args.push("-U".to_string());
             args.push("--multiline-dotall".to_string());
         }
 
         // Case insensitive
-        if case_insensitive {
+        if params.case_insensitive {
             args.push("-i".to_string());
         }
 
         // Output mode flags
-        match output_mode {
+        match params.output_mode {
             "filename" => {
                 args.push("-l".to_string());
             }
@@ -78,38 +80,40 @@ impl GrepTool {
             _ => {
                 // content mode - use JSON for structured parsing
                 args.push("--json".to_string());
-                if show_line_numbers {
+                if params.show_line_numbers {
                     args.push("-n".to_string());
                 }
             }
         }
 
         // Context lines (only for content mode)
-        if output_mode == "content" && (context_before > 0 || context_after > 0) {
+        if params.output_mode == "content"
+            && (params.context_before > 0 || params.context_after > 0)
+        {
             // Use -C if both are same, otherwise use -B and -A
-            if context_before == context_after {
+            if params.context_before == params.context_after {
                 args.push("-C".to_string());
-                args.push(context_before.to_string());
+                args.push(params.context_before.to_string());
             } else {
-                if context_before > 0 {
+                if params.context_before > 0 {
                     args.push("-B".to_string());
-                    args.push(context_before.to_string());
+                    args.push(params.context_before.to_string());
                 }
-                if context_after > 0 {
+                if params.context_after > 0 {
                     args.push("-A".to_string());
-                    args.push(context_after.to_string());
+                    args.push(params.context_after.to_string());
                 }
             }
         }
 
         // File type filter
-        if let Some(ft) = file_type {
+        if let Some(ft) = params.file_type {
             args.push("--type".to_string());
             args.push(ft.to_string());
         }
 
         // Glob pattern filter - split on spaces but preserve braces
-        if let Some(glob) = glob_pattern {
+        if let Some(glob) = params.glob_pattern {
             let glob_patterns = Self::parse_glob_patterns(glob);
             for pat in glob_patterns {
                 if !pat.is_empty() {
@@ -128,10 +132,10 @@ impl GrepTool {
         args.push("!.hg".to_string());
 
         // Pattern - if it starts with -, use -e to avoid interpretation as flag
-        if pattern.starts_with('-') {
+        if params.pattern.starts_with('-') {
             args.push("-e".to_string());
         }
-        args.push(pattern.to_string());
+        args.push(params.pattern.to_string());
 
         args
     }
@@ -457,17 +461,17 @@ impl Tool for GrepTool {
         }
 
         // Build ripgrep arguments
-        let rg_args = Self::build_rg_args(
+        let rg_args = Self::build_rg_args(&RgParams {
             pattern,
             output_mode,
-            ctx_before,
-            ctx_after,
+            context_before: ctx_before,
+            context_after: ctx_after,
             show_line_numbers,
             case_insensitive,
             multiline,
             glob_pattern,
             file_type,
-        );
+        });
 
         tracing::debug!("Running ripgrep with args: {:?}", rg_args);
 
@@ -511,8 +515,9 @@ impl Tool for GrepTool {
                             } else {
                                 ctx.working_dir.join(file_path)
                             };
-                            let mtime = get_mtime(&absolute_path).await;
-                            states.push((absolute_path, mtime));
+                            if let Some(mtime) = get_mtime(&absolute_path).await {
+                                states.push((absolute_path, mtime));
+                            }
                         }
                         store.record_batch(states).await;
                     }

@@ -96,9 +96,11 @@ impl FileStateStore {
         }
     }
 
-    /// Check if file has been modified since last read
+    /// Check if file has been modified since last read.
+    /// Returns `false` if the file was never recorded.
     pub fn is_stale(&self, path: &Path, current_mtime: u64) -> bool {
-        self.get_mtime(path) != Some(current_mtime)
+        self.get_mtime(path)
+            .is_some_and(|recorded| recorded != current_mtime)
     }
 
     /// Check staleness and return an error message if stale
@@ -183,6 +185,6 @@ mod tests {
 
         store.remove(&path);
         assert!(!store.has_recorded(&path));
-        assert!(store.is_stale(&path, 12345));
+        assert!(!store.is_stale(&path, 12345)); // unrecorded files are not stale
     }
 }

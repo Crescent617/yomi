@@ -8,7 +8,7 @@ use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE}
 use crate::utils::line_numbers::add_line_numbers;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
@@ -31,7 +31,7 @@ impl ReadTool {
     /// Read an image file and return `ToolOutput` with image content
     async fn read_image(&self, path: &Path, path_str: &str) -> Result<ToolOutput> {
         // Acquire lock before reading to coordinate with writers
-        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
 
         // Check file size
         let metadata = tokio::fs::metadata(path).await?;
@@ -47,8 +47,9 @@ impl ReadTool {
             Some(data_url) => {
                 // Track file mtime if store is available
                 if let Some(ref store) = self.file_state_store {
-                    let mtime = get_mtime(path).await;
-                    store.record(path.to_path_buf(), mtime).await;
+                    if let Some(mtime) = get_mtime(path).await {
+                        store.record(path.to_path_buf(), mtime).await;
+                    }
                 }
 
                 // Create output with image and metadata text
@@ -71,7 +72,7 @@ impl ReadTool {
         line_numbers: bool,
     ) -> Result<ToolOutput> {
         // Acquire lock before reading to coordinate with writers
-        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await;
+        let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
 
         let content = tokio::fs::read_to_string(path).await?;
         let lines: Vec<&str> = content.lines().collect();
@@ -94,12 +95,12 @@ impl ReadTool {
         };
 
         if let Some(ref store) = self.file_state_store {
-            store
-                .record(path.to_path_buf(), get_mtime(path).await)
-                .await;
+            if let Some(mtime) = get_mtime(path).await {
+                store.record(path.to_path_buf(), mtime).await;
+            }
         }
 
-        let output = if !line_numbers && end < total_lines {
+        let output = if end < total_lines {
             let notice = format!(
                 "\n\n[Stopped at line {end} of {total_lines}. Use offset/limit to read more.]"
             );
@@ -161,7 +162,11 @@ impl Tool for ReadTool {
         let limit = args["limit"].as_u64().map(|n| n as usize);
         let line_numbers = args["line_numbers"].as_bool().unwrap_or(false);
 
-        let path = ctx.working_dir.join(path_str);
+        let path = if Path::new(path_str).is_absolute() {
+            PathBuf::from(path_str)
+        } else {
+            ctx.working_dir.join(path_str)
+        };
 
         tracing::debug!("Read: {}", path.display());
 
@@ -276,10 +281,11 @@ mod tests {
 
         assert!(result.success());
         let content = result.text_content();
-        assert!(content.contains('b'));
-        assert!(content.contains('c'));
-        assert!(!content.contains('a'));
-        assert!(!content.contains('d'));
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(lines.iter().any(|l| l.contains('b')));
+        assert!(lines.iter().any(|l| l.contains('c')));
+        assert!(!lines.iter().any(|l| l.trim() == "a" || l.trim().ends_with(" a")));
+        assert!(!lines.iter().any(|l| l.trim() == "d" || l.trim().ends_with(" d")));
     }
 
     #[tokio::test]

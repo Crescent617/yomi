@@ -7,26 +7,31 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::tools::{
     AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
-    SleepTool, SubagentTool, ToolRegistry, WebFetchTool, WebSearchTool, WriteTool,
+    SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool, WebSearchTool, WriteTool,
 };
+use crate::tools::helper::file_state::FileStateStore;
 use crate::types::AgentId;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// Feature flags for tool registry configuration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ToolFlags {
+    pub sub_agents: bool,
+    pub reminder: bool,
+    pub sleep: bool,
+    pub update_goal: bool,
+}
+
 /// Configuration for creating a tool registry.
-#[allow(clippy::struct_excessive_bools)]
 pub struct ToolRegistryConfig<'a> {
     pub agent_id: &'a AgentId,
     pub shared: &'a Arc<crate::agent::AgentShared>,
     pub event_tx: &'a mpsc::Sender<Event>,
     pub session_id: &'a str,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
-    pub parent_session_id: Option<&'a str>,
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
-    pub enable_sub_agents: bool,
-    pub enable_reminder: bool,
-    pub enable_sleep: bool,
-    pub enable_update_goal: bool,
+    pub flags: ToolFlags,
     pub ask_user_state: Option<crate::tools::AskUserState>,
     pub tool_blocklist: Vec<String>,
 }
@@ -46,12 +51,8 @@ impl<'a> ToolRegistryConfig<'a> {
             event_tx,
             session_id,
             input_tx: Some(input_tx),
-            parent_session_id: None,
             file_state_store: None,
-            enable_sub_agents: true,
-            enable_reminder: false,
-            enable_sleep: true,
-            enable_update_goal: true,
+            flags: ToolFlags::default(),
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
         }
@@ -59,24 +60,19 @@ impl<'a> ToolRegistryConfig<'a> {
 
     /// Create config for a subagent.
     pub fn for_subagent(
-        parent_id: &'a AgentId,
+        agent_id: &'a AgentId,
         shared: &'a Arc<crate::agent::AgentShared>,
         event_tx: &'a mpsc::Sender<Event>,
         session_id: &'a str,
-        parent_session_id: &'a str,
     ) -> Self {
         Self {
-            agent_id: parent_id,
+            agent_id,
             shared,
             event_tx,
             session_id,
             input_tx: None,
-            parent_session_id: Some(parent_session_id),
             file_state_store: None,
-            enable_sub_agents: false,
-            enable_reminder: false,
-            enable_sleep: false,
-            enable_update_goal: false,
+            flags: ToolFlags::default(),
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
         }
@@ -85,7 +81,7 @@ impl<'a> ToolRegistryConfig<'a> {
     /// Set whether to enable subagents.
     #[must_use]
     pub fn with_enable_sub_agents(mut self, enable: bool) -> Self {
-        self.enable_sub_agents = enable;
+        self.flags.sub_agents = enable;
         self
     }
 
@@ -93,7 +89,7 @@ impl<'a> ToolRegistryConfig<'a> {
     #[must_use]
     pub fn with_file_state_store(
         mut self,
-        store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
+        store: Option<Arc<FileStateStore>>,
     ) -> Self {
         self.file_state_store = store;
         self
@@ -120,10 +116,10 @@ impl ToolRegistryFactory {
         let mut registry = ToolRegistry::new();
         let file_state_store = config
             .file_state_store
-            .unwrap_or_else(|| Arc::new(crate::tools::helper::file_state::FileStateStore::new()));
+            .unwrap_or_else(|| Arc::new(FileStateStore::new()));
 
         // Register Bash tool
-        let bash_ctx = ShellToolCtx::new(config.agent_id.clone(), config.input_tx.cloned());
+        let bash_ctx = ShellToolCtx::new(config.input_tx.cloned());
         let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         registry.register(bash_tool);
 
@@ -153,16 +149,20 @@ impl ToolRegistryFactory {
         registry.register(WebSearchTool::new());
 
         // Register SubAgent tool if enabled
-        if config.enable_sub_agents {
-            let subagent_tool = SubagentTool::new(
-                config.agent_id.clone(),
-                Arc::clone(config.shared),
-                config.input_tx.cloned().unwrap(),
-                config.shared.session_store.clone(),
-                config.session_id.to_owned(),
-                config.event_tx.clone(),
-            );
-            registry.register(subagent_tool);
+        if config.flags.sub_agents {
+            if let Some(tx) = config.input_tx {
+                let subagent_tool = SubagentTool::new(
+                    config.agent_id.clone(),
+                    Arc::clone(config.shared),
+                    tx.clone(),
+                    config.shared.session_store.clone(),
+                    config.session_id.to_owned(),
+                    config.event_tx.clone(),
+                );
+                registry.register(subagent_tool);
+            } else {
+                tracing::warn!("SubAgent tool enabled but input_tx not provided; skipping registration");
+            }
         }
 
         // Register todo tool
@@ -171,21 +171,21 @@ impl ToolRegistryFactory {
         }
 
         // Register Reminder tool if enabled (main agent only)
-        if config.enable_reminder {
+        if config.flags.reminder {
             if let Some(tx) = config.input_tx {
                 registry.register(ReminderTool::new(tx.clone()));
             }
         }
 
         // Register update_goal tool if goal store is available
-        if config.enable_update_goal {
+        if config.flags.update_goal {
             if let Some(ref store) = config.shared.goal_store {
-                registry.register(crate::tools::UpdateGoalTool::new(Arc::clone(store)));
+                registry.register(UpdateGoalTool::new(Arc::clone(store)));
             }
         }
 
         // Register Sleep tool if enabled
-        if config.enable_sleep {
+        if config.flags.sleep {
             registry.register(SleepTool::new());
         }
 

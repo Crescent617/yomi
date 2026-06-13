@@ -18,7 +18,6 @@ pub mod shell;
 pub mod skill_load;
 pub mod sleep;
 pub mod subagent;
-pub mod subagent_presets;
 pub mod todo;
 pub mod update_goal;
 pub mod webfetch;
@@ -44,8 +43,7 @@ pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
-pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
-pub use subagent_presets::SubagentPreset;
+pub use subagent::{SubagentPreset, SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoTool, TODO_TOOL_NAME};
 pub use update_goal::{UpdateGoalTool, UPDATE_GOAL_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
@@ -192,7 +190,7 @@ pub trait FileStateAwareTool {
                 .ok_or("File state store not initialized")?;
 
             let current_mtime = helper::get_mtime(path).await;
-            store.check_staleness(path, current_mtime)
+            store.check_staleness(path, current_mtime.unwrap_or(0))
         }
     }
 }

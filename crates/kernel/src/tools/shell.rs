@@ -1,10 +1,10 @@
 use crate::agent::AgentInput;
 use crate::const_concat;
 use crate::tools::helper::truncate::MAX_TOOL_OUTPUT_LENGTH;
+use crate::tools::helper::truncate::truncate_keep_edges;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{AgentId, KernelError, Result, ToolOutput};
+use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;
-use crate::utils::strs::truncate_keep_edges;
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -36,7 +36,7 @@ pub struct ShellToolCtx {
 }
 
 impl ShellToolCtx {
-    pub fn new(_agent_id: AgentId, input_tx: Option<mpsc::Sender<AgentInput>>) -> Self {
+    pub fn new(input_tx: Option<mpsc::Sender<AgentInput>>) -> Self {
         Self { input_tx }
     }
 }

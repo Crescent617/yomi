@@ -2,7 +2,7 @@ use crate::event::ToolEvent;
 use crate::tools::helper::truncate::{truncate_output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE};
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -148,6 +148,20 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
     results.push(result);
 }
 
+/// Parameters for executing multiple tools in parallel.
+pub struct ToolExecParams<'a> {
+    pub agent_id: &'a AgentId,
+    pub tool_calls: &'a [ToolCall],
+    pub tool_registry: &'a ToolRegistry,
+    pub cancel_token: Option<&'a CancellationToken>,
+    pub parent_messages: Option<&'a [Arc<Message>]>,
+    pub working_dir: &'a std::path::Path,
+    pub session_id: &'a str,
+    pub message_ids: &'a BTreeMap<String, MessageId>,
+    pub turn: Option<Arc<crate::agent::Turn>>,
+    pub skills: &'a [Arc<crate::skill::Skill>],
+}
+
 /// Execute multiple tool calls in parallel with optional cancellation support
 ///
 /// Accepts tokio native `CancellationToken` for runtime cancellation control.
@@ -162,46 +176,36 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
 /// ensuring checkpoints capture the state BEFORE modification.
 ///
 /// Returns both the execution results and any files that were tracked for checkpointing.
-#[allow(clippy::too_many_arguments, clippy::implicit_hasher)]
 pub async fn execute_tools_parallel(
-    agent_id: &AgentId,
-    tool_calls: &[ToolCall],
-    tool_registry: &ToolRegistry,
-    cancel_token: Option<&CancellationToken>,
-    parent_messages: Option<&[Arc<Message>]>,
-    working_dir: &std::path::Path,
-    session_id: &str,
-    message_ids: &HashMap<String, MessageId>,
-    turn: Option<Arc<crate::agent::Turn>>,
-    skills: &[Arc<crate::skill::Skill>],
+    params: &ToolExecParams<'_>,
 ) -> Vec<ToolExecutionResult> {
-    let tool_count = tool_calls.len();
+    let tool_count = params.tool_calls.len();
     tracing::info!("Executing {} tool(s) in parallel", tool_count);
 
     let mut join_set = JoinSet::new();
 
-    for call in tool_calls {
-        let agent_id = agent_id.clone();
+    for call in params.tool_calls {
+        let agent_id = params.agent_id.clone();
         let call_id = call.id.clone();
         let call_name = call.name.clone();
         let arguments = call.arguments.clone();
-        let tool_opt = tool_registry.get(&call_name);
-        let session_id = session_id.to_string();
-        let message_id = message_ids[&call_id].clone();
+        let tool_opt = params.tool_registry.get(&call_name);
+        let session_id = params.session_id.to_string();
+        let message_id = params.message_ids[&call_id].clone();
 
         if tool_opt.is_none() {
             tracing::error!(
                 "Tool '{}' not found in registry. Available tools: {:?}",
                 call_name,
-                tool_registry.list()
+                params.tool_registry.list()
             );
         }
 
-        let parent_messages_for_task = parent_messages.map(|msgs| msgs.to_vec());
-        let cancel_token_for_task = cancel_token.cloned();
-        let working_dir = working_dir.to_path_buf();
-        let turn_for_task = turn.clone();
-        let skills_for_task: Vec<Arc<crate::skill::Skill>> = skills.to_vec();
+        let parent_messages_for_task = params.parent_messages.map(|msgs| msgs.to_vec());
+        let cancel_token_for_task = params.cancel_token.cloned();
+        let working_dir = params.working_dir.to_path_buf();
+        let turn_for_task = params.turn.clone();
+        let skills_for_task: Vec<Arc<crate::skill::Skill>> = params.skills.to_vec();
 
         join_set.spawn(
             async move {
@@ -244,13 +248,17 @@ pub async fn execute_tools_parallel(
 
     let mut results = Vec::new();
 
-    if let Some(token) = cancel_token {
+    if let Some(token) = params.cancel_token {
         loop {
             tokio::select! {
                 biased;
                 () = token.cancelled() => {
                     tracing::info!("Tool execution cancelled, aborting {} remaining tasks", join_set.len());
                     join_set.abort_all();
+                    // Drain any tasks that completed before/during abort
+                    while let Some(Ok(r)) = join_set.join_next().await {
+                        log_and_push_result(&mut results, r);
+                    }
                     break;
                 }
                 result = join_set.join_next() => {
