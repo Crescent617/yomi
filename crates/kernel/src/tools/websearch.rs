@@ -1,14 +1,8 @@
-//! `WebSearch` tool — searches the web using multiple engines.
+//! `WebSearch` tool — searches the web and returns results with titles, URLs,
+//! snippets, and optionally fetches content from top results.
 //!
-//! Supported engines (in priority order):
-//! 1. **Brave** — JSON API, requires `YOMI_BRAVE_API_KEY`.
-//! 2. **`SearXNG`** — JSON API, requires `YOMI_SEARXNG_URL`.
-//! 3. **`DuckDuckGo`** — Lite HTML interface, no API key.
-//! 4. **Bing** — HTML interface, no API key.
-//!
-//! Results from all available engines are queried in parallel, merged by
-//! rank, and deduplicated by URL. If every engine fails, the error message
-//! includes the specific failure reason from each engine.
+//! Queries multiple sources in parallel, merges by rank, and deduplicates by URL.
+//! If all sources fail, the error includes the specific failure reason from each.
 
 use crate::tools::webfetch::get_client;
 use crate::tools::{Tool, ToolExecCtx};
@@ -56,13 +50,13 @@ impl WebSearchTool {
         num_results: usize,
     ) -> std::result::Result<Vec<SearchResult>, String> {
         if self.engines.is_empty() {
-            return Err("No search engines are available".to_string());
+            return Err("No search sources are available".to_string());
         }
 
         let mut errors: Vec<String> = Vec::new();
         let mut all_results: Vec<Vec<SearchResult>> = Vec::new();
 
-        // Run every engine in parallel.
+        // Run every source in parallel.
         let futures: Vec<_> = self
             .engines
             .iter()
@@ -87,14 +81,14 @@ impl WebSearchTool {
             let msg = if errors.len() == 1 {
                 errors.into_iter().next().unwrap()
             } else {
-                format!("All engines failed: {}", errors.join("; "))
+                format!("All sources failed: {}", errors.join("; "))
             };
             return Err(msg);
         }
 
         let merged = merge_results(&all_results, num_results);
         if merged.is_empty() {
-            return Err("No search results found after merging".to_string());
+            return Err("No search results found".to_string());
         }
 
         Ok(merged)
@@ -195,9 +189,7 @@ impl Tool for WebSearchTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Searches the web using multiple engines (DuckDuckGo, Bing, Brave, SearXNG). \
-         Returns search results with titles, URLs, snippets, and optionally fetches \
-         content from top results."
+        "Searches the web and returns results with titles, URLs, snippets, and optionally fetches content from top results."
     }
 
     fn schema(&self) -> Value {
