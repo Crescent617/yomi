@@ -97,10 +97,11 @@ pub async fn get_coordinator() -> Result<Arc<dyn kernel::client::CoordinatorApi>
 
 /// Initialise a `Coordinator` in-process without any IPC.
 ///
-/// Opens storage, loads config, and builds the agent. Also starts the cron
-/// scheduler + worker when `enable_cron` is true. The returned `KernelInit`
-/// holds a reference to the coordinator; the cron subsystem runs in the
-/// background and will shut down when the process exits.
+/// Opens storage, loads config, and builds the agent. The `cron_store`
+/// is always created in the coordinator; the caller decides whether to
+/// start the cron scheduler + worker (`enable_cron` for in-process mode).
+/// For daemon mode, `KernelServer` checks `cron_store` itself and starts
+/// cron if available.
 ///
 /// This is the zero-overhead path for a single-tenant GUI. To support
 /// remote connections or multiple clients, use `spawn_daemon()` instead.
@@ -228,11 +229,15 @@ pub async fn spawn_daemon() -> Result<()> {
         tokio::spawn(async move {
             #[cfg(unix)]
             {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm =
-                    signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-                let mut sigint =
-                    signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
+                let mut sigterm = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                )
+                .expect("Failed to register SIGTERM handler");
+                let mut sigint = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::interrupt(),
+                )
+                .expect("Failed to register SIGINT handler");
+                let shutdown_clone = shutdown_sig.clone();
                 tokio::select! {
                     _ = sigterm.recv() => {
                         tracing::info!("Received SIGTERM, initiating graceful shutdown");
@@ -240,12 +245,22 @@ pub async fn spawn_daemon() -> Result<()> {
                     _ = sigint.recv() => {
                         tracing::info!("Received SIGINT, initiating graceful shutdown");
                     }
+                    () = shutdown_clone.cancelled() => {
+                        // shutdown triggered by stop_daemon or auto_exit
+                    }
                 }
             }
-            #[cfg(windows)]
+            #[cfg(not(unix))]
             {
-                let _ = tokio::signal::ctrl_c().await;
-                tracing::info!("Received Ctrl-C, initiating graceful shutdown");
+                let shutdown_clone = shutdown_sig.clone();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("Received Ctrl-C, initiating graceful shutdown");
+                    }
+                    () = shutdown_clone.cancelled() => {
+                        // shutdown triggered externally
+                    }
+                }
             }
             shutdown_sig.cancel();
         });
@@ -318,12 +333,9 @@ pub async fn stop_daemon() -> Result<()> {
         }
     }
 
-    // Briefly wait for the server to stop accepting so the socket is
-    // unbound before the next launch.
-    let start = tokio::time::Instant::now();
-    while try_connect().await.is_some() && start.elapsed() < Duration::from_secs(2) {
-        sleep(Duration::from_millis(50)).await;
-    }
+    // Clear the global token so subsequent calls know no daemon is managed
+    let mut guard = DAEMON_SHUTDOWN.lock().await;
+    *guard = None;
 
     Ok(())
 }

@@ -51,9 +51,9 @@ impl TodoReminderInterceptor {
                 TodoStatus::Completed => "(completed)",
             };
             reminder.push('\n');
-            reminder.push_str(icon);
-            reminder.push(' ');
             reminder.push_str(&todo.id);
+            reminder.push_str(". ");
+            reminder.push_str(icon);
             reminder.push(' ');
             reminder.push_str(&todo.content);
         }
@@ -200,7 +200,7 @@ mod tests {
         interceptor.intercept(&mut content, &ctx(&history)).await;
         let text = extract_text(&content);
         assert!(text.contains("pending todos"));
-        assert!(text.contains("(pending) 1 A"));
+        assert!(text.contains("1. (pending) A"));
         assert!(!text.contains("[pending]"));
     }
 
