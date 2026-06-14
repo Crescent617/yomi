@@ -11,6 +11,9 @@ pub enum DaemonCommands {
     Start {
         #[arg(long)]
         auto_exit: bool,
+        /// Enable cron scheduler
+        #[arg(long)]
+        cron: bool,
     },
     /// Stop daemon gracefully
     Stop,
@@ -24,7 +27,7 @@ pub enum DaemonCommands {
 
 pub async fn run(cmd: DaemonCommands) -> Result<()> {
     match cmd {
-        DaemonCommands::Start { auto_exit } => {
+        DaemonCommands::Start { auto_exit, cron } => {
             const IDLE_CHECK_INTERVAL: Duration = Duration::from_mins(1);
             const DAEMON_IDLE_TIMEOUT_SECS: u64 = 300;
             const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,7 +82,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 Arc::clone(&coordinator),
                 config_file,
                 base_dir,
-                false, // enable_cron: CLI daemon does not start cron
+                cron,
             );
             let shutdown = tokio_util::sync::CancellationToken::new();
 
