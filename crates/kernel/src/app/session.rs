@@ -211,10 +211,6 @@ impl Session {
     /// skills are re-loaded and merged with the provided (global) skills — workspace
     /// skills take precedence on name collision.
     #[tracing::instrument(skip(self))]
-    pub fn workspace_skill_dir(&self) -> Option<&PathBuf> {
-        self.workspace_skill_dir.as_ref()
-    }
-
     pub async fn reload_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
         let merged = if let Some(ref dir) = self.workspace_skill_dir {
             match SkillLoader::new(vec![dir.clone()]).load_all() {
@@ -256,6 +252,10 @@ impl Session {
             }
             None => Err(SessionError::NotInitialized.into()),
         }
+    }
+
+    pub fn workspace_skill_dir(&self) -> Option<&PathBuf> {
+        self.workspace_skill_dir.as_ref()
     }
 
     /// Reload full agent configuration for the main agent of this session.

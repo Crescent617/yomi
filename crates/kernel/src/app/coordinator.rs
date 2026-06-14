@@ -434,7 +434,6 @@ impl Coordinator {
     }
 
     /// Forward events from agent to broadcast channel and handle cleanup
-    #[tracing::instrument(skip(agent_rx, broadcast_tx, sessions, senders, last_activity_at), fields(session_id = %session_id.0))]
     async fn forward_session_events(
         session_id: SessionId,
         mut agent_rx: mpsc::Receiver<Event>,
@@ -443,19 +442,19 @@ impl Coordinator {
         senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
         last_activity_at: Arc<AtomicU64>,
     ) {
-        tracing::info!("event forwarding started");
+        tracing::info!(session_id = %session_id.0, "event forwarding started");
 
         // Forward events until the channel closes (agent ended)
         while let Some(event) = agent_rx.recv().await {
             last_activity_at.store(Self::now_epoch(), Ordering::Relaxed);
             if broadcast_tx.send(event).is_err() {
                 // No active subscribers (this is ok, receivers can come and go)
-                tracing::trace!("No active subscribers for events");
+                tracing::trace!(session_id = %session_id.0, "No active subscribers for events");
             }
         }
 
         // Agent channel closed - session is shutting down
-        tracing::info!("main agent closed");
+        tracing::info!(session_id = %session_id.0, "main agent closed");
 
         // Broadcast shutdown event
         let shutdown_event = Event::System(SystemEvent::Shutdown {
@@ -467,17 +466,16 @@ impl Coordinator {
         // Remove session from coordinator
         sessions.remove(&session_id);
         senders.remove(&session_id);
-        tracing::info!("removed from coordinator");
+        tracing::info!(session_id = %session_id.0, "removed from coordinator");
     }
 
     /// Restore a session from storage by its ID.
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn restore_session(&self, session_id: &SessionId) -> Result<SessionId> {
         let live = self.get_session(session_id).is_some();
-        tracing::info!("restore_session: live={}", live);
+        tracing::info!(session_id = %session_id.0, "restore_session: live={}", live);
 
         if live {
-            tracing::info!("already live, re-attaching");
+            tracing::info!(session_id = %session_id.0, "already live, re-attaching");
             return Ok(session_id.clone());
         }
 
@@ -511,15 +509,15 @@ impl Coordinator {
             auto_approve_level,
             data_dir: self.data_dir().await.clone(),
         };
-        tracing::info!("Restoring from storage");
+        tracing::info!(session_id = %session_id.0, "Restoring from storage");
         if let Err(e) = self.init_session(info.id.clone(), config).await {
             if e.is_session_already_exists() {
-                tracing::debug!("already initialized — treating as restored");
+                tracing::debug!(session_id = %session_id.0, "already initialized — treating as restored");
                 return Ok(info.id);
             }
             return Err(e);
         }
-        tracing::info!("restored");
+        tracing::info!(session_id = %session_id.0, "restored");
         Ok(info.id)
     }
 
