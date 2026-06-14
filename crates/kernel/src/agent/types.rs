@@ -34,7 +34,7 @@ pub struct AgentSpawnArgs {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub max_iterations: usize,
-    pub enable_sub_agents: bool,
+    pub enable_subagent: bool,
     pub working_dir: std::path::PathBuf,
     /// Optional cancel token to share with parent (for cascading cancellation)
     pub cancel_token: Option<super::CancelToken>,
@@ -51,7 +51,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("session_id", &self.session_id)
             .field("parent_session_id", &self.parent_session_id)
             .field("max_iterations", &self.max_iterations)
-            .field("enable_sub_agents", &self.enable_sub_agents)
+            .field("enable_sub_agents", &self.enable_subagent)
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
             .field("file_state_store", &self.file_state_store.is_some())
@@ -69,7 +69,7 @@ impl AgentSpawnArgs {
             session_id: session_id.into(),
             parent_session_id: None,
             max_iterations: 100,
-            enable_sub_agents: true,
+            enable_subagent: true,
             working_dir: std::path::PathBuf::new(),
             cancel_token: None,
             file_state_store: None,
@@ -113,7 +113,7 @@ impl AgentSpawnArgs {
 
     #[must_use]
     pub const fn with_subagent(mut self, enabled: bool) -> Self {
-        self.enable_sub_agents = enabled;
+        self.enable_subagent = enabled;
         self
     }
 

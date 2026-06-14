@@ -56,7 +56,7 @@ pub enum AppMode {
 }
 
 /// Status bar showing current mode (vim-style at bottom)
-/// Layout: [mode] [center: goal info] [scroll progress (optional)] [model] [ctx usage]
+/// Layout: [mode] [center] [scroll progress (optional)] [model] [ctx usage]
 #[derive(Debug, Default)]
 pub struct StatusBar {
     props: Props,
@@ -70,15 +70,6 @@ pub struct StatusBar {
     scroll_progress: Option<(usize, usize)>,
     /// Model name (shown at right, next to context usage)
     model_name: Option<String>,
-    /// Current goal info (description, status)
-    goal_info: Option<GoalInfo>,
-}
-
-/// Goal info for status bar display
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GoalInfo {
-    pub description: String,
-    pub status: String,
 }
 
 impl StatusBar {
@@ -113,17 +104,6 @@ impl StatusBar {
     /// Set model name for display in the right section
     pub fn set_model_name(&mut self, name: impl Into<String>) {
         self.model_name = Some(name.into());
-    }
-
-    pub fn set_goal_info(&mut self, description: impl Into<String>, status: impl Into<String>) {
-        self.goal_info = Some(GoalInfo {
-            description: description.into(),
-            status: status.into(),
-        });
-    }
-
-    pub fn clear_goal_info(&mut self) {
-        self.goal_info = None;
     }
 
     fn render_mode_section(&self) -> Span<'static> {
@@ -227,33 +207,8 @@ impl Component for StatusBar {
             chunks[0],
         );
 
-        // Center section: goal info (if active) or empty
-        if let Some(ref goal) = self.goal_info {
-            let truncated = if goal.description.len() > 30 {
-                truncate_by_width(&goal.description, 30, "…")
-            } else {
-                goal.description.clone()
-            };
-            let status_fg = match goal.status.as_str() {
-                "active" | "completed" => colors::accent_success(),
-                "paused" => colors::accent_warning(),
-                "blocked" => colors::accent_error(),
-                _ => colors::text_secondary(),
-            };
-            let spans = vec![
-                Span::styled("🎯 ", Style::default().fg(status_fg)),
-                Span::styled(truncated, Style::default().fg(colors::text_primary())),
-                Span::styled(
-                    format!(" [{}]", goal.status),
-                    Style::default()
-                        .fg(status_fg)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ];
-            frame.render_widget(Paragraph::new(Line::from(spans)), chunks[1]);
-        } else {
-            frame.render_widget(Self::render_center_section(), chunks[1]);
-        }
+        // Center section: empty
+        frame.render_widget(Self::render_center_section(), chunks[1]);
 
         // Right side content: scroll (optional) + model + context (right-aligned)
         let mut right_spans = Vec::new();
@@ -331,16 +286,6 @@ impl Component for StatusBar {
             Attribute::Custom(attr::SET_MODEL_NAME) => {
                 if let AttrValue::String(name) = value {
                     self.set_model_name(name);
-                }
-            }
-            Attribute::Custom(attr::SET_GOAL) => {
-                if let AttrValue::String(value_str) = value {
-                    let parts: Vec<&str> = value_str.split('\x00').collect();
-                    if parts.len() == 2 && !parts[0].is_empty() {
-                        self.set_goal_info(parts[1], parts[0]);
-                    } else {
-                        self.clear_goal_info();
-                    }
                 }
             }
             _ => {

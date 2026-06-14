@@ -344,11 +344,11 @@ impl Model {
                 }) => {
                     let goal_str = format!("{status}\x00{description}");
                     if let Err(e) = self.app.attr(
-                        &Id::StatusBar,
+                        &Id::TodoList,
                         Attribute::Custom(attr::SET_GOAL),
                         AttrValue::String(goal_str),
                     ) {
-                        tracing::warn!("Failed to update goal status: {e}");
+                        tracing::warn!("Failed to update goal status on TodoList: {e}");
                     }
                     self.show_notification(&crate::components::info_bar::Notification::info(
                         format!("Goal {status}: {description}"),
@@ -358,11 +358,11 @@ impl Model {
                 }
                 Event::System(kernel::event::SystemEvent::GoalStopped { .. }) => {
                     if let Err(e) = self.app.attr(
-                        &Id::StatusBar,
+                        &Id::TodoList,
                         Attribute::Custom(attr::SET_GOAL),
                         AttrValue::String(String::new()),
                     ) {
-                        tracing::warn!("Failed to clear goal status: {e}");
+                        tracing::warn!("Failed to clear goal status on TodoList: {e}");
                     }
                     self.show_notification(&crate::components::info_bar::Notification::info(
                         "Goal stopped",
