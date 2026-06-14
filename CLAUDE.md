@@ -1,9 +1,5 @@
 # AGENTS.md
 
-## Project Overview
-
-Yomi is a Rust-based AI coding assistant CLI featuring an async agent loop, sub-agent support, and a TUI interface built with tuirealm.
-
 ## Build Commands
 
 ```bash
@@ -42,7 +38,6 @@ cargo fmt -- --check
 - **State Machine**: Agent uses explicit state transitions with `AgentState` enum
 - **Cancellation**: tokio's `CancellationToken` propagates through agent hierarchy
 - **Storage**: SQLite for tasks/messages, filesystem for sessions
-- **Plugin Loading**: `PluginLoader` loads `.js` plugins from Claude's plugin cache
 - **Unicode Handling**: must carefully handling of unicode width in TUI
 - **Env Vars**: should follow prefix `kernel::ENV_PREFIX`
 
