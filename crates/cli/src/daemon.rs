@@ -144,6 +144,7 @@ pub async fn stop_daemon() -> Result<()> {
     if let Ok(pid_str) = tokio::fs::read_to_string(&pid_file).await {
         if let Ok(p) = pid_str.trim().parse::<u32>() {
             pid = Some(p);
+            tracing::info!("Sending kill signal to daemon (PID {p})...");
             #[cfg(unix)]
             {
                 let _ = std::process::Command::new("kill")
@@ -169,6 +170,7 @@ pub async fn stop_daemon() -> Result<()> {
         }
     }
 
+    tracing::info!("Daemon force-stopped");
     Ok(())
 }
 
@@ -222,13 +224,16 @@ pub async fn graceful_shutdown() -> Result<()> {
 
 /// Restart the daemon (graceful stop + spawn).
 pub async fn restart_daemon() -> Result<()> {
+    tracing::info!("Restarting daemon...");
     graceful_shutdown().await?;
 
     // graceful_shutdown already waits up to 3s for the PID file to disappear.
     // Give a short extra grace period in case the old process is slow to exit.
     sleep(Duration::from_millis(200)).await;
 
-    spawn_daemon().await
+    spawn_daemon().await?;
+    tracing::info!("Daemon restarted successfully");
+    Ok(())
 }
 
 /// Check daemon status.
@@ -238,6 +243,7 @@ pub async fn daemon_status() -> Result<String> {
 
     if let Ok(stream) = kernel::transport::connect(&addr).await {
         drop(stream);
+        tracing::info!("Daemon is running and accepting connections on {addr}");
         return Ok("Daemon is running".to_string());
     }
 
@@ -256,10 +262,13 @@ pub async fn daemon_status() -> Result<String> {
 
     if stale {
         let _ = tokio::fs::remove_file(&pid_file).await;
+        tracing::info!("Daemon is not running, cleaned stale PID file");
         Ok("Daemon is not running (stale PID cleaned)".to_string())
     } else if pid_file.exists() {
+        tracing::info!("Daemon may be starting up (PID file exists but not responding yet)");
         Ok("Daemon may be starting up".to_string())
     } else {
+        tracing::info!("Daemon is not running (no PID file, no socket)");
         Ok("Daemon is not running".to_string())
     }
 }

@@ -225,9 +225,7 @@ impl Component for TodoList {
 
             let goal_line = Line::from(vec![Span::styled(
                 format!("🎯 {}", goal.description),
-                Style::default()
-                    .fg(status_fg)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(status_fg).add_modifier(Modifier::BOLD),
             )]);
 
             let goal_area = Rect {

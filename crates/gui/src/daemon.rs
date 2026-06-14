@@ -1,9 +1,10 @@
 //! Daemon lifecycle management for yomi-gui.
 //!
-//! Supports three connection strategies:
+//! The GUI always connects to a daemon via IPC. Two strategies:
 //! 1. Connect to an existing yomi daemon (external or CLI-started).
 //! 2. Spawn a background daemon if none is running.
-//! 3. Fall back to an in-process coordinator for single-tenant builds.
+//!
+//! There is no in-process fallback — the daemon is the only supported path.
 //!
 //! All cron operations go through the `CoordinatorApi` so the same GUI code
 //! works regardless of which strategy is used.
@@ -58,140 +59,25 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     }
 }
 
-/// Initialised core components for the GUI (shared by in-process and IPC paths).
-///
-/// DESIGN PRINCIPLE: The GUI never holds a `CronStore` directly. All cron
-/// operations go through the `CoordinatorApi`, so the same code works for both
-/// local (in-process) and remote (IPC) kernel connections.
-pub struct KernelInit {
-    pub coordinator: Arc<kernel::Coordinator>,
-    /// Shutdown token for the cron subsystem (only present when cron was started).
-    #[allow(dead_code)]
-    pub cron_shutdown: Option<CancellationToken>,
-    /// Handle to the cron scheduler so callers can trigger reloads after mutations.
-    #[allow(dead_code)]
-    pub cron_scheduler: Option<Arc<kernel::cron::CronScheduler>>,
-}
-
 /// Obtain a `CoordinatorApi` for the GUI.
 ///
-/// Tries three strategies in order:
+/// Tries two strategies in order:
 /// 1. Connect to an existing daemon.
 /// 2. Spawn a background daemon and connect to it.
-/// 3. Fall back to an in-process coordinator.
 ///
-/// Returns an error only if all three strategies fail.
+/// Returns an error if neither succeeds. The GUI does not fall back to an
+/// in-process coordinator — the daemon is the only supported path.
 pub async fn get_coordinator() -> Result<Arc<dyn kernel::client::CoordinatorApi>, String> {
     let addr = socket_addr();
     if try_connect().await.is_some() {
+        tracing::info!("Connected to existing daemon at {addr}");
         return Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)));
     }
-    if spawn_daemon().await.is_ok() {
-        return Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)));
-    }
-    let init = init_coordinator(true)
+    spawn_daemon()
         .await
-        .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
-    Ok(init.coordinator)
-}
-
-/// Initialise a `Coordinator` in-process without any IPC.
-///
-/// Opens storage, loads config, and builds the agent. The `cron_store`
-/// is always created in the coordinator; the caller decides whether to
-/// start the cron scheduler + worker (`enable_cron` for in-process mode).
-/// For daemon mode, `KernelServer` checks `cron_store` itself and starts
-/// cron if available.
-///
-/// This is the zero-overhead path for a single-tenant GUI. To support
-/// remote connections or multiple clients, use `spawn_daemon()` instead.
-pub async fn init_coordinator(enable_cron: bool) -> Result<KernelInit> {
-    let working_dir = std::env::current_dir()?;
-    let config_file = kernel::config::Config::discover_file();
-    let mut config = if let Some(ref path) = config_file {
-        kernel::config::Config::from_file(path)
-            .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?
-    } else {
-        kernel::config::Config::default()
-    };
-    config.apply_env_overrides();
-    config.finalize(&working_dir);
-
-    tokio::fs::create_dir_all(&config.data_dir).await?;
-
-    let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
-        || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
-        PathBuf::from,
-    );
-
-    let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to open storage: {e}"))?;
-    let provider = create_provider(&config)?;
-    let task_store = Arc::new(
-        kernel::TaskStore::new(&config.data_dir)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create task store: {e}"))?,
-    );
-    let skill_folders = resolve_skill_folders(&config, &base_dir);
-
-    let agent_config = tokio::task::spawn_blocking({
-        let config = config.clone();
-        let base_dir = base_dir.clone();
-        move || kernel::server::build_agent_config(&config, &base_dir)
-    })
-    .await
-    .context("Failed to build agent config in blocking task")?;
-
-    let coordinator = kernel::Coordinator::new(
-        &storage,
-        provider,
-        agent_config,
-        Some(task_store),
-        Some(config.agent.compactor.clone()),
-        skill_folders,
-        config.features.hooks.then(|| {
-            kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
-        }),
-    );
-
-    // Start cron subsystem only when requested (GUI in-process mode).
-    let (cron_shutdown, cron_scheduler) = if enable_cron {
-        coordinator
-            .cron_store()
-            .map(|store| {
-                let (task_tx, task_rx) = tokio::sync::mpsc::channel(64);
-                let shutdown = CancellationToken::new();
-                let scheduler = Arc::new(kernel::cron::CronScheduler::new(
-                    store.clone(),
-                    task_tx,
-                    shutdown.clone(),
-                ));
-
-                let sched_clone = Arc::clone(&scheduler);
-                tokio::spawn(async move { sched_clone.run().await });
-
-                let worker = kernel::cron::CronWorker::new(
-                    Arc::clone(&coordinator) as Arc<dyn kernel::cron::CronExecutor>,
-                    task_rx,
-                    store.clone(),
-                    Some(Arc::clone(&scheduler)),
-                    shutdown.clone(),
-                );
-                tokio::spawn(async move { worker.run().await });
-
-                (shutdown, scheduler)
-            })
-            .map_or((None, None), |(s, sched)| (Some(s), Some(sched)))
-    } else {
-        (None, None)
-    };
-
-    Ok(KernelInit {
-        coordinator,
-        cron_shutdown,
-        cron_scheduler,
-    })
+        .map_err(|e| format!("failed to spawn daemon: {e}"))?;
+    tracing::info!("Connected to spawned daemon at {addr}");
+    Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)))
 }
 
 /// Start the kernel server in a background task.
@@ -202,8 +88,7 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let KernelInit { coordinator, .. } = init_coordinator(false).await?;
-    let config_file = kernel::config::Config::discover_file();
+    let (coordinator, _config, config_file) = kernel::init_coordinator(None, true).await?;
     let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
         || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
         PathBuf::from,
@@ -229,14 +114,12 @@ pub async fn spawn_daemon() -> Result<()> {
         tokio::spawn(async move {
             #[cfg(unix)]
             {
-                let mut sigterm = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate(),
-                )
-                .expect("Failed to register SIGTERM handler");
-                let mut sigint = tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::interrupt(),
-                )
-                .expect("Failed to register SIGINT handler");
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("Failed to register SIGTERM handler");
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                        .expect("Failed to register SIGINT handler");
                 let shutdown_clone = shutdown_sig.clone();
                 tokio::select! {
                     _ = sigterm.recv() => {
@@ -338,32 +221,4 @@ pub async fn stop_daemon() -> Result<()> {
     *guard = None;
 
     Ok(())
-}
-
-fn resolve_skill_folders(
-    config: &kernel::config::Config,
-    base_dir: &std::path::Path,
-) -> Vec<PathBuf> {
-    config
-        .skill_folders()
-        .iter()
-        .map(PathBuf::from)
-        .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
-        .collect()
-}
-
-fn create_provider(config: &kernel::config::Config) -> Result<Arc<dyn kernel::Provider>> {
-    if !config.has_api_key() {
-        tracing::warn!(
-            "No API key configured — using NoKeyProvider (sessions will fail to send messages)"
-        );
-        return Ok(Arc::new(kernel::NoKeyProvider));
-    }
-
-    let provider: Arc<dyn kernel::Provider> = match config.agent.model.provider {
-        kernel::ModelProvider::OpenAI => Arc::new(kernel::OpenAIProvider::new()?),
-        kernel::ModelProvider::Anthropic => Arc::new(kernel::AnthropicProvider::new()?),
-    };
-
-    Ok(provider)
 }

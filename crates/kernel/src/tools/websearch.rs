@@ -7,7 +7,7 @@ use crate::utils::search::{available_engines, format_results, search_all};
 use async_trait::async_trait;
 use serde_json::Value;
 
-pub const WEBSEARCH_TOOL_NAME: &str = "websearch";
+pub const WEBSEARCH_TOOL_NAME: &str = "webSearch";
 
 const MAX_QUERY_LENGTH: usize = 1000;
 

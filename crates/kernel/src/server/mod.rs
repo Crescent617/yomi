@@ -45,7 +45,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
     agent
 }
 
-fn reload_config(file_path: Option<&PathBuf>, base_dir: &Path) -> Config {
+fn reload_config(file_path: Option<&PathBuf>) -> Config {
     let mut config = match file_path {
         Some(path) => Config::from_file(path).unwrap_or_else(|e| {
             tracing::error!(
@@ -66,7 +66,7 @@ fn reload_config(file_path: Option<&PathBuf>, base_dir: &Path) -> Config {
         },
     };
     config.apply_env_overrides();
-    config.finalize(base_dir);
+    config.finalize();
     config
 }
 
@@ -139,7 +139,7 @@ impl KernelServer {
         let base_dir = self.base_dir.clone();
         let (new_agent, hook_registry, provider, model_config, skill_folders) =
             match tokio::task::spawn_blocking(move || {
-                let config = reload_config(file_path.as_ref(), &base_dir);
+                let config = reload_config(file_path.as_ref());
                 let agent = build_agent_config(&config, &base_dir);
                 let hooks = config.features.hooks.then(|| {
                     crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)

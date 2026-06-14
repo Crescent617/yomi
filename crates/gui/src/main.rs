@@ -116,8 +116,7 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .and_then(|p| kernel::config::Config::from_file(p).ok())
         .unwrap_or_default();
 
-    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    config.finalize(&working_dir);
+    config.finalize();
 
     let log_dir = config.log_dir();
     if let Err(e) = std::fs::create_dir_all(&log_dir) {

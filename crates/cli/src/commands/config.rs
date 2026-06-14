@@ -1,5 +1,5 @@
 use crate::args::GlobalArgs;
-use crate::utils::{get_nested_value, load_config, resolve_working_dir, set_nested_value};
+use crate::utils::{get_nested_value, load_config, set_nested_value};
 use anyhow::{Context, Result};
 use kernel::{expand_tilde, DEFAULT_DATA_DIR};
 use std::path::PathBuf;
@@ -12,16 +12,14 @@ fn config_path(global: &GlobalArgs) -> PathBuf {
 }
 
 pub fn show(global: &GlobalArgs) -> Result<()> {
-    let working_dir = resolve_working_dir(global)?;
-    let config = load_config(global.config.as_ref(), &working_dir)?;
+    let config = load_config(global.config.as_ref())?;
     let toml_str = toml::to_string_pretty(&config)?;
     println!("{toml_str}");
     Ok(())
 }
 
 pub fn get(global: &GlobalArgs, key: &str) -> Result<()> {
-    let working_dir = resolve_working_dir(global)?;
-    let config = load_config(global.config.as_ref(), &working_dir)?;
+    let config = load_config(global.config.as_ref())?;
     let value = serde_json::to_value(&config)?;
     match get_nested_value(&value, key) {
         Some(v) => println!("{v}"),

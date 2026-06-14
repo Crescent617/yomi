@@ -30,10 +30,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
             const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-            let working_dir = std::env::current_dir()?;
-            let config_file = kernel::config::Config::discover_file();
-            let config = crate::utils::load_config(config_file.as_ref(), &working_dir)?;
-            tokio::fs::create_dir_all(&config.data_dir).await?;
+            let (coordinator, config, config_file) = kernel::init_coordinator(None, true).await?;
             let _log_guard = crate::commands::tui::init_logging(&config)?;
 
             let addr = crate::daemon::socket_addr();
@@ -45,34 +42,6 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
                 || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
                 PathBuf::from,
-            );
-            let storage = kernel::StorageSet::open_with_config(&config.data_dir, &config).await?;
-            let provider = crate::commands::tui::create_provider(&config)?;
-            let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
-            let skill_folders = crate::commands::tui::resolve_skill_folders(&config, &base_dir);
-
-            // Load skills so the daemon starts with the same agent configuration
-            // (including skills) that reload would produce.
-            let agent_config = tokio::task::spawn_blocking({
-                let config = config.clone();
-                let base_dir = base_dir.clone();
-                move || kernel::server::build_agent_config(&config, &base_dir)
-            })
-            .await?;
-
-            let coordinator = kernel::Coordinator::new(
-                &storage,
-                provider,
-                agent_config,
-                Some(task_store),
-                Some(config.agent.compactor.clone()),
-                skill_folders,
-                config.features.hooks.then(|| {
-                    kernel::hooks::build_registry(
-                        &config.hooks,
-                        config.features.allow_command_hooks,
-                    )
-                }),
             );
 
             let server =
@@ -126,6 +95,11 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 let coord_for_exit = Arc::clone(&coordinator);
                 let shutdown_clone = shutdown.clone();
                 tokio::spawn(async move {
+                    tracing::info!(
+                        "Daemon starting with {} session(s), idle check {}s",
+                        coord_for_exit.idle_seconds(),
+                        DAEMON_IDLE_TIMEOUT_SECS
+                    );
                     let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
                     loop {
                         interval.tick().await;
@@ -164,10 +138,12 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             serve_result?;
         }
         DaemonCommands::Stop => {
+            tracing::info!("Stop command received");
             crate::daemon::graceful_shutdown().await?;
             println!("Daemon stopped");
         }
         DaemonCommands::Restart => {
+            tracing::info!("Restart command received");
             crate::daemon::restart_daemon().await?;
             println!("Daemon restarted");
         }
@@ -176,9 +152,11 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             println!("{status}");
         }
         DaemonCommands::Reload => {
-            let coord =
-                kernel::client::RemoteCoordinator::connect(&crate::daemon::socket_addr()).await?;
+            let addr = crate::daemon::socket_addr();
+            tracing::info!("Connecting to daemon at {addr} for reload...");
+            let coord = kernel::client::RemoteCoordinator::connect(&addr).await?;
             coord.reload_agent_config().await?;
+            tracing::info!("Agent configuration reloaded in daemon at {addr}");
             println!("Agent configuration reloaded in daemon");
         }
     }

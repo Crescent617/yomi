@@ -8,13 +8,11 @@ use crate::{
 use anyhow::{Context, Result};
 use kernel::{
     client::{CoordinatorApi, RemoteCoordinator},
-    config::{Config, ModelProvider},
+    config::Config,
     permissions::Level,
     utils::strs,
-    AnthropicProvider, OpenAIProvider,
 };
 use std::io::{self, IsTerminal, Read};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -132,7 +130,7 @@ impl TuiArgs {
 pub async fn run(args: TuiArgs) -> Result<()> {
     let working_dir = crate::utils::resolve_working_dir(&args.global)?;
 
-    let mut config = crate::utils::load_config(args.global.config.as_ref(), &working_dir)?;
+    let mut config = crate::utils::load_config(args.global.config.as_ref())?;
 
     // Load feature gates from environment
     let feature_gates = tui::FeatureGates::from_env();
@@ -151,7 +149,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         daemon::spawn_daemon().await?;
         Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
     } else {
-        create_local_coordinator(&config, &working_dir).await?
+        create_local_coordinator(&config).await?
     };
 
     print_startup_info(&config);
@@ -243,66 +241,11 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     Ok(())
 }
 
-async fn create_local_coordinator(
-    config: &Config,
-    working_dir: &Path,
-) -> Result<Arc<kernel::Coordinator>> {
-    let storage = kernel::StorageSet::open_with_config(&config.data_dir, config).await?;
-    let provider = create_provider(config)?;
-    let task_store = Arc::new(kernel::TaskStore::new(&config.data_dir).await?);
-    let skill_folders = resolve_skill_folders(config, working_dir);
-
-    let agent_config = tokio::task::spawn_blocking({
-        let config = config.clone();
-        let working_dir = working_dir.to_path_buf();
-        move || kernel::server::build_agent_config(&config, &working_dir)
-    })
-    .await?;
-
-    Ok(kernel::Coordinator::new(
-        &storage,
-        provider,
-        agent_config,
-        Some(task_store),
-        Some(config.agent.compactor.clone()),
-        skill_folders,
-        config.features.hooks.then(|| {
-            kernel::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
-        }),
-    ))
-}
-
-/// Resolve skill folders against working directory.
-/// Relative paths are joined with `working_dir`, absolute paths are kept as-is.
-/// Resolve skill folders against working directory.
-/// Relative paths are joined with `working_dir`, absolute paths are kept as-is.
-pub fn resolve_skill_folders(config: &Config, working_dir: &Path) -> Vec<PathBuf> {
-    config
-        .skill_folders()
-        .iter()
-        .map(PathBuf::from)
-        .map(|p| {
-            if p.is_relative() {
-                working_dir.join(p)
-            } else {
-                p
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn create_provider(config: &Config) -> Result<Arc<dyn kernel::Provider>> {
-    if !config.has_api_key() {
-        eprintln!("Error: API key not configured.");
-        std::process::exit(1);
-    }
-
-    let provider: Arc<dyn kernel::Provider> = match config.agent.model.provider {
-        ModelProvider::OpenAI => Arc::new(OpenAIProvider::new()?),
-        ModelProvider::Anthropic => Arc::new(AnthropicProvider::new()?),
-    };
-
-    Ok(provider)
+async fn create_local_coordinator(config: &Config) -> Result<Arc<kernel::Coordinator>> {
+    let coordinator = kernel::build_coordinator(config, false)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to build coordinator: {e}"))?;
+    Ok(coordinator)
 }
 
 fn print_startup_info(config: &Config) {
