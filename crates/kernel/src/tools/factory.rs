@@ -17,12 +17,32 @@ use tokio::sync::mpsc;
 /// Feature flags for tool registry configuration.
 /// These are independent on/off switches, so a simple struct is intentional.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ToolFlags {
-    pub sub_agents: bool,
+    pub subagent: bool,
     pub reminder: bool,
     pub sleep: bool,
-    pub update_goal: bool,
+    pub goal: bool,
+}
+
+impl ToolFlags {
+    fn for_agent() -> Self {
+        Self {
+            subagent: true,
+            sleep: true,
+            goal: true,
+            reminder: false,
+        }
+    }
+
+    fn for_subagent() -> Self {
+        Self {
+            sleep: true,
+            subagent: false,
+            goal: false,
+            reminder: false,
+        }
+    }
 }
 
 /// Configuration for creating a tool registry.
@@ -56,7 +76,7 @@ impl<'a> ToolRegistryConfig<'a> {
             file_state_store: None,
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
-            flags: ToolFlags::default(),
+            flags: ToolFlags::for_agent(),
         }
     }
 
@@ -76,14 +96,14 @@ impl<'a> ToolRegistryConfig<'a> {
             file_state_store: None,
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
-            flags: ToolFlags::default(),
+            flags: ToolFlags::for_subagent(),
         }
     }
 
     /// Set whether to enable subagents.
     #[must_use]
-    pub fn with_enable_sub_agents(mut self, enable: bool) -> Self {
-        self.flags.sub_agents = enable;
+    pub fn with_enable_subagent(mut self, enable: bool) -> Self {
+        self.flags.subagent = enable;
         self
     }
 
@@ -148,7 +168,7 @@ impl ToolRegistryFactory {
         registry.register(WebSearchTool::new());
 
         // Register SubAgent tool if enabled
-        if config.flags.sub_agents {
+        if config.flags.subagent {
             if let Some(tx) = config.input_tx {
                 let subagent_tool = SubagentTool::new(
                     config.agent_id.clone(),
@@ -178,8 +198,8 @@ impl ToolRegistryFactory {
             }
         }
 
-        // Register update_goal tool if goal store is available
-        if config.flags.update_goal {
+        // Register goal tool if goal store is available
+        if config.flags.goal {
             if let Some(ref store) = config.shared.goal_store {
                 registry.register(UpdateGoalTool::new(Arc::clone(store)));
             }

@@ -1,6 +1,9 @@
 //! Todo list floating panel component
 //!
-//! Displays pending and in-progress todos from todoWrite tool on the right side.
+//! Displays active goal and pending todos on the right side.
+//! Title is always "Tasks".
+//! If a goal exists, it renders at the top (wrapped, max 3 lines).
+//! Todos render below with a separator line.
 
 use kernel::storage::todo::TodoListData;
 pub use kernel::storage::todo::{TodoItem, TodoStatus};
@@ -13,7 +16,9 @@ use tuirealm::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Widget},
+        widgets::{
+            Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget,
+        },
         Frame,
     },
     state::State,
@@ -29,14 +34,25 @@ const MIN_SCREEN_WIDTH: u16 = 60;
 const PANEL_MARGIN: u16 = 3;
 /// Icon width: "○ " or "● " = 2 chars
 const ICON_WIDTH: usize = 2;
+/// Maximum goal lines to show
+const MAX_GOAL_LINES: usize = 3;
 
-/// Todo list floating panel component
+/// Goal info shown in the task panel
+#[derive(Debug, Clone)]
+struct GoalInfo {
+    description: String,
+    status: String,
+}
+
+/// Task panel floating component (goal + todos)
 #[derive(Debug, Default)]
 pub struct TodoList {
     todos: Vec<TodoItem>,
     visible: bool,
     /// User manually toggled visibility (overrides auto-show)
     manually_hidden: bool,
+    /// Current goal (rendered at the top of the panel)
+    goal: Option<GoalInfo>,
 }
 
 impl TodoList {
@@ -45,51 +61,66 @@ impl TodoList {
             todos: Vec::new(),
             visible: false,
             manually_hidden: false,
+            goal: None,
         }
     }
 
     /// Toggle visibility (user command)
     pub fn toggle(&mut self) {
         self.manually_hidden = !self.manually_hidden;
-        // Update visible based on state
         self.update_visible();
     }
 
-    /// Update visible state based on todos and manual hide
-    /// Only show when there are pending or in-progress todos
+    /// Update visible state based on content and manual hide
+    /// Show when there are pending todos OR an active goal
     fn update_visible(&mut self) {
-        let has_pending = self
+        let has_content = self
             .todos
             .iter()
-            .any(|t| matches!(t.status, TodoStatus::Pending | TodoStatus::InProgress));
-        self.visible = has_pending && !self.manually_hidden;
+            .any(|t| matches!(t.status, TodoStatus::Pending | TodoStatus::InProgress))
+            || self.goal.is_some();
+        self.visible = has_content && !self.manually_hidden;
     }
 
     /// Update todo list from JSON string
     pub fn update_todos(&mut self, json_str: &str) {
         match serde_json::from_str::<TodoListData>(json_str) {
             Ok(data) => {
-                // Show all todos (completed items shown with strikethrough)
                 self.todos = data.todos;
                 self.update_visible();
             }
             Err(e) => {
                 tracing::debug!("Failed to parse todo list: {}", e);
-                self.visible = false;
+                self.update_visible();
             }
         }
     }
 
-    /// Clear todo list and hide
+    /// Clear everything and hide
     pub fn clear(&mut self) {
         self.todos.clear();
         self.visible = false;
-        self.manually_hidden = false; // Reset manual hide on clear
+        self.manually_hidden = false;
+        self.goal = None;
+    }
+
+    /// Update goal info from raw string "status\0description"
+    pub fn update_goal(&mut self, value: &str) {
+        let parts: Vec<&str> = value.split('\x00').collect();
+        if parts.len() == 2 && !parts[0].is_empty() {
+            self.goal = Some(GoalInfo {
+                status: parts[0].to_string(),
+                description: parts[1].to_string(),
+            });
+        } else {
+            self.goal = None;
+        }
+        self.update_visible();
     }
 
     /// Check if panel should be visible
     pub fn is_visible(&self) -> bool {
-        self.visible && !self.todos.is_empty()
+        self.visible
     }
 
     /// Get the number of pending/in-progress todos
@@ -106,8 +137,6 @@ impl Component for TodoList {
         if !self.is_visible() {
             return;
         }
-
-        // Minimum width requirement - if screen is too narrow, don't show
         if area.width < MIN_SCREEN_WIDTH {
             return;
         }
@@ -117,88 +146,190 @@ impl Component for TodoList {
         sorted_todos.sort_by_key(|t| matches!(t.status, TodoStatus::Completed));
 
         let total_todos = sorted_todos.len();
-        let display_count = total_todos.min(MAX_DISPLAY_TODOS);
-        let hidden_count = total_todos.saturating_sub(MAX_DISPLAY_TODOS);
+        let display_todos = total_todos.min(MAX_DISPLAY_TODOS);
+        let hidden_todos = total_todos.saturating_sub(MAX_DISPLAY_TODOS);
 
-        // Calculate content width based on longest todo entry
-        let max_content_width = sorted_todos
+        // Calculate panel width based on longest content
+        let max_todo_width = sorted_todos
             .iter()
             .take(MAX_DISPLAY_TODOS)
-            .map(|todo| ICON_WIDTH + unicode_width::UnicodeWidthStr::width(todo.content.as_str()))
+            .map(|todo| {
+                ICON_WIDTH + unicode_width::UnicodeWidthStr::width(todo.content.as_str())
+            })
             .max()
-            .unwrap_or(10);
+            .unwrap_or(0);
 
-        // Panel width: content + margin, but not exceeding max or screen limit
-        let content_with_margin = (max_content_width as u16) + PANEL_MARGIN;
-        let panel_width = content_with_margin.min(area.width * 2 / 5);
+        let goal_width = if let Some(ref goal) = self.goal {
+            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            unicode_width::UnicodeWidthStr::width(text.as_str())
+        } else {
+            0
+        };
 
-        // Calculate height: items + border(2) + optional more indicator(1)
-        let panel_height =
-            (display_count as u16 + 2 + u16::from(hidden_count > 0)).min(area.height / 2);
+        let max_content_width = max_todo_width.max(goal_width);
+        let panel_width =
+            (max_content_width as u16 + PANEL_MARGIN).min(area.width * 2 / 5);
 
-        // Position on the right side, top corner (no margin)
+        // Estimate goal height (max 3 lines)
+        let estimated_inner_width = panel_width.saturating_sub(2) as usize;
+        let estimated_goal_lines = if let Some(ref goal) = self.goal {
+            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
+            let width = estimated_inner_width.max(1);
+            text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16
+        } else {
+            0
+        };
+
+        // Calculate total height
+        let mut total_height = 2; // border
+        if estimated_goal_lines > 0 {
+            total_height += estimated_goal_lines + 1; // +1 for separator
+        }
+        total_height += display_todos as u16;
+        if hidden_todos > 0 {
+            total_height += 1;
+        }
+        total_height = total_height.min(area.height / 2);
+
+        // Position on the right side, top corner
         let panel_area = Rect {
             x: area.x + area.width.saturating_sub(panel_width),
             y: area.y,
             width: panel_width,
-            height: panel_height,
+            height: total_height,
         };
 
         // Clear background
         Clear.render(panel_area, frame.buffer_mut());
 
-        // Build list items
-        // Account for borders(2) + right_spacing(1)
-        let max_chars = (panel_width as usize).saturating_sub(PANEL_MARGIN as usize);
-        let mut items: Vec<ListItem> = sorted_todos
-            .iter()
-            .take(MAX_DISPLAY_TODOS)
-            .map(|todo| {
-                let (icon, style) = match todo.status {
-                    TodoStatus::Pending => ("○", Style::default().fg(colors::text_primary())),
-                    TodoStatus::InProgress => (
-                        "●",
-                        Style::default()
-                            .fg(colors::accent_success())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    TodoStatus::Completed => (
-                        "●",
-                        Style::default()
-                            .fg(colors::text_muted())
-                            .add_modifier(Modifier::CROSSED_OUT),
-                    ),
+        // Render border block
+        let block = Block::default()
+            .title("Tasks")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(colors::accent_system()));
+        frame.render_widget(block.clone(), panel_area);
+
+        let inner = block.inner(panel_area);
+
+        // Render goal at the top
+        let mut y = inner.y;
+        if let Some(ref goal) = self.goal {
+            let status_fg = match goal.status.as_str() {
+                "active" => colors::accent_success(),
+                "paused" => colors::accent_warning(),
+                "blocked" => colors::accent_error(),
+                _ => colors::text_muted(),
+            };
+
+            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
+            let width = inner.width.max(1) as usize;
+            let goal_lines =
+                text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16;
+
+            let goal_line = Line::from(vec![
+                Span::styled("🎯 ", Style::default().fg(status_fg)),
+                Span::styled(
+                    format!("[{}] ", goal.status),
+                    Style::default()
+                        .fg(status_fg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    goal.description.clone(),
+                    Style::default().fg(colors::text_primary()),
+                ),
+            ]);
+
+            let goal_area = Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: goal_lines,
+            };
+
+            frame.render_widget(
+                Paragraph::new(goal_line)
+                    .wrap(tuirealm::ratatui::widgets::Wrap { trim: true }),
+                goal_area,
+            );
+            y += goal_lines;
+
+            // Separator between goal and todos
+            if !self.todos.is_empty() {
+                let sep_area = Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
                 };
-
-                let content = format!("{} {}", icon, todo.content);
-                let truncated = truncate_by_chars(&content, max_chars);
-
-                ListItem::new(Line::from(vec![Span::styled(truncated, style)]))
-            })
-            .collect();
-
-        // Add "+X more..." indicator if there are hidden todos
-        if hidden_count > 0 {
-            let more_style = Style::default()
-                .fg(colors::text_muted())
-                .add_modifier(Modifier::ITALIC);
-            items.push(ListItem::new(Line::from(vec![Span::styled(
-                format!("+{hidden_count} more..."),
-                more_style,
-            )])));
+                let sep = "─".repeat(inner.width as usize);
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![Span::styled(
+                        sep,
+                        Style::default().fg(colors::border()),
+                    )])),
+                    sep_area,
+                );
+                y += 1;
+            }
         }
 
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title("Todos")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(colors::accent_system())),
-            )
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+        // Render todo list below
+        if !self.todos.is_empty() {
+            let remaining_height = inner.height.saturating_sub(y - inner.y);
+            let list_area = Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: remaining_height,
+            };
 
-        frame.render_widget(list, panel_area);
+            let mut items: Vec<ListItem> = sorted_todos
+                .iter()
+                .take(MAX_DISPLAY_TODOS)
+                .map(|todo| {
+                    let (icon, style) = match todo.status {
+                        TodoStatus::Pending => {
+                            ("○", Style::default().fg(colors::text_primary()))
+                        }
+                        TodoStatus::InProgress => (
+                            "●",
+                            Style::default()
+                                .fg(colors::accent_success())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        TodoStatus::Completed => (
+                            "●",
+                            Style::default()
+                                .fg(colors::text_muted())
+                                .add_modifier(Modifier::CROSSED_OUT),
+                        ),
+                    };
+
+                    let content = format!("{} {}", icon, todo.content);
+                    let truncated = truncate_by_chars(&content, inner.width as usize);
+
+                    ListItem::new(Line::from(vec![Span::styled(truncated, style)]))
+                })
+                .collect();
+
+            if hidden_todos > 0 {
+                let more_style = Style::default()
+                    .fg(colors::text_muted())
+                    .add_modifier(Modifier::ITALIC);
+                items.push(ListItem::new(Line::from(vec![Span::styled(
+                    format!("+{hidden_todos} more..."),
+                    more_style,
+                )])));
+            }
+
+            let list = List::new(items)
+                .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+            frame.render_widget(list, list_area);
+        }
     }
 
     fn query(&self, _attr: Attribute) -> Option<QueryResult<'_>> {
@@ -215,6 +346,10 @@ impl Component for TodoList {
                 self.clear();
             } else if *name == attr::TOGGLE_TODOS {
                 self.toggle();
+            } else if *name == attr::SET_GOAL {
+                if let AttrValue::String(value_str) = value {
+                    self.update_goal(&value_str);
+                }
             }
         }
     }
@@ -305,7 +440,6 @@ mod tests {
         let json = r#"{"todos":[{"id":"1","content":"Done","status":"completed"},{"id":"2","content":"Pending","status":"pending"}]}"#;
         let mut list = TodoList::new();
         list.update_todos(json);
-        // Both completed and pending should be shown (order depends on view sorting)
         assert_eq!(list.todos.len(), 2);
     }
 
@@ -328,5 +462,17 @@ mod tests {
         list.update_todos(json);
         assert_eq!(list.todos.len(), 1);
         assert_eq!(list.todos[0].content, "Line 1\nLine 2\tTabbed");
+    }
+
+    #[test]
+    fn test_goal_triggers_visibility() {
+        let mut list = TodoList::new();
+        assert!(!list.is_visible());
+
+        list.update_goal("active\x00Implement auth");
+        assert!(list.is_visible());
+
+        list.update_goal("");
+        assert!(!list.is_visible());
     }
 }

@@ -125,7 +125,7 @@ impl Agent {
                 &event_tx,
                 &args.session_id,
             )
-            .with_enable_sub_agents(args.enable_sub_agents)
+            .with_enable_subagent(args.enable_subagent)
             .with_file_state_store(args.file_state_store.clone())
             .with_ask_user_state(ask_user_state.clone()),
         );
