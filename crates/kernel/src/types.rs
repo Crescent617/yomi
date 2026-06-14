@@ -184,6 +184,10 @@ impl FinishReason {
     /// Parse from provider-specific string
     pub fn from_provider_str(s: &str) -> Option<Self> {
         match s {
+            "" => {
+                tracing::warn!("empty finish_reason");
+                None
+            }
             "length" | "max_tokens" => Some(Self::MaxTokens), // length is used by OpenAI, max_tokens by Anthropic
             "content_filter" => Some(Self::ContentFilter),
             "tool_calls" | "tool_use" => Some(Self::ToolCalls), // Custom reasons for tool calls
@@ -191,7 +195,7 @@ impl FinishReason {
             _ => {
                 tracing::warn!("unknown finish_reason {s}");
                 Some(Self::Unknown)
-            } // Default to Stop for unknown reasons for backward compatibility
+            }
         }
     }
 }

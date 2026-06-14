@@ -9,6 +9,7 @@ use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
+use crate::FinishReason;
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -437,6 +438,23 @@ impl Agent {
         }
     }
 
+    /// Emit user message event to frontend.
+    fn emit_user_message_event(
+        &self,
+        message_id: &crate::types::MessageId,
+        content: &[crate::types::ContentBlock],
+    ) {
+        if let Err(e) = self
+            .event_tx
+            .try_send(Event::User(crate::event::UserEvent::Message {
+                message_id: message_id.clone(),
+                content: content.to_vec(),
+            }))
+        {
+            tracing::warn!("Failed to send user message event: {}", e);
+        }
+    }
+
     /// Extract text summary from content blocks for checkpoint display.
     /// Returns first 50 chars of the first text block, handling unicode boundaries.
     /// Replaces newlines with spaces to ensure single-line summary.
@@ -735,15 +753,7 @@ impl Agent {
 
         // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
         // We only persist the message here, the turn object is created later
-        if let Err(e) = self
-            .event_tx
-            .try_send(Event::User(crate::event::UserEvent::Message {
-                message_id: msg.id.clone(),
-                content: msg.content.clone(),
-            }))
-        {
-            tracing::warn!("Failed to send user message event: {}", e);
-        }
+        self.emit_user_message_event(&msg.id, &msg.content);
         self.persist_message(&msg).await;
         self.message_buffer.push(msg);
         self.context.transition_to(AgentState::Streaming);
@@ -810,15 +820,7 @@ impl Agent {
                 steer_blocks.len()
             );
             let steer_msg = Message::with_blocks(Role::User, steer_blocks);
-            if let Err(e) = self
-                .event_tx
-                .try_send(Event::User(crate::event::UserEvent::Message {
-                    message_id: steer_msg.id.clone(),
-                    content: steer_msg.content.clone(),
-                }))
-            {
-                tracing::warn!("Failed to send steer message event: {}", e);
-            }
+            self.emit_user_message_event(&steer_msg.id, &steer_msg.content);
             self.persist_message(&steer_msg).await;
             self.message_buffer.push(steer_msg);
         }
@@ -891,21 +893,16 @@ impl Agent {
             tracing::warn!("Failed to send completed event: {}", e);
         }
 
-        let finish_reason = match result.finish_reason {
-            Some(fr) => fr,
-            None => {
-                tracing::warn!("model response has no finish_reason");
-                self.emit_error(
-                    crate::event::ErrorPhase::Streaming,
-                    "model response missing finish_reason",
-                    true,
-                )
-                .await;
-                crate::types::FinishReason::Stop
-            }
-        };
-
-        self.transition_after_streaming(Some(finish_reason)).await
+        if result.finish_reason.is_none() {
+            tracing::warn!("model response has no finish_reason");
+            self.emit_error(
+                crate::event::ErrorPhase::Streaming,
+                "model response missing finish_reason",
+                true,
+            )
+            .await;
+        }
+        self.transition_after_streaming(result.finish_reason).await
     }
 
     /// Collect all output from the stream until completion
@@ -1234,6 +1231,18 @@ impl Agent {
                 tool_count
             );
             self.context.transition_to(AgentState::ExecutingTool);
+            return Ok(());
+        }
+
+        // No tool calls and no finish reason: the model likely stopped mid-stream
+        // (e.g., hit max_tokens). Auto-inject a "continue" user message to resume.
+        if matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+            tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
+            let msg = Message::user("continue");
+            self.emit_user_message_event(&msg.id, &msg.content);
+            self.persist_message(&msg).await;
+            self.message_buffer.push(msg);
+            self.context.transition_to(AgentState::Streaming);
             return Ok(());
         }
 
