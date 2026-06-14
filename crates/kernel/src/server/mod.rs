@@ -92,35 +92,29 @@ impl KernelServer {
         coordinator: Arc<Coordinator>,
         config_file_path: Option<PathBuf>,
         base_dir: PathBuf,
-        enable_cron: bool,
     ) -> Self {
-        let (cron_scheduler, cron_shutdown) = if enable_cron {
-            let store = coordinator.cron_store.as_ref().map(Arc::clone);
-            if let Some(store) = store {
-                let (task_tx, task_rx) = mpsc::channel(64);
-                let shutdown = tokio_util::sync::CancellationToken::new();
-                let scheduler = Arc::new(crate::cron::CronScheduler::new(
-                    Arc::clone(&store),
-                    task_tx,
-                    shutdown.clone(),
-                ));
+        let (cron_scheduler, cron_shutdown) = if let Some(store) = coordinator.cron_store.as_ref() {
+            let (task_tx, task_rx) = mpsc::channel(64);
+            let shutdown = tokio_util::sync::CancellationToken::new();
+            let scheduler = Arc::new(crate::cron::CronScheduler::new(
+                Arc::clone(store),
+                task_tx,
+                shutdown.clone(),
+            ));
 
-                let sched_clone = Arc::clone(&scheduler);
-                tokio::spawn(async move { sched_clone.run().await });
+            let sched_clone = Arc::clone(&scheduler);
+            tokio::spawn(async move { sched_clone.run().await });
 
-                let worker = crate::cron::CronWorker::new(
-                    Arc::clone(&coordinator) as Arc<dyn crate::cron::CronExecutor>,
-                    task_rx,
-                    store,
-                    Some(Arc::clone(&scheduler)),
-                    shutdown.clone(),
-                );
-                tokio::spawn(async move { worker.run().await });
+            let worker = crate::cron::CronWorker::new(
+                Arc::clone(&coordinator) as Arc<dyn crate::cron::CronExecutor>,
+                task_rx,
+                Arc::clone(store),
+                Some(Arc::clone(&scheduler)),
+                shutdown.clone(),
+            );
+            tokio::spawn(async move { worker.run().await });
 
-                (Some(scheduler), Some(shutdown))
-            } else {
-                (None, None)
-            }
+            (Some(scheduler), Some(shutdown))
         } else {
             (None, None)
         };
@@ -780,6 +774,21 @@ impl KernelServer {
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
                             code: "delete_cron_job_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+
+            RequestMethod::TriggerCronJob { job_id } => {
+                match self.coordinator.trigger_cron_job(&CronJobId(job_id)).await {
+                    Ok(()) => ResponseBody::Ok {
+                        result: serde_json::Value::Null,
+                    },
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "trigger_cron_job_failed".to_string(),
                             message: e.to_string(),
                             detail: None,
                         },

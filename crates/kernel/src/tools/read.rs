@@ -284,8 +284,12 @@ mod tests {
         let lines: Vec<&str> = content.lines().collect();
         assert!(lines.iter().any(|l| l.contains('b')));
         assert!(lines.iter().any(|l| l.contains('c')));
-        assert!(!lines.iter().any(|l| l.trim() == "a" || l.trim().ends_with(" a")));
-        assert!(!lines.iter().any(|l| l.trim() == "d" || l.trim().ends_with(" d")));
+        assert!(!lines
+            .iter()
+            .any(|l| l.trim() == "a" || l.trim().ends_with(" a")));
+        assert!(!lines
+            .iter()
+            .any(|l| l.trim() == "d" || l.trim().ends_with(" d")));
     }
 
     #[tokio::test]

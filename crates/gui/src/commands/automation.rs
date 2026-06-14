@@ -10,18 +10,14 @@ pub async fn list_cron_jobs(
     status: Option<String>,
     limit: usize,
 ) -> Result<Vec<CronJob>, GuiError> {
-    let store = state
-        .cron_store
-        .as_ref()
-        .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
-
     let status_parsed = match status {
         Some(s) => Some(s.parse::<CronJobStatus>().map_err(GuiError::unknown)?),
         None => None,
     };
 
-    let jobs = store
-        .list(status_parsed, limit)
+    let jobs = state
+        .coordinator
+        .list_cron_jobs(status_parsed, limit)
         .await
         .map_err(|e| GuiError::kernel(format!("list cron jobs failed: {e}")))?;
 
@@ -37,12 +33,7 @@ pub async fn create_cron_job(
     max_runs: Option<u32>,
     expires_at: Option<String>,
 ) -> Result<String, GuiError> {
-    let store = state
-        .cron_store
-        .as_ref()
-        .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
-
-    let _ = kernel::cron::CronSchedule::parse(&schedule)
+    kernel::cron::CronSchedule::parse(&schedule)
         .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
 
     let action: CronAction = serde_json::from_value(action)
@@ -57,36 +48,19 @@ pub async fn create_cron_job(
         None => None,
     };
 
-    let now = chrono::Utc::now();
-    let next_run = kernel::cron::CronSchedule::parse(&schedule)
-        .ok()
-        .and_then(|s| s.next_after(now));
-
-    let job = CronJob {
-        id: CronJobId::new(),
+    let input = kernel::cron::CreateCronJobInput {
         name,
         schedule,
         action,
-        status: CronJobStatus::Active,
-        created_at: now,
-        updated_at: now,
-        next_run_at: next_run,
-        last_run_at: None,
-        run_count: 0,
         max_runs,
         expires_at,
-        last_error: None,
     };
 
-    let job_id = job.id.clone();
-    store
-        .create(&job)
+    let job_id = state
+        .coordinator
+        .create_cron_job(input)
         .await
         .map_err(|e| GuiError::kernel(format!("create cron job failed: {e}")))?;
-
-    if let Some(ref scheduler) = state.cron_scheduler {
-        scheduler.reload();
-    }
 
     Ok(job_id.0)
 }
@@ -103,13 +77,8 @@ pub async fn update_cron_job(
     max_runs: Option<u32>,
     expires_at: Option<String>,
 ) -> Result<(), GuiError> {
-    let store = state
-        .cron_store
-        .as_ref()
-        .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
-
     if let Some(ref s) = schedule {
-        let _ = kernel::cron::CronSchedule::parse(s)
+        kernel::cron::CronSchedule::parse(s)
             .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
     }
 
@@ -145,116 +114,33 @@ pub async fn update_cron_job(
         ..Default::default()
     };
 
-    store
-        .update(&CronJobId(job_id), &input)
+    state
+        .coordinator
+        .update_cron_job(&CronJobId(job_id), input)
         .await
         .map_err(|e| GuiError::kernel(format!("update cron job failed: {e}")))?;
-
-    if let Some(ref scheduler) = state.cron_scheduler {
-        scheduler.reload();
-    }
 
     Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
-    let store = state
-        .cron_store
-        .as_ref()
-        .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
-
-    store
-        .delete(&CronJobId(job_id))
+    state
+        .coordinator
+        .delete_cron_job(&CronJobId(job_id))
         .await
         .map_err(|e| GuiError::kernel(format!("delete cron job failed: {e}")))?;
-
-    if let Some(ref scheduler) = state.cron_scheduler {
-        scheduler.reload();
-    }
 
     Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn trigger_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
-    let store = state
-        .cron_store
-        .as_ref()
-        .ok_or_else(|| GuiError::unknown("cron store not configured"))?;
-
-    let job = store
-        .get(&CronJobId(job_id.clone()))
+    state
+        .coordinator
+        .trigger_cron_job(&CronJobId(job_id))
         .await
-        .map_err(|e| GuiError::kernel(format!("get cron job failed: {e}")))?
-        .ok_or_else(|| GuiError::unknown("cron job not found"))?;
+        .map_err(|e| GuiError::kernel(format!("trigger cron job failed: {e}")))?;
 
-    let result = execute_cron_action(state.coordinator.as_ref(), &job.action).await;
-
-    let error = match &result {
-        Ok(()) => None,
-        Err(e) => {
-            tracing::error!("Cron job {} trigger failed: {}", job_id, e);
-            Some(e.clone())
-        }
-    };
-
-    store
-        .record_execution(&CronJobId(job_id), error)
-        .await
-        .map_err(|e| GuiError::kernel(format!("record execution failed: {e}")))?;
-
-    result.map_err(GuiError::unknown)
-}
-
-async fn execute_cron_action(
-    coordinator: &dyn kernel::client::CoordinatorApi,
-    action: &CronAction,
-) -> Result<(), String> {
-    match action {
-        CronAction::SendMessage {
-            session_id,
-            content,
-        } => {
-            let sid = kernel::types::SessionId(session_id.clone());
-            let text = content
-                .replace("{{timestamp}}", &chrono::Utc::now().to_rfc3339())
-                .replace(
-                    "{{date}}",
-                    &chrono::Utc::now().format("%Y-%m-%d").to_string(),
-                )
-                .replace(
-                    "{{time}}",
-                    &chrono::Utc::now().format("%H:%M:%S").to_string(),
-                );
-            let blocks = vec![kernel::types::ContentBlock::Text { text }];
-            coordinator
-                .send_message(&sid, blocks)
-                .await
-                .map_err(|e| format!("send message failed: {e}"))?;
-        }
-        CronAction::Shell {
-            command,
-            working_dir,
-        } => {
-            let output = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(working_dir.as_deref().unwrap_or("."))
-                .kill_on_drop(true)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output()
-                .await
-                .map_err(|e| format!("shell command failed: {e}"))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("shell command failed: {stderr}"));
-            }
-        }
-        CronAction::Internal { .. } => {
-            return Err("Internal cron actions cannot be triggered manually".to_string());
-        }
-    }
     Ok(())
 }

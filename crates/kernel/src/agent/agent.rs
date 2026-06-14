@@ -7,7 +7,7 @@ use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::executor::{ToolExecutionResult, ToolExecParams};
+use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
@@ -500,9 +500,10 @@ impl Agent {
             {
                 tracing::warn!("Failed to send rewind error result: {:?}", e);
             }
-            return Err(AgentError::Serialization(
-                format!("Message {} not found", message_id.as_str()),
-            ));
+            return Err(AgentError::Serialization(format!(
+                "Message {} not found",
+                message_id.as_str()
+            )));
         }
 
         let result = super::turn::Turn::rewind_to_checkpoint(
@@ -1370,20 +1371,18 @@ impl Agent {
         let results = if approved_calls.is_empty() {
             Vec::new()
         } else {
-            crate::tools::execute_tools_parallel(
-                &ToolExecParams {
-                    agent_id: &self.id,
-                    tool_calls: &approved_calls,
-                    tool_registry: &self.tool_registry,
-                    cancel_token: Some(&cancel_token),
-                    parent_messages: Some(self.message_buffer.messages()),
-                    working_dir: &self.working_dir,
-                    session_id: &self.session_id,
-                    message_ids: &tool_message_ids,
-                    turn: turn_for_tools,
-                    skills: &self.skills,
-                },
-            )
+            crate::tools::execute_tools_parallel(&ToolExecParams {
+                agent_id: &self.id,
+                tool_calls: &approved_calls,
+                tool_registry: &self.tool_registry,
+                cancel_token: Some(&cancel_token),
+                parent_messages: Some(self.message_buffer.messages()),
+                working_dir: &self.working_dir,
+                session_id: &self.session_id,
+                message_ids: &tool_message_ids,
+                turn: turn_for_tools,
+                skills: &self.skills,
+            })
             .await
         };
 

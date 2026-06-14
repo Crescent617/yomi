@@ -34,7 +34,8 @@ impl TodoTool {
         ctx: &ToolExecCtx<'_>,
     ) -> Result<ToolOutput> {
         // Lock on session_id to prevent concurrent todo modifications
-        let _lock = g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
+        let _lock =
+            g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
 
         // Validate todo items
         for item in todos_array {
@@ -69,7 +70,8 @@ impl TodoTool {
         ctx: &ToolExecCtx<'_>,
     ) -> Result<ToolOutput> {
         // Lock on session_id to prevent concurrent todo modifications
-        let _lock = g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
+        let _lock =
+            g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
 
         // Load current todos
         let mut todos: Value = match self.storage.load(&ctx.session_id).await? {

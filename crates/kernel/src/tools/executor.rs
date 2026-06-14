@@ -176,9 +176,7 @@ pub struct ToolExecParams<'a> {
 /// ensuring checkpoints capture the state BEFORE modification.
 ///
 /// Returns both the execution results and any files that were tracked for checkpointing.
-pub async fn execute_tools_parallel(
-    params: &ToolExecParams<'_>,
-) -> Vec<ToolExecutionResult> {
+pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExecutionResult> {
     let tool_count = params.tool_calls.len();
     tracing::info!("Executing {} tool(s) in parallel", tool_count);
 

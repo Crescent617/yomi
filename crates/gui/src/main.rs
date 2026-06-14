@@ -4,8 +4,6 @@ mod daemon;
 mod error;
 mod state;
 
-use std::sync::Arc;
-
 use state::AppState;
 use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -19,16 +17,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            let init = tauri::async_runtime::block_on(daemon::init_coordinator(true))
-                .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
-            let coordinator: Arc<dyn kernel::client::CoordinatorApi> = init.coordinator.clone();
-            let cron_store = init.coordinator.cron_store();
-            app.manage(AppState::new(
-                coordinator,
-                init.cron_shutdown,
-                cron_store,
-                init.cron_scheduler,
-            ));
+            let coordinator = tauri::async_runtime::block_on(daemon::get_coordinator())
+                .map_err(|e| format!("failed to get coordinator: {e}"))?;
+            app.manage(AppState::new(coordinator));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,9 +84,19 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let builder = builder.plugin(tauri_plugin_pilot::init());
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            tauri::async_runtime::block_on(async {
+                if let Err(e) = daemon::stop_daemon().await {
+                    tracing::warn!("Failed to stop daemon: {e}");
+                }
+            });
+        }
+    });
 }
 
 fn main() {

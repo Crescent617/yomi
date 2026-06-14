@@ -413,7 +413,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -441,7 +443,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -469,7 +473,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -499,7 +505,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -529,7 +537,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -559,7 +569,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;
@@ -588,7 +600,9 @@ mod tests {
         let file_name = temp_file.path().file_name().unwrap().to_str().unwrap();
 
         let store = Arc::new(FileStateStore::new());
-        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap()).await.unwrap();
+        let mtime = get_mtime(&temp_file.path().canonicalize().unwrap())
+            .await
+            .unwrap();
         store
             .record(temp_file.path().canonicalize().unwrap(), mtime)
             .await;

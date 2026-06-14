@@ -156,6 +156,7 @@ pub trait CoordinatorApi: Send + Sync {
         input: crate::cron::UpdateCronJobInput,
     ) -> Result<bool>;
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
+    async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()>;
 }
 
 // ── LocalCoordinator (existing Coordinator wrapped) ──────────────────────
@@ -387,6 +388,10 @@ impl CoordinatorApi for Coordinator {
 
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
         Self::delete_cron_job(self, id).await
+    }
+
+    async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
+        Self::trigger_cron_job(self, id).await
     }
 }
 
@@ -1267,5 +1272,13 @@ impl CoordinatorApi for RemoteCoordinator {
             .await?;
         let deleted: bool = serde_json::from_value(result)?;
         Ok(deleted)
+    }
+
+    async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
+        self.call(RequestMethod::TriggerCronJob {
+            job_id: id.0.clone(),
+        })
+        .await?;
+        Ok(())
     }
 }

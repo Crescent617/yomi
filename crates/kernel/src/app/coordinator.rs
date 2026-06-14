@@ -1203,6 +1203,35 @@ impl Coordinator {
             crate::types::KernelError::storage(format!("Failed to delete cron job: {e}"))
         })
     }
+
+    /// Trigger a cron job manually (execute immediately, record result).
+    pub async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
+        let store = self
+            .cron_store
+            .as_ref()
+            .ok_or_else(|| crate::types::KernelError::storage("Cron store not configured"))?;
+
+        let job = store
+            .get(id)
+            .await
+            .map_err(|e| {
+                crate::types::KernelError::storage(format!("Failed to get cron job: {e}"))
+            })?
+            .ok_or_else(|| crate::types::KernelError::storage("Cron job not found"))?;
+
+        let result = crate::cron::CronExecutor::execute_cron_action(self, &job.action).await;
+
+        let error = match &result {
+            Ok(()) => None,
+            Err(e) => Some(e.to_string()),
+        };
+
+        store.record_execution(id, error).await.map_err(|e| {
+            crate::types::KernelError::storage(format!("Failed to record execution: {e}"))
+        })?;
+
+        result.map_err(|e| crate::types::KernelError::storage(e.to_string()))
+    }
 }
 
 #[async_trait::async_trait]

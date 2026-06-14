@@ -5,16 +5,18 @@
 
 use crate::agent::AgentInput;
 use crate::event::Event;
+use crate::tools::helper::file_state::FileStateStore;
 use crate::tools::{
     AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
     SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool, WebSearchTool, WriteTool,
 };
-use crate::tools::helper::file_state::FileStateStore;
 use crate::types::AgentId;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Feature flags for tool registry configuration.
+/// These are independent on/off switches, so a simple struct is intentional.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ToolFlags {
     pub sub_agents: bool,
@@ -31,9 +33,9 @@ pub struct ToolRegistryConfig<'a> {
     pub session_id: &'a str,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
-    pub flags: ToolFlags,
     pub ask_user_state: Option<crate::tools::AskUserState>,
     pub tool_blocklist: Vec<String>,
+    pub flags: ToolFlags,
 }
 
 impl<'a> ToolRegistryConfig<'a> {
@@ -52,9 +54,9 @@ impl<'a> ToolRegistryConfig<'a> {
             session_id,
             input_tx: Some(input_tx),
             file_state_store: None,
-            flags: ToolFlags::default(),
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
+            flags: ToolFlags::default(),
         }
     }
 
@@ -72,9 +74,9 @@ impl<'a> ToolRegistryConfig<'a> {
             session_id,
             input_tx: None,
             file_state_store: None,
-            flags: ToolFlags::default(),
             ask_user_state: None,
             tool_blocklist: shared.tool_blocklist.clone(),
+            flags: ToolFlags::default(),
         }
     }
 
@@ -87,10 +89,7 @@ impl<'a> ToolRegistryConfig<'a> {
 
     /// Set the file state store.
     #[must_use]
-    pub fn with_file_state_store(
-        mut self,
-        store: Option<Arc<FileStateStore>>,
-    ) -> Self {
+    pub fn with_file_state_store(mut self, store: Option<Arc<FileStateStore>>) -> Self {
         self.file_state_store = store;
         self
     }
@@ -161,7 +160,9 @@ impl ToolRegistryFactory {
                 );
                 registry.register(subagent_tool);
             } else {
-                tracing::warn!("SubAgent tool enabled but input_tx not provided; skipping registration");
+                tracing::warn!(
+                    "SubAgent tool enabled but input_tx not provided; skipping registration"
+                );
             }
         }
 

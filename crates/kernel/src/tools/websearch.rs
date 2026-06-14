@@ -68,7 +68,9 @@ impl Tool for WebSearchTool {
             .ok_or_else(|| KernelError::tool("Missing 'query' argument"))?;
 
         if query.is_empty() {
-            return Ok(ToolOutput::error("Search query cannot be empty".to_string()));
+            return Ok(ToolOutput::error(
+                "Search query cannot be empty".to_string(),
+            ));
         }
         if query.len() > MAX_QUERY_LENGTH {
             return Ok(ToolOutput::error(format!(
