@@ -156,7 +156,7 @@ impl Component for TodoList {
             .unwrap_or(0);
 
         let goal_width = if let Some(ref goal) = self.goal {
-            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            let text = format!("🎯 {}", goal.description);
             unicode_width::UnicodeWidthStr::width(text.as_str())
         } else {
             0
@@ -168,7 +168,7 @@ impl Component for TodoList {
         // Estimate goal height (max 3 lines)
         let estimated_inner_width = panel_width.saturating_sub(2) as usize;
         let estimated_goal_lines = if let Some(ref goal) = self.goal {
-            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            let text = format!("🎯 {}", goal.description);
             let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
             let width = estimated_inner_width.max(1);
             text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16
@@ -218,22 +218,17 @@ impl Component for TodoList {
                 _ => colors::text_muted(),
             };
 
-            let text = format!("🎯 [{}] {}", goal.status, goal.description);
+            let text = format!("🎯 {}", goal.description);
             let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
             let width = inner.width.max(1) as usize;
             let goal_lines = text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16;
 
-            let goal_line = Line::from(vec![
-                Span::styled("🎯 ", Style::default().fg(status_fg)),
-                Span::styled(
-                    format!("[{}] ", goal.status),
-                    Style::default().fg(status_fg).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    goal.description.clone(),
-                    Style::default().fg(colors::text_primary()),
-                ),
-            ]);
+            let goal_line = Line::from(vec![Span::styled(
+                format!("🎯 {}", goal.description),
+                Style::default()
+                    .fg(status_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]);
 
             let goal_area = Rect {
                 x: inner.x,
