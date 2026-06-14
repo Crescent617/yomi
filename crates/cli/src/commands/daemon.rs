@@ -84,11 +84,15 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 tokio::spawn(async move {
                     #[cfg(unix)]
                     {
-                        use tokio::signal::unix::{signal, SignalKind};
-                        let mut sigterm = signal(SignalKind::terminate())
-                            .expect("Failed to register SIGTERM handler");
-                        let mut sigint = signal(SignalKind::interrupt())
-                            .expect("Failed to register SIGINT handler");
+                        let mut sigterm = tokio::signal::unix::signal(
+                            tokio::signal::unix::SignalKind::terminate(),
+                        )
+                        .expect("Failed to register SIGTERM handler");
+                        let mut sigint = tokio::signal::unix::signal(
+                            tokio::signal::unix::SignalKind::interrupt(),
+                        )
+                        .expect("Failed to register SIGINT handler");
+                        let shutdown_clone = shutdown_sig.clone();
                         tokio::select! {
                             _ = sigterm.recv() => {
                                 tracing::info!("Received SIGTERM, initiating graceful shutdown");
@@ -96,12 +100,22 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                             _ = sigint.recv() => {
                                 tracing::info!("Received SIGINT, initiating graceful shutdown");
                             }
+                            () = shutdown_clone.cancelled() => {
+                                // shutdown triggered by idle auto-exit or external
+                            }
                         }
                     }
-                    #[cfg(windows)]
+                    #[cfg(not(unix))]
                     {
-                        let _ = tokio::signal::ctrl_c().await;
-                        tracing::info!("Received Ctrl-C, initiating graceful shutdown");
+                        let shutdown_clone = shutdown_sig.clone();
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("Received Ctrl-C, initiating graceful shutdown");
+                            }
+                            () = shutdown_clone.cancelled() => {
+                                // shutdown triggered externally
+                            }
+                        }
                     }
                     shutdown_sig.cancel();
                 });
