@@ -16,9 +16,7 @@ use tuirealm::{
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{
-            Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget,
-        },
+        widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget},
         Frame,
     },
     state::State,
@@ -153,9 +151,7 @@ impl Component for TodoList {
         let max_todo_width = sorted_todos
             .iter()
             .take(MAX_DISPLAY_TODOS)
-            .map(|todo| {
-                ICON_WIDTH + unicode_width::UnicodeWidthStr::width(todo.content.as_str())
-            })
+            .map(|todo| ICON_WIDTH + unicode_width::UnicodeWidthStr::width(todo.content.as_str()))
             .max()
             .unwrap_or(0);
 
@@ -167,8 +163,7 @@ impl Component for TodoList {
         };
 
         let max_content_width = max_todo_width.max(goal_width);
-        let panel_width =
-            (max_content_width as u16 + PANEL_MARGIN).min(area.width * 2 / 5);
+        let panel_width = (max_content_width as u16 + PANEL_MARGIN).min(area.width * 2 / 5);
 
         // Estimate goal height (max 3 lines)
         let estimated_inner_width = panel_width.saturating_sub(2) as usize;
@@ -226,16 +221,13 @@ impl Component for TodoList {
             let text = format!("🎯 [{}] {}", goal.status, goal.description);
             let text_width = unicode_width::UnicodeWidthStr::width(text.as_str());
             let width = inner.width.max(1) as usize;
-            let goal_lines =
-                text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16;
+            let goal_lines = text_width.div_ceil(width).min(MAX_GOAL_LINES) as u16;
 
             let goal_line = Line::from(vec![
                 Span::styled("🎯 ", Style::default().fg(status_fg)),
                 Span::styled(
                     format!("[{}] ", goal.status),
-                    Style::default()
-                        .fg(status_fg)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(status_fg).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     goal.description.clone(),
@@ -251,8 +243,7 @@ impl Component for TodoList {
             };
 
             frame.render_widget(
-                Paragraph::new(goal_line)
-                    .wrap(tuirealm::ratatui::widgets::Wrap { trim: true }),
+                Paragraph::new(goal_line).wrap(tuirealm::ratatui::widgets::Wrap { trim: true }),
                 goal_area,
             );
             y += goal_lines;
@@ -292,9 +283,7 @@ impl Component for TodoList {
                 .take(MAX_DISPLAY_TODOS)
                 .map(|todo| {
                     let (icon, style) = match todo.status {
-                        TodoStatus::Pending => {
-                            ("○", Style::default().fg(colors::text_primary()))
-                        }
+                        TodoStatus::Pending => ("○", Style::default().fg(colors::text_primary())),
                         TodoStatus::InProgress => (
                             "●",
                             Style::default()
@@ -326,8 +315,8 @@ impl Component for TodoList {
                 )])));
             }
 
-            let list = List::new(items)
-                .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+            let list =
+                List::new(items).highlight_style(Style::default().add_modifier(Modifier::BOLD));
             frame.render_widget(list, list_area);
         }
     }

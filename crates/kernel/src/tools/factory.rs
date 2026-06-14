@@ -221,7 +221,10 @@ impl ToolRegistryFactory {
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry
         if !config.tool_blocklist.is_empty() {
-            if let Ok(set) = regex::RegexSet::new(&config.tool_blocklist) {
+            if let Ok(set) = regex::RegexSetBuilder::new(&config.tool_blocklist)
+                .case_insensitive(true)
+                .build()
+            {
                 let to_remove: Vec<String> = registry
                     .list()
                     .into_iter()
