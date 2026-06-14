@@ -646,9 +646,7 @@ impl KernelServer {
                         if let Some(ref scheduler) = self.cron_scheduler {
                             scheduler.reload();
                         }
-                        ResponseBody::Ok {
-                            result: serde_json::json!({"job_id": job_id.0}),
-                        }
+                        ok_body(JobIdResponse { job_id: job_id.0 })
                     }
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
@@ -796,11 +794,36 @@ impl KernelServer {
                 }
             }
 
-            RequestMethod::Hello => ResponseBody::Ok {
-                result: serde_json::json!({
-                    "proto": crate::wire::WIRE_PROTOCOL_VERSION,
-                }),
-            },
+            // ── Usage ───────────────────────────────────────────────────────
+            RequestMethod::GetUsageSummary { days } => {
+                let days = days.unwrap_or(365);
+                match self.coordinator.get_usage_summary(days).await {
+                    Ok(summary) => ok_body(summary),
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "get_usage_summary_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+            RequestMethod::GetDailyUsage { days } => {
+                match self.coordinator.get_daily_usage(days).await {
+                    Ok(daily) => ok_body(daily),
+                    Err(e) => ResponseBody::Err {
+                        error: RpcError {
+                            code: "get_daily_usage_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
+
+            RequestMethod::Hello => ok_body(ProtoResponse {
+                proto: crate::wire::WIRE_PROTOCOL_VERSION,
+            }),
         }
     }
 }
@@ -880,6 +903,31 @@ async fn dispatch_command(
             Ok(serde_json::Value::Null)
         }
     }
+}
+
+
+/// Serialize a value into `ResponseBody::Ok`, handling serialization errors.
+fn ok_body<T: serde::Serialize>(val: T) -> ResponseBody {
+    match serde_json::to_value(val) {
+        Ok(v) => ResponseBody::Ok { result: v },
+        Err(e) => ResponseBody::Err {
+            error: RpcError {
+                code: "serialize_error".to_string(),
+                message: e.to_string(),
+                detail: None,
+            },
+        },
+    }
+}
+
+#[derive(serde::Serialize)]
+struct JobIdResponse {
+    job_id: String,
+}
+
+#[derive(serde::Serialize)]
+struct ProtoResponse {
+    proto: u32,
 }
 
 fn rpc_body<T: serde::Serialize>(

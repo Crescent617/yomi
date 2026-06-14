@@ -71,7 +71,6 @@ pub fn run() {
             commands::system::get_config,
             commands::system::get_usage_summary,
             commands::system::get_daily_usage,
-            commands::system::get_session_usage,
             commands::system::open_in_explorer,
             commands::system::open_in_vscode,
             commands::system::open_in_zed,

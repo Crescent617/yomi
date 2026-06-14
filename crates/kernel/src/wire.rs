@@ -119,6 +119,14 @@ pub enum RequestMethod {
     DeleteCronJob {
         job_id: String,
     },
+
+    // ── Usage ───────────────────────────────────────────────────────
+    GetUsageSummary {
+        days: Option<i64>,
+    },
+    GetDailyUsage {
+        days: i64,
+    },
 }
 
 /// Response body — tagged union, no serde magic.

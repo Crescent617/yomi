@@ -268,7 +268,6 @@ export async function getUsageSummary(): Promise<{
   prompt_tokens: number;
   completion_tokens: number;
   cached_tokens: number;
-  total_tokens: number;
   request_count: number;
 }> {
   return invokeCmd("get_usage_summary");
@@ -280,22 +279,11 @@ export async function getDailyUsage(days: number): Promise<
     prompt_tokens: number;
     completion_tokens: number;
     cached_tokens: number;
-    total_tokens: number;
     request_count: number;
     models: string[];
   }[]
 > {
   return invokeCmd("get_daily_usage", { days });
-}
-
-export async function getSessionUsage(session_id: string): Promise<{
-  prompt_tokens: number;
-  completion_tokens: number;
-  cached_tokens: number;
-  total_tokens: number;
-  request_count: number;
-}> {
-  return invokeCmd("get_session_usage", { session_id: session_id });
 }
 
 export async function getTodos(session_id: string): Promise<{

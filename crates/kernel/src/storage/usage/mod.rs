@@ -93,7 +93,7 @@ impl UsageRecord {
 }
 
 /// Aggregated usage summary for a time range
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct UsageSummary {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -109,7 +109,7 @@ impl UsageSummary {
 }
 
 /// Daily usage summary
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct DailyUsage {
     /// Date in local timezone (YYYY-MM-DD)
     pub date: String,

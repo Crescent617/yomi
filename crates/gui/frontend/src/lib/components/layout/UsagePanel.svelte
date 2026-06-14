@@ -360,11 +360,11 @@
 
       const sum = await api.getUsageSummary();
       console.log("[UsagePanel] summary ok", sum);
-      summary = sum;
+      summary = { ...sum, total_tokens: sum.prompt_tokens + sum.completion_tokens };
 
       const d = await api.getDailyUsage(DAYS_RANGE);
       console.log("[UsagePanel] daily ok", d?.length ?? 0, "days");
-      daily = d ?? [];
+      daily = (d ?? []).map((day) => ({ ...day, total_tokens: day.prompt_tokens + day.completion_tokens }));
     } catch (e: unknown) {
       console.error("[UsagePanel] loadData failed:", e instanceof Error ? e.message : e);
     } finally {
