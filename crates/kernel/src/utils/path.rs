@@ -24,13 +24,10 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Generate default skill folders based on `working_dir` and `data_dir`
-pub fn default_skill_folders(
-    working_dir: &std::path::Path,
-    data_dir: &std::path::Path,
-) -> Vec<PathBuf> {
+/// Generate default skill folders based on `data_dir`
+/// (project-level skills are resolved per-session by the coordinator).
+pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
     vec![
-        working_dir.join(".agents/skills"),
         data_dir.join("skills"),
         expand_tilde("~/.agents/skills"),
         expand_tilde("~/.claude/skills"),
@@ -75,15 +72,13 @@ mod tests {
 
     #[test]
     fn test_default_skill_folders() {
-        let working = PathBuf::from("/working");
         let data = PathBuf::from("/data");
-        let folders = default_skill_folders(&working, &data);
+        let folders = default_skill_folders(&data);
 
-        assert_eq!(folders.len(), 4);
-        assert_eq!(folders[0], PathBuf::from("/working/.agents/skills"));
-        assert_eq!(folders[1], PathBuf::from("/data/skills"));
-        // [2] and [3] depend on HOME, just check they end correctly
-        assert!(folders[2].to_string_lossy().ends_with("/.agents/skills"));
-        assert!(folders[3].to_string_lossy().ends_with("/.claude/skills"));
+        assert_eq!(folders.len(), 3);
+        assert_eq!(folders[0], PathBuf::from("/data/skills"));
+        // [1] and [2] depend on HOME, just check they end correctly
+        assert!(folders[1].to_string_lossy().ends_with("/.agents/skills"));
+        assert!(folders[2].to_string_lossy().ends_with("/.claude/skills"));
     }
 }

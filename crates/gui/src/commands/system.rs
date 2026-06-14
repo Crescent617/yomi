@@ -64,8 +64,6 @@ pub async fn save_config_toml(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
-    let working_dir = std::env::current_dir()
-        .map_err(|e| GuiError::unknown(format!("Failed to get cwd: {e}")))?;
     let config_file = kernel::config::Config::discover_file();
     let mut config = if let Some(ref path) = config_file {
         kernel::config::Config::from_file(path)
@@ -74,7 +72,7 @@ pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value
         kernel::config::Config::default()
     };
     config.apply_env_overrides();
-    config.finalize(&working_dir);
+    config.finalize();
 
     let model = config.agent.model.model_id.clone();
     let context_window = config.agent.compactor.context_window;

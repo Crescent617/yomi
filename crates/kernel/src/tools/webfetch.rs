@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-pub const WEBFETCH_TOOL_NAME: &str = "webfetch";
+pub const WEBFETCH_TOOL_NAME: &str = "webFetch";
 
 // 15 minute cache TTL
 const CACHE_TTL: Duration = Duration::from_mins(15);

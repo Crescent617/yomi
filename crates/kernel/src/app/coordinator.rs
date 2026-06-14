@@ -125,6 +125,7 @@ impl Coordinator {
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
         hook_registry: Option<crate::hooks::HookRegistry>,
+        enable_cron: bool,
     ) -> Arc<Self> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -167,7 +168,11 @@ impl Coordinator {
         let session_event_senders = Arc::new(DashMap::new());
         let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
         let agent_config = Arc::new(RwLock::new(agent_config));
-        let cron_store = Some(storage.cron_store());
+        let cron_store = if enable_cron {
+            Some(storage.cron_store())
+        } else {
+            None
+        };
 
         Self::spawn_session_pruner(Arc::clone(&sessions), Arc::clone(&session_event_senders));
 
@@ -1004,7 +1009,7 @@ impl Coordinator {
             },
         };
         config.apply_env_overrides();
-        config.finalize(base_dir);
+        config.finalize();
 
         let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
             match config.agent.model.provider {

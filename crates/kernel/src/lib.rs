@@ -96,3 +96,104 @@ pub use task::{
     UpdateTaskOutput, TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME,
     TASK_UPDATE_TOOL_NAME,
 };
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Full coordinator initialisation: load config, apply env overrides,
+/// finalise, and build a `Coordinator` with the given cron setting.
+///
+/// `config_path` overrides the default config discovery when provided.
+///
+/// Returns `(coordinator, config, config_file)` so callers can derive `base_dir`
+/// from `config_file.parent()` if needed.
+pub async fn init_coordinator(
+    config_path: Option<&PathBuf>,
+    enable_cron: bool,
+) -> Result<(Arc<Coordinator>, Config, Option<PathBuf>)> {
+    let config_file = config_path.cloned().or_else(Config::discover_file);
+    let mut config = match &config_file {
+        Some(path) => Config::from_file(path)
+            .map_err(|e| KernelError::config(format!("Failed to load config: {e}")))?,
+        None => Config::default(),
+    };
+    config.apply_env_overrides();
+    config.finalize();
+
+    let coordinator = build_coordinator(&config, enable_cron).await?;
+    Ok((coordinator, config, config_file))
+}
+
+/// Create a provider from configuration.
+/// Returns `NoKeyProvider` when no API key is configured so the application can
+/// start and fail gracefully at message-send time rather than on boot.
+pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
+    if !config.has_api_key() {
+        tracing::warn!("No API key configured — using NoKeyProvider");
+        return Ok(Arc::new(NoKeyProvider));
+    }
+    match config.agent.model.provider {
+        ModelProvider::OpenAI => Ok(Arc::new(OpenAIProvider::new()?)),
+        ModelProvider::Anthropic => Ok(Arc::new(AnthropicProvider::new()?)),
+    }
+}
+
+/// Build a `Coordinator` from an already-finalized `Config`.
+///
+/// `config.data_dir` is used to resolve relative skill folders and build the agent config.
+/// This function does not discover or load config — callers must do that first.
+///
+/// Returns the fully constructed `Coordinator` wrapped in an `Arc`.
+pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc<Coordinator>> {
+    tokio::fs::create_dir_all(&config.data_dir)
+        .await
+        .map_err(|e| KernelError::storage(format!("Failed to create data directory: {e}")))?;
+
+    let storage = StorageSet::open_with_config(&config.data_dir, config)
+        .await
+        .map_err(|e| KernelError::storage(format!("Failed to open storage: {e}")))?;
+    let provider = create_provider(config)
+        .map_err(|e| KernelError::storage(format!("Failed to create provider: {e}")))?;
+    let task_store = Arc::new(
+        TaskStore::new(&config.data_dir)
+            .await
+            .map_err(|e| KernelError::storage(format!("Failed to create task store: {e}")))?,
+    );
+    let skill_folders = config
+        .skill_folders()
+        .iter()
+        .map(PathBuf::from)
+        .map(|p| {
+            if p.is_relative() {
+                config.data_dir.join(p)
+            } else {
+                p
+            }
+        })
+        .collect();
+
+    let agent_config = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || server::build_agent_config(&config, &config.data_dir)
+    })
+    .await
+    .map_err(|e| {
+        KernelError::storage(format!(
+            "Failed to build agent config in blocking task: {e}"
+        ))
+    })?;
+
+    Ok(Coordinator::new(
+        &storage,
+        provider,
+        agent_config,
+        Some(task_store),
+        Some(config.agent.compactor.clone()),
+        skill_folders,
+        config
+            .features
+            .hooks
+            .then(|| hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
+        enable_cron,
+    ))
+}

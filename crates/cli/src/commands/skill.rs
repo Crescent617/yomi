@@ -1,14 +1,12 @@
 use crate::args::GlobalArgs;
-use crate::commands::tui::resolve_skill_folders;
-use crate::utils::{load_config, resolve_working_dir};
+use crate::utils::load_config;
 use anyhow::Result;
 use kernel::skill::SkillLoader;
+use std::path::PathBuf;
 
 pub async fn list(global: &GlobalArgs) -> Result<()> {
-    let working_dir = resolve_working_dir(global)?;
-
-    let config = load_config(global.config.as_ref(), &working_dir)?;
-    let skill_folders = resolve_skill_folders(&config, &working_dir);
+    let config = load_config(global.config.as_ref())?;
+    let skill_folders = config.skill_folders().iter().map(PathBuf::from).collect();
 
     let loader = SkillLoader::new(skill_folders);
     let skills = loader.load_all().unwrap_or_default();

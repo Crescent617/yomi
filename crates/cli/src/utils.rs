@@ -1,7 +1,7 @@
 use crate::args::GlobalArgs;
 use anyhow::Result;
 use kernel::config::Config;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Global debug mode flag, initialized from DEBUG=1 environment variable
@@ -16,7 +16,7 @@ pub static DEBUG_MODE: LazyLock<bool> = LazyLock::new(|| {
 /// 2. `YOMI_CONFIG` environment variable
 /// 3. `~/.yomi/config.toml`
 /// 4. Environment variables only
-pub fn load_config(config_path: Option<&PathBuf>, working_dir: &Path) -> Result<Config> {
+pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
     let mut config = if let Some(path) = config_path {
         Config::from_file(path)?
     } else {
@@ -27,7 +27,7 @@ pub fn load_config(config_path: Option<&PathBuf>, working_dir: &Path) -> Result<
     };
 
     config.apply_env_overrides();
-    config.finalize(working_dir);
+    config.finalize();
     Ok(config)
 }
 
@@ -80,15 +80,13 @@ pub fn set_nested_value(table: &mut toml::Table, key: &str, value: String) -> Re
 
 /// Get the data directory from global args
 pub fn data_dir(global: &GlobalArgs) -> Result<PathBuf> {
-    let working_dir = resolve_working_dir(global)?;
-    let config = load_config(global.config.as_ref(), &working_dir)?;
+    let config = load_config(global.config.as_ref())?;
     Ok(config.data_dir)
 }
 
 /// Open storage with configuration from global args
 pub async fn open_storage(global: &GlobalArgs) -> Result<kernel::StorageSet> {
-    let working_dir = resolve_working_dir(global)?;
-    let config = load_config(global.config.as_ref(), &working_dir)?;
+    let config = load_config(global.config.as_ref())?;
     kernel::StorageSet::open_with_config(&config.data_dir, &config)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to open storage: {e}"))

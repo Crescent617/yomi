@@ -181,7 +181,10 @@ impl Config {
 
     /// Finalize configuration by computing and filling in default values.
     /// Call this after all configuration sources are loaded.
-    pub fn finalize(&mut self, working_dir: &std::path::Path) {
+    pub fn finalize(&mut self) {
+        // Expand ~ in data_dir if not already done
+        self.data_dir = expand_tilde(self.data_dir.to_string_lossy());
+
         // Fill log_dir default if not set
         if self.log_dir.is_none() {
             self.log_dir = Some(self.data_dir.join("logs"));
@@ -190,7 +193,7 @@ impl Config {
         // Fill skill_folders default if not set
         if self.skill_folders.is_none() {
             self.skill_folders = Some(
-                default_skill_folders(working_dir, &self.data_dir)
+                default_skill_folders(&self.data_dir)
                     .into_iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect(),
