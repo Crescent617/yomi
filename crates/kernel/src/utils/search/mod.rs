@@ -193,7 +193,10 @@ pub async fn fetch_content(url: &str) -> Result<String, String> {
     let truncated = truncate_with_suffix(
         &text,
         5_000,
-        &format!("\n\n[Content truncated - original length: {} characters]", text.len()),
+        &format!(
+            "\n\n[Content truncated - original length: {} characters]",
+            text.len()
+        ),
     );
 
     Ok(truncated)

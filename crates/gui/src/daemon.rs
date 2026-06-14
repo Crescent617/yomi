@@ -1,10 +1,12 @@
 //! Daemon lifecycle management for yomi-gui.
 //!
-//! Directly starts the kernel server inside the GUI process so the GUI and CLI
-//! share a single kernel. Sessions and state survive GUI restarts.
+//! Supports three connection strategies:
+//! 1. Connect to an existing yomi daemon (external or CLI-started).
+//! 2. Spawn a background daemon if none is running.
+//! 3. Fall back to an in-process coordinator for single-tenant builds.
 //!
-//! Also provides `init_coordinator` for embedding the kernel directly in-process
-//! without any IPC, useful for a single-tenant GUI build.
+//! All cron operations go through the `CoordinatorApi` so the same GUI code
+//! works regardless of which strategy is used.
 
 use anyhow::{Context, Result};
 use kernel::transport::SocketAddr;
@@ -14,9 +16,7 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 
-#[allow(dead_code)]
 const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
-#[allow(dead_code)]
 const SPAWN_READY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Global shutdown token for the in-process daemon server.
@@ -66,16 +66,41 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 pub struct KernelInit {
     pub coordinator: Arc<kernel::Coordinator>,
     /// Shutdown token for the cron subsystem (only present when cron was started).
+    #[allow(dead_code)]
     pub cron_shutdown: Option<CancellationToken>,
     /// Handle to the cron scheduler so callers can trigger reloads after mutations.
+    #[allow(dead_code)]
     pub cron_scheduler: Option<Arc<kernel::cron::CronScheduler>>,
+}
+
+/// Obtain a `CoordinatorApi` for the GUI.
+///
+/// Tries three strategies in order:
+/// 1. Connect to an existing daemon.
+/// 2. Spawn a background daemon and connect to it.
+/// 3. Fall back to an in-process coordinator.
+///
+/// Returns an error only if all three strategies fail.
+pub async fn get_coordinator() -> Result<Arc<dyn kernel::client::CoordinatorApi>, String> {
+    let addr = socket_addr();
+    if try_connect().await.is_some() {
+        return Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)));
+    }
+    if spawn_daemon().await.is_ok() {
+        return Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)));
+    }
+    let init = init_coordinator(true)
+        .await
+        .map_err(|e| format!("failed to initialise kernel coordinator: {e}"))?;
+    Ok(init.coordinator)
 }
 
 /// Initialise a `Coordinator` in-process without any IPC.
 ///
-/// Opens storage, loads config, and builds the agent.  Also starts the cron
-/// scheduler + worker because the GUI is the only consumer that needs cron.
-/// The caller should call `KernelInit::shutdown_cron()` on application exit.
+/// Opens storage, loads config, and builds the agent. Also starts the cron
+/// scheduler + worker when `enable_cron` is true. The returned `KernelInit`
+/// holds a reference to the coordinator; the cron subsystem runs in the
+/// background and will shut down when the process exits.
 ///
 /// This is the zero-overhead path for a single-tenant GUI. To support
 /// remote connections or multiple clients, use `spawn_daemon()` instead.
@@ -168,9 +193,8 @@ pub async fn init_coordinator(enable_cron: bool) -> Result<KernelInit> {
     })
 }
 
-/// Start the kernel server directly in a background tokio task.
+/// Start the kernel server in a background task.
 /// If a daemon is already accepting connections, returns Ok immediately.
-#[allow(dead_code)]
 pub async fn spawn_daemon() -> Result<()> {
     if try_connect().await.is_some() {
         tracing::info!("daemon already running, skipping spawn");
@@ -190,12 +214,7 @@ pub async fn spawn_daemon() -> Result<()> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(
-        Arc::clone(&coordinator),
-        config_file,
-        base_dir,
-        true, // enable_cron: GUI daemon has cron
-    );
+    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
     let shutdown = CancellationToken::new();
 
     {
@@ -268,109 +287,45 @@ pub async fn spawn_daemon() -> Result<()> {
     ))
 }
 
-/// Force-stop the daemon.
-#[allow(dead_code)]
+/// Stop the daemon that was spawned by this process.
+///
+/// Only deletes the PID / socket files when they point to the current process,
+/// so we never clean up a file written by another (e.g. CLI-started) daemon.
+/// If the GUI connected to an external daemon, this is a no-op.
 pub async fn stop_daemon() -> Result<()> {
+    let guard = DAEMON_SHUTDOWN.lock().await;
+    let token = guard.clone();
+    drop(guard);
+
+    let Some(token) = token else {
+        // Not our daemon — nothing to clean up.
+        return Ok(());
+    };
+
+    token.cancel();
+
     let pid_file = pid_file_path();
-    {
-        let guard = DAEMON_SHUTDOWN.lock().await;
-        if let Some(token) = guard.clone() {
-            token.cancel();
+    let own_pid = std::process::id().to_string();
+    let should_remove = match tokio::fs::read_to_string(&pid_file).await {
+        Ok(content) => content.trim() == own_pid,
+        Err(_) => false,
+    };
+
+    if should_remove {
+        let _ = tokio::fs::remove_file(&pid_file).await;
+        if let SocketAddr::Unix(ref path) = socket_addr() {
+            let _ = tokio::fs::remove_file(path).await;
         }
     }
-    let _ = tokio::fs::remove_file(&pid_file).await;
-    if let SocketAddr::Unix(ref path) = socket_addr() {
-        let _ = tokio::fs::remove_file(path).await;
-    }
 
+    // Briefly wait for the server to stop accepting so the socket is
+    // unbound before the next launch.
     let start = tokio::time::Instant::now();
     while try_connect().await.is_some() && start.elapsed() < Duration::from_secs(2) {
         sleep(Duration::from_millis(50)).await;
     }
 
     Ok(())
-}
-
-/// Gracefully shut down the daemon.
-#[allow(dead_code)]
-pub async fn graceful_shutdown() -> Result<()> {
-    let pid_file = pid_file_path();
-    if !pid_file.exists() {
-        tracing::info!("no daemon found, nothing to stop");
-        return Ok(());
-    }
-
-    {
-        let guard = DAEMON_SHUTDOWN.lock().await;
-        if let Some(token) = guard.clone() {
-            tracing::info!("cancelling in-process daemon...");
-            token.cancel();
-        } else {
-            tracing::info!("no daemon shutdown token found, cleaning up stale files");
-        }
-    }
-
-    let _ = tokio::time::timeout(Duration::from_secs(3), async {
-        while pid_file.exists() {
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-
-    if pid_file.exists() {
-        tracing::warn!("daemon did not exit gracefully, falling back to stop");
-        stop_daemon().await?;
-    } else {
-        tracing::info!("daemon shut down gracefully");
-    }
-
-    Ok(())
-}
-
-/// Check daemon status.
-#[allow(dead_code)]
-pub async fn daemon_status() -> Result<String> {
-    let addr = socket_addr();
-    let pid_file = pid_file_path();
-
-    if kernel::transport::connect(&addr).await.is_ok() {
-        return Ok("daemon is running".to_string());
-    }
-
-    let stale = if pid_file.exists() {
-        match tokio::fs::read_to_string(&pid_file).await {
-            Ok(s) => {
-                match s.trim().parse::<u32>() {
-                    Ok(pid) => {
-                        if !process_exists(pid) {
-                            true
-                        } else if pid == std::process::id() {
-                            // In-process server is not responding
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    Err(_) => true,
-                }
-            }
-            Err(_) => true,
-        }
-    } else {
-        false
-    };
-
-    if stale {
-        let _ = tokio::fs::remove_file(&pid_file).await;
-        if let SocketAddr::Unix(ref path) = addr {
-            let _ = tokio::fs::remove_file(path).await;
-        }
-        Ok("daemon is not running (stale PID cleaned)".to_string())
-    } else if pid_file.exists() {
-        Ok("daemon may be starting up".to_string())
-    } else {
-        Ok("daemon is not running".to_string())
-    }
 }
 
 fn resolve_skill_folders(

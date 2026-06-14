@@ -323,8 +323,8 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 let message_id = ctx.message_id.clone();
                 tokio::spawn(
                     async move {
-                        let (output, status) = Self::execute_simple_agent_with_shared(
-                            SubAgentExecParams {
+                        let (output, status) =
+                            Self::execute_simple_agent_with_shared(SubAgentExecParams {
                                 simple_agent: &mut simple_agent,
                                 system_prompt,
                                 history,
@@ -336,9 +336,8 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                                 shared,
                                 parent_session_id,
                                 message_id,
-                            }
-                        )
-                        .await;
+                            })
+                            .await;
 
                         // Format and send result back to parent
                         let result_text =
@@ -359,21 +358,19 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 Ok(ToolOutput::text(result))
             }
             SubAgentMode::Sync => {
-                let (output, status) = Self::execute_simple_agent_with_shared(
-                    SubAgentExecParams {
-                        simple_agent: &mut simple_agent,
-                        system_prompt,
-                        history,
-                        task: prompt,
-                        cancel_token,
-                        parent_event_tx: &self.parent_event_tx,
-                        parent_id: &self.parent_id,
-                        tool_id: ctx.tool_call_id,
-                        shared: self.shared.clone(),
-                        parent_session_id: self.parent_session_id.clone(),
-                        message_id: ctx.message_id.clone(),
-                    }
-                )
+                let (output, status) = Self::execute_simple_agent_with_shared(SubAgentExecParams {
+                    simple_agent: &mut simple_agent,
+                    system_prompt,
+                    history,
+                    task: prompt,
+                    cancel_token,
+                    parent_event_tx: &self.parent_event_tx,
+                    parent_id: &self.parent_id,
+                    tool_id: ctx.tool_call_id,
+                    shared: self.shared.clone(),
+                    parent_session_id: self.parent_session_id.clone(),
+                    message_id: ctx.message_id.clone(),
+                })
                 .await;
 
                 info!(
@@ -522,16 +519,22 @@ impl SubagentTool {
 
         let result = params
             .simple_agent
-            .execute(params.system_prompt, params.history, params.task, params.cancel_token, |event| {
-                Self::handle_model_event(
-                    &event,
-                    &mut iteration_count,
-                    &event_tx,
-                    agent_id.clone(),
-                    &tool_id_owned,
-                    &params.message_id,
-                );
-            })
+            .execute(
+                params.system_prompt,
+                params.history,
+                params.task,
+                params.cancel_token,
+                |event| {
+                    Self::handle_model_event(
+                        &event,
+                        &mut iteration_count,
+                        &event_tx,
+                        agent_id.clone(),
+                        &tool_id_owned,
+                        &params.message_id,
+                    );
+                },
+            )
             .await;
 
         // Handle result and send final progress
@@ -540,7 +543,13 @@ impl SubagentTool {
                 let total = metrics.token_usage.total_tokens();
 
                 // Record token usage for subagent
-                Self::do_record_token_usage(params.shared, &params.parent_session_id, params.parent_id, &metrics).await;
+                Self::do_record_token_usage(
+                    params.shared,
+                    &params.parent_session_id,
+                    params.parent_id,
+                    &metrics,
+                )
+                .await;
 
                 let status = if metrics.completed {
                     Self::send_progress(
@@ -597,9 +606,6 @@ impl SubagentTool {
         }
     }
 }
-
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentPreset {
@@ -760,4 +766,3 @@ VERDICT: PARTIAL
 
 For each check, show the exact command run and the actual output observed.
 ";
-

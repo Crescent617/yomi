@@ -1,7 +1,7 @@
 use crate::agent::AgentInput;
 use crate::const_concat;
-use crate::tools::helper::truncate::MAX_TOOL_OUTPUT_LENGTH;
 use crate::tools::helper::truncate::truncate_keep_edges;
+use crate::tools::helper::truncate::MAX_TOOL_OUTPUT_LENGTH;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;

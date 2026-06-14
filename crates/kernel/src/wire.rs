@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 3;
+pub const WIRE_PROTOCOL_VERSION: u32 = 4;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +111,11 @@ pub enum RequestMethod {
         max_runs: Option<u32>,
         expires_at: Option<DateTime<Utc>>,
     },
+    /// Trigger a cron job manually (execute immediately, record result).
+    TriggerCronJob {
+        job_id: String,
+    },
+
     DeleteCronJob {
         job_id: String,
     },
