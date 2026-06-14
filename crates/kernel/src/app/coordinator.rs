@@ -4,7 +4,7 @@ use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::ModelConfig;
 use crate::providers::Provider;
-use crate::storage::usage::{DailyUsage, UsageFilter, UsageSummary};
+use crate::storage::usage::{DailyUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
 use chrono::{DateTime, Utc};
@@ -1055,10 +1055,10 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Get aggregated usage summary for today
-    pub async fn get_usage_summary(&self) -> Result<UsageSummary> {
+    /// Get aggregated usage summary for the last N days
+    pub async fn get_usage_summary(&self, days: i64) -> Result<UsageSummary> {
         let now = Utc::now();
-        let start = now - chrono::Duration::days(1);
+        let start = now - chrono::Duration::days(days);
         self.usage_store().await.summarize(start, now, None).await
     }
 
@@ -1069,23 +1069,6 @@ impl Coordinator {
         self.usage_store()
             .await
             .daily_summary(start, now, None)
-            .await
-    }
-
-    /// Get usage for a specific session
-    pub async fn get_session_usage(&self, _session_id: &SessionId) -> Result<UsageSummary> {
-        let now = Utc::now();
-        let start = now - chrono::Duration::days(365); // all time
-        let filter = UsageFilter {
-            model: None,
-            provider: None,
-            usage_type: None,
-        };
-        // TODO: UsageStore doesn't support session filter yet, so we get all and filter client-side
-        // or extend the filter. For now, just return the total summary.
-        self.usage_store()
-            .await
-            .summarize(start, now, Some(&filter))
             .await
     }
 

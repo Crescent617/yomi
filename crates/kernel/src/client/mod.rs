@@ -121,12 +121,8 @@ pub trait CoordinatorApi: Send + Sync {
     async fn send_continue(&self, session_id: &SessionId) -> Result<()>;
 
     // ── Usage ──────────────────────────────────────────────────────────
-    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary>;
+    async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary>;
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>>;
-    async fn get_session_usage(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::storage::usage::UsageSummary>;
 
     // ── Cron Job ─────────────────────────────────────────────────────────
     //
@@ -341,19 +337,12 @@ impl CoordinatorApi for Coordinator {
         Self::send_continue(self, session_id).await
     }
 
-    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
-        Self::get_usage_summary(self).await
+    async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary> {
+        Self::get_usage_summary(self, days).await
     }
 
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
         Self::get_daily_usage(self, days).await
-    }
-
-    async fn get_session_usage(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::storage::usage::UsageSummary> {
-        Self::get_session_usage(self, session_id).await
     }
 
     async fn create_cron_job(
@@ -1177,19 +1166,22 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(())
     }
 
-    async fn get_usage_summary(&self) -> Result<crate::storage::usage::UsageSummary> {
-        Ok(crate::storage::usage::UsageSummary::default())
+    async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary> {
+        let result = self
+            .call(RequestMethod::GetUsageSummary {
+                days: Some(days),
+            })
+            .await?;
+        let summary = serde_json::from_value(result)?;
+        Ok(summary)
     }
 
-    async fn get_daily_usage(&self, _days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
-        Ok(Vec::new())
-    }
-
-    async fn get_session_usage(
-        &self,
-        _session_id: &SessionId,
-    ) -> Result<crate::storage::usage::UsageSummary> {
-        Ok(crate::storage::usage::UsageSummary::default())
+    async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
+        let result = self
+            .call(RequestMethod::GetDailyUsage { days })
+            .await?;
+        let daily: Vec<crate::storage::usage::DailyUsage> = serde_json::from_value(result)?;
+        Ok(daily)
     }
 
     async fn create_cron_job(
