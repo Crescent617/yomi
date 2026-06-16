@@ -99,8 +99,18 @@ pub fn run() {
 }
 
 fn main() {
+    // Load ~/.env before anything else so env vars are available to the app.
+    if let Some(home) = std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok()) {
+        let env_path = std::path::Path::new(&home).join(".env");
+        if env_path.exists() {
+            if let Err(e) = dotenvy::from_path(&env_path) {
+                eprintln!("Failed to load {}: {e}", env_path.display());
+            }
+        }
+    }
+
     if let Err(e) = fix_path_env::fix() {
-        tracing::debug!("Failed to fix PATH environment: {e}");
+        tracing::warn!("Failed to fix PATH environment: {e}");
     }
     let _guard = init_logging();
     run();

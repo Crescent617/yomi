@@ -34,6 +34,8 @@
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
+  let homeComposing = $state(false);
+  let homeIgnoreNextEnter = $state(false);
   let homeInput = $state("");
   let submitting = $state(false);
   let homeFileAttachments = $state<string[]>([]);
@@ -502,6 +504,11 @@
   }
 
   function handleHomeKeydown(e: KeyboardEvent) {
+    // Ignore key events while IME is composing or right after composition ends
+    if (e.isComposing || homeComposing) {
+      return;
+    }
+
     // Command picker navigation
     if (showCommands) {
       if (e.key === "ArrowDown") {
@@ -542,6 +549,12 @@
       }
     }
     if (e.key === "Enter" && !e.shiftKey) {
+      // If this Enter is right after IME composition ends, ignore it
+      if (homeIgnoreNextEnter) {
+        homeIgnoreNextEnter = false;
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       handleHomeSubmit();
     }
@@ -687,6 +700,12 @@
                 oninput={detectHomeCompletion}
                 onfocus={detectHomeCompletion}
                 onpaste={handleHomePaste}
+                oncompositionstart={() => homeComposing = true}
+                oncompositionend={() => {
+                  homeComposing = false;
+                  homeIgnoreNextEnter = true;
+                  setTimeout(() => homeIgnoreNextEnter = false, 100);
+                }}
                 placeholder="Ask anything... (type @ to reference files, / for commands)"
                 rows={3}
                 disabled={submitting}
