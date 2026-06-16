@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.40"
+version = "0.2.41"
 edition = "2021"
 authors = ["Huaru Li <crescent617@outlook.com>"]
 license = "MIT"
@@ -94,3 +94,4 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", default-features = false }
 tauri-plugin-store = "2"
+dotenvy = "0.15"
