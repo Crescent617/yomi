@@ -12,14 +12,18 @@ lint:
 lint-fix:
     cargo clippy --fix --allow-dirty
     cargo fmt
+    cd crates/gui/frontend && npm run lint:fix
+    cd crates/gui/frontend && npm run format
 
 # Format all code
 fmt:
     cargo fmt
+    cd crates/gui/frontend && npm run format
 
 # Check formatting without modifying files
 fmt-check:
     cargo fmt -- --check
+    cd crates/gui/frontend && npm run format:check
 
 # Full CI check - runs check, clippy, test, and fmt-check
 ci: check lint test fmt-check

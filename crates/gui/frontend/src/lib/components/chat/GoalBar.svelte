@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Clock, ListChecks, Target, Pause, Play, Square, Pencil } from "lucide-svelte";
+  import {
+    Clock,
+    ListChecks,
+    Target,
+    Pause,
+    Play,
+    Square,
+    Pencil,
+  } from "lucide-svelte";
   import { getActiveSession } from "../../state.svelte";
   import * as api from "../../api";
 
@@ -16,8 +24,10 @@
 
   let posX = $state(0);
   let posY = $state(0);
-  let startX = 0, startY = 0;
-  let dragStartPosX = 0, dragStartPosY = 0;
+  let startX = 0,
+    startY = 0;
+  let dragStartPosX = 0,
+    dragStartPosY = 0;
   let hasDragged = false;
 
   const goal = $derived(activeSession?.goal ?? null);
@@ -28,26 +38,32 @@
       todoItems = [];
       return;
     }
-    api.getTodos(id).then((result) => {
-      todoItems = result.todos ?? [];
-    }).catch(() => {
-      todoItems = [];
-    });
+    api
+      .getTodos(id)
+      .then((result) => {
+        todoItems = result.todos ?? [];
+      })
+      .catch(() => {
+        todoItems = [];
+      });
   }
 
   function loadGoal() {
     const id = activeSession?.id;
     if (!id) return;
     const session = activeSession;
-    api.getGoal(id).then((result) => {
-      if (session) {
-        session.goal = result;
-      }
-    }).catch(() => {
-      if (session) {
-        session.goal = null;
-      }
-    });
+    api
+      .getGoal(id)
+      .then((result) => {
+        if (session) {
+          session.goal = result;
+        }
+      })
+      .catch(() => {
+        if (session) {
+          session.goal = null;
+        }
+      });
   }
 
   $effect(() => {
@@ -64,30 +80,48 @@
   });
 
   const totalCount = $derived(todoItems.length);
-  const completedCount = $derived(todoItems.filter((t) => t.status === "completed").length);
-  const inProgressItem = $derived(todoItems.find((t) => t.status === "in_progress"));
-  const progressPct = $derived(totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0);
+  const completedCount = $derived(
+    todoItems.filter((t) => t.status === "completed").length,
+  );
+  const inProgressItem = $derived(
+    todoItems.find((t) => t.status === "in_progress"),
+  );
+  const progressPct = $derived(
+    totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0,
+  );
   const hasTodos = $derived(todoItems.length > 0);
   const hasActiveGoal = $derived(!!goal);
-  const shouldShow = $derived(hasActiveGoal || (hasTodos && totalCount !== completedCount));
+  const shouldShow = $derived(
+    hasActiveGoal || (hasTodos && totalCount !== completedCount),
+  );
 
   function statusDotClass(status: string): string {
     switch (status) {
-      case "active": return "bg-green-500 animate-pulse";
-      case "paused": return "bg-amber-500";
-      case "blocked": return "bg-red-500 animate-pulse";
-      case "completed": return "bg-green-500";
-      default: return "bg-gray-400";
+      case "active":
+        return "bg-green-500 animate-pulse";
+      case "paused":
+        return "bg-amber-500";
+      case "blocked":
+        return "bg-red-500 animate-pulse";
+      case "completed":
+        return "bg-green-500";
+      default:
+        return "bg-gray-400";
     }
   }
 
   function statusBadgeClass(status: string): string {
     switch (status) {
-      case "active": return "bg-green-500/10 text-green-500 border-green-500/20";
-      case "paused": return "bg-amber-500/10 text-amber-500 border-amber-500/20";
-      case "blocked": return "bg-red-500/10 text-red-500 border-red-500/20";
-      case "completed": return "bg-green-500/10 text-green-500 border-green-500/20";
-      default: return "bg-gray-500/10 text-gray-500 border-gray-500/20";
+      case "active":
+        return "bg-green-500/10 text-green-500 border-green-500/20";
+      case "paused":
+        return "bg-amber-500/10 text-amber-500 border-amber-500/20";
+      case "blocked":
+        return "bg-red-500/10 text-red-500 border-red-500/20";
+      case "completed":
+        return "bg-green-500/10 text-green-500 border-green-500/20";
+      default:
+        return "bg-gray-500/10 text-gray-500 border-gray-500/20";
     }
   }
 
@@ -119,7 +153,9 @@
 
   async function handleStopGoal() {
     if (!activeSession?.id || loading) return;
-    const confirmed = confirm("Are you sure you want to stop the current goal?");
+    const confirmed = confirm(
+      "Are you sure you want to stop the current goal?",
+    );
     if (!confirmed) return;
     loading = true;
     try {
@@ -174,7 +210,8 @@
     if (newLeft < pRect.left) clampedX = posX + (pRect.left - eRect.left);
     if (newTop < pRect.top) clampedY = posY + (pRect.top - eRect.top);
     if (newRight > pRect.right) clampedX = posX + (pRect.right - eRect.right);
-    if (newBottom > pRect.bottom) clampedY = posY + (pRect.bottom - eRect.bottom);
+    if (newBottom > pRect.bottom)
+      clampedY = posY + (pRect.bottom - eRect.bottom);
 
     return [clampedX, clampedY];
   }
@@ -218,7 +255,11 @@
 </script>
 
 {#if shouldShow}
-  <div bind:this={el} class="absolute left-1/2 top-2 z-50 select-none" style="transform: translateX(-50%) translate({posX}px, {posY}px)">
+  <div
+    bind:this={el}
+    class="absolute left-1/2 top-2 z-50 select-none"
+    style="transform: translateX(-50%) translate({posX}px, {posY}px)"
+  >
     <div class="flex flex-col items-center gap-1">
       <div
         bind:this={handleEl}
@@ -228,90 +269,114 @@
         class="flex items-center gap-3 px-3 py-1.5 rounded-full bg-background border border-border/80 shadow-sm hover:bg-background hover:border-border transition-all text-xs group cursor-move max-w-[80vw]"
       >
         <!-- Goal section -->
-          {#if hasActiveGoal}
-            <div class="flex items-center gap-1.5 shrink-0">
-              <Target size={13} class="text-primary shrink-0" />
-              <span class="truncate max-w-[160px] text-foreground font-medium" title={goal!.description}>
-                {goal!.description}
-              </span>
-              <span class="w-1.5 h-1.5 rounded-full {statusDotClass(goal!.status)}"></span>
-              {#if goal!.status !== "completed"}
-                {#if goal!.status === "active"}
-                  <button
-                    type="button"
-                    data-action-btn
-                    disabled={loading}
-                    onpointerdown={(e: PointerEvent) => e.stopPropagation()}
-                    onclick={handlePauseGoal}
-                    class="p-0.5 rounded hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Pause"
-                  >
-                    <Pause size={11} />
-                  </button>
-                {:else if goal!.status === "paused"}
-                  <button
-                    type="button"
-                    data-action-btn
-                    disabled={loading}
-                    onpointerdown={(e: PointerEvent) => e.stopPropagation()}
-                    onclick={handleResumeGoal}
-                    class="p-0.5 rounded hover:bg-secondary transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Resume"
-                  >
-                    <Play size={11} />
-                  </button>
-                {/if}
+        {#if hasActiveGoal}
+          <div class="flex items-center gap-1.5 shrink-0">
+            <Target size={13} class="text-primary shrink-0" />
+            <span
+              class="truncate max-w-[160px] text-foreground font-medium"
+              title={goal!.description}
+            >
+              {goal!.description}
+            </span>
+            <span
+              class="w-1.5 h-1.5 rounded-full {statusDotClass(goal!.status)}"
+            ></span>
+            {#if goal!.status !== "completed"}
+              {#if goal!.status === "active"}
                 <button
                   type="button"
                   data-action-btn
                   disabled={loading}
                   onpointerdown={(e: PointerEvent) => e.stopPropagation()}
-                  onclick={handleStopGoal}
-                  class="p-0.5 rounded hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Stop"
+                  onclick={handlePauseGoal}
+                  class="p-0.5 rounded hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Pause"
                 >
-                  <Square size={11} />
+                  <Pause size={11} />
+                </button>
+              {:else if goal!.status === "paused"}
+                <button
+                  type="button"
+                  data-action-btn
+                  disabled={loading}
+                  onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                  onclick={handleResumeGoal}
+                  class="p-0.5 rounded hover:bg-secondary transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Resume"
+                >
+                  <Play size={11} />
                 </button>
               {/if}
-            </div>
-          {/if}
+              <button
+                type="button"
+                data-action-btn
+                disabled={loading}
+                onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+                onclick={handleStopGoal}
+                class="p-0.5 rounded hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Stop"
+              >
+                <Square size={11} />
+              </button>
+            {/if}
+          </div>
+        {/if}
 
-          <!-- Separator when both present -->
-          {#if hasActiveGoal && hasTodos && totalCount !== completedCount}
-            <div class="h-3 w-px bg-border shrink-0"></div>
-          {/if}
+        <!-- Separator when both present -->
+        {#if hasActiveGoal && hasTodos && totalCount !== completedCount}
+          <div class="h-3 w-px bg-border shrink-0"></div>
+        {/if}
 
-          <!-- Todo section -->
-          {#if hasTodos && totalCount !== completedCount}
-            <div class="flex items-center gap-2 shrink-0">
-              <ListChecks size={13} class="text-muted-foreground" />
-              <span class="text-muted-foreground font-medium tabular-nums">{completedCount}/{totalCount}</span>
-              {#if inProgressItem}
-                <div class="flex items-center gap-1 max-w-[120px]">
-                  <Clock size={12} class="text-amber-500 shrink-0 animate-pulse" />
-                  <span class="truncate text-foreground">{inProgressItem.content}</span>
-                </div>
-              {:else}
-                <div class="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div class="h-full bg-primary rounded-full transition-all" style="width: {progressPct}%"></div>
-                </div>
-              {/if}
-            </div>
-          {/if}
+        <!-- Todo section -->
+        {#if hasTodos && totalCount !== completedCount}
+          <div class="flex items-center gap-2 shrink-0">
+            <ListChecks size={13} class="text-muted-foreground" />
+            <span class="text-muted-foreground font-medium tabular-nums"
+              >{completedCount}/{totalCount}</span
+            >
+            {#if inProgressItem}
+              <div class="flex items-center gap-1 max-w-[120px]">
+                <Clock
+                  size={12}
+                  class="text-amber-500 shrink-0 animate-pulse"
+                />
+                <span class="truncate text-foreground"
+                  >{inProgressItem.content}</span
+                >
+              </div>
+            {:else}
+              <div class="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div
+                  class="h-full bg-primary rounded-full transition-all"
+                  style="width: {progressPct}%"
+                ></div>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       {#if expanded}
-        <div class="bg-background border border-border rounded-xl shadow-lg overflow-hidden w-80 max-w-[85vw]">
+        <div
+          class="bg-background border border-border rounded-xl shadow-lg overflow-hidden w-80 max-w-[85vw]"
+        >
           <!-- Goal Card -->
           {#if hasActiveGoal}
             <div class="p-3.5 border-b border-border">
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-1.5">
                   <Target size={14} class="text-primary" />
-                  <span class="text-xs font-semibold text-foreground uppercase tracking-wide">Goal</span>
+                  <span
+                    class="text-xs font-semibold text-foreground uppercase tracking-wide"
+                    >Goal</span
+                  >
                 </div>
                 <div class="flex items-center gap-1.5">
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full border font-medium uppercase {statusBadgeClass(goal!.status)}">
+                  <span
+                    class="text-[10px] px-1.5 py-0.5 rounded-full border font-medium uppercase {statusBadgeClass(
+                      goal!.status,
+                    )}"
+                  >
                     {goal!.status}
                   </span>
                 </div>
@@ -324,11 +389,11 @@
                     class="w-full text-sm bg-muted rounded-lg px-2.5 py-2 border border-border focus:outline-none focus:ring-1 focus:ring-ring resize-none"
                     rows={3}
                     onkeydown={(e: KeyboardEvent) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
+                      if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         submitEditGoal();
                       }
-                      if (e.key === 'Escape') cancelEditGoal();
+                      if (e.key === "Escape") cancelEditGoal();
                     }}
                   ></textarea>
                   <div class="flex items-center justify-end gap-2">
@@ -349,7 +414,9 @@
                   </div>
                 </div>
               {:else}
-                <p class="text-sm text-foreground leading-relaxed mb-2.5">{goal!.description}</p>
+                <p class="text-sm text-foreground leading-relaxed mb-2.5">
+                  {goal!.description}
+                </p>
                 {#if goal!.status !== "completed"}
                   <div class="flex items-center gap-1.5">
                     {#if goal!.status === "active"}
@@ -405,13 +472,39 @@
           {#if hasTodos}
             <div class="max-h-64 overflow-y-auto p-3 space-y-1">
               {#each todoItems as item (item.id)}
-                <div class="flex items-start gap-2 text-sm rounded-lg px-2 py-1.5 hover:bg-secondary/40 transition-colors">
-                  <div class="mt-0.5 shrink-0 w-4 h-4 rounded border {item.status === 'completed' ? 'bg-green-500 border-green-500' : item.status === 'in_progress' ? 'border-amber-500' : 'border-muted-foreground'} flex items-center justify-center">
-                    {#if item.status === 'completed'}
-                      <svg class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
+                <div
+                  class="flex items-start gap-2 text-sm rounded-lg px-2 py-1.5 hover:bg-secondary/40 transition-colors"
+                >
+                  <div
+                    class="mt-0.5 shrink-0 w-4 h-4 rounded border {item.status ===
+                    'completed'
+                      ? 'bg-green-500 border-green-500'
+                      : item.status === 'in_progress'
+                        ? 'border-amber-500'
+                        : 'border-muted-foreground'} flex items-center justify-center"
+                  >
+                    {#if item.status === "completed"}
+                      <svg
+                        class="w-3 h-3 text-white"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        stroke-width="3"
+                        ><path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M5 13l4 4L19 7"
+                        /></svg
+                      >
                     {/if}
                   </div>
-                  <span class="{item.status === 'completed' ? 'line-through text-muted-foreground' : item.status === 'in_progress' ? 'text-amber-500' : ''}">{item.content}</span>
+                  <span
+                    class={item.status === "completed"
+                      ? "line-through text-muted-foreground"
+                      : item.status === "in_progress"
+                        ? "text-amber-500"
+                        : ""}>{item.content}</span
+                  >
                 </div>
               {/each}
             </div>

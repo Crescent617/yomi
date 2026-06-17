@@ -6,13 +6,10 @@ const dmp = new diffMatchPatch();
 export function computeFileDiff(
   path: string,
   old_content: string,
-  new_content: string
+  new_content: string,
 ): FileDiff {
   // Simple line-level diff using LCS-like approach
-  const hunks = computeHunks(
-    old_content.split("\n"),
-    new_content.split("\n")
-  );
+  const hunks = computeHunks(old_content.split("\n"), new_content.split("\n"));
 
   return {
     path,
@@ -41,13 +38,7 @@ function computeHunks(old_lines: string[], new_lines: string[]): Hunk[] {
       if (inHunk) {
         // Add trailing context (up to 3 lines)
         if (hunkLines.filter((l) => l.type !== "context").length > 0) {
-          hunks.push(
-            createHunk(
-              hunkOldStart,
-              hunkNewStart,
-              hunkLines
-            )
-          );
+          hunks.push(createHunk(hunkOldStart, hunkNewStart, hunkLines));
         }
         inHunk = false;
         hunkLines = [];
@@ -111,9 +102,7 @@ function computeHunks(old_lines: string[], new_lines: string[]): Hunk[] {
   }
 
   if (inHunk && hunkLines.filter((l) => l.type !== "context").length > 0) {
-    hunks.push(
-      createHunk(hunkOldStart, hunkNewStart, hunkLines)
-    );
+    hunks.push(createHunk(hunkOldStart, hunkNewStart, hunkLines));
   }
 
   return hunks;
@@ -122,7 +111,7 @@ function computeHunks(old_lines: string[], new_lines: string[]): Hunk[] {
 function createHunk(
   old_start: number,
   new_start: number,
-  lines: DiffLine[]
+  lines: DiffLine[],
 ): Hunk {
   const oldCount = lines.filter((l) => l.type !== "add").length;
   const newCount = lines.filter((l) => l.type !== "remove").length;
@@ -135,7 +124,7 @@ function createHunk(
       if (prevLine && prevLine.type === "remove") {
         line.intra_line_segments = computeIntraLineDiff(
           prevLine.content,
-          line.content
+          line.content,
         );
       }
     }
@@ -153,7 +142,10 @@ function createHunk(
   };
 }
 
-function computeIntraLineDiff(oldText: string, newText: string): IntraSegment[] {
+function computeIntraLineDiff(
+  oldText: string,
+  newText: string,
+): IntraSegment[] {
   const diffs = dmp.diff_main(oldText, newText);
   dmp.diff_cleanupSemantic(diffs);
 

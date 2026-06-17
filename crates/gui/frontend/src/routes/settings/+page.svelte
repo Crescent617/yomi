@@ -1,6 +1,18 @@
 <script lang="ts">
-  import { Settings, Moon, Sun, Monitor, Type, Bell, RotateCcw } from "lucide-svelte";
-  import { settings, persistSettings, applyTheme } from "../../lib/settings.svelte";
+  import {
+    Settings,
+    Moon,
+    Sun,
+    Monitor,
+    Type,
+    Bell,
+    RotateCcw,
+  } from "lucide-svelte";
+  import {
+    settings,
+    persistSettings,
+    applyTheme,
+  } from "../../lib/settings.svelte";
   import { pushToast } from "../../lib/toast.svelte";
 
   let themes = [
@@ -8,6 +20,8 @@
     { id: "dark" as const, label: "Dark", icon: Moon },
     { id: "system" as const, label: "System", icon: Monitor },
   ];
+
+  const fontSizes = ["sm", "base", "lg"] as const;
 
   function setTheme(theme: "light" | "dark" | "system") {
     settings.theme = theme;
@@ -58,7 +72,8 @@
         {#each themes as t (t.id)}
           <button
             onclick={() => setTheme(t.id)}
-            class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors text-sm {settings.theme === t.id
+            class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors text-sm {settings.theme ===
+            t.id
               ? 'border-primary bg-primary/10'
               : 'border-border hover:bg-secondary'}"
           >
@@ -76,10 +91,14 @@
         Font Size
       </h2>
       <div class="flex gap-2">
-        {#each ["sm", "base", "lg"] as size (size)}
+        {#each fontSizes as size (size)}
           <button
-            onclick={() => { settings.fontSize = size; persistSettings(settings); }}
-            class="px-3 py-2 rounded-lg border text-sm transition-colors {settings.fontSize === size
+            onclick={() => {
+              settings.fontSize = size;
+              persistSettings(settings);
+            }}
+            class="px-3 py-2 rounded-lg border text-sm transition-colors {settings.fontSize ===
+            size
               ? 'border-primary bg-primary/10'
               : 'border-border hover:bg-secondary'}"
           >

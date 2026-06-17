@@ -60,7 +60,7 @@ export function createFilePicker() {
       if (filter) {
         const lowerFilter = filter.toLowerCase();
         fileEntries = entries.filter((e) =>
-          e.name.toLowerCase().includes(lowerFilter)
+          e.name.toLowerCase().includes(lowerFilter),
         );
       } else {
         fileEntries = entries;
@@ -74,7 +74,12 @@ export function createFilePicker() {
   }
 
   function openPicker(anchor: number, query: string, root: string) {
-    if (showFilePicker && query === filePickerQuery && anchor === filePickerAnchor && root === filePickerRoot) {
+    if (
+      showFilePicker &&
+      query === filePickerQuery &&
+      anchor === filePickerAnchor &&
+      root === filePickerRoot
+    ) {
       return;
     }
     filePickerAnchor = anchor;
@@ -124,7 +129,10 @@ export function createFilePicker() {
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedFileIdx = Math.min(selectedFileIdx + 1, Math.max(0, fileEntries.length - 1));
+      selectedFileIdx = Math.min(
+        selectedFileIdx + 1,
+        Math.max(0, fileEntries.length - 1),
+      );
       return true;
     }
     if (e.key === "ArrowUp") {
@@ -152,14 +160,30 @@ export function createFilePicker() {
   }
 
   return {
-    get show() { return showFilePicker; },
-    get anchor() { return filePickerAnchor; },
-    get query() { return filePickerQuery; },
-    get dir() { return filePickerDir; },
-    get root() { return filePickerRoot; },
-    get entries() { return fileEntries; },
-    get selectedIdx() { return selectedFileIdx; },
-    get homeDirPath() { return homeDirPath; },
+    get show() {
+      return showFilePicker;
+    },
+    get anchor() {
+      return filePickerAnchor;
+    },
+    get query() {
+      return filePickerQuery;
+    },
+    get dir() {
+      return filePickerDir;
+    },
+    get root() {
+      return filePickerRoot;
+    },
+    get entries() {
+      return fileEntries;
+    },
+    get selectedIdx() {
+      return selectedFileIdx;
+    },
+    get homeDirPath() {
+      return homeDirPath;
+    },
     open: openPicker,
     close: closePicker,
     update: updateFilePicker,
@@ -174,7 +198,7 @@ export function createFilePicker() {
 export function resolvePickerDir(
   query: string,
   root: string,
-  home: string
+  home: string,
 ): { dir: string; filter: string } {
   let dir: string;
   let filter: string;
@@ -226,7 +250,9 @@ export function resolvePickerDir(
         dir = root;
         filter = query;
       } else {
-        dir = root ? `${root}/${query.slice(0, lastSlash + 1)}` : query.slice(0, lastSlash + 1);
+        dir = root
+          ? `${root}/${query.slice(0, lastSlash + 1)}`
+          : query.slice(0, lastSlash + 1);
         filter = query.slice(lastSlash + 1);
       }
     }

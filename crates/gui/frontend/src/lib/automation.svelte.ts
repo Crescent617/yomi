@@ -1,4 +1,9 @@
-import { listCronJobs, deleteCronJob, triggerCronJob, updateCronJob } from "./api";
+import {
+  listCronJobs,
+  deleteCronJob,
+  triggerCronJob,
+  updateCronJob,
+} from "./api";
 import { sendDesktopNotification } from "./state.svelte";
 
 export interface CronJob {
@@ -26,7 +31,8 @@ export interface CronJob {
 function extractErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e) return String((e as Record<string, unknown>).message);
+  if (e && typeof e === "object" && "message" in e)
+    return String((e as Record<string, unknown>).message);
   try {
     return JSON.stringify(e);
   } catch {
@@ -88,12 +94,20 @@ export class AutomationStore {
       await this.load();
       const job = this.jobs.find((j) => j.id === job_id);
       const session_id = job?.action?.session_id;
-      sendDesktopNotification("Yomi", `Task "${job?.name ?? job_id}" completed`, session_id);
+      sendDesktopNotification(
+        "Yomi",
+        `Task "${job?.name ?? job_id}" completed`,
+        session_id,
+      );
     } catch (e: unknown) {
       this.error = extractErrorMessage(e);
       const job = this.jobs.find((j) => j.id === job_id);
       const session_id = job?.action?.session_id;
-      sendDesktopNotification("Yomi", `Task "${job_id}" failed: ${this.error}`, session_id);
+      sendDesktopNotification(
+        "Yomi",
+        `Task "${job_id}" failed: ${this.error}`,
+        session_id,
+      );
     }
   }
 

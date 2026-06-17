@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { TaggedContentBlock } from "./types";
 
 const DEFAULT_TIMEOUT = 30000; // 30s
-const PING_TIMEOUT = 5000;     // 5s
+const PING_TIMEOUT = 5000; // 5s
 
 async function invokeCmd<T>(
   cmd: string,
@@ -22,7 +22,10 @@ async function withTimeout<T>(
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    timeoutId = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
   });
 
   const result = signal
@@ -30,7 +33,11 @@ async function withTimeout<T>(
         promise,
         timeout,
         new Promise<never>((_, reject) => {
-          signal.addEventListener("abort", () => reject(new Error(`${label} aborted`)), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error(`${label} aborted`)),
+            { once: true },
+          );
         }),
       ])
     : await Promise.race([promise, timeout]);
@@ -53,15 +60,23 @@ export async function listProjects(): Promise<ProjectInfo[]> {
   return invokeCmd("list_projects");
 }
 
-export async function createProject(dir: string, name?: string): Promise<ProjectInfo> {
+export async function createProject(
+  dir: string,
+  name?: string,
+): Promise<ProjectInfo> {
   return invokeCmd("create_project", { dir, name });
 }
 
-export async function getProject(project_id: string): Promise<ProjectInfo | null> {
+export async function getProject(
+  project_id: string,
+): Promise<ProjectInfo | null> {
   return invokeCmd("get_project", { project_id: project_id });
 }
 
-export async function renameProject(project_id: string, name: string): Promise<void> {
+export async function renameProject(
+  project_id: string,
+  name: string,
+): Promise<void> {
   return invokeCmd("rename_project", { project_id: project_id, name });
 }
 
@@ -93,7 +108,7 @@ export async function listSessions(
 ): Promise<PaginatedSessions> {
   const result = await invokeCmd<{ sessions: unknown[]; has_more: boolean }>(
     "list_sessions",
-    { project_id: project_id, before, limit }
+    { project_id: project_id, before, limit },
   );
   return {
     sessions: result.sessions.map((s: unknown) => {
@@ -124,7 +139,12 @@ export async function respondPermission(
   approved: boolean,
   remember: boolean = false,
 ): Promise<void> {
-  return invokeCmd("respond_permission", { session_id: session_id, req_id: req_id, approved, remember });
+  return invokeCmd("respond_permission", {
+    session_id: session_id,
+    req_id: req_id,
+    approved,
+    remember,
+  });
 }
 
 export async function respondAskUser(
@@ -132,7 +152,11 @@ export async function respondAskUser(
   req_id: string,
   answers: [string, string][],
 ): Promise<void> {
-  return invokeCmd("respond_ask_user", { session_id: session_id, req_id: req_id, answers });
+  return invokeCmd("respond_ask_user", {
+    session_id: session_id,
+    req_id: req_id,
+    answers,
+  });
 }
 
 export async function getCwd(): Promise<string> {
@@ -144,7 +168,11 @@ export async function createSession(
   level: string = "safe",
   project_id?: string,
 ): Promise<string> {
-  return invokeCmd("create_session", { project_id: project_id, working_dir: working_dir, auto_approve_level: level });
+  return invokeCmd("create_session", {
+    project_id: project_id,
+    working_dir: working_dir,
+    auto_approve_level: level,
+  });
 }
 
 export async function restoreSession(session_id: string): Promise<void> {
@@ -155,7 +183,10 @@ export async function forkSession(
   parent_id: string,
   level: string = "safe",
 ): Promise<string> {
-  return invokeCmd("fork_session", { parent_id: parent_id, auto_approve_level: level });
+  return invokeCmd("fork_session", {
+    parent_id: parent_id,
+    auto_approve_level: level,
+  });
 }
 
 export async function deleteSession(session_id: string): Promise<void> {
@@ -166,11 +197,17 @@ export async function shutdownSession(session_id: string): Promise<void> {
   return invokeCmd("shutdown_session", { session_id: session_id });
 }
 
-export async function sendMessage(session_id: string, content: string): Promise<void> {
+export async function sendMessage(
+  session_id: string,
+  content: string,
+): Promise<void> {
   return invokeCmd("send_message", { session_id: session_id, content });
 }
 
-export async function sendMessageBlocks(session_id: string, blocks: TaggedContentBlock[]): Promise<void> {
+export async function sendMessageBlocks(
+  session_id: string,
+  blocks: TaggedContentBlock[],
+): Promise<void> {
   return invokeCmd("send_message_blocks", { session_id: session_id, blocks });
 }
 
@@ -186,7 +223,9 @@ export async function getMessages(session_id: string): Promise<unknown[]> {
   return invokeCmd("get_messages", { session_id: session_id });
 }
 
-export async function getSessionStatus(session_id: string): Promise<{ phase: string; compacting: boolean }> {
+export async function getSessionStatus(
+  session_id: string,
+): Promise<{ phase: string; compacting: boolean }> {
   return invokeCmd("get_session_status", { session_id: session_id });
 }
 
@@ -194,8 +233,14 @@ export async function getCheckpoints(session_id: string): Promise<unknown[]> {
   return invokeCmd("get_checkpoints", { session_id: session_id });
 }
 
-export async function rewind(session_id: string, message_id: string): Promise<void> {
-  return invokeCmd("rewind", { session_id: session_id, message_id: message_id });
+export async function rewind(
+  session_id: string,
+  message_id: string,
+): Promise<void> {
+  return invokeCmd("rewind", {
+    session_id: session_id,
+    message_id: message_id,
+  });
 }
 
 export async function listSkills(): Promise<unknown[]> {
@@ -210,15 +255,23 @@ export async function compactSession(session_id: string): Promise<void> {
   return invokeCmd("compact_session", { session_id: session_id });
 }
 
-export async function setPermissionLevel(session_id: string, level: string): Promise<void> {
+export async function setPermissionLevel(
+  session_id: string,
+  level: string,
+): Promise<void> {
   return invokeCmd("set_permission_level", { session_id: session_id, level });
 }
 
-export async function startGoal(session_id: string, description: string): Promise<void> {
+export async function startGoal(
+  session_id: string,
+  description: string,
+): Promise<void> {
   return invokeCmd("start_goal", { session_id: session_id, description });
 }
 
-export async function getGoal(session_id: string): Promise<{ description: string; status: string } | null> {
+export async function getGoal(
+  session_id: string,
+): Promise<{ description: string; status: string } | null> {
   return invokeCmd("get_goal", { session_id: session_id });
 }
 
@@ -234,11 +287,17 @@ export async function resumeGoal(session_id: string): Promise<void> {
   return invokeCmd("resume_goal", { session_id: session_id });
 }
 
-export async function editGoal(session_id: string, description: string): Promise<void> {
+export async function editGoal(
+  session_id: string,
+  description: string,
+): Promise<void> {
   return invokeCmd("edit_goal", { session_id: session_id, description });
 }
 
-export async function sendSteer(session_id: string, blocks: TaggedContentBlock[]): Promise<void> {
+export async function sendSteer(
+  session_id: string,
+  blocks: TaggedContentBlock[],
+): Promise<void> {
   return invokeCmd("send_steer", { session_id: session_id, blocks });
 }
 
@@ -246,7 +305,10 @@ export async function continueSession(session_id: string): Promise<void> {
   return invokeCmd("continue_session", { session_id: session_id });
 }
 
-export async function getConfigToml(): Promise<{ content: string; path: string }> {
+export async function getConfigToml(): Promise<{
+  content: string;
+  path: string;
+}> {
   return invokeCmd("get_config_toml");
 }
 
@@ -292,7 +354,10 @@ export async function getTodos(session_id: string): Promise<{
   return invokeCmd("get_todos", { session_id: session_id });
 }
 
-export async function renameSession(session_id: string, title: string): Promise<void> {
+export async function renameSession(
+  session_id: string,
+  title: string,
+): Promise<void> {
   return invokeCmd("rename_session", { session_id: session_id, title });
 }
 
@@ -328,12 +393,26 @@ export interface GitDiffFileSummary {
   status: string;
 }
 
-export async function getGitDiffSummary(path: string, staged: boolean): Promise<GitDiffFileSummary[] | null> {
-  return invokeCmd<GitDiffFileSummary[] | null>("get_git_diff_summary", { path, staged });
+export async function getGitDiffSummary(
+  path: string,
+  staged: boolean,
+): Promise<GitDiffFileSummary[] | null> {
+  return invokeCmd<GitDiffFileSummary[] | null>("get_git_diff_summary", {
+    path,
+    staged,
+  });
 }
 
-export async function getGitFileDiffRaw(path: string, file_path: string, staged: boolean): Promise<string | null> {
-  return invokeCmd<string | null>("get_git_file_diff_raw", { path, file_path, staged });
+export async function getGitFileDiffRaw(
+  path: string,
+  file_path: string,
+  staged: boolean,
+): Promise<string | null> {
+  return invokeCmd<string | null>("get_git_file_diff_raw", {
+    path,
+    file_path,
+    staged,
+  });
 }
 
 const inflightGit = new Map<string, Promise<GitInfo | null>>();
@@ -342,8 +421,9 @@ export async function getGitInfo(path: string): Promise<GitInfo | null> {
   const existing = inflightGit.get(path);
   if (existing) return existing;
 
-  const promise = invokeCmd<GitInfo | null>("get_git_info", { path })
-    .finally(() => inflightGit.delete(path));
+  const promise = invokeCmd<GitInfo | null>("get_git_info", { path }).finally(
+    () => inflightGit.delete(path),
+  );
 
   inflightGit.set(path, promise);
   return promise;

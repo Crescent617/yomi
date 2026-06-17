@@ -905,7 +905,6 @@ async fn dispatch_command(
     }
 }
 
-
 /// Serialize a value into `ResponseBody::Ok`, handling serialization errors.
 fn ok_body<T: serde::Serialize>(val: T) -> ResponseBody {
     match serde_json::to_value(val) {

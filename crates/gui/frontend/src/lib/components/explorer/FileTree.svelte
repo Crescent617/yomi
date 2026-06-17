@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { ChevronRight, ChevronDown, Folder, File, FileCode } from "lucide-svelte";
+  import {
+    ChevronRight,
+    ChevronDown,
+    Folder,
+    File,
+    FileCode,
+  } from "lucide-svelte";
   import { fsProvider } from "../../fs/factory";
   import type { FileEntry } from "../../fs/provider";
   import { onMount } from "svelte";
@@ -37,7 +43,7 @@
   onMount(() => {
     load().then(() => {
       if (depth === 0 && Object.keys(expanded).length === 0) {
-        const firstDir = entries.find(e => e.isDirectory);
+        const firstDir = entries.find((e) => e.isDirectory);
         if (firstDir) {
           expanded = { [firstDir.path]: true };
         }
@@ -52,7 +58,11 @@
   function getFileIcon(entry: FileEntry) {
     if (entry.isDirectory) return Folder;
     const ext = entry.name.split(".").pop()?.toLowerCase();
-    if (["rs", "js", "ts", "py", "go", "java", "c", "cpp", "h", "hpp"].includes(ext ?? "")) {
+    if (
+      ["rs", "js", "ts", "py", "go", "java", "c", "cpp", "h", "hpp"].includes(
+        ext ?? "",
+      )
+    ) {
       return FileCode;
     }
     return File;
@@ -68,7 +78,11 @@
 </script>
 
 {#if depth === 0 || loaded}
-  <div class="flex flex-col gap-0.5 {depth > 0 ? 'ml-3 border-l border-border pl-1' : ''}">
+  <div
+    class="flex flex-col gap-0.5 {depth > 0
+      ? 'ml-3 border-l border-border pl-1'
+      : ''}"
+  >
     {#each entries as entry (entry.path)}
       {@const Icon = getFileIcon(entry)}
       <div class="flex flex-col">
@@ -89,10 +103,14 @@
 
           <Icon
             size={14}
-            class="shrink-0 {entry.isDirectory ? 'text-primary' : 'text-muted-foreground'}"
+            class="shrink-0 {entry.isDirectory
+              ? 'text-primary'
+              : 'text-muted-foreground'}"
           />
 
-          <span class="truncate {entry.isDirectory ? 'font-medium' : ''}">{entry.name}</span>
+          <span class="truncate {entry.isDirectory ? 'font-medium' : ''}"
+            >{entry.name}</span
+          >
         </button>
 
         {#if entry.isDirectory && !!expanded[entry.path]}

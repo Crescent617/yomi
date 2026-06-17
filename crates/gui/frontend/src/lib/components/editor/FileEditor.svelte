@@ -97,7 +97,9 @@
         <span class="text-xs text-muted-foreground">Saved</span>
       {/if}
       <button
-        class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs {dirty ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground'} transition-colors"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs {dirty
+          ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+          : 'bg-muted text-muted-foreground'} transition-colors"
         onclick={save}
         disabled={!dirty || saving}
       >

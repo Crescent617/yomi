@@ -13,12 +13,18 @@
     session_id: string;
   } = $props();
 
-  const checkpoints = $derived(getSession(session_id)?.checkpoints ?? []);
+  const checkpoints = $derived(
+    (getSession(session_id)?.checkpoints ?? []) as Array<{
+      message_id?: string;
+      id?: string;
+    }>,
+  );
 
   const hasCheckpoint = $derived(
     Array.isArray(checkpoints) &&
       checkpoints.some(
-        (cp: { message_id?: string; id?: string }) => cp.message_id === message.id || cp.id === message.id,
+        (cp: { message_id?: string; id?: string }) =>
+          cp.message_id === message.id || cp.id === message.id,
       ),
   );
 
@@ -53,7 +59,6 @@
       showNotification("Failed to copy text", "error", 2000);
     }
   }
-
 </script>
 
 <div class="flex items-center gap-0 opacity-100 transition-opacity">

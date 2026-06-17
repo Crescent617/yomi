@@ -13,7 +13,10 @@
   let config = $state<{ model: string; context_window: number } | null>(null);
 
   onMount(() => {
-    api.getConfig().then(c => config = c).catch(() => {});
+    api
+      .getConfig()
+      .then((c) => (config = c))
+      .catch(() => {});
   });
 
   // ── Timer ──
@@ -23,7 +26,10 @@
 
   const isRunning = $derived.by(() => {
     if (!session) return false;
-    return session.phase !== "idle" && session.phase !== "closed" || session.compacting;
+    return (
+      (session.phase !== "idle" && session.phase !== "closed") ||
+      session.compacting
+    );
   });
 
   $effect(() => {
@@ -73,7 +79,7 @@
   // ── Token estimate: last assistant message only ──
   const streamingTokens = $derived.by(() => {
     if (!session) return 0;
-    let lastAssistant: typeof displayMessages[0] | null = null;
+    let lastAssistant: (typeof displayMessages)[0] | null = null;
     for (let i = displayMessages.length - 1; i >= 0; i--) {
       if (displayMessages[i].role === "assistant") {
         lastAssistant = displayMessages[i];
@@ -93,11 +99,12 @@
 
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
-    if (session?.phase !== "streaming" && session?.phase !== "executing_tool") return null;
+    if (session?.phase !== "streaming" && session?.phase !== "executing_tool")
+      return null;
 
     // Find latest assistant message with content/thinking
     // If model is already outputting text/thinking, don't show "calling"
-    let latestOutputMsg: (typeof displayMessages[0]) | null = null;
+    let latestOutputMsg: (typeof displayMessages)[0] | null = null;
     for (let i = displayMessages.length - 1; i >= 0; i--) {
       const msg = displayMessages[i];
       if (msg.role === "assistant") {
@@ -109,10 +116,15 @@
     }
 
     // If latest output message has content/thinking, suppress calling indicator
-    if (latestOutputMsg && (latestOutputMsg.content || latestOutputMsg.thinking)) {
+    if (
+      latestOutputMsg &&
+      (latestOutputMsg.content || latestOutputMsg.thinking)
+    ) {
       // But still check if it's the *same* message that contains the running tool
       // Only suppress if the latest message is a pure output (no running tools in it)
-      const hasRunningToolInLatest = latestOutputMsg.tools?.some(t => t.status === "running");
+      const hasRunningToolInLatest = latestOutputMsg.tools?.some(
+        (t) => t.status === "running",
+      );
       if (!hasRunningToolInLatest) return null;
     }
 
@@ -129,7 +141,9 @@
 </script>
 
 {#if isRunning || streamingTokens > 0 || total_tokens > 0}
-  <div class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-7 font-mono">
+  <div
+    class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-7 font-mono"
+  >
     <!-- Left: phase status -->
     <div class="flex items-center gap-1.5 min-w-0">
       {#if session?.phase === "streaming"}
@@ -143,17 +157,25 @@
       {/if}
 
       {#if streamingTokens > 0}
-        <span class="text-muted-foreground shrink-0">{formatTokens(streamingTokens)} tokens</span>
+        <span class="text-muted-foreground shrink-0"
+          >{formatTokens(streamingTokens)} tokens</span
+        >
       {/if}
 
       {#if isRunning && elapsed_ms > 0}
-        <span class="text-muted-foreground/70 shrink-0">{formatElapsed(elapsed_ms)}</span>
+        <span class="text-muted-foreground/70 shrink-0"
+          >· {formatElapsed(elapsed_ms)}</span
+        >
       {/if}
 
       {#if currentTool}
-        <span class="text-muted-foreground/70 truncate">· calling {currentTool.tool_name}</span>
+        <span class="text-muted-foreground/70 truncate"
+          >· calling {currentTool.tool_name}</span
+        >
         {#if currentTool.progress}
-          <span class="text-muted-foreground/50 truncate max-w-60">· {currentTool.progress}</span>
+          <span class="text-muted-foreground/50 truncate max-w-60"
+            >· {currentTool.progress}</span
+          >
         {/if}
       {:else if session?.phase === "streaming"}
         <span class="text-muted-foreground/70 shrink-0">· generating</span>
@@ -166,9 +188,11 @@
         {@const pct = (total_tokens / config.context_window) * 100}
         <span class="text-muted-foreground/60">{config.model}</span>
         <span class="text-muted-foreground/40">·</span>
-        <span class="text-muted-foreground/60"
+        <span
+          class="text-muted-foreground/60"
           class:text-amber-500={pct >= 70}
-          class:text-red-500={pct >= 90}>
+          class:text-red-500={pct >= 90}
+        >
           {pct.toFixed(1)}% ({(config.context_window / 1000).toFixed(0)}K)
         </span>
       {/if}

@@ -20,7 +20,10 @@
   import type { SessionState } from "../../state.svelte";
   import * as api from "../../api";
 
-  let { session, onClose }: { session: SessionState | null; onClose?: () => void } = $props();
+  let {
+    session,
+    onClose,
+  }: { session: SessionState | null; onClose?: () => void } = $props();
 
   interface FileSummary {
     path: string;
@@ -142,15 +145,35 @@
             oldLine++;
             newLine++;
           } else if (ch === "+") {
-            currentHunk.lines.push({ type: "add", oldLine: null, newLine, text });
+            currentHunk.lines.push({
+              type: "add",
+              oldLine: null,
+              newLine,
+              text,
+            });
             newLine++;
           } else if (ch === "-") {
-            currentHunk.lines.push({ type: "del", oldLine, newLine: null, text });
+            currentHunk.lines.push({
+              type: "del",
+              oldLine,
+              newLine: null,
+              text,
+            });
             oldLine++;
           } else if (ch === "\\") {
-            currentHunk.lines.push({ type: "context", oldLine, newLine, text: line });
+            currentHunk.lines.push({
+              type: "context",
+              oldLine,
+              newLine,
+              text: line,
+            });
           } else {
-            currentHunk.lines.push({ type: "context", oldLine, newLine, text: line });
+            currentHunk.lines.push({
+              type: "context",
+              oldLine,
+              newLine,
+              text: line,
+            });
             oldLine++;
             newLine++;
           }
@@ -315,8 +338,16 @@
 
     try {
       const raw = await api.getGitFileDiffRaw(path, filePath, currentStaged);
-      if (currentDiffVersion !== diffLoadVersion || showStaged !== currentStaged) return;
-      if (files.findIndex((f) => f.path === filePath) < 0 || activeFilePath !== filePath) return;
+      if (
+        currentDiffVersion !== diffLoadVersion ||
+        showStaged !== currentStaged
+      )
+        return;
+      if (
+        files.findIndex((f) => f.path === filePath) < 0 ||
+        activeFilePath !== filePath
+      )
+        return;
 
       if (!raw) {
         diffFiles = [];
@@ -359,8 +390,6 @@
       maybeLoad();
     }
   });
-
-
 
   function lineBg(type: DiffLine["type"]) {
     switch (type) {
@@ -417,7 +446,9 @@
 
 <div class="flex flex-col h-full bg-background min-w-0">
   <!-- Header -->
-  <div class="shrink-0 px-3 py-2 border-b border-border flex items-center justify-between">
+  <div
+    class="shrink-0 px-3 py-2 border-b border-border flex items-center justify-between"
+  >
     <div class="flex items-center gap-2">
       <FileDiffIcon size={14} class="text-muted-foreground" />
       <span class="text-sm font-medium">Git Diff</span>
@@ -425,7 +456,7 @@
     <div class="flex items-center gap-1">
       <button
         type="button"
-        onclick={() => showFileTree = !showFileTree}
+        onclick={() => (showFileTree = !showFileTree)}
         class="p-1 rounded-md text-muted-foreground hover:bg-secondary transition-colors"
         title={showFileTree ? "Hide file tree" : "Show file tree"}
       >
@@ -445,15 +476,25 @@
       </button>
       <button
         type="button"
-        onclick={() => { showStaged = false; maybeLoad(); }}
-        class="px-2 py-0.5 text-xs rounded transition-colors {showStaged ? 'text-muted-foreground hover:bg-secondary' : 'bg-primary/10 text-primary'}"
+        onclick={() => {
+          showStaged = false;
+          maybeLoad();
+        }}
+        class="px-2 py-0.5 text-xs rounded transition-colors {showStaged
+          ? 'text-muted-foreground hover:bg-secondary'
+          : 'bg-primary/10 text-primary'}"
       >
         <GitBranch size={12} class="inline mr-1" /> Working
       </button>
       <button
         type="button"
-        onclick={() => { showStaged = true; maybeLoad(); }}
-        class="px-2 py-0.5 text-xs rounded transition-colors {showStaged ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-secondary'}"
+        onclick={() => {
+          showStaged = true;
+          maybeLoad();
+        }}
+        class="px-2 py-0.5 text-xs rounded transition-colors {showStaged
+          ? 'bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-secondary'}"
       >
         <GitCommit size={12} class="inline mr-1" /> Staged
       </button>
@@ -473,8 +514,12 @@
   {#if files.length > 0}
     <div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
       {#if showFileTree}
-        <div class="shrink-0 lg:w-[220px] w-full max-h-[200px] lg:max-h-full overflow-auto border-b lg:border-b-0 lg:border-r border-border">
-          <div class="px-2 py-1 text-xs font-medium text-muted-foreground border-b border-border sticky top-0 bg-background z-10">
+        <div
+          class="shrink-0 lg:w-[220px] w-full max-h-[200px] lg:max-h-full overflow-auto border-b lg:border-b-0 lg:border-r border-border"
+        >
+          <div
+            class="px-2 py-1 text-xs font-medium text-muted-foreground border-b border-border sticky top-0 bg-background z-10"
+          >
             {files.length} file{files.length === 1 ? "" : "s"}
           </div>
           {#snippet renderTree(nodes: TreeNode[], depth: number)}
@@ -482,14 +527,24 @@
               {#if node.isDir}
                 <button
                   class="w-full text-left flex items-center gap-1 transition-colors hover:bg-secondary text-foreground"
-                  style="padding-left: {depth * 12 + 8}px; padding-top: 4px; padding-bottom: 4px;"
+                  style="padding-left: {depth * 12 +
+                    8}px; padding-top: 4px; padding-bottom: 4px;"
                   onclick={() => toggleDir(node.path)}
                 >
                   {#if expandedDirs.has(node.path)}
-                    <ChevronDown size={12} class="text-muted-foreground shrink-0" />
-                    <FolderOpen size={12} class="text-muted-foreground shrink-0" />
+                    <ChevronDown
+                      size={12}
+                      class="text-muted-foreground shrink-0"
+                    />
+                    <FolderOpen
+                      size={12}
+                      class="text-muted-foreground shrink-0"
+                    />
                   {:else}
-                    <ChevronRight size={12} class="text-muted-foreground shrink-0" />
+                    <ChevronRight
+                      size={12}
+                      class="text-muted-foreground shrink-0"
+                    />
                     <Folder size={12} class="text-muted-foreground shrink-0" />
                   {/if}
                   <span class="text-xs truncate">{node.name}</span>
@@ -499,10 +554,12 @@
                 {/if}
               {:else}
                 <button
-                  class="w-full text-left flex items-center gap-1 transition-colors {node.path === activeFilePath
+                  class="w-full text-left flex items-center gap-1 transition-colors {node.path ===
+                  activeFilePath
                     ? 'bg-primary/10 text-primary'
                     : 'text-foreground hover:bg-secondary'}"
-                  style="padding-left: {depth * 12 + 8}px; padding-top: 4px; padding-bottom: 4px;"
+                  style="padding-left: {depth * 12 +
+                    8}px; padding-top: 4px; padding-bottom: 4px;"
                   onclick={() => loadFileDiff(node.path)}
                 >
                   {#if node.status === "added"}
@@ -515,7 +572,10 @@
                   <span class="text-xs truncate flex-1">{node.name}</span>
                   <span class="w-4 shrink-0 flex items-center justify-center">
                     {#if loadingFile === node.path}
-                      <Loader size={12} class="text-muted-foreground animate-spin" />
+                      <Loader
+                        size={12}
+                        class="text-muted-foreground animate-spin"
+                      />
                     {/if}
                   </span>
                 </button>
@@ -528,17 +588,25 @@
 
       <div class="flex-1 min-w-0 min-h-[280px] overflow-hidden flex flex-col">
         {#if activeFilePath}
-          <div class="shrink-0 flex items-center justify-between px-2 py-1 border-b border-border">
-            <span class="text-xs text-muted-foreground truncate">{activeFilePath}</span>
+          <div
+            class="shrink-0 flex items-center justify-between px-2 py-1 border-b border-border"
+          >
+            <span class="text-xs text-muted-foreground truncate"
+              >{activeFilePath}</span
+            >
             <div class="flex gap-1">
               <button
-                class="text-xs px-2 py-0.5 rounded {viewMode === 'unified' ? 'bg-secondary' : ''}"
+                class="text-xs px-2 py-0.5 rounded {viewMode === 'unified'
+                  ? 'bg-secondary'
+                  : ''}"
                 onclick={() => (viewMode = "unified")}
               >
                 Unified
               </button>
               <button
-                class="text-xs px-2 py-0.5 rounded {viewMode === 'split' ? 'bg-secondary' : ''}"
+                class="text-xs px-2 py-0.5 rounded {viewMode === 'split'
+                  ? 'bg-secondary'
+                  : ''}"
                 onclick={() => (viewMode = "split")}
               >
                 Split
@@ -548,11 +616,15 @@
 
           <div class="flex-1 overflow-auto">
             {#if loadingFile === activeFilePath}
-              <div class="flex items-center justify-center h-full text-muted-foreground text-sm">
+              <div
+                class="flex items-center justify-center h-full text-muted-foreground text-sm"
+              >
                 Loading diff...
               </div>
             {:else if diffFiles.length === 0}
-              <div class="flex items-center justify-center h-full text-muted-foreground text-sm">
+              <div
+                class="flex items-center justify-center h-full text-muted-foreground text-sm"
+              >
                 No diff available
               </div>
             {:else}
@@ -561,21 +633,45 @@
                   {#if viewMode === "unified"}
                     <div class="font-mono text-xs leading-relaxed">
                       {#each file.hunks as hunk, i (i)}
-                        <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
-                          <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
-                          <span class="w-10 text-right text-[10px] select-none tabular-nums">...</span>
+                        <div
+                          class="flex items-center gap-2 px-2 py-0.5 {lineBg(
+                            'hunk',
+                          )} border-b border-border/50"
+                        >
+                          <span
+                            class="w-10 text-right text-[10px] select-none tabular-nums"
+                            >...</span
+                          >
+                          <span
+                            class="w-10 text-right text-[10px] select-none tabular-nums"
+                            >...</span
+                          >
                           <span class="text-[10px]">{hunk.header}</span>
                         </div>
                         {#each hunk.lines as line, i (i)}
-                          <div class="flex items-start gap-2 px-2 py-0.5 {lineBg(line.type)}">
-                            <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
+                          <div
+                            class="flex items-start gap-2 px-2 py-0.5 {lineBg(
+                              line.type,
+                            )}"
+                          >
+                            <span
+                              class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0"
+                            >
                               {line.oldLine ?? ""}
                             </span>
-                            <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
+                            <span
+                              class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0"
+                            >
                               {line.newLine ?? ""}
                             </span>
-                            <span class="whitespace-pre-wrap {lineText(line.type)}">
-                              {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}{line.text}
+                            <span
+                              class="whitespace-pre-wrap {lineText(line.type)}"
+                            >
+                              {line.type === "add"
+                                ? "+"
+                                : line.type === "del"
+                                  ? "-"
+                                  : " "}{line.text}
                             </span>
                           </div>
                         {/each}
@@ -585,25 +681,61 @@
                     <!-- Split view -->
                     <div class="font-mono text-xs leading-relaxed">
                       {#each file.hunks as hunk, i (i)}
-                        <div class="flex items-center gap-2 px-2 py-0.5 {lineBg('hunk')} border-b border-border/50">
+                        <div
+                          class="flex items-center gap-2 px-2 py-0.5 {lineBg(
+                            'hunk',
+                          )} border-b border-border/50"
+                        >
                           <span class="text-[10px]">@@ {hunk.header}</span>
                         </div>
                         {#each hunk.lines as line, i (i)}
                           <div class="flex border-b border-border/5">
-                            <div class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {leftLineBg(line.type)}">
-                              <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
-                                {line.type !== 'add' ? (line.oldLine ?? '') : ''}
+                            <div
+                              class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {leftLineBg(
+                                line.type,
+                              )}"
+                            >
+                              <span
+                                class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0"
+                              >
+                                {line.type !== "add"
+                                  ? (line.oldLine ?? "")
+                                  : ""}
                               </span>
-                              <span class="whitespace-pre-wrap {leftLineText(line.type)}">
-                                {line.type === 'add' ? '' : line.type === 'del' ? '-' : ' '}{line.type === 'add' ? '' : line.text}
+                              <span
+                                class="whitespace-pre-wrap {leftLineText(
+                                  line.type,
+                                )}"
+                              >
+                                {line.type === "add"
+                                  ? ""
+                                  : line.type === "del"
+                                    ? "-"
+                                    : " "}{line.type === "add" ? "" : line.text}
                               </span>
                             </div>
-                            <div class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {rightLineBg(line.type)}">
-                              <span class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0">
-                                {line.type !== 'del' ? (line.newLine ?? '') : ''}
+                            <div
+                              class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {rightLineBg(
+                                line.type,
+                              )}"
+                            >
+                              <span
+                                class="w-10 text-right text-[10px] text-muted-foreground select-none tabular-nums shrink-0"
+                              >
+                                {line.type !== "del"
+                                  ? (line.newLine ?? "")
+                                  : ""}
                               </span>
-                              <span class="whitespace-pre-wrap {rightLineText(line.type)}">
-                                {line.type === 'del' ? '' : line.type === 'add' ? '+' : ' '}{line.type === 'del' ? '' : line.text}
+                              <span
+                                class="whitespace-pre-wrap {rightLineText(
+                                  line.type,
+                                )}"
+                              >
+                                {line.type === "del"
+                                  ? ""
+                                  : line.type === "add"
+                                    ? "+"
+                                    : " "}{line.type === "del" ? "" : line.text}
                               </span>
                             </div>
                           </div>
@@ -616,18 +748,24 @@
             {/if}
           </div>
         {:else}
-          <div class="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+          <div
+            class="flex-1 flex items-center justify-center text-muted-foreground text-sm"
+          >
             Select a file to view diff
           </div>
         {/if}
       </div>
     </div>
   {:else if loading}
-    <div class="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+    <div
+      class="flex-1 flex items-center justify-center text-muted-foreground text-sm"
+    >
       Loading...
     </div>
   {:else}
-    <div class="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+    <div
+      class="flex-1 flex items-center justify-center text-muted-foreground text-sm"
+    >
       No {showStaged ? "staged" : "unstaged"} changes.
     </div>
   {/if}

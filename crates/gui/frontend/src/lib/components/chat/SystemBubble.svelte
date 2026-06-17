@@ -6,13 +6,16 @@
 
   let expanded = $state(false);
 
-  const isShort = message.content.length < 100 && !message.content.includes("\n");
+  const isShort =
+    message.content.length < 100 && !message.content.includes("\n");
 </script>
 
 <div class="flex justify-center my-1">
   <div class="max-w-[90%]">
     {#if isShort}
-      <div class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/60 bg-muted/30 rounded-md px-2 py-1">
+      <div
+        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/60 bg-muted/30 rounded-md px-2 py-1"
+      >
         <Terminal size={10} />
         <span class="font-mono">{message.content}</span>
       </div>
@@ -20,7 +23,7 @@
       <button
         type="button"
         class="inline-flex items-center gap-1.5 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer select-none bg-muted/30 rounded-md px-2 py-1"
-        onclick={() => expanded = !expanded}
+        onclick={() => (expanded = !expanded)}
       >
         <Terminal size={10} />
         <span>{expanded ? "Hide" : "System"}</span>

@@ -51,8 +51,14 @@
   {:else}
     <div class="space-y-2">
       {#each skills as skill (JSON.stringify(skill))}
-        <div class="rounded-lg border border-border p-4 hover:bg-secondary/50 transition-colors">
-          <pre class="text-xs overflow-x-auto">{JSON.stringify(skill, null, 2)}</pre>
+        <div
+          class="rounded-lg border border-border p-4 hover:bg-secondary/50 transition-colors"
+        >
+          <pre class="text-xs overflow-x-auto">{JSON.stringify(
+              skill,
+              null,
+              2,
+            )}</pre>
         </div>
       {/each}
     </div>

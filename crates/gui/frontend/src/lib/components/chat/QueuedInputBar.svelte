@@ -4,11 +4,21 @@
   import type { TaggedContentBlock } from "../../types";
   import { showNotification } from "../../state.svelte";
 
-  let { session, onEdit, onSteer }: { session: SessionState; onEdit: (text: string) => void; onSteer: (blocks: TaggedContentBlock[]) => void } = $props();
+  let {
+    session,
+    onEdit,
+    onSteer,
+  }: {
+    session: SessionState;
+    onEdit: (text: string) => void;
+    onSteer: (blocks: TaggedContentBlock[]) => void;
+  } = $props();
 
   function handleSteer() {
     if (!session.queued_input) return;
-    const blocks = session.queued_input.blocks ?? [{ type: "text", text: session.queued_input.text }];
+    const blocks = session.queued_input.blocks ?? [
+      { type: "text", text: session.queued_input.text },
+    ];
     onSteer(blocks);
     session.queued_input = null;
   }
@@ -26,10 +36,14 @@
 </script>
 
 {#if session.queued_input}
-  <div class="mx-4 mb-2 rounded-lg border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3">
+  <div
+    class="mx-4 mb-2 rounded-lg border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3"
+  >
     <Send class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
     <div class="flex-1 min-w-0">
-      <div class="text-xs text-muted-foreground mb-0.5">Queued — will send when streaming ends</div>
+      <div class="text-xs text-muted-foreground mb-0.5">
+        Queued — will send when streaming ends
+      </div>
       <div class="text-sm truncate">{session.queued_input.text}</div>
     </div>
     <button

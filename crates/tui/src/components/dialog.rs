@@ -192,7 +192,7 @@ impl SelectDialog {
 
         let dialog_area = Rect {
             x: area.x,
-            y: area.y + (area.height - dialog_height) / 2,
+            y: area.y + area.height.saturating_sub(dialog_height),
             width: dialog_width,
             height: dialog_height,
         };
