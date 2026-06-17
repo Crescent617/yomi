@@ -117,7 +117,9 @@
         <!-- Desktop inline sidebar -->
         <aside
           class="hidden lg:flex flex-col border-r border-border shrink-0 relative overflow-hidden
-                 {isDraggingLeft ? '' : 'transition-[width] duration-300 ease-out'}"
+                 {isDraggingLeft
+            ? ''
+            : 'transition-[width] duration-300 ease-out'}"
           style="width: {appState.sidebarCollapsed ? 64 : leftSidebarWidth}px"
         >
           <ProjectSidebar collapsed={appState.sidebarCollapsed} />
@@ -136,7 +138,9 @@
         <div
           class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
                  transition-opacity duration-200
-                 {mobileSidebarOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}"
+                 {mobileSidebarOpen
+            ? 'opacity-100 pointer-events-auto'
+            : 'opacity-0 pointer-events-none'}"
           onclick={closeMobileSidebar}
           role="presentation"
         ></div>
@@ -157,16 +161,21 @@
         <ChatView
           rightPanelCollapsed={appState.rightPanelCollapsed}
           leftPanelCollapsed={appState.sidebarCollapsed}
-          onToggleRightPanel={() => appState.rightPanelCollapsed = !appState.rightPanelCollapsed}
+          onToggleRightPanel={() =>
+            (appState.rightPanelCollapsed = !appState.rightPanelCollapsed)}
           onToggleLeftPanel={handleToggleLeft}
         />
 
         <!-- Desktop right panel -->
         <aside
           class="hidden lg:flex flex-col border-l border-border shrink-0 relative overflow-hidden
-                 {isDraggingRight ? '' : 'transition-[width] duration-300 ease-out'}
+                 {isDraggingRight
+            ? ''
+            : 'transition-[width] duration-300 ease-out'}
                  {appState.rightPanelCollapsed ? 'border-l-0' : ''}"
-          style="width: {appState.rightPanelCollapsed ? 0 : rightSidebarWidth}px"
+          style="width: {appState.rightPanelCollapsed
+            ? 0
+            : rightSidebarWidth}px"
         >
           {#if !appState.rightPanelCollapsed}
             <div
@@ -183,17 +192,24 @@
         <div
           class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
                  transition-opacity duration-200
-                 {appState.rightPanelCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100 pointer-events-auto'}"
-          onclick={() => appState.rightPanelCollapsed = true}
+                 {appState.rightPanelCollapsed
+            ? 'opacity-0 pointer-events-none'
+            : 'opacity-100 pointer-events-auto'}"
+          onclick={() => (appState.rightPanelCollapsed = true)}
           role="presentation"
         ></div>
         <div
           class="fixed right-0 top-0 bottom-0 z-50 w-[90vw] border-l border-border bg-background shadow-xl
                  transition-transform duration-300 ease-out lg:hidden flex flex-col
-                 {appState.rightPanelCollapsed ? 'translate-x-full' : 'translate-x-0'}"
+                 {appState.rightPanelCollapsed
+            ? 'translate-x-full'
+            : 'translate-x-0'}"
           style="max-width: 500px;"
         >
-          <RightPanel session={activeSession} onClose={() => appState.rightPanelCollapsed = true} />
+          <RightPanel
+            session={activeSession}
+            onClose={() => (appState.rightPanelCollapsed = true)}
+          />
         </div>
       {:else if appState.activePanel === "usage"}
         <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />

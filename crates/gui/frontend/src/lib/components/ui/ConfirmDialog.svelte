@@ -34,7 +34,7 @@
         if (node.parentNode) {
           node.parentNode.removeChild(node);
         }
-      }
+      },
     };
   }
 </script>
@@ -47,17 +47,25 @@
   <div
     use:portal
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-    onclick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    onclick={(e) => {
+      if (e.target === e.currentTarget) onCancel();
+    }}
   >
-    <div class="bg-background rounded-xl border border-border shadow-2xl w-full max-w-sm flex flex-col">
+    <div
+      class="bg-background rounded-xl border border-border shadow-2xl w-full max-w-sm flex flex-col"
+    >
       <div class="flex items-center gap-3 px-5 py-4 border-b border-border">
         <AlertTriangle class="w-5 h-5 text-amber-500 shrink-0" />
         <h2 class="text-sm font-semibold">{title}</h2>
       </div>
-      <div class="px-5 py-4 text-sm text-muted-foreground leading-relaxed whitespace-pre-line">
+      <div
+        class="px-5 py-4 text-sm text-muted-foreground leading-relaxed whitespace-pre-line"
+      >
         {message}
       </div>
-      <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
+      <div
+        class="flex items-center justify-end gap-2 px-5 py-4 border-t border-border"
+      >
         <button
           type="button"
           onclick={onCancel}

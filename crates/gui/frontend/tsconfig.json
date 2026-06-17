@@ -11,6 +11,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "$lib/*": ["src/lib/*"]
+    },
     "types": ["svelte"]
   },
   "include": ["src/**/*", "src/**/*.svelte", "src/**/*.svelte.ts"]

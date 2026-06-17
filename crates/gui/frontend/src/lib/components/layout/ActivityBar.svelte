@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { MessageSquare, BarChart3, Settings, Sun, Moon, Monitor, Timer } from "lucide-svelte";
+  import {
+    MessageSquare,
+    BarChart3,
+    Settings,
+    Sun,
+    Moon,
+    Monitor,
+    Timer,
+  } from "lucide-svelte";
   import { appState } from "../../state.svelte";
   import { settings, applyTheme, persistSettings } from "../../settings.svelte";
 
@@ -20,15 +28,17 @@
   }
 </script>
 
-<div class="shrink-0 w-12 border-r border-border bg-muted/30 flex flex-col items-center py-2 gap-1">
+<div
+  class="shrink-0 w-12 border-r border-border bg-muted/30 flex flex-col items-center py-2 gap-1"
+>
   {#each tabs as tab (tab.id)}
     <button
       type="button"
-      onclick={() => appState.activePanel = tab.id}
+      onclick={() => (appState.activePanel = tab.id)}
       class="w-9 h-9 rounded-lg flex items-center justify-center transition-colors
              {appState.activePanel === tab.id
-               ? 'bg-primary/10 text-primary'
-               : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
+        ? 'bg-primary/10 text-primary'
+        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'}"
       title={tab.label}
     >
       <tab.icon class="w-5 h-5" />

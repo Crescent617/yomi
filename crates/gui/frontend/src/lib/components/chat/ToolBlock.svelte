@@ -1,11 +1,22 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp, Loader2, CheckCircle2, XCircle, MinusCircle, AlertCircle } from "lucide-svelte";
+  import {
+    ChevronDown,
+    ChevronUp,
+    Loader2,
+    CheckCircle2,
+    XCircle,
+    MinusCircle,
+    AlertCircle,
+  } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
   import { formatElapsed } from "../../utils";
 
-  let { tool }: { tool: ToolCall } = $props();
+  let {
+    tool,
+    expanded: initialExpanded = false,
+  }: { tool: ToolCall; expanded?: boolean } = $props();
 
-  let expanded = $state(false);
+  let expanded = $state(initialExpanded);
 
   function compactArgs(args: string, maxLen = 120): string {
     if (!args) return "";
@@ -15,7 +26,10 @@
       if (s.length <= maxLen) return s;
       return s.slice(0, maxLen) + "…";
     } catch {
-      return args.replace(/\s+/g, " ").slice(0, maxLen) + (args.length > maxLen ? "…" : "");
+      return (
+        args.replace(/\s+/g, " ").slice(0, maxLen) +
+        (args.length > maxLen ? "…" : "")
+      );
     }
   }
 
@@ -39,16 +53,28 @@
     try {
       const parsed = JSON.parse(args);
       switch (tool_name.toLowerCase()) {
-        case "read": case "edit": return parsed.path ?? "";
-        case "write": return parsed.file_path ?? "";
-        case "shell": return parsed.command ?? "";
-        case "glob": case "grep": return parsed.pattern ?? "";
-        case "webfetch": return parsed.url ?? "";
-        case "skill": return parsed.name ?? parsed.path ?? "";
-        case "subagent": return parsed.description ?? "";
-        default: return "";
+        case "read":
+        case "edit":
+          return parsed.path ?? "";
+        case "write":
+          return parsed.file_path ?? "";
+        case "shell":
+          return parsed.command ?? "";
+        case "glob":
+        case "grep":
+          return parsed.pattern ?? "";
+        case "webfetch":
+          return parsed.url ?? "";
+        case "skill":
+          return parsed.name ?? parsed.path ?? "";
+        case "subagent":
+          return parsed.description ?? "";
+        default:
+          return "";
       }
-    } catch { return ""; }
+    } catch {
+      return "";
+    }
   }
 
   function extraMeta(tool_name: string, args: string): string {
@@ -77,19 +103,23 @@
         }
       }
       return extras.join(" · ");
-    } catch { return ""; }
+    } catch {
+      return "";
+    }
   }
 
   const target = $derived(extractTarget(tool.tool_name, tool.arguments ?? ""));
   const meta = $derived(extraMeta(tool.tool_name, tool.arguments ?? ""));
 </script>
 
-<div class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}">
+<div
+  class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}"
+>
   <!-- Header — always visible, clickable -->
   <button
     type="button"
     class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-    onclick={() => expanded = !expanded}
+    onclick={() => (expanded = !expanded)}
   >
     {#if tool.status === "running"}
       <Loader2 class="w-4 h-4 shrink-0 animate-spin" />
@@ -108,14 +138,18 @@
     {#if target}
       <span class="text-xs opacity-70 truncate">{target}</span>
     {:else if tool.arguments}
-      <span class="text-xs opacity-60 truncate">{compactArgs(tool.arguments, 80)}</span>
+      <span class="text-xs opacity-60 truncate"
+        >{compactArgs(tool.arguments, 80)}</span
+      >
     {/if}
     {#if meta}
       <span class="text-xs opacity-50 shrink-0">· {meta}</span>
     {/if}
 
     {#if tool.elapsed_ms && tool.elapsed_ms > 1000}
-      <span class="text-xs opacity-60 shrink-0">{formatElapsed(tool.elapsed_ms)}</span>
+      <span class="text-xs opacity-60 shrink-0"
+        >{formatElapsed(tool.elapsed_ms)}</span
+      >
     {/if}
     {#if tool.progress && tool.status === "running"}
       <span class="text-xs opacity-60 truncate">· {tool.progress}</span>
@@ -134,11 +168,14 @@
 
   <!-- Body — expanded only -->
   {#if expanded}
-    <div class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/10 max-h-96 overflow-y-auto">
+    <div
+      class="px-3 pb-2 space-y-1.5 border-t border-black/5 dark:border-white/10 max-h-96 overflow-y-auto"
+    >
       {#if tool.arguments}
         <div class="text-xs opacity-60 dark:opacity-50">
           <div class="font-medium mb-0.5">Arguments:</div>
-          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{tool.arguments}</pre>
+          <pre
+            class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{tool.arguments}</pre>
         </div>
       {/if}
 
@@ -151,15 +188,19 @@
 
       {#if tool.output}
         <div class="text-xs">
-          <div class="font-medium mb-0.5 opacity-70 dark:opacity-50">Output:</div>
-          <pre class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
+          <div class="font-medium mb-0.5 opacity-70 dark:opacity-50">
+            Output:
+          </div>
+          <pre
+            class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
         </div>
       {/if}
 
       {#if tool.error}
         <div class="text-xs text-red-600 dark:text-red-400">
           <div class="font-medium mb-0.5">Error:</div>
-          <pre class="bg-red-50/80 dark:bg-red-950/40 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
+          <pre
+            class="bg-red-50/80 dark:bg-red-950/40 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
         </div>
       {/if}
     </div>

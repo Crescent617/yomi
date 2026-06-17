@@ -1,16 +1,22 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/yomi.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>
-      (function() {
-        const theme = localStorage.getItem('yomi-gui-settings');
-        let mode = 'system';
-        try { mode = JSON.parse(theme)?.theme || 'system'; } catch(e) {}
-        if (mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-          document.documentElement.classList.add('dark');
+      (function () {
+        const theme = localStorage.getItem("yomi-gui-settings");
+        let mode = "system";
+        try {
+          mode = JSON.parse(theme)?.theme || "system";
+        } catch (e) {}
+        if (
+          mode === "dark" ||
+          (mode === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ) {
+          document.documentElement.classList.add("dark");
         }
       })();
     </script>

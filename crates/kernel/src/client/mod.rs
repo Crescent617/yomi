@@ -1168,18 +1168,14 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary> {
         let result = self
-            .call(RequestMethod::GetUsageSummary {
-                days: Some(days),
-            })
+            .call(RequestMethod::GetUsageSummary { days: Some(days) })
             .await?;
         let summary = serde_json::from_value(result)?;
         Ok(summary)
     }
 
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
-        let result = self
-            .call(RequestMethod::GetDailyUsage { days })
-            .await?;
+        let result = self.call(RequestMethod::GetDailyUsage { days }).await?;
         let daily: Vec<crate::storage::usage::DailyUsage> = serde_json::from_value(result)?;
         Ok(daily)
     }

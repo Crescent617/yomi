@@ -71,6 +71,7 @@ pub fn run() {
             commands::system::get_config,
             commands::system::get_usage_summary,
             commands::system::get_daily_usage,
+            commands::system::open_in_browser,
             commands::system::open_in_explorer,
             commands::system::open_in_vscode,
             commands::system::open_in_zed,
@@ -100,7 +101,10 @@ pub fn run() {
 
 fn main() {
     // Load ~/.env before anything else so env vars are available to the app.
-    if let Some(home) = std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok()) {
+    if let Some(home) = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+    {
         let env_path = std::path::Path::new(&home).join(".env");
         if env_path.exists() {
             if let Err(e) = dotenvy::from_path(&env_path) {

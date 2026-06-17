@@ -73,9 +73,16 @@ export function formatMessageTime(iso: string | undefined): string {
   if (isNaN(d.getTime())) return "";
   const now = new Date();
   const isToday = d.toDateString() === now.toDateString();
-  const timeStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const timeStr = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
   if (isToday) return timeStr;
-  const dateStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const dateStr = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
   return `${dateStr} ${timeStr}`;
 }
 

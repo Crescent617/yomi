@@ -7,17 +7,23 @@
   let version = $state("");
 
   onMount(() => {
-    getVersion().then(v => version = v).catch(() => {});
+    getVersion()
+      .then((v) => (version = v))
+      .catch(() => {});
   });
 
   const streamingCount = $derived(
-    sessionState.sessions.filter((s) => s.phase === "streaming" || s.phase === "executing_tool").length
+    sessionState.sessions.filter(
+      (s) => s.phase === "streaming" || s.phase === "executing_tool",
+    ).length,
   );
 
   const anyStreaming = $derived(streamingCount > 0);
 </script>
 
-<div class="shrink-0 h-7 border-t border-border bg-background flex items-center px-3 text-xs select-none gap-3">
+<div
+  class="shrink-0 h-7 border-t border-border bg-background flex items-center px-3 text-xs select-none gap-3"
+>
   <!-- Left: Streaming indicator -->
   <div class="flex items-center gap-1.5 min-w-0">
     {#if anyStreaming}

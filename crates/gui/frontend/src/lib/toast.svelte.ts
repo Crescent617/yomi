@@ -12,7 +12,7 @@ let toastIdCounter = 0;
 export function pushToast(
   message: string,
   type: Toast["type"] = "info",
-  duration = 4000
+  duration = 4000,
 ): string {
   const id = `toast-${++toastIdCounter}`;
   toasts.push({ id, message, type, duration });

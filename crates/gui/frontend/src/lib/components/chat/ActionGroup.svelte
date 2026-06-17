@@ -40,34 +40,44 @@
       }
     }
 
-    const activeLabel = runningNames.length > 0
-      ? `calling ${runningNames.join(", ")}`
-      : isStreaming && thinkingCount > 0
-        ? "thinking"
-        : "";
+    const activeLabel =
+      runningNames.length > 0
+        ? `calling ${runningNames.join(", ")}`
+        : isStreaming && thinkingCount > 0
+          ? "thinking"
+          : "";
 
     return { toolCount, thinkingCount, runningCount, failedCount, activeLabel };
   });
 </script>
 
-<div class="{expanded ? 'flex' : 'inline-flex'} flex-col rounded-lg border border-border/50 overflow-hidden">
+<div
+  class="{expanded
+    ? 'flex'
+    : 'inline-flex'} flex-col rounded-lg border border-border/50 overflow-hidden"
+>
   <button
     type="button"
     class="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/40 transition-colors whitespace-nowrap"
-    onclick={() => expanded = !expanded}
+    onclick={() => (expanded = !expanded)}
   >
     <!-- 状态图标 — 呼吸灯 or 失败 -->
     {#if isStreaming || stats.runningCount > 0}
       <span class="relative flex size-2 shrink-0">
-        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-        <span class="relative inline-flex rounded-full size-2 bg-amber-500"></span>
+        <span
+          class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"
+        ></span>
+        <span class="relative inline-flex rounded-full size-2 bg-amber-500"
+        ></span>
       </span>
     {:else if stats.failedCount > 0}
       <XCircle class="size-4 text-red-500 shrink-0" />
     {/if}
 
     <!-- 标题 -->
-    <span class="font-medium text-foreground shrink-0 inline-flex items-center gap-1.5">
+    <span
+      class="font-medium text-foreground shrink-0 inline-flex items-center gap-1.5"
+    >
       {#if stats.toolCount > 0}
         <Wrench class="size-3.5 text-muted-foreground" />
         {#key stats.toolCount}
@@ -87,7 +97,9 @@
 
     {#if stats.activeLabel}
       <span class="text-muted-foreground/30">|</span>
-      <span class="text-xs text-muted-foreground/70 truncate">{stats.activeLabel}</span>
+      <span class="text-xs text-muted-foreground/70 truncate"
+        >{stats.activeLabel}</span
+      >
     {/if}
   </button>
 
@@ -95,7 +107,10 @@
     <div class="p-2 space-y-2 border-t border-border/30 bg-muted/20 w-full">
       {#each messages as msg (`msg-${msg.id}`)}
         {#if msg.thinking}
-          <ThinkingBlock content={msg.thinking.content} elapsed_ms={msg.thinking.elapsed_ms} />
+          <ThinkingBlock
+            content={msg.thinking.content}
+            elapsed_ms={msg.thinking.elapsed_ms}
+          />
         {/if}
         {#if msg.tools && msg.tools.length > 0}
           {#each msg.tools as tool (`${msg.id}-${tool.id}`)}
@@ -109,8 +124,14 @@
 
 <style>
   @keyframes roll-in {
-    0% { transform: translateY(60%); opacity: 0; }
-    100% { transform: translateY(0); opacity: 1; }
+    0% {
+      transform: translateY(60%);
+      opacity: 0;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
   .roll-num {
     animation: roll-in 0.25s ease-out;

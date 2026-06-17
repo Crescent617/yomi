@@ -19,7 +19,7 @@
   let highlighted = $state("");
   let loading = $state(true);
   let error = $state("");
-  let highlighter: { codeToHtml: (code: string, options: { lang: string; theme: string }) => Promise<string>; dispose: () => void } | null = null;
+  let highlighter: any = null;
 
   function breadcrumb(path: string): string[] {
     return path.split("/").filter(Boolean);
@@ -38,7 +38,7 @@
         themes: ["github-light", "github-dark"],
         langs: [lang],
       });
-      highlighted = highlighter.codeToHtml(content, {
+      highlighted = await highlighter.codeToHtml(content, {
         lang,
         theme: "github-dark",
       });

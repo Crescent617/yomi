@@ -42,7 +42,11 @@
       selections = {};
       customInputs = {};
     } catch (e: unknown) {
-      showNotification("Response failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
+      showNotification(
+        "Response failed: " + (e instanceof Error ? e.message : ""),
+        "error",
+        3000,
+      );
     }
   }
 
@@ -51,7 +55,9 @@
     // Send empty response to unblock the agent
     try {
       await api.respondAskUser(activeSession.id, askUser.req_id, []);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     activeSession.pending_ask_user = null;
     selections = {};
     customInputs = {};
@@ -59,18 +65,33 @@
 </script>
 
 {#if askUser && askUser.questions.length > 0}
-  <div class="shrink-0 border-t border-border bg-blue-50/40 dark:bg-blue-950/20 px-4 py-3">
-    <div class="rounded-lg border border-blue-200 dark:border-blue-800 bg-background px-3 py-2.5 space-y-3">
+  <div
+    class="shrink-0 border-t border-border bg-blue-50/40 dark:bg-blue-950/20 px-4 py-3"
+  >
+    <div
+      class="rounded-lg border border-blue-200 dark:border-blue-800 bg-background px-3 py-2.5 space-y-3"
+    >
       {#each askUser.questions as question (question.header)}
         <div>
-          <div class="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1.5">{question.question}</div>
+          <div
+            class="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1.5"
+          >
+            {question.question}
+          </div>
           {#if question.options.length > 0}
             <div class="flex flex-wrap gap-1.5 mb-2">
               {#each question.options as opt (opt.label)}
-                {@const selected = (selections[question.header] ?? []).includes(opt.label)}
+                {@const selected = (selections[question.header] ?? []).includes(
+                  opt.label,
+                )}
                 <button
                   type="button"
-                  onclick={() => toggleOption(question.header, opt.label, question.multi_select)}
+                  onclick={() =>
+                    toggleOption(
+                      question.header,
+                      opt.label,
+                      question.multi_select,
+                    )}
                   class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"
@@ -82,7 +103,8 @@
             </div>
             {#if question.options.some((o) => o.preview)}
               {#each question.options.filter((o) => o.preview && (selections[question.header] ?? []).includes(o.label)) as opt (opt.label)}
-                <pre class="mb-2 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
+                <pre
+                  class="mb-2 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
               {/each}
             {/if}
           {/if}

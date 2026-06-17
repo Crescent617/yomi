@@ -10,9 +10,14 @@
     if (!activeSession) return;
     try {
       await api.respondPermission(activeSession.id, req_id, true, remember);
-      activeSession.pending_permissions = activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
+      activeSession.pending_permissions =
+        activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
-      showNotification("Approval failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
+      showNotification(
+        "Approval failed: " + (e instanceof Error ? e.message : ""),
+        "error",
+        3000,
+      );
     }
   }
 
@@ -20,9 +25,14 @@
     if (!activeSession) return;
     try {
       await api.respondPermission(activeSession.id, req_id, false, false);
-      activeSession.pending_permissions = activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
+      activeSession.pending_permissions =
+        activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
-      showNotification("Denial failed: " + (e instanceof Error ? e.message : ""), "error", 3000);
+      showNotification(
+        "Denial failed: " + (e instanceof Error ? e.message : ""),
+        "error",
+        3000,
+      );
     }
   }
 
@@ -37,15 +47,23 @@
 </script>
 
 {#if permissions.length > 0}
-  <div class="shrink-0 border-t border-border bg-amber-50/40 dark:bg-amber-950/20 px-4 py-3 space-y-3">
+  <div
+    class="shrink-0 border-t border-border bg-amber-50/40 dark:bg-amber-950/20 px-4 py-3 space-y-3"
+  >
     {#each permissions as perm (perm.req_id)}
-      <div class="rounded-lg border border-amber-200 dark:border-amber-800 bg-background px-3 py-2.5">
+      <div
+        class="rounded-lg border border-amber-200 dark:border-amber-800 bg-background px-3 py-2.5"
+      >
         <div class="flex items-start justify-between gap-3">
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+            <div
+              class="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400"
+            >
               <ShieldCheck class="w-4 h-4 shrink-0" />
               <span class="truncate">{perm.tool_name}</span>
-              <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-400">
+              <span
+                class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-400"
+              >
                 {perm.tool_level}
               </span>
             </div>
@@ -53,7 +71,10 @@
               <p class="text-xs text-muted-foreground mt-1">{perm.reason}</p>
             {/if}
             {#if perm.tool_args}
-              <pre class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap">{compactJson(perm.tool_args)}</pre>
+              <pre
+                class="mt-1.5 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap max-h-48 overflow-y-auto">{compactJson(
+                  perm.tool_args,
+                )}</pre>
             {/if}
           </div>
           <div class="flex items-center gap-1.5 shrink-0">

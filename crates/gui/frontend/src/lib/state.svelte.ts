@@ -7,7 +7,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 // 非活跃 session 自动 unsubscribe 延迟（60 秒）
 const INACTIVE_UNSUBSCRIBE_DELAY = 60_000;
 
-const pendingUnsubscribeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const pendingUnsubscribeTimers: Record<
+  string,
+  ReturnType<typeof setTimeout>
+> = {};
 
 export function scheduleUnsubscribe(session_id: string) {
   const session = getSession(session_id);
@@ -81,7 +84,11 @@ export interface ChatMessage {
   thinking?: { content: string; elapsed_ms: number } | null;
   tools?: ToolCall[];
   error?: boolean;
-  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  token_usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
   raw?: unknown;
   created_at?: string;
 }
@@ -143,17 +150,25 @@ export interface SessionState {
   updated_at: string;
   permission_level?: string;
   compacting?: boolean;
-  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  token_usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
   git_info?: GitInfo | null;
   goal?: { description: string; status: string } | null;
+  browserUrl?: string;
 }
 
 export const appState = $state({
-  connectionStatus: "disconnected" as "connected" | "disconnected" | "connecting",
+  connectionStatus: "disconnected" as
+    | "connected"
+    | "disconnected"
+    | "connecting",
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
-  activePanel: "chat" as "chat" | "usage" | "config",
+  activePanel: "chat" as "chat" | "usage" | "config" | "automation",
 });
 
 export const projectState = $state({
@@ -169,7 +184,7 @@ import { pushToast } from "./toast.svelte";
 export function showNotification(
   text: string,
   level: "info" | "warn" | "error" | "success" = "info",
-  durationMs = 4000
+  durationMs = 4000,
 ) {
   const typeMap: Record<string, "info" | "success" | "warning" | "error"> = {
     info: "info",
@@ -180,13 +195,19 @@ export function showNotification(
   pushToast(text, typeMap[level] ?? "info", durationMs);
 }
 
-export function sendDesktopNotification(title: string, body: string, session_id?: string) {
+export function sendDesktopNotification(
+  title: string,
+  body: string,
+  session_id?: string,
+) {
   try {
     if (session_id && typeof Notification !== "undefined") {
       try {
         const n = new Notification(title, { body, tag: session_id });
         n.onclick = () => {
-          getCurrentWindow().setFocus().catch(() => {});
+          getCurrentWindow()
+            .setFocus()
+            .catch(() => {});
           appState.activePanel = "chat";
           if (getSession(session_id)) {
             setActiveSession(session_id);
@@ -194,7 +215,10 @@ export function sendDesktopNotification(title: string, body: string, session_id?
         };
         return;
       } catch (webErr) {
-        console.warn("Web Notification API failed, falling back to plugin:", webErr);
+        console.warn(
+          "Web Notification API failed, falling back to plugin:",
+          webErr,
+        );
       }
     }
     sendNotification({ title, body });
@@ -210,6 +234,20 @@ export const sessionState = $state({
 
 export const streamingMessages = $state<Record<string, ChatMessage[]>>({});
 
+export function openBrowser(session_id: string, url: string) {
+  const session = getSession(session_id);
+  if (session) {
+    session.browserUrl = url;
+  }
+}
+
+export function closeBrowser(session_id: string) {
+  const session = getSession(session_id);
+  if (session) {
+    session.browserUrl = undefined;
+  }
+}
+
 export function getDisplayMessages(session_id: string): ChatMessage[] {
   const session = getSession(session_id);
   if (!session) return [];
@@ -223,47 +261,54 @@ export function getSession(id: string): SessionState | undefined {
 }
 
 export function refreshCheckpoints(session_id: string) {
-  api.getCheckpoints(session_id).then((cps) => {
-    const session = getSession(session_id);
-    if (session) session.checkpoints = cps;
-  }).catch((e: Error) => console.error("Failed to reload checkpoints:", e));
+  api
+    .getCheckpoints(session_id)
+    .then((cps) => {
+      const session = getSession(session_id);
+      if (session) session.checkpoints = cps;
+    })
+    .catch((e: Error) => console.error("Failed to reload checkpoints:", e));
 }
 
 export function refreshSessions() {
-  api.listSessions().then((result) => {
-    const existing = new Map(sessionState.sessions.map((s) => [s.id, s]));
-    for (const s of result.sessions) {
-      const current = existing.get(s.id);
-      if (!current) {
-        sessionState.sessions.push({
-          id: s.id,
-          project_path: s.project_path,
-          project_id: s.project_id,
-          alias: s.title,
-          messages: [],
-          phase: "idle",
-          unread: 0,
-          checkpoints: [],
-          tabs: [],
-          active_tab_id: "chat",
-          pending_permissions: [],
-          pending_ask_user: null,
-          queued_input: null,
-          updated_at: s.created_at,
-          permission_level: s.auto_approve_level,
-        });
-      } else {
-        current.alias = s.title ?? current.alias;
-        current.updated_at = s.created_at ?? current.updated_at;
-        current.permission_level = s.auto_approve_level ?? current.permission_level;
+  api
+    .listSessions()
+    .then((result) => {
+      const existing = new Map(sessionState.sessions.map((s) => [s.id, s]));
+      for (const s of result.sessions) {
+        const current = existing.get(s.id);
+        if (!current) {
+          sessionState.sessions.push({
+            id: s.id,
+            project_path: s.project_path,
+            project_id: s.project_id,
+            alias: s.title,
+            messages: [],
+            phase: "idle",
+            unread: 0,
+            checkpoints: [],
+            tabs: [],
+            active_tab_id: "chat",
+            pending_permissions: [],
+            pending_ask_user: null,
+            queued_input: null,
+            updated_at: s.created_at,
+            permission_level: s.auto_approve_level,
+          });
+        } else {
+          current.alias = s.title ?? current.alias;
+          current.updated_at = s.created_at ?? current.updated_at;
+          current.permission_level =
+            s.auto_approve_level ?? current.permission_level;
+        }
       }
-    }
-  }).catch((e: Error) => console.error("Failed to refresh sessions:", e));
+    })
+    .catch((e: Error) => console.error("Failed to refresh sessions:", e));
 }
 
 export function getActiveSession(): SessionState | null {
   return sessionState.activeSessionId
-    ? getSession(sessionState.activeSessionId) ?? null
+    ? (getSession(sessionState.activeSessionId) ?? null)
     : null;
 }
 
@@ -291,9 +336,10 @@ function upsertSession(session: SessionState) {
   }
 }
 
-
-
-export function syncSessionStatus(session_id: string, status: { phase: string; compacting: boolean }) {
+export function syncSessionStatus(
+  session_id: string,
+  status: { phase: string; compacting: boolean },
+) {
   const session = getSession(session_id);
   if (!session) return;
   session.phase = status.phase;
@@ -303,10 +349,10 @@ export function syncSessionStatus(session_id: string, status: { phase: string; c
 export function openFileTab(
   session: SessionState,
   entry: TabEntry,
-  type: "preview" | "edit"
+  type: "preview" | "edit",
 ) {
   const existing = session.tabs.find(
-    (t) => t.type === type && t.entry?.path === entry.path
+    (t) => t.type === type && t.entry?.path === entry.path,
   );
   if (existing) {
     session.active_tab_id = existing.id;
@@ -328,7 +374,8 @@ export function closeTab(session: SessionState, tabId: string) {
   if (idx === -1) return;
   session.tabs = session.tabs.filter((t) => t.id !== tabId);
   if (session.active_tab_id === tabId) {
-    session.active_tab_id = session.tabs[Math.min(idx, session.tabs.length - 1)]?.id ?? "chat";
+    session.active_tab_id =
+      session.tabs[Math.min(idx, session.tabs.length - 1)]?.id ?? "chat";
   }
 }
 
@@ -341,7 +388,9 @@ function extractId(raw: unknown): string {
   return typeof raw === "string" && raw.length > 0 ? raw : crypto.randomUUID();
 }
 
-function normalizeRole(role: unknown): "user" | "tool" | "system" | "assistant" | "error" {
+function normalizeRole(
+  role: unknown,
+): "user" | "tool" | "system" | "assistant" | "error" {
   if (role === "User" || role === "user") return "user";
   if (role === "tool" || role === "Tool") return "tool";
   if (role === "system" || role === "System") return "system";
@@ -355,7 +404,11 @@ export interface RawMessage {
   content?: string | TaggedContentBlock[];
   tool_call_id?: string;
   tool_calls?: RawToolCall[];
-  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  token_usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
   created_at?: string;
 }
 
@@ -366,7 +419,10 @@ interface RawToolCall {
   arguments?: string | Record<string, unknown>;
 }
 
-export function loadSessionMessages(session_id: string, rawMessages: unknown[]) {
+export function loadSessionMessages(
+  session_id: string,
+  rawMessages: unknown[],
+) {
   const session = getSession(session_id);
   if (!session) return;
 
@@ -379,10 +435,12 @@ export function loadSessionMessages(session_id: string, rawMessages: unknown[]) 
 
     let output = "";
     if (Array.isArray(m.content)) {
-      output = m.content.map((block: TaggedContentBlock) => {
-        if (typeof block === "string") return block;
-        return block.type === "text" && block.text ? block.text : "";
-      }).join("");
+      output = m.content
+        .map((block: TaggedContentBlock) => {
+          if (typeof block === "string") return block;
+          return block.type === "text" && block.text ? block.text : "";
+        })
+        .join("");
     } else if (typeof m.content === "string") {
       output = m.content;
     }
@@ -415,7 +473,11 @@ export function loadSessionMessages(session_id: string, rawMessages: unknown[]) 
       let textContent = "";
       let blocks: TaggedContentBlock[] | undefined;
       if (Array.isArray(m.content)) {
-        textContent = m.content.map((b: TaggedContentBlock) => b.type === "text" && b.text ? b.text : "").join("");
+        textContent = m.content
+          .map((b: TaggedContentBlock) =>
+            b.type === "text" && b.text ? b.text : "",
+          )
+          .join("");
         // Keep blocks if there's any non-text content (e.g., images)
         if (m.content.some((b: TaggedContentBlock) => b.type !== "text")) {
           blocks = m.content;
@@ -464,11 +526,21 @@ export function loadSessionMessages(session_id: string, rawMessages: unknown[]) 
         for (const block of m.content) {
           if (typeof block === "string") {
             text += block;
-          } else if (block.type === "text" || (block as Record<string, unknown>).text) {
-            text += (block as Record<string, unknown>).text as string || "";
-          } else if (block.type === "thinking" || (block as Record<string, unknown>).thinking) {
+          } else if (
+            block.type === "text" ||
+            (block as unknown as Record<string, unknown>).text
+          ) {
+            text +=
+              ((block as unknown as Record<string, unknown>).text as string) ||
+              "";
+          } else if (
+            block.type === "thinking" ||
+            (block as unknown as Record<string, unknown>).thinking
+          ) {
             thinking = {
-              content: (block as Record<string, unknown>).thinking as string || "",
+              content:
+                ((block as unknown as Record<string, unknown>)
+                  .thinking as string) || "",
               elapsed_ms: 0,
             };
           }
@@ -485,18 +557,21 @@ export function loadSessionMessages(session_id: string, rawMessages: unknown[]) 
           const tool_name = tc.name || tc.tool_name || "";
           let args = "";
           if (tc.arguments) {
-            args = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments);
+            args =
+              typeof tc.arguments === "string"
+                ? tc.arguments
+                : JSON.stringify(tc.arguments);
           }
           const output =
-            toolOutputs[tool_id]
-            || toolOutputs[tool_id.replace(/^functions\./, "")]
-            || toolOutputByName[tool_name.toLowerCase()]
-            || "";
+            toolOutputs[tool_id] ||
+            toolOutputs[tool_id.replace(/^functions\./, "")] ||
+            toolOutputByName[tool_name.toLowerCase()] ||
+            "";
           const hasOutput =
-            output !== ""
-            || tool_id in toolOutputs
-            || tool_id.replace(/^functions\./, "") in toolOutputs
-            || tool_name.toLowerCase() in toolOutputByName;
+            output !== "" ||
+            tool_id in toolOutputs ||
+            tool_id.replace(/^functions\./, "") in toolOutputs ||
+            tool_name.toLowerCase() in toolOutputByName;
           tools.push({
             id: tool_id,
             tool_name,
@@ -555,7 +630,13 @@ interface ChunkContent {
 interface ModelChunk {
   request?: { agent_id: string; message_id: string; message_count: number };
   chunk?: { agent_id: string; message_id: string; content: ChunkContent };
-  tool_call_delta?: { agent_id: string; message_id: string; tool_id: string; tool_name: string; arguments_delta: string };
+  tool_call_delta?: {
+    agent_id: string;
+    message_id: string;
+    tool_id: string;
+    tool_name: string;
+    arguments_delta: string;
+  };
   completed?: { agent_id: string; message_id: string };
   error?: { agent_id: string; message_id: string; error: string };
   fallback?: { agent_id: string; message_id: string; from: string; to: string };
@@ -616,7 +697,12 @@ type AgentLifecycle = AgentLifecycleRunning | AgentLifecycleStopped;
 
 interface AgentEvent {
   lifecycle?: AgentLifecycle;
-  error?: { agent_id: string; phase: string; error: string; is_recoverable: boolean };
+  error?: {
+    agent_id: string;
+    phase: string;
+    error: string;
+    is_recoverable: boolean;
+  };
   permission_request?: {
     req_id: string;
     tool_name: string;
@@ -702,8 +788,14 @@ function scheduleUnsubscribeIfInactive(session: SessionState) {
 }
 
 /** Search all messages for a tool with the given id. */
-function findToolById(session: SessionState, tool_id: string): { msg: ChatMessage; tool: ToolCall } | null {
-  const allMessages = [...session.messages, ...(streamingMessages[session.id] ?? [])];
+function findToolById(
+  session: SessionState,
+  tool_id: string,
+): { msg: ChatMessage; tool: ToolCall } | null {
+  const allMessages = [
+    ...session.messages,
+    ...(streamingMessages[session.id] ?? []),
+  ];
   for (let i = allMessages.length - 1; i >= 0; i--) {
     const msg = allMessages[i];
     if (msg.role === "assistant" && msg.tools) {
@@ -734,21 +826,46 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       const text = content.text;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
-      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.thinking && (!lastMsg.tools || lastMsg.tools.length === 0)) {
+      if (
+        lastMsg &&
+        lastMsg.role === "assistant" &&
+        !lastMsg.thinking &&
+        (!lastMsg.tools || lastMsg.tools.length === 0)
+      ) {
         lastMsg.content += text;
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: text, thinking: null, tools: [], created_at: new Date().toISOString() });
+        buf.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: text,
+          thinking: null,
+          tools: [],
+          created_at: new Date().toISOString(),
+        });
       }
       streamingMessages[session.id] = buf;
       return true;
     } else if (content?.thinking) {
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
-      if (lastMsg && lastMsg.role === "assistant" && !lastMsg.content && (!lastMsg.tools || lastMsg.tools.length === 0)) {
-        if (!lastMsg.thinking) lastMsg.thinking = { content: "", elapsed_ms: 0 };
+      if (
+        lastMsg &&
+        lastMsg.role === "assistant" &&
+        !lastMsg.content &&
+        (!lastMsg.tools || lastMsg.tools.length === 0)
+      ) {
+        if (!lastMsg.thinking)
+          lastMsg.thinking = { content: "", elapsed_ms: 0 };
         lastMsg.thinking.content += content.thinking.thinking ?? "";
       } else {
-        buf.push({ id: crypto.randomUUID(), role: "assistant", content: "", thinking: { content: content.thinking.thinking ?? "", elapsed_ms: 0 }, tools: [], created_at: new Date().toISOString() });
+        buf.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "",
+          thinking: { content: content.thinking.thinking ?? "", elapsed_ms: 0 },
+          tools: [],
+          created_at: new Date().toISOString(),
+        });
       }
       streamingMessages[session.id] = buf;
       return true;
@@ -762,13 +879,26 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
+      lastMsg = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        thinking: null,
+        tools: [],
+        created_at: new Date().toISOString(),
+      };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
     let tool = lastMsg.tools.find((t) => t.id === delta.tool_id);
     if (!tool) {
-      tool = { id: delta.tool_id, tool_name: delta.tool_name, status: "running", arguments: "", folded: true };
+      tool = {
+        id: delta.tool_id,
+        tool_name: delta.tool_name,
+        status: "running",
+        arguments: "",
+        folded: true,
+      };
       lastMsg.tools.push(tool);
     } else if (delta.tool_name) {
       tool.tool_name = delta.tool_name;
@@ -787,12 +917,17 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     }
     if (!active) {
       // Compaction finished — reload messages to reflect compacted history
-      api.getMessages(session.id).then((msgs) => {
-        loadSessionMessages(session.id, msgs);
-      }).catch((e: Error) => console.error("Failed to reload messages after compaction:", e));
+      api
+        .getMessages(session.id)
+        .then((msgs) => {
+          loadSessionMessages(session.id, msgs);
+        })
+        .catch((e: Error) =>
+          console.error("Failed to reload messages after compaction:", e),
+        );
     }
     return true;
-} else if (event.completed) {
+  } else if (event.completed) {
     // Streaming chunks finished — merge buffer, but do not mutate session.messages
     // here. User messages are added only via UserEvent::Message from the kernel.
     const buf = streamingMessages[session.id] ?? [];
@@ -817,19 +952,23 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
 }
 
 function maybeRefreshGitInfo(session: SessionState) {
-  if (!session.project_path || session.id !== sessionState.activeSessionId) return;
+  if (!session.project_path || session.id !== sessionState.activeSessionId)
+    return;
   const { id, project_path } = session;
-  api.getGitInfo(project_path).then((info) => {
-    const current = getSession(id);
-    if (current && current.id === sessionState.activeSessionId) {
-      current.git_info = info;
-    }
-  }).catch(() => {
-    const current = getSession(id);
-    if (current && current.id === sessionState.activeSessionId) {
-      current.git_info = null;
-    }
-  });
+  api
+    .getGitInfo(project_path)
+    .then((info) => {
+      const current = getSession(id);
+      if (current && current.id === sessionState.activeSessionId) {
+        current.git_info = info;
+      }
+    })
+    .catch(() => {
+      const current = getSession(id);
+      if (current && current.id === sessionState.activeSessionId) {
+        current.git_info = null;
+      }
+    });
 }
 
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
@@ -845,7 +984,14 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
+      lastMsg = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        thinking: null,
+        tools: [],
+        created_at: new Date().toISOString(),
+      };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -885,7 +1031,14 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
+      lastMsg = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        thinking: null,
+        tools: [],
+        created_at: new Date().toISOString(),
+      };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -923,7 +1076,14 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     const buf = streamingMessages[session.id] ?? [];
     let lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     if (!lastMsg || lastMsg.role !== "assistant") {
-      lastMsg = { id: crypto.randomUUID(), role: "assistant", content: "", thinking: null, tools: [], created_at: new Date().toISOString() };
+      lastMsg = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        thinking: null,
+        tools: [],
+        created_at: new Date().toISOString(),
+      };
       buf.push(lastMsg);
     }
     if (!lastMsg.tools) lastMsg.tools = [];
@@ -953,7 +1113,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       startStreaming(session);
       return true;
     } else if (typeof state === "object") {
-      if (state.stopped && (session.phase === "streaming" || session.phase === "executing_tool")) {
+      if (
+        state.stopped &&
+        (session.phase === "streaming" || session.phase === "executing_tool")
+      ) {
         session.phase = "idle";
         scheduleUnsubscribeIfInactive(session);
         const buf = streamingMessages[session.id] ?? [];
@@ -968,46 +1131,64 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
           const { text, blocks } = session.queued_input;
           session.queued_input = null;
           if (blocks && blocks.length > 0) {
-            api.sendMessageBlocks(session.id, blocks).catch((e: Error) => console.error("Failed to send queued message:", e));
+            api
+              .sendMessageBlocks(session.id, blocks)
+              .catch((e: Error) =>
+                console.error("Failed to send queued message:", e),
+              );
           } else {
-            api.sendMessage(session.id, text).catch((e: Error) => console.error("Failed to send queued message:", e));
+            api
+              .sendMessage(session.id, text)
+              .catch((e: Error) =>
+                console.error("Failed to send queued message:", e),
+              );
           }
         }
         const stopReason = state.stopped.reason;
         if ("cancelled" in stopReason) {
           const op = stopReason.cancelled.operation;
           const msg = op ? `Cancelled: ${op}` : "Cancelled";
-          session.messages = [...session.messages, {
-            id: crypto.randomUUID(),
-            role: "error",
-            content: msg,
-            thinking: null,
-            tools: [],
-          }];
+          session.messages = [
+            ...session.messages,
+            {
+              id: crypto.randomUUID(),
+              role: "error",
+              content: msg,
+              thinking: null,
+              tools: [],
+            },
+          ];
           showNotification(msg, "warn", 3000);
           sendDesktopNotification("Yomi", msg, session.id);
           return true;
         } else if ("failed" in stopReason) {
-          const errorMsg = "Task failed: " + (stopReason.failed.error ?? "Unknown");
-          session.messages = [...session.messages, {
-            id: crypto.randomUUID(),
-            role: "error",
-            content: errorMsg,
-            thinking: null,
-            tools: [],
-          }];
+          const errorMsg =
+            "Task failed: " + (stopReason.failed.error ?? "Unknown");
+          session.messages = [
+            ...session.messages,
+            {
+              id: crypto.randomUUID(),
+              role: "error",
+              content: errorMsg,
+              thinking: null,
+              tools: [],
+            },
+          ];
           showNotification(errorMsg, "warn", 5000);
           sendDesktopNotification("Yomi", errorMsg, session.id);
           return true;
         } else if ("max_iterations" in stopReason) {
           const msg = `Max iterations reached (${stopReason.max_iterations.reached})`;
-          session.messages = [...session.messages, {
-            id: crypto.randomUUID(),
-            role: "error",
-            content: msg,
-            thinking: null,
-            tools: [],
-          }];
+          session.messages = [
+            ...session.messages,
+            {
+              id: crypto.randomUUID(),
+              role: "error",
+              content: msg,
+              thinking: null,
+              tools: [],
+            },
+          ];
           showNotification(msg, "warn", 5000);
           sendDesktopNotification("Yomi", msg, session.id);
           return true;
@@ -1017,7 +1198,11 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         return true;
       }
     }
-  } else if (event.error && session.phase !== "idle" && session.phase !== "closed") {
+  } else if (
+    event.error &&
+    session.phase !== "idle" &&
+    session.phase !== "closed"
+  ) {
     session.phase = "idle";
     const buf = streamingMessages[session.id] ?? [];
     if (buf.length > 0) {
@@ -1026,13 +1211,16 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     }
     const errorStr = event.error.error ?? "Unknown";
     const errorMsg = "Agent error: " + errorStr;
-    session.messages = [...session.messages, {
-      id: crypto.randomUUID(),
-      role: "error",
-      content: errorMsg,
-      thinking: null,
-      tools: [],
-    }];
+    session.messages = [
+      ...session.messages,
+      {
+        id: crypto.randomUUID(),
+        role: "error",
+        content: errorMsg,
+        thinking: null,
+        tools: [],
+      },
+    ];
     const level = event.error.is_recoverable ? "warn" : "error";
     showNotification(errorMsg, level, 5000);
     sendDesktopNotification("Yomi", errorMsg, session.id);
@@ -1041,13 +1229,16 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   } else if (event.retrying) {
     const retry = event.retrying;
     const msg = `Agent retrying (${retry.attempt}/${retry.max_attempts})`;
-    session.messages = [...session.messages, {
-      id: crypto.randomUUID(),
-      role: "error",
-      content: msg,
-      thinking: null,
-      tools: [],
-    }];
+    session.messages = [
+      ...session.messages,
+      {
+        id: crypto.randomUUID(),
+        role: "error",
+        content: msg,
+        thinking: null,
+        tools: [],
+      },
+    ];
     showNotification(msg, "warn", 3000);
     return true;
   } else if (event.permission_request) {
@@ -1078,13 +1269,18 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
 function handleUserEvent(session: SessionState, event: UserEvent): boolean {
   if (event.message) {
     const msg = event.message;
-    const content = msg.content
-      ?.map((b: TaggedContentBlock) => {
-        if (typeof b === "string") return b;
-        return b.type === "text" && b.text ? b.text : "";
-      })
-      .join("") ?? "";
-    const hasNonText = Array.isArray(msg.content) && msg.content.some((b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text");
+    const content =
+      msg.content
+        ?.map((b: TaggedContentBlock) => {
+          if (typeof b === "string") return b;
+          return b.type === "text" && b.text ? b.text : "";
+        })
+        .join("") ?? "";
+    const hasNonText =
+      Array.isArray(msg.content) &&
+      msg.content.some(
+        (b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text",
+      );
 
     session.messages.push({
       id: msg.message_id,
@@ -1125,7 +1321,10 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     if (event.title_updated.session_id !== session.id) return false;
     const idx = sessionState.sessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
-      sessionState.sessions[idx] = { ...sessionState.sessions[idx], alias: event.title_updated.title };
+      sessionState.sessions[idx] = {
+        ...sessionState.sessions[idx],
+        alias: event.title_updated.title,
+      };
     }
     return true;
   } else if (event.rewound) {
@@ -1154,6 +1353,8 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
   return false;
 }
 
-export function updateConnectionStatus(status: "connected" | "disconnected" | "connecting") {
+export function updateConnectionStatus(
+  status: "connected" | "disconnected" | "connecting",
+) {
   appState.connectionStatus = status;
 }

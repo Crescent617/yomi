@@ -82,21 +82,30 @@
   }
 
   function hasActions(msg: ChatMessage): boolean {
-    return !!msg.thinking || (msg.tools && msg.tools.length > 0);
+    return !!msg.thinking || !!(msg.tools && msg.tools.length > 0);
   }
 
   type DisplayItem =
     | { type: "message"; message: ChatMessage; isStreaming: boolean }
     | { type: "action_group"; messages: ChatMessage[]; isStreaming: boolean };
 
-  function buildDisplayItems(messages: ChatMessage[], streaming: boolean): DisplayItem[] {
+  function buildDisplayItems(
+    messages: ChatMessage[],
+    streaming: boolean,
+  ): DisplayItem[] {
     const items: DisplayItem[] = [];
     let group: ChatMessage[] = [];
 
     const flush = () => {
       if (group.length > 0) {
-        const isGroupStreaming = streaming && group[group.length - 1] === messages[messages.length - 1];
-        items.push({ type: "action_group", messages: [...group], isStreaming: isGroupStreaming });
+        const isGroupStreaming =
+          streaming &&
+          group[group.length - 1] === messages[messages.length - 1];
+        items.push({
+          type: "action_group",
+          messages: [...group],
+          isStreaming: isGroupStreaming,
+        });
         group = [];
       }
     };
@@ -117,7 +126,11 @@
         if (hasText) flush();
       } else {
         flush();
-        items.push({ type: "message", message: msg, isStreaming: streaming && isLast });
+        items.push({
+          type: "message",
+          message: msg,
+          isStreaming: streaming && isLast,
+        });
       }
     }
 
@@ -126,67 +139,88 @@
   }
 
   const displayItems = $derived(
-    activeSession ? buildDisplayItems(displayMessages, activeSession.phase === "streaming") : []
+    activeSession
+      ? buildDisplayItems(displayMessages, activeSession.phase === "streaming")
+      : [],
   );
 </script>
 
 {#if activeSession}
   <div class="h-full relative">
-    <div bind:this={scrollContainer} onscroll={onScroll} class="h-full overflow-y-auto">
+    <div
+      bind:this={scrollContainer}
+      onscroll={onScroll}
+      class="h-full overflow-y-auto"
+    >
       <div class="container mx-auto px-4 lg:px-6 pt-2 pb-4">
-      <div class="space-y-4">
-        {#each displayItems as item, index (item.type === "message" ? item.message.id : `group-${item.messages[0]?.id ?? index}`)}
-          {#if item.type === "message"}
-            {@const msg = item.message}
-            <div class="group relative">
-              {#if msg.role === "user"}
-                <UserBubble message={msg} session_id={activeSession.id} />
-              {:else if msg.error || msg.role === "error"}
-                <ErrorBubble message={msg} />
-              {:else if msg.role === "system"}
-                <SystemBubble message={msg} />
-              {:else}
-                <AssistantBubble message={msg} isStreaming={item.isStreaming} />
-              {/if}
-              {#if msg.created_at && !item.isStreaming}
-                <div class="absolute right-2 -bottom-5 text-[11px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                  {formatMessageTime(msg.created_at)}
-                </div>
-              {/if}
-            </div>
-          {:else}
-            <div class="group relative">
-              <ActionGroup messages={item.messages} isStreaming={item.isStreaming} />
-              {#each item.messages as m (m.id)}
-                {#if m.content?.trim()}
-                  <div class="w-full space-y-1 mt-3">
-                    <TextBlock content={m.content} isStreaming={item.isStreaming} />
+        <div class="space-y-4">
+          {#each displayItems as item, index (item.type === "message" ? item.message.id : `group-${item.messages[0]?.id ?? index}`)}
+            {#if item.type === "message"}
+              {@const msg = item.message}
+              <div class="group relative">
+                {#if msg.role === "user"}
+                  <UserBubble message={msg} session_id={activeSession.id} />
+                {:else if msg.error || msg.role === "error"}
+                  <ErrorBubble message={msg} />
+                {:else if msg.role === "system"}
+                  <SystemBubble message={msg} />
+                {:else}
+                  <AssistantBubble
+                    message={msg}
+                    isStreaming={item.isStreaming}
+                  />
+                {/if}
+                {#if msg.created_at && !item.isStreaming}
+                  <div
+                    class="absolute right-2 -bottom-5 text-[11px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20"
+                  >
+                    {formatMessageTime(msg.created_at)}
                   </div>
                 {/if}
-              {/each}
-              {#if item.messages[item.messages.length - 1]?.created_at && !item.isStreaming}
-                <div class="absolute left-2 -bottom-4 text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                  {formatMessageTime(item.messages[item.messages.length - 1].created_at)}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        {/each}
+              </div>
+            {:else}
+              <div class="group relative space-y-1">
+                <ActionGroup
+                  messages={item.messages}
+                  isStreaming={item.isStreaming}
+                />
+                {#each item.messages as m (m.id)}
+                  {#if m.content?.trim()}
+                    <div class="w-full space-y-1 mt-3">
+                      <TextBlock
+                        content={m.content}
+                        isStreaming={item.isStreaming}
+                      />
+                    </div>
+                  {/if}
+                {/each}
+                {#if item.messages[item.messages.length - 1]?.created_at && !item.isStreaming}
+                  <div
+                    class="absolute left-2 -bottom-4 text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20"
+                  >
+                    {formatMessageTime(
+                      item.messages[item.messages.length - 1].created_at,
+                    )}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          {/each}
+        </div>
       </div>
     </div>
+    <GoalBar />
+    {#if !isNearBottom}
+      <button
+        type="button"
+        onclick={scrollToBottom}
+        class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
+      >
+        <ArrowDown class="w-3 h-3" />
+        Bottom
+      </button>
+    {/if}
   </div>
-  <GoalBar />
-  {#if !isNearBottom}
-    <button
-      type="button"
-      onclick={scrollToBottom}
-      class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs shadow-lg hover:bg-primary/90 transition-colors"
-    >
-      <ArrowDown class="w-3 h-3" />
-      Bottom
-    </button>
-  {/if}
-</div>
 {:else}
   <div class="flex items-center justify-center h-full text-muted-foreground">
     No messages

@@ -98,7 +98,10 @@ pub async fn get_usage_summary(
 ) -> Result<serde_json::Value, GuiError> {
     let coord = state.coordinator.clone();
     let days = days.unwrap_or(365);
-    let summary = coord.get_usage_summary(days).await.map_err(GuiError::kernel)?;
+    let summary = coord
+        .get_usage_summary(days)
+        .await
+        .map_err(GuiError::kernel)?;
     Ok(serde_json::json!({
         "prompt_tokens": summary.prompt_tokens,
         "completion_tokens": summary.completion_tokens,
@@ -133,6 +136,13 @@ pub async fn get_daily_usage(
         })
         .collect();
     Ok(serde_json::Value::Array(items))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_in_browser(url: String) -> Result<(), GuiError> {
+    tauri_plugin_opener::open_path(&url, None::<&str>)
+        .map_err(|e| GuiError::unknown(format!("Failed to open browser: {e}")))?;
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

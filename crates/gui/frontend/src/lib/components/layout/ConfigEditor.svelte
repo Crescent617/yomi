@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Save, FileCode, RotateCcw, Check, Zap, PanelLeftOpen } from "lucide-svelte";
+  import {
+    Save,
+    FileCode,
+    RotateCcw,
+    Check,
+    Zap,
+    PanelLeftOpen,
+  } from "lucide-svelte";
   import * as api from "../../api";
   import { showNotification } from "../../state.svelte";
 
@@ -45,7 +52,11 @@
       await load();
     } catch (e: unknown) {
       console.error("Failed to reload config:", e);
-      showNotification(`Failed to reload: ${e instanceof Error ? e.message : ""}`, "error", 4000);
+      showNotification(
+        `Failed to reload: ${e instanceof Error ? e.message : ""}`,
+        "error",
+        4000,
+      );
     } finally {
       loading = false;
     }
@@ -59,14 +70,18 @@
       await api.reloadConfig(); // apply to running agents
       dirty = false;
       saved = true;
-      setTimeout(() => saved = false, 2000);
+      setTimeout(() => (saved = false), 2000);
       showNotification("Config saved and reloaded", "success", 2000);
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
       full_config = c?.full_config ?? "";
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
-      showNotification(`Failed to save: ${e instanceof Error ? e.message : ""}`, "error", 4000);
+      showNotification(
+        `Failed to save: ${e instanceof Error ? e.message : ""}`,
+        "error",
+        4000,
+      );
     } finally {
       saving = false;
     }
@@ -86,7 +101,9 @@
 
 <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
   <!-- Header -->
-  <div class="shrink-0 flex items-center justify-between px-4 py-2 border-b border-border">
+  <div
+    class="shrink-0 flex items-center justify-between px-4 py-2 border-b border-border"
+  >
     <div class="flex items-center gap-2">
       {#if onToggleLeftPanel}
         <button
@@ -100,7 +117,9 @@
       {/if}
       <FileCode class="w-4 h-4 text-muted-foreground" />
       <span class="text-sm font-medium">Config</span>
-      <span class="text-xs text-muted-foreground truncate max-w-[300px]">{filePath}</span>
+      <span class="text-xs text-muted-foreground truncate max-w-[300px]"
+        >{filePath}</span
+      >
     </div>
     <div class="flex items-center gap-2">
       {#if dirty}
@@ -136,20 +155,29 @@
   <!-- Two-column layout: runtime config (left) + editor (right) -->
   <div class="flex-1 flex min-h-0">
     <!-- Left: Full runtime config (read-only) -->
-    <div class="flex-1 min-w-0 border-r border-border overflow-hidden flex flex-col">
-      <div class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border">
+    <div
+      class="flex-1 min-w-0 border-r border-border overflow-hidden flex flex-col"
+    >
+      <div
+        class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border"
+      >
         <Zap class="w-4 h-4 text-muted-foreground" />
         <span class="text-sm font-medium">Runtime Config</span>
       </div>
       <div class="flex-1 overflow-y-auto p-3">
         {#if loading}
           <div class="flex items-center justify-center py-8">
-            <div class="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+            <div
+              class="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"
+            ></div>
           </div>
         {:else if full_config}
-          <pre class="text-xs font-mono text-muted-foreground leading-relaxed whitespace-pre-wrap">{full_config}</pre>
+          <pre
+            class="text-xs font-mono text-muted-foreground leading-relaxed whitespace-pre-wrap">{full_config}</pre>
         {:else}
-          <div class="text-sm text-muted-foreground">Failed to load runtime config</div>
+          <div class="text-sm text-muted-foreground">
+            Failed to load runtime config
+          </div>
         {/if}
       </div>
     </div>
@@ -158,12 +186,17 @@
     <div class="flex-1 min-h-0 p-4">
       {#if loading}
         <div class="flex items-center justify-center h-full">
-          <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+          <div
+            class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"
+          ></div>
         </div>
       {:else}
         <textarea
           bind:value={content}
-          oninput={() => { dirty = true; saved = false; }}
+          oninput={() => {
+            dirty = true;
+            saved = false;
+          }}
           onkeydown={handleKeydown}
           class="w-full h-full resize-none rounded-lg border border-border bg-background p-4 font-mono text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           spellcheck={false}

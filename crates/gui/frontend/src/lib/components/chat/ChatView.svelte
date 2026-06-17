@@ -1,5 +1,19 @@
 <script lang="ts">
-  import { sessionState, projectState, getSession, getActiveSession, closeTab, setActiveSession, showNotification, loadSessionMessages, streamingMessages, syncSessionStatus, refreshCheckpoints } from "../../state.svelte";
+  import {
+    sessionState,
+    projectState,
+    getSession,
+    getActiveSession,
+    openBrowser,
+    closeBrowser,
+    closeTab,
+    setActiveSession,
+    showNotification,
+    loadSessionMessages,
+    streamingMessages,
+    syncSessionStatus,
+    refreshCheckpoints,
+  } from "../../state.svelte";
   import * as api from "../../api";
   import { collapseHome } from "../../utils";
   import TabBar from "../layout/TabBar.svelte";
@@ -11,26 +25,67 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
-  import { FolderOpen, ChevronDown, Send, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose, ExternalLink, Paperclip, X, Code, Zap, GitBranch, FileDiff, Command } from "lucide-svelte";
+  import {
+    ArrowDown,
+    ArrowLeft,
+    ChevronDown,
+    Send,
+    PanelRightOpen,
+    PanelRightClose,
+    PanelLeftOpen,
+    PanelLeftClose,
+    ExternalLink,
+    Paperclip,
+    X,
+    Code,
+    Zap,
+    GitBranch,
+    FileDiff,
+    Command,
+    Globe,
+    FolderOpen,
+  } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
-  import { levelDescription, levelIcon, levelColor, type PermissionLevel } from "../../permission";
-  import { createFilePicker } from "$lib/filePicker";
+  import {
+    levelDescription,
+    levelIcon,
+    levelColor,
+    type PermissionLevel,
+  } from "../../permission";
+  import { createFilePicker } from "$lib/filePicker.svelte";
+
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
   import type { TaggedContentBlock } from "../../types";
 
-  let { rightPanelCollapsed, onToggleRightPanel, onToggleLeftPanel, leftPanelCollapsed }: { rightPanelCollapsed?: boolean; onToggleRightPanel?: () => void; onToggleLeftPanel?: () => void; leftPanelCollapsed?: boolean } = $props();
+  let {
+    rightPanelCollapsed,
+    onToggleRightPanel,
+    onToggleLeftPanel,
+    leftPanelCollapsed,
+  }: {
+    rightPanelCollapsed?: boolean;
+    onToggleRightPanel?: () => void;
+    onToggleLeftPanel?: () => void;
+    leftPanelCollapsed?: boolean;
+  } = $props();
 
   const activeSession = $derived(getActiveSession());
 
-  const hasNonChatTabs = $derived(activeSession?.tabs.some((t: { type: string }) => t.type !== "chat") ?? false);
+  const hasNonChatTabs = $derived(
+    activeSession?.tabs.some((t: { type: string }) => t.type !== "chat") ??
+      false,
+  );
 
   let selectedProjectId = $state<string | "new">("");
   let newProjectPath = $state("");
   let newProjectName = $state("");
   let permission_level = $state("");
-  let chatInputRef: { setContent?: (text: string) => void; focus?: () => void } | null = $state(null);
+  let chatInputRef: {
+    setContent?: (text: string) => void;
+    focus?: () => void;
+  } | null = $state(null);
   let projectDropdownOpen = $state(false);
   let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
@@ -54,7 +109,9 @@
     ["/goal", "<description> Start goal mode with optional description"],
   ];
   const filteredHomeCommands = $derived(
-    HOME_COMMANDS.filter(([cmd]) => cmd.toLowerCase().includes(commandFilter.toLowerCase()))
+    HOME_COMMANDS.filter(([cmd]) =>
+      cmd.toLowerCase().includes(commandFilter.toLowerCase()),
+    ),
   );
 
   // ── home inline images (clipboard paste) ──
@@ -67,7 +124,10 @@
 
   function addHomeInlineImage(base64Url: string) {
     homeInlineImageCounter += 1;
-    homeInlineImages = [...homeInlineImages, { id: homeInlineImageCounter, url: base64Url }];
+    homeInlineImages = [
+      ...homeInlineImages,
+      { id: homeInlineImageCounter, url: base64Url },
+    ];
   }
 
   function removeHomeInlineImage(id: number) {
@@ -154,7 +214,11 @@
 
   // Pick the first project by default when projects load and nothing selected
   $effect(() => {
-    if (!sessionState.activeSessionId && selectedProjectId === "" && projectState.projects.length > 0) {
+    if (
+      !sessionState.activeSessionId &&
+      selectedProjectId === "" &&
+      projectState.projects.length > 0
+    ) {
       selectedProjectId = projectState.projects[0].id;
     }
   });
@@ -162,31 +226,41 @@
   // Refresh project list on mount
   $effect(() => {
     let cancelled = false;
-    api.listProjects().then(list => {
-      if (cancelled) return;
-      projectState.projects = list.map(p => ({
-        id: p.id,
-        name: p.name,
-        dir: p.dir,
-        created_at: p.created_at,
-        updated_at: p.updated_at,
-      }));
-    }).catch(() => {});
-    api.getConfig().then(c => {
-      if (cancelled) return;
-      if (c?.auto_approve) {
-        permission_level = c.auto_approve;
-      } else {
+    api
+      .listProjects()
+      .then((list) => {
+        if (cancelled) return;
+        projectState.projects = list.map((p) => ({
+          id: p.id,
+          name: p.name,
+          dir: p.dir,
+          created_at: p.created_at,
+          updated_at: p.updated_at,
+        }));
+      })
+      .catch(() => {});
+    api
+      .getConfig()
+      .then((c) => {
+        if (cancelled) return;
+        if (c?.auto_approve) {
+          permission_level = c.auto_approve;
+        } else {
+          permission_level = "caution";
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
         permission_level = "caution";
-      }
-    }).catch(() => {
-      if (cancelled) return;
-      permission_level = "caution";
-    });
-    homeDir().then(h => {
-      if (!cancelled) homeDirPath = h;
-    }).catch(() => {});
-    return () => { cancelled = true; };
+      });
+    homeDir()
+      .then((h) => {
+        if (!cancelled) homeDirPath = h;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   });
 
   async function handleHomeSubmit() {
@@ -194,11 +268,17 @@
 
     // Validate /goal before clearing any state
     const baseText = homeInput.trim();
-    const isGoal = baseText.toLowerCase() === "/goal" || baseText.toLowerCase().startsWith("/goal ");
+    const isGoal =
+      baseText.toLowerCase() === "/goal" ||
+      baseText.toLowerCase().startsWith("/goal ");
     if (isGoal) {
       const description = baseText.slice(5).trim();
       if (!description) {
-        showNotification("Please provide a goal description: /goal <description>", "error", 5000);
+        showNotification(
+          "Please provide a goal description: /goal <description>",
+          "error",
+          5000,
+        );
         return;
       }
     }
@@ -229,7 +309,10 @@
       }
       submitting = true;
       try {
-        const project = await api.createProject(dir, newProjectName.trim() || undefined);
+        const project = await api.createProject(
+          dir,
+          newProjectName.trim() || undefined,
+        );
         project_id = project.id;
         working_dir = project.dir;
         projectState.projects.push({
@@ -240,13 +323,22 @@
           updated_at: project.updated_at,
         });
       } catch (e: unknown) {
-        console.error("Failed to create project:", e instanceof Error ? e.message : e);
-        showNotification("Failed to create project: " + (e instanceof Error ? e.message : ""), "error", 5000);
+        console.error(
+          "Failed to create project:",
+          e instanceof Error ? e.message : e,
+        );
+        showNotification(
+          "Failed to create project: " + (e instanceof Error ? e.message : ""),
+          "error",
+          5000,
+        );
         submitting = false;
         return;
       }
     } else {
-      const project = projectState.projects.find((p) => p.id === selectedProjectId);
+      const project = projectState.projects.find(
+        (p) => p.id === selectedProjectId,
+      );
       if (!project) {
         showNotification("Please select a project", "error", 3000);
         return;
@@ -260,7 +352,7 @@
       const id = await api.createSession(working_dir, level, project_id);
       const result = await api.listSessions(project_id, undefined, 20);
       for (const s of result.sessions) {
-        if (!sessionState.sessions.find(sess => sess.id === s.id)) {
+        if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
           sessionState.sessions.push({
             id: s.id,
             project_path: s.project_path ?? "",
@@ -285,12 +377,19 @@
       await api.subscribe(id);
       const status = await api.getSessionStatus(id);
       const msgs = await api.getMessages(id);
-      const session = sessionState.sessions.find(s => s.id === id);
+      const session = sessionState.sessions.find((s) => s.id === id);
       if (session) {
         syncSessionStatus(id, status);
         loadSessionMessages(id, msgs);
         refreshCheckpoints(id);
-        api.getGoal(id).then((g) => { session.goal = g; }).catch(() => { session.goal = null; });
+        api
+          .getGoal(id)
+          .then((g) => {
+            session.goal = g;
+          })
+          .catch(() => {
+            session.goal = null;
+          });
         const buf = streamingMessages[id] ?? [];
         if (buf.length > 0) {
           session.messages = [...session.messages, ...buf];
@@ -299,9 +398,10 @@
       }
       // Send the home input
       homeInput = "";
-      const fileSuffix = homeFileAttachments.length > 0
-        ? "\n" + homeFileAttachments.map((p) => `[File: ${p}]`).join("\n")
-        : "";
+      const fileSuffix =
+        homeFileAttachments.length > 0
+          ? "\n" + homeFileAttachments.map((p) => `[File: ${p}]`).join("\n")
+          : "";
       const text = baseText + fileSuffix;
       homeFileAttachments = [];
       const hasImages = homeInlineImages.length > 0;
@@ -309,9 +409,14 @@
         const description = baseText.slice(5).trim();
         await api.startGoal(id, description);
         {
-          const session = sessionState.sessions.find(s => s.id === id);
+          const session = sessionState.sessions.find((s) => s.id === id);
           if (session) {
-            api.getGoal(id).then((g) => { session.goal = g; }).catch(() => {});
+            api
+              .getGoal(id)
+              .then((g) => {
+                session.goal = g;
+              })
+              .catch(() => {});
           }
         }
         // rename_session will emit TitleUpdated event — alias is synced there
@@ -329,8 +434,16 @@
       }
       clearHomeInlineImages();
     } catch (e: unknown) {
-      console.error("Failed to create session:", e instanceof Error ? e.message : e);
-      showNotification("Failed to create session: " + (e instanceof Error ? e.message : "Unknown error"), "error", 5000);
+      console.error(
+        "Failed to create session:",
+        e instanceof Error ? e.message : e,
+      );
+      showNotification(
+        "Failed to create session: " +
+          (e instanceof Error ? e.message : "Unknown error"),
+        "error",
+        5000,
+      );
     } finally {
       submitting = false;
     }
@@ -375,7 +488,10 @@
       activeSession.alias = name;
       showNotification("Session renamed", "success", 2000);
     } catch (e: unknown) {
-      console.error("Failed to rename session:", e instanceof Error ? e.message : e);
+      console.error(
+        "Failed to rename session:",
+        e instanceof Error ? e.message : e,
+      );
       showNotification("Failed to rename session", "error", 3000);
     } finally {
       editingTitle = false;
@@ -461,7 +577,9 @@
     if (lastAt >= 0) {
       const afterAt = beforeCursor.slice(lastAt + 1);
       if (!afterAt.includes(" ")) {
-        const root = projectState.projects.find(p => p.id === selectedProjectId)?.dir || "";
+        const root =
+          projectState.projects.find((p) => p.id === selectedProjectId)?.dir ||
+          "";
         homeFilePicker.open(lastAt, afterAt, root);
       } else {
         homeFilePicker.close();
@@ -480,7 +598,9 @@
   function onEnterHomeDir(entry: FileEntry) {
     const newQuery = homeFilePicker.enterDir(entry);
     const before = homeInput.slice(0, homeFilePicker.anchor);
-    const after = homeInput.slice(homeTextareaRef?.selectionStart ?? homeInput.length);
+    const after = homeInput.slice(
+      homeTextareaRef?.selectionStart ?? homeInput.length,
+    );
     homeInput = before + "@" + newQuery + after;
     homeTextareaRef?.focus();
   }
@@ -503,6 +623,29 @@
     }
   }
 
+  function handleChatClick(e: MouseEvent) {
+    let node: Node | null = e.target as Node;
+    const container = e.currentTarget as HTMLElement;
+    while (node && node !== container) {
+      if (node.nodeName === "A") {
+        const anchor = node as HTMLAnchorElement;
+        const href = anchor.getAttribute("href");
+        if (
+          href &&
+          (href.startsWith("http://") ||
+            href.startsWith("https://") ||
+            href.startsWith("mailto:"))
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (activeSession) openBrowser(activeSession.id, href);
+        }
+        return;
+      }
+      node = node.parentNode;
+    }
+  }
+
   function handleHomeKeydown(e: KeyboardEvent) {
     // Ignore key events while IME is composing or right after composition ends
     if (e.isComposing || homeComposing) {
@@ -514,13 +657,16 @@
       if (e.key === "ArrowDown") {
         e.preventDefault();
         if (filteredHomeCommands.length === 0) return;
-        selectedCommandIdx = (selectedCommandIdx + 1) % filteredHomeCommands.length;
+        selectedCommandIdx =
+          (selectedCommandIdx + 1) % filteredHomeCommands.length;
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
         if (filteredHomeCommands.length === 0) return;
-        selectedCommandIdx = (selectedCommandIdx - 1 + filteredHomeCommands.length) % filteredHomeCommands.length;
+        selectedCommandIdx =
+          (selectedCommandIdx - 1 + filteredHomeCommands.length) %
+          filteredHomeCommands.length;
         return;
       }
       if (e.key === "Tab" || e.key === "Enter") {
@@ -542,7 +688,11 @@
         const entries = homeFilePicker.entries;
         const idx = homeFilePicker.selectedIdx;
         const entry = entries[idx];
-        if (entry && !entry.isDirectory && (e.key === "Enter" || e.key === "Tab")) {
+        if (
+          entry &&
+          !entry.isDirectory &&
+          (e.key === "Enter" || e.key === "Tab")
+        ) {
           onAcceptHomeFile(entry);
         }
         return;
@@ -563,106 +713,154 @@
 
 <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
   {#if activeSession}
-  <!-- Header -->
-  <div class="flex items-center justify-between p-2 border-b border-border">
-    <div class="flex items-center gap-1 min-w-0">
-      <!-- Left panel toggle -->
-      {#if onToggleLeftPanel}
-        <button
-          type="button"
-          onclick={() => onToggleLeftPanel()}
-          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-          title={leftPanelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {#if leftPanelCollapsed}
-            <PanelLeftOpen size={16} />
-          {:else}
-            <PanelLeftClose size={16} />
-          {/if}
-        </button>
-      {/if}
-      {#if editingTitle}
-        <!-- svelte-ignore a11y_autofocus -->
-        <input
-          type="text"
-          bind:value={titleValue}
-          onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') confirmRenameTitle(); if (e.key === 'Escape') editingTitle = false; }}
-          onblur={() => confirmRenameTitle()}
-          class="flex-1 min-w-0 bg-background border border-border rounded px-2 py-0.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
-          autofocus
-        />
-      {:else}
-        <span
-          class="font-medium truncate cursor-pointer hover:text-primary transition-colors"
-          title={activeSession.alias ?? activeSession.id.slice(-8)}
-          ondblclick={() => { editingTitle = true; titleValue = activeSession.alias ?? activeSession.id.slice(-8); }}
-          role="button"
-          tabindex="0"
-        >
-          {activeSession.alias ?? activeSession.id.slice(-8)}
-        </span>
-      {/if}
-      {#if activeSession.project_path}
-        {@const displayPath = collapseHome(activeSession.project_path, homeDirPath)}
-        <span class="text-xs text-muted-foreground truncate" title={activeSession.project_path}>{displayPath}</span>
-      {/if}
-      {#if activeSession.git_info?.branch}
-        <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/80 bg-muted rounded px-1.5 py-0.5 ml-1">
-          <GitBranch size={10} />
-          {activeSession.git_info.branch}
-        </span>
-        {@const g = activeSession.git_info}
-        {#if g.added_lines > 0 || g.deleted_lines > 0 || g.untracked > 0}
-          <span class="inline-flex items-center gap-1 text-xs text-muted-foreground/70 font-mono bg-muted rounded px-1.5 py-0.5 ml-1">
-            <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
-            {#if g.added_lines > 0}{#key g.added_lines}<span class="roll-num text-green-700/80 dark:text-green-400/80">+{g.added_lines}</span>{/key}{/if}
-            {#if g.deleted_lines > 0}{#key g.deleted_lines}<span class="roll-num text-red-700/80 dark:text-red-400/80">-{g.deleted_lines}</span>{/key}{/if}
-            {#if g.untracked > 0}{#key g.untracked}<span class="roll-num text-slate-500 dark:text-slate-400">?{g.untracked}</span>{/key}{/if}
-          </span>
-        {/if}
-      {/if}
-    </div>
-    <div class="flex items-center gap-0.5">
-      {#if activeSession.project_path}
-        <div class="relative">
+    <!-- Header -->
+    <div class="flex items-center justify-between p-2 border-b border-border">
+      <div class="flex items-center gap-1 min-w-0">
+        <!-- Left panel toggle -->
+        {#if onToggleLeftPanel}
           <button
             type="button"
-            onclick={() => openDropdownOpen = !openDropdownOpen}
+            onclick={() => onToggleLeftPanel()}
             class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-            title="Open project"
+            title={leftPanelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            <ExternalLink size={16} />
+            {#if leftPanelCollapsed}
+              <PanelLeftOpen size={16} />
+            {:else}
+              <PanelLeftClose size={16} />
+            {/if}
           </button>
-          {#if openDropdownOpen}
-            <div class="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-popover shadow-md py-1">
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInExplorer(activeSession.project_path); openDropdownOpen = false; }}>
-                <FolderOpen size={12} /> Open in Explorer
-              </button>
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInVscode(activeSession.project_path); openDropdownOpen = false; }}>
-                <Code size={12} /> Open in VS Code
-              </button>
-              <button class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left" onclick={() => { api.openInZed(activeSession.project_path); openDropdownOpen = false; }}>
-                <Zap size={12} /> Open in Zed
-              </button>
-            </div>
-            <div class="fixed inset-0 z-10" onclick={() => openDropdownOpen = false}></div>
-          {/if}
-        </div>
-      {/if}
-      <button
-        type="button"
-        onclick={() => onToggleRightPanel?.()}
-        class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-        title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
-      >
-        {#if rightPanelCollapsed}
-          <PanelRightOpen size={16} />
-        {:else}
-          <PanelRightClose size={16} />
         {/if}
-      </button>
+        {#if editingTitle}
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            type="text"
+            bind:value={titleValue}
+            onkeydown={(e: KeyboardEvent) => {
+              if (e.key === "Enter") confirmRenameTitle();
+              if (e.key === "Escape") editingTitle = false;
+            }}
+            onblur={() => confirmRenameTitle()}
+            class="flex-1 min-w-0 bg-background border border-border rounded px-2 py-0.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
+            autofocus
+          />
+        {:else}
+          <span
+            class="font-medium truncate cursor-pointer hover:text-primary transition-colors"
+            title={activeSession.alias ?? activeSession.id.slice(-8)}
+            ondblclick={() => {
+              editingTitle = true;
+              titleValue = activeSession.alias ?? activeSession.id.slice(-8);
+            }}
+            role="button"
+            tabindex="0"
+          >
+            {activeSession.alias ?? activeSession.id.slice(-8)}
+          </span>
+        {/if}
+        {#if activeSession.project_path}
+          {@const displayPath = collapseHome(
+            activeSession.project_path,
+            homeDirPath,
+          )}
+          <span
+            class="text-xs text-muted-foreground truncate"
+            title={activeSession.project_path}>{displayPath}</span
+          >
+        {/if}
+        {#if activeSession.git_info?.branch}
+          <span
+            class="inline-flex items-center gap-1 text-xs text-muted-foreground/80 bg-muted rounded px-1.5 py-0.5 ml-1"
+          >
+            <GitBranch size={10} />
+            {activeSession.git_info.branch}
+          </span>
+          {@const g = activeSession.git_info}
+          {#if g.added_lines > 0 || g.deleted_lines > 0 || g.untracked > 0}
+            <span
+              class="inline-flex items-center gap-1 text-xs text-muted-foreground/70 font-mono bg-muted rounded px-1.5 py-0.5 ml-1"
+            >
+              <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
+              {#if g.added_lines > 0}{#key g.added_lines}<span
+                    class="roll-num text-green-700/80 dark:text-green-400/80"
+                    >+{g.added_lines}</span
+                  >{/key}{/if}
+              {#if g.deleted_lines > 0}{#key g.deleted_lines}<span
+                    class="roll-num text-red-700/80 dark:text-red-400/80"
+                    >-{g.deleted_lines}</span
+                  >{/key}{/if}
+              {#if g.untracked > 0}{#key g.untracked}<span
+                    class="roll-num text-slate-500 dark:text-slate-400"
+                    >?{g.untracked}</span
+                  >{/key}{/if}
+            </span>
+          {/if}
+        {/if}
+      </div>
+      <div class="flex items-center gap-0.5">
+        {#if activeSession.project_path}
+          <div class="relative">
+            <button
+              type="button"
+              onclick={() => (openDropdownOpen = !openDropdownOpen)}
+              class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+              title="Open project"
+            >
+              <ExternalLink size={16} />
+            </button>
+            {#if openDropdownOpen}
+              <div
+                class="absolute right-0 top-full mt-1 z-20 w-40 rounded-md border border-border bg-popover shadow-md py-1"
+              >
+                <button
+                  class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                  onclick={() => {
+                    api.openInExplorer(activeSession.project_path);
+                    openDropdownOpen = false;
+                  }}
+                >
+                  <FolderOpen size={12} /> Open in Explorer
+                </button>
+                <button
+                  class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                  onclick={() => {
+                    api.openInVscode(activeSession.project_path);
+                    openDropdownOpen = false;
+                  }}
+                >
+                  <Code size={12} /> Open in VS Code
+                </button>
+                <button
+                  class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                  onclick={() => {
+                    api.openInZed(activeSession.project_path);
+                    openDropdownOpen = false;
+                  }}
+                >
+                  <Zap size={12} /> Open in Zed
+                </button>
+              </div>
+              <div
+                class="fixed inset-0 z-10"
+                onclick={() => (openDropdownOpen = false)}
+              ></div>
+            {/if}
+          </div>
+        {/if}
+        <button
+          type="button"
+          onclick={() => onToggleRightPanel?.()}
+          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+          title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
+        >
+          {#if rightPanelCollapsed}
+            <PanelRightOpen size={16} />
+          {:else}
+            <PanelRightClose size={16} />
+          {/if}
+        </button>
+      </div>
     </div>
-  </div>
   {/if}
 
   <!-- InfoBar removed from here — moved into chat area above ChatInput -->
@@ -685,13 +883,26 @@
         <div class="w-full max-w-2xl">
           <!-- Title -->
           <div class="text-center mb-8">
-            <img src="/yomi-dark.png" alt="Yomi" class="w-24 h-24 mx-auto mb-3 object-contain hidden dark:block" />
-            <img src="/yomi-light.png" alt="Yomi" class="w-24 h-24 mx-auto mb-3 object-contain dark:hidden" />
-            <p class="text-muted-foreground text-lg">What can I help you with today?</p>
+            <img
+              src="/yomi-dark.png"
+              alt="Yomi"
+              class="w-24 h-24 mx-auto mb-3 object-contain hidden dark:block"
+            />
+            <img
+              src="/yomi-light.png"
+              alt="Yomi"
+              class="w-24 h-24 mx-auto mb-3 object-contain dark:hidden"
+            />
+            <p class="text-muted-foreground text-lg">
+              What can I help you with today?
+            </p>
           </div>
 
           <!-- Input card -->
-          <div class="relative rounded-2xl border border-border bg-card shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all" onfocusout={handleHomeFocusOut}>
+          <div
+            class="relative rounded-2xl border border-border bg-card shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all"
+            onfocusout={handleHomeFocusOut}
+          >
             <div class="p-4">
               <textarea
                 bind:this={homeTextareaRef}
@@ -700,11 +911,11 @@
                 oninput={detectHomeCompletion}
                 onfocus={detectHomeCompletion}
                 onpaste={handleHomePaste}
-                oncompositionstart={() => homeComposing = true}
+                oncompositionstart={() => (homeComposing = true)}
                 oncompositionend={() => {
                   homeComposing = false;
                   homeIgnoreNextEnter = true;
-                  setTimeout(() => homeIgnoreNextEnter = false, 100);
+                  setTimeout(() => (homeIgnoreNextEnter = false), 100);
                 }}
                 placeholder="Ask anything... (type @ to reference files, / for commands)"
                 rows={3}
@@ -736,8 +947,13 @@
               {#if homeFileAttachments.length > 0}
                 <div class="flex items-center gap-2 mt-2 flex-wrap">
                   {#each homeFileAttachments as path (path)}
-                    <div class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5">
-                      <span class="text-xs text-muted-foreground truncate max-w-[200px]">{path.split("/").pop()}</span>
+                    <div
+                      class="flex items-center gap-1.5 rounded-md border border-border bg-secondary px-2 py-0.5"
+                    >
+                      <span
+                        class="text-xs text-muted-foreground truncate max-w-[200px]"
+                        >{path.split("/").pop()}</span
+                      >
                       <button
                         type="button"
                         onclick={() => removeHomeFileAttachment(path)}
@@ -753,16 +969,24 @@
             </div>
             <!-- Home command picker dropdown (floating above input) -->
             {#if showCommands && filteredHomeCommands.length > 0}
-              <div bind:this={homeCommandListRef} class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50">
+              <div
+                bind:this={homeCommandListRef}
+                class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50"
+              >
                 {#each filteredHomeCommands as [cmd, desc], i (cmd)}
                   <button
                     type="button"
-                    class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i === selectedCommandIdx ? 'bg-secondary' : 'hover:bg-secondary/50'}"
+                    class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i ===
+                    selectedCommandIdx
+                      ? 'bg-secondary'
+                      : 'hover:bg-secondary/50'}"
                     onclick={() => acceptHomeCommand(cmd)}
                   >
                     <Command size={14} class="text-muted-foreground shrink-0" />
                     <span class="font-mono text-primary shrink-0">{cmd}</span>
-                    <span class="text-muted-foreground text-xs truncate">{desc}</span>
+                    <span class="text-muted-foreground text-xs truncate"
+                      >{desc}</span
+                    >
                   </button>
                 {/each}
               </div>
@@ -777,13 +1001,15 @@
               onEnter={onEnterHomeDir}
               onAccept={onAcceptHomeFile}
             />
-            <div class="px-4 py-3 border-t border-border flex items-center justify-between gap-3">
+            <div
+              class="px-4 py-3 border-t border-border flex items-center justify-between gap-3"
+            >
               <div class="flex items-center gap-3">
                 <!-- Project selector -->
                 <div class="relative" bind:this={projectDropdownRef}>
                   <button
                     type="button"
-                    onclick={() => projectDropdownOpen = !projectDropdownOpen}
+                    onclick={() => (projectDropdownOpen = !projectDropdownOpen)}
                     class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <FolderOpen class="w-4 h-4" />
@@ -793,28 +1019,46 @@
                       {:else if selectedProjectId === "new"}
                         + New Project
                       {:else}
-                        {projectState.projects.find(p => p.id === selectedProjectId)?.name ?? "Unknown"}
+                        {projectState.projects.find(
+                          (p) => p.id === selectedProjectId,
+                        )?.name ?? "Unknown"}
                       {/if}
                     </span>
                     <ChevronDown class="w-3 h-3" />
                   </button>
                   {#if projectDropdownOpen}
-                    <div class="absolute bottom-full left-0 mb-1 z-50 w-56 rounded-lg border border-border bg-popover shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+                    <div
+                      class="absolute bottom-full left-0 mb-1 z-50 w-56 rounded-lg border border-border bg-popover shadow-lg overflow-hidden max-h-60 overflow-y-auto"
+                    >
                       {#each projectState.projects as project (project.id)}
                         <button
                           type="button"
-                          onclick={() => { selectedProjectId = project.id; projectDropdownOpen = false; }}
-                          class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors {selectedProjectId === project.id ? 'bg-accent/50' : ''}"
+                          onclick={() => {
+                            selectedProjectId = project.id;
+                            projectDropdownOpen = false;
+                          }}
+                          class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors {selectedProjectId ===
+                          project.id
+                            ? 'bg-accent/50'
+                            : ''}"
                         >
                           <div class="font-medium">{project.name}</div>
-                          <div class="text-xs text-muted-foreground truncate">{project.dir}</div>
+                          <div class="text-xs text-muted-foreground truncate">
+                            {project.dir}
+                          </div>
                         </button>
                       {/each}
                       <div class="border-t border-border"></div>
                       <button
                         type="button"
-                        onclick={() => { selectedProjectId = "new"; projectDropdownOpen = false; }}
-                        class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors text-primary font-medium {selectedProjectId === 'new' ? 'bg-accent/50' : ''}"
+                        onclick={() => {
+                          selectedProjectId = "new";
+                          projectDropdownOpen = false;
+                        }}
+                        class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors text-primary font-medium {selectedProjectId ===
+                        'new'
+                          ? 'bg-accent/50'
+                          : ''}"
                       >
                         + New Project...
                       </button>
@@ -833,12 +1077,15 @@
                 </button>
                 <!-- Permission level -->
                 <div class="flex items-center gap-1">
-                  {#each (["safe", "caution", "dangerous"] as PermissionLevel[]) as level (level)}
+                  {#each ["safe", "caution", "dangerous"] as PermissionLevel[] as level (level)}
                     {@const Icon = levelIcon(level)}
                     <button
                       type="button"
-                      onclick={() => permission_level = level}
-                      class="p-1 rounded transition-colors {permission_level === level ? levelColor(level) : 'text-muted-foreground hover:text-foreground'}"
+                      onclick={() => (permission_level = level)}
+                      class="p-1 rounded transition-colors {permission_level ===
+                      level
+                        ? levelColor(level)
+                        : 'text-muted-foreground hover:text-foreground'}"
                       title={levelDescription(level)}
                     >
                       <Icon class="w-4 h-4" />
@@ -850,11 +1097,15 @@
               <button
                 type="button"
                 onclick={handleHomeSubmit}
-                disabled={submitting || !homeInput.trim() || selectedProjectId === ""}
+                disabled={submitting ||
+                  !homeInput.trim() ||
+                  selectedProjectId === ""}
                 class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-8 w-8 hover:bg-primary/90 disabled:opacity-50 shrink-0 transition-colors"
               >
                 {#if submitting}
-                  <span class="w-3.5 h-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"></span>
+                  <span
+                    class="w-3.5 h-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"
+                  ></span>
                 {:else}
                   <Send class="w-4 h-4" />
                 {/if}
@@ -864,10 +1115,14 @@
 
           <!-- New project inputs -->
           {#if selectedProjectId === "new"}
-            <div class="mt-3 space-y-2 rounded-xl border border-border bg-card p-3 shadow-sm">
+            <div
+              class="mt-3 space-y-2 rounded-xl border border-border bg-card p-3 shadow-sm"
+            >
               <div class="flex gap-2">
                 <div class="relative flex-1">
-                  <FolderOpen class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <FolderOpen
+                    class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground"
+                  />
                   <input
                     type="text"
                     bind:value={newProjectPath}
@@ -898,20 +1153,65 @@
       <div class="flex h-full relative">
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
-          <div class="flex-1 relative min-h-0">
+          <!-- Browser overlay -->
+          {#if activeSession?.browserUrl}
+            <div class="absolute inset-0 z-50 flex flex-col bg-background">
+              <div
+                class="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30 shrink-0"
+              >
+                <button
+                  type="button"
+                  onclick={() => {
+                    if (activeSession) closeBrowser(activeSession.id);
+                  }}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors"
+                >
+                  <ArrowLeft class="w-4 h-4" />
+                  Back
+                </button>
+                <div class="flex items-center gap-1 flex-1 min-w-0">
+                  <Globe class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <span class="truncate text-sm text-muted-foreground"
+                    >{activeSession.browserUrl}</span
+                  >
+                </div>
+              </div>
+              <iframe
+                src={activeSession.browserUrl}
+                class="flex-1 w-full border-0"
+                title="Browser"
+                sandbox="allow-scripts allow-same-origin allow-popups"
+              ></iframe>
+            </div>
+          {/if}
+          <div class="flex-1 relative min-h-0" onclick={handleChatClick}>
             <MessageList />
           </div>
           <div class="shrink-0 w-full">
             <div class="container mx-auto px-4 lg:px-6">
-              <QueuedInputBar session={activeSession} onEdit={(text) => chatInputRef?.setContent(text)} onSteer={(blocks) => {
-                if (!activeSession) return;
-                api.sendSteer(activeSession.id, blocks).then(() => {
-                  showNotification("Steer message queued for next turn", "info", 3000);
-                }).catch((e: unknown) => {
-                  console.error("Failed to send steer:", e instanceof Error ? e.message : e);
-                  showNotification("Failed to send steer", "error", 3000);
-                });
-              }} />
+              <QueuedInputBar
+                session={activeSession}
+                onEdit={(text) => chatInputRef?.setContent?.(text)}
+                onSteer={(blocks) => {
+                  if (!activeSession) return;
+                  api
+                    .sendSteer(activeSession.id, blocks)
+                    .then(() => {
+                      showNotification(
+                        "Steer message queued for next turn",
+                        "info",
+                        3000,
+                      );
+                    })
+                    .catch((e: unknown) => {
+                      console.error(
+                        "Failed to send steer:",
+                        e instanceof Error ? e.message : e,
+                      );
+                      showNotification("Failed to send steer", "error", 3000);
+                    });
+                }}
+              />
               <InfoBar session={activeSession} />
               <PermissionBar />
               <AskUserBar />
@@ -921,26 +1221,42 @@
         </div>
       </div>
     {:else if activeSession}
-      {@const activeTab = activeSession.tabs.find((t: { id: string }) => t.id === activeSession.active_tab_id)}
-      {#if activeTab?.type === "preview" && activeTab.entry}
+      {@const activeTab = activeSession.tabs.find(
+        (t: { id: string }) => t.id === activeSession.active_tab_id,
+      )}
+      {@const fileEntry = activeTab?.entry
+        ? {
+            name: activeTab.entry.name,
+            path: activeTab.entry.path,
+            isDirectory: activeTab.entry.is_directory,
+            isFile: !activeTab.entry.is_directory,
+          }
+        : null}
+      {#if activeTab?.type === "preview" && fileEntry}
         <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">
             <FilePreview
-              entry={activeTab.entry}
-              onEdit={(_e) => { /* TODO: open edit tab */ }}
-              onAskAI={(_path) => { /* TODO: send to chat */ }}
+              entry={fileEntry}
+              onEdit={(_e) => {
+                /* TODO: open edit tab */
+              }}
+              onAskAI={(_path) => {
+                /* TODO: send to chat */
+              }}
             />
           </div>
         </div>
-      {:else if activeTab?.type === "edit" && activeTab.entry}
+      {:else if activeTab?.type === "edit" && fileEntry}
         <div class="flex h-full relative container mx-auto">
           <div class="flex-1 min-w-0">
-            <FileEditor entry={activeTab.entry} />
+            <FileEditor entry={fileEntry} />
           </div>
         </div>
       {/if}
     {:else}
-      <div class="flex items-center justify-center h-full text-muted-foreground">
+      <div
+        class="flex items-center justify-center h-full text-muted-foreground"
+      >
         Loading session...
       </div>
     {/if}
@@ -949,8 +1265,14 @@
 
 <style>
   @keyframes roll-in {
-    0% { transform: translateY(60%); opacity: 0; }
-    100% { transform: translateY(0); opacity: 1; }
+    0% {
+      transform: translateY(60%);
+      opacity: 0;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
   .roll-num {
     animation: roll-in 0.25s ease-out;

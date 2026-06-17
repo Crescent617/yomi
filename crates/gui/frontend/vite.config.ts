@@ -6,7 +6,16 @@ export default defineConfig(async () => ({
   plugins: [tailwindcss(), sveltekit()],
   clearScreen: false,
   resolve: {
-    extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte", ".svelte.ts"],
+    extensions: [
+      ".mjs",
+      ".js",
+      ".ts",
+      ".jsx",
+      ".tsx",
+      ".json",
+      ".svelte",
+      ".svelte.ts",
+    ],
   },
   server: {
     port: 1420,
