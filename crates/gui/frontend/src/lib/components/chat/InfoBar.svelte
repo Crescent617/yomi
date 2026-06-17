@@ -26,10 +26,7 @@
 
   const isRunning = $derived.by(() => {
     if (!session) return false;
-    return (
-      (session.phase !== "idle" && session.phase !== "closed") ||
-      session.compacting
-    );
+    return session.phase !== "idle" && session.phase !== "closed";
   });
 
   $effect(() => {
@@ -150,7 +147,7 @@
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
       {:else if session?.phase === "executing_tool"}
         <Zap size={12} class="animate-pulse text-amber-500 shrink-0" />
-      {:else if session?.compacting}
+      {:else if session?.phase === "compacting"}
         <Database size={12} class="animate-spin text-amber-500 shrink-0" />
       {:else if streamingTokens > 0}
         <CheckCircle2 size={12} class="text-green-500 shrink-0" />
@@ -179,6 +176,8 @@
         {/if}
       {:else if session?.phase === "streaming"}
         <span class="text-muted-foreground/70 shrink-0">· generating</span>
+      {:else if session?.phase === "compacting"}
+        <span class="text-muted-foreground/70 shrink-0">· compacting</span>
       {/if}
     </div>
 

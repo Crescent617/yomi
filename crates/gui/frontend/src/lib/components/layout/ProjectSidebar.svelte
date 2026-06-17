@@ -373,11 +373,13 @@
               {:else}
                 <span class="truncate font-medium">{project.name}</span>
               {/if}
-              {#if getSessions(project.id).some((s) => (s.phase !== "idle" && s.phase !== "closed") || s.compacting)}
+              {#if getSessions(project.id).some((s) => s.phase !== "idle" && s.phase !== "closed")}
                 <span
                   class="w-1.5 h-1.5 rounded-full {getSessions(project.id).some(
                     (s) =>
-                      s.phase === 'streaming' || s.phase === 'executing_tool',
+                      s.phase === 'streaming' ||
+                      s.phase === 'executing_tool' ||
+                      s.phase === 'compacting',
                   )
                     ? 'bg-primary'
                     : 'bg-amber-500'} animate-pulse shrink-0"
@@ -472,10 +474,12 @@
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
-                    {#if (session.phase !== "idle" && session.phase !== "closed") || session.compacting}
+                    {#if session.phase !== "idle" && session.phase !== "closed"}
                       <span
                         class="w-1.5 h-1.5 rounded-full {session.phase ===
-                          'streaming' || session.phase === 'executing_tool'
+                          'streaming' ||
+                        session.phase === 'executing_tool' ||
+                        session.phase === 'compacting'
                           ? 'bg-primary'
                           : 'bg-amber-500'} animate-pulse"
                       ></span>

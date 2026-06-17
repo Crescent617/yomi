@@ -2,7 +2,8 @@ use crate::agent::{AgentConfig, AgentError, AgentInput, AgentShared, AgentState,
 use crate::permissions::Responder;
 use crate::tools::AskUserResponder;
 use crate::types::{AgentId, ContentBlock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -19,8 +20,6 @@ pub struct AgentHandle {
     input_stale_since: Arc<AtomicU64>,
     /// Channel for sending steer messages that are injected before the next streaming
     pub(super) steer_tx: mpsc::Sender<Vec<ContentBlock>>,
-    /// Whether the agent is currently compacting messages
-    pub(super) compacting: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for AgentHandle {
@@ -34,7 +33,7 @@ impl std::fmt::Debug for AgentHandle {
                 "input_generation",
                 &self.input_stale_since.load(Ordering::Acquire),
             )
-            .field("compacting", &self.compacting.load(Ordering::Relaxed))
+            .field("state", &self.state())
             .finish_non_exhaustive()
     }
 }
@@ -50,7 +49,6 @@ impl AgentHandle {
         ask_user_responder: Option<AskUserResponder>,
         input_stale_since: Arc<AtomicU64>,
         steer_tx: mpsc::Sender<Vec<ContentBlock>>,
-        compacting: Arc<AtomicBool>,
     ) -> Self {
         Self {
             id,
@@ -61,7 +59,6 @@ impl AgentHandle {
             ask_user_responder,
             input_stale_since,
             steer_tx,
-            compacting,
         }
     }
 
@@ -119,7 +116,7 @@ impl AgentHandle {
 
     /// Whether the agent is currently compacting messages
     pub fn is_compacting(&self) -> bool {
-        self.compacting.load(Ordering::Relaxed)
+        self.state() == AgentState::Compacting
     }
 
     /// Wait for a state change

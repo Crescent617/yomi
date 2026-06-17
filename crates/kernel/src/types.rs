@@ -103,14 +103,12 @@ impl SessionId {
 #[serde(rename_all = "snake_case")]
 pub struct SessionStatus {
     pub phase: String,
-    pub compacting: bool,
 }
 
 impl Default for SessionStatus {
     fn default() -> Self {
         Self {
             phase: "idle".to_string(),
-            compacting: false,
         }
     }
 }

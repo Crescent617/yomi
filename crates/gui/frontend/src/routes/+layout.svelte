@@ -15,7 +15,7 @@
   } from "../lib/settings.svelte";
   import "../app.css";
 
-  // @ts-ignore
+  // @ts-expect-error svelte onMount 返回类型在 lib 升级后被误判
   onMount(async () => {
     await initSettings();
     startThemeListener();
