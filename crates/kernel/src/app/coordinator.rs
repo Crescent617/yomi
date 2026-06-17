@@ -655,12 +655,12 @@ impl Coordinator {
         let phase = match session.agent_state() {
             Some(crate::agent::AgentState::Streaming) => "streaming",
             Some(crate::agent::AgentState::ExecutingTool) => "executing_tool",
+            Some(crate::agent::AgentState::Compacting) => "compacting",
             Some(crate::agent::AgentState::Closed) => "closed",
             _ => "idle",
         };
         Ok(crate::types::SessionStatus {
             phase: phase.to_string(),
-            compacting: session.is_compacting(),
         })
     }
 

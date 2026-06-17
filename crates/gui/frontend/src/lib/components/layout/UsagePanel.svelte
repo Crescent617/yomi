@@ -256,7 +256,7 @@
         textStyle: { color: dark ? "#f1f5f9" : "#0f172a", fontSize: 12 },
         extraCssText:
           "border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); z-index: 9999;",
-        formatter: (params: any) => {
+        formatter: (params: { value: [string, ...unknown[]] }) => {
           const day = data.find((d) => d.date === params.value[0]);
           if (!day) return params.value[0];
           const total = day.prompt_tokens + day.completion_tokens;
@@ -340,7 +340,7 @@
           fontSize: 9,
         },
         weekLabel: { show: false },
-      } as any,
+      } as unknown,
       series: [
         {
           type: "heatmap",

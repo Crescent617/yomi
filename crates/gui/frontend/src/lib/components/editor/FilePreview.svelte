@@ -19,7 +19,13 @@
   let highlighted = $state("");
   let loading = $state(true);
   let error = $state("");
-  let highlighter: any = null;
+  let highlighter: {
+    dispose(): void;
+    codeToHtml(
+      code: string,
+      options: { lang: string; theme: string },
+    ): Promise<string>;
+  } | null = null;
 
   function breadcrumb(path: string): string[] {
     return path.split("/").filter(Boolean);

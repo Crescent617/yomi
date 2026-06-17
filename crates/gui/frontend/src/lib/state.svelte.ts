@@ -17,7 +17,6 @@ export function scheduleUnsubscribe(session_id: string) {
   if (!session) return;
   if (session.id === sessionState.activeSessionId) return; // 当前活跃的，不清理
   if (session.phase !== "idle" && session.phase !== "closed") return; // 正在运行，不清理
-  if (session.compacting) return; // 正在 compacting，不清理
 
   cancelPendingUnsubscribe(session_id);
 
@@ -149,7 +148,6 @@ export interface SessionState {
   queued_input: QueuedInput | null;
   updated_at: string;
   permission_level?: string;
-  compacting?: boolean;
   token_usage?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -338,12 +336,11 @@ function upsertSession(session: SessionState) {
 
 export function syncSessionStatus(
   session_id: string,
-  status: { phase: string; compacting: boolean },
+  status: { phase: string },
 ) {
   const session = getSession(session_id);
   if (!session) return;
   session.phase = status.phase;
-  session.compacting = status.compacting;
 }
 
 export function openFileTab(
@@ -911,9 +908,11 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     return true;
   } else if (event.compacting) {
     const active = event.compacting.active;
-    session.compacting = active;
     if (active) {
+      session.phase = "compacting";
       cancelPendingUnsubscribe(session.id);
+    } else if (session.phase === "compacting") {
+      session.phase = "idle";
     }
     if (!active) {
       // Compaction finished — reload messages to reflect compacted history

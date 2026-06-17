@@ -225,7 +225,7 @@ export async function getMessages(session_id: string): Promise<unknown[]> {
 
 export async function getSessionStatus(
   session_id: string,
-): Promise<{ phase: string; compacting: boolean }> {
+): Promise<{ phase: string }> {
   return invokeCmd("get_session_status", { session_id: session_id });
 }
 

@@ -26,7 +26,6 @@
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
   import {
-    ArrowDown,
     ArrowLeft,
     ChevronDown,
     Send,

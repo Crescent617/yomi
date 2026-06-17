@@ -356,92 +356,101 @@ impl MsgChunkAssembler {
             self.response_id = Some(id);
         }
 
-        // Handle usage information (top-level or in choices)
+        let mut items = Vec::new();
+
+        // Process the first choice if present
+        if let Some(choice) = response.choices.into_iter().next() {
+            // Capture finish_reason from the final chunk
+            if let Some(finish_reason) = choice.finish_reason {
+                self.finish_reason = Some(finish_reason);
+            }
+
+            // Some providers (like Kimi) put usage inside the choice
+            if let Some(usage) = choice.usage {
+                items.push(ModelStreamItem::TokenUsage(
+                    crate::providers::TokenUsage::new(
+                        usage.prompt_tokens,
+                        usage.completion_tokens,
+                        usage.cached_tokens(),
+                    ),
+                ));
+            }
+
+            if let Some(delta) = choice.delta {
+                // Handle tool call deltas
+                if let Some(calls) = delta.tool_calls {
+                    for call in calls {
+                        let index = call.index.unwrap_or(0);
+
+                        // Update max seen index
+                        self.max_seen_index =
+                            Some(self.max_seen_index.map_or(index, |m| m.max(index)));
+
+                        // Check if this is a new index - previous indices are now complete
+                        if index > 0 {
+                            if let Some(completed) = self.try_complete(index - 1) {
+                                items.push(ModelStreamItem::ToolCall(completed));
+                            }
+                        }
+
+                        // Accumulate this call's data
+                        let partial = self.partials.entry(index).or_default();
+                        if let Some(id) = call.id.filter(|s| !s.is_empty()) {
+                            partial.id = Some(id);
+                        }
+                        if let Some(name) = call.function.name.filter(|s| !s.is_empty()) {
+                            partial.name = Some(name);
+                        }
+
+                        // Emit incremental update for UI feedback if we have:
+                        // 1. args delta in this chunk, and
+                        // 2. accumulated id from previous chunks (name may come later)
+                        if let Some(args) = call.function.arguments {
+                            if !args.is_empty() {
+                                partial.arguments.push_str(&args);
+                                if let Some(id) = &partial.id {
+                                    items.push(ModelStreamItem::ToolCallDelta {
+                                        id: id.clone(),
+                                        name: partial.name.clone().unwrap_or_default(),
+                                        arguments_delta: args,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle content deltas (always emitted immediately)
+                if let Some(thinking) = delta
+                    .thinking
+                    .or(delta.reasoning)
+                    .or(delta.reasoning_content)
+                {
+                    items.push(ModelStreamItem::Chunk(ContentChunk::Thinking {
+                        thinking,
+                        signature: delta.thinking_signature,
+                    }));
+                }
+
+                if delta.thinking_redacted.unwrap_or(false) {
+                    items.push(ModelStreamItem::Chunk(ContentChunk::RedactedThinking));
+                }
+
+                if let Some(content) = delta.content.filter(|c| !c.is_empty()) {
+                    items.push(ModelStreamItem::Chunk(ContentChunk::Text(content)));
+                }
+            }
+        }
+
+        // Handle top-level usage information
         if let Some(usage) = response.usage {
-            return Ok(vec![ModelStreamItem::TokenUsage(
+            items.push(ModelStreamItem::TokenUsage(
                 crate::providers::TokenUsage::new(
                     usage.prompt_tokens,
                     usage.completion_tokens,
                     usage.cached_tokens(),
                 ),
-            )]);
-        }
-
-        let Some(choice) = response.choices.into_iter().next() else {
-            return Ok(vec![]);
-        };
-
-        // Capture finish_reason from the final chunk
-        if let Some(finish_reason) = choice.finish_reason {
-            self.finish_reason = Some(finish_reason);
-        }
-
-        let Some(delta) = choice.delta else {
-            return Ok(vec![]);
-        };
-
-        let mut items = Vec::new();
-
-        // Handle tool call deltas
-        if let Some(calls) = delta.tool_calls {
-            for call in calls {
-                let index = call.index.unwrap_or(0);
-
-                // Update max seen index
-                self.max_seen_index = Some(self.max_seen_index.map_or(index, |m| m.max(index)));
-
-                // Check if this is a new index - previous indices are now complete
-                if index > 0 {
-                    if let Some(completed) = self.try_complete(index - 1) {
-                        items.push(ModelStreamItem::ToolCall(completed));
-                    }
-                }
-
-                // Accumulate this call's data
-                let partial = self.partials.entry(index).or_default();
-                if let Some(id) = call.id.filter(|s| !s.is_empty()) {
-                    partial.id = Some(id);
-                }
-                if let Some(name) = call.function.name.filter(|s| !s.is_empty()) {
-                    partial.name = Some(name);
-                }
-
-                // Emit incremental update for UI feedback if we have:
-                // 1. args delta in this chunk, and
-                // 2. accumulated id from previous chunks (name may come later)
-                if let Some(args) = call.function.arguments {
-                    if !args.is_empty() {
-                        partial.arguments.push_str(&args);
-                        if let Some(id) = &partial.id {
-                            items.push(ModelStreamItem::ToolCallDelta {
-                                id: id.clone(),
-                                name: partial.name.clone().unwrap_or_default(),
-                                arguments_delta: args,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // Handle content deltas (always emitted immediately)
-        if let Some(thinking) = delta
-            .thinking
-            .or(delta.reasoning)
-            .or(delta.reasoning_content)
-        {
-            items.push(ModelStreamItem::Chunk(ContentChunk::Thinking {
-                thinking,
-                signature: delta.thinking_signature,
-            }));
-        }
-
-        if delta.thinking_redacted.unwrap_or(false) {
-            items.push(ModelStreamItem::Chunk(ContentChunk::RedactedThinking));
-        }
-
-        if let Some(content) = delta.content.filter(|c| !c.is_empty()) {
-            items.push(ModelStreamItem::Chunk(ContentChunk::Text(content)));
+            ));
         }
 
         Ok(items)
@@ -1030,35 +1039,111 @@ mod tests {
     }
 
     #[test]
-    fn test_assembler_mixed_content_and_tool() {
+    fn test_assembler_finish_reason_and_usage_in_same_chunk() {
         let mut assembler = MsgChunkAssembler::new();
 
-        // First some text
-        let delta = OpenAIDelta {
-            content: Some("I'll help ".to_string()),
-            thinking: None,
-            reasoning: None,
-            reasoning_content: None,
-            thinking_signature: None,
-            thinking_redacted: None,
-            tool_calls: None,
-        };
-        let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-        let items = assembler.process(&json).unwrap();
-        assert_eq!(items.len(), 1);
+        // Real data from Kimi/free-tokens proxy: last chunk has both finish_reason and top-level usage
+        let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
 
-        // Then tool call
-        let delta = create_tool_call_delta(0, Some("call_1"), Some("bash"), Some("{}"));
-        let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-        let items = assembler.process(&json).unwrap();
-        // ToolCallDelta is emitted for UI feedback
+        let items = assembler.process(data).unwrap();
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_1"));
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::TokenUsage(crate::providers::TokenUsage {
+                prompt_tokens: 11,
+                completion_tokens: 16,
+                ..
+            })
+        ));
 
-        // Finish
+        // finish() should emit ResponseMeta with captured finish_reason
+        let items = assembler.finish();
+        assert_eq!(items.len(), 2); // ResponseMeta + Complete
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::ResponseMeta {
+                response_id,
+                finish_reason: Some(FinishReason::Stop),
+            } if response_id == "chatcmpl-test"
+        ));
+        assert!(matches!(items[1], ModelStreamItem::Complete));
+    }
+
+    #[test]
+    fn test_assembler_choice_usage_only() {
+        let mut assembler = MsgChunkAssembler::new();
+
+        // Some providers (like older Kimi) put usage only inside the choice
+        let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.5","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121}}]}"#;
+
+        let items = assembler.process(data).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::TokenUsage(crate::providers::TokenUsage {
+                prompt_tokens: 8,
+                completion_tokens: 113,
+                ..
+            })
+        ));
+
         let items = assembler.finish();
         assert_eq!(items.len(), 2);
-        assert!(matches!(items[0], ModelStreamItem::ToolCall(_)));
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::ResponseMeta {
+                response_id,
+                finish_reason: Some(FinishReason::Stop),
+            } if response_id == "chatcmpl-test"
+        ));
         assert!(matches!(items[1], ModelStreamItem::Complete));
+    }
+
+    #[test]
+    fn test_assembler_empty_choices_with_usage() {
+        let mut assembler = MsgChunkAssembler::new();
+
+        // Some proxies send a chunk with empty choices but usage after the finish_reason chunk
+        let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
+
+        let items = assembler.process(data).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::TokenUsage(crate::providers::TokenUsage {
+                prompt_tokens: 11,
+                completion_tokens: 16,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_assembler_usage_without_delta() {
+        let mut assembler = MsgChunkAssembler::new();
+
+        // Chunk with finish_reason but no delta (empty delta object)
+        let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"length","usage":null}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}"#;
+
+        let items = assembler.process(data).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::TokenUsage(crate::providers::TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                ..
+            })
+        ));
+
+        let items = assembler.finish();
+        assert_eq!(items.len(), 2); // ResponseMeta + Complete
+        assert!(matches!(
+            &items[0],
+            ModelStreamItem::ResponseMeta {
+                response_id,
+                finish_reason: Some(FinishReason::MaxTokens),
+            } if response_id == "chatcmpl-test"
+        ));
     }
 }

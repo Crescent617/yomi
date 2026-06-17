@@ -325,7 +325,7 @@
               class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <option value="">None</option>
-              {#each projects as project}
+              {#each projects as project (project.id)}
                 <option value={project.id}>{project.name}</option>
               {/each}
             </select>

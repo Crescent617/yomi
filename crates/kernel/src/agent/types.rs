@@ -182,6 +182,7 @@ pub enum AgentState {
     Idle,
     Streaming,
     ExecutingTool,
+    Compacting,
     Closed,
 }
 
@@ -192,9 +193,10 @@ impl AgentState {
 
     pub const fn valid_transitions(&self) -> &'static [Self] {
         match self {
-            Self::Idle => &[Self::Streaming, Self::Closed],
-            Self::Streaming => &[Self::ExecutingTool, Self::Idle],
+            Self::Idle => &[Self::Streaming, Self::Compacting, Self::Closed],
+            Self::Streaming => &[Self::ExecutingTool, Self::Compacting, Self::Idle],
             Self::ExecutingTool => &[Self::Streaming, Self::Idle, Self::Closed],
+            Self::Compacting => &[Self::Idle, Self::Streaming],
             Self::Closed => &[],
         }
     }
@@ -204,6 +206,7 @@ impl AgentState {
             Self::Idle => "idle",
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
+            Self::Compacting => "compacting",
             Self::Closed => "completed",
         }
     }
@@ -551,7 +554,16 @@ mod tests {
     #[test]
     fn test_waiting_for_input_transitions() {
         assert!(AgentState::Idle.can_transition_to(AgentState::Streaming));
+        assert!(AgentState::Idle.can_transition_to(AgentState::Compacting));
         assert!(!AgentState::Idle.can_transition_to(AgentState::ExecutingTool));
         assert!(!AgentState::Idle.can_transition_to(AgentState::Idle));
+    }
+
+    #[test]
+    fn test_compacting_transitions() {
+        assert!(AgentState::Compacting.can_transition_to(AgentState::Idle));
+        assert!(AgentState::Compacting.can_transition_to(AgentState::Streaming));
+        assert!(!AgentState::Compacting.can_transition_to(AgentState::ExecutingTool));
+        assert!(!AgentState::Compacting.can_transition_to(AgentState::Closed));
     }
 }

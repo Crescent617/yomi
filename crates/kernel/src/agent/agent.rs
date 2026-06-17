@@ -12,7 +12,7 @@ use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage,
 use crate::FinishReason;
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, info_span, warn, Instrument};
@@ -83,8 +83,6 @@ pub struct Agent {
     skills: Vec<Arc<crate::skill::Skill>>,
     /// Channel for receiving steer messages injected before each streaming turn
     steer_rx: mpsc::Receiver<Vec<ContentBlock>>,
-    /// Whether the agent is currently compacting messages
-    compacting: Arc<AtomicBool>,
 }
 
 impl Agent {
@@ -164,7 +162,6 @@ impl Agent {
         });
 
         let data_dir = shared.data_dir.clone();
-        let compacting = Arc::new(AtomicBool::new(false));
 
         let session_id = args.session_id.clone();
         let agent = Self {
@@ -188,7 +185,6 @@ impl Agent {
             base_prompt: args.base_prompt,
             skills: args.skills.clone(),
             steer_rx,
-            compacting: Arc::clone(&compacting),
         };
 
         let span = info_span!("agent", session_id = %session_id);
@@ -214,7 +210,6 @@ impl Agent {
             Some(ask_user_responder),
             Arc::clone(&input_stale_since),
             steer_tx,
-            Arc::clone(&compacting),
         );
         (handle, event_rx)
     }
@@ -310,6 +305,11 @@ impl Agent {
                     tracing::debug!("executing tools");
                     self.handle_execute_tool().await
                 }
+                AgentState::Compacting => {
+                    tracing::warn!("Unexpected Compacting state in main loop; returning to Idle");
+                    self.context.transition_to(AgentState::Idle);
+                    continue;
+                }
                 AgentState::Closed => break,
             };
 
@@ -324,6 +324,7 @@ impl Agent {
                         AgentState::Idle => crate::event::ErrorPhase::Idle,
                         AgentState::Streaming => crate::event::ErrorPhase::Streaming,
                         AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
+                        AgentState::Compacting => crate::event::ErrorPhase::Compaction,
                         AgentState::Closed => unreachable!(),
                     };
                     self.emit_error(phase, &e.to_string(), false).await;
@@ -626,7 +627,8 @@ impl Agent {
             }
             Some(AgentInput::Compact) => {
                 tracing::info!("received compact request");
-                if let Err(e) = self.force_full_compact().await {
+                let result = self.force_full_compact().await;
+                if let Err(e) = result {
                     tracing::warn!("force_full_compact failed: {}", e);
                 }
                 Ok(())
@@ -1028,7 +1030,10 @@ impl Agent {
             .as_ref()
             .ok_or("No compactor configured")?;
         let old_count = self.message_buffer.len();
-
+        let prev_state = self.context.current_state();
+        if !self.context.transition_to(AgentState::Compacting) {
+            tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
+        }
         self.emit_compaction_event(true).await;
 
         let result = compactor
@@ -1040,6 +1045,13 @@ impl Agent {
             )
             .await;
 
+        if !self.context.transition_to(prev_state) {
+            tracing::warn!(
+                "Failed to transition back to {:?} from Compacting",
+                prev_state
+            );
+        }
+        self.emit_compaction_event(false).await;
         self.handle_compaction_result(result, old_count).await
     }
 
@@ -1052,7 +1064,10 @@ impl Agent {
             .as_ref()
             .ok_or("No compactor configured")?;
         let old_count = self.message_buffer.len();
-
+        let prev_state = self.context.current_state();
+        if !self.context.transition_to(AgentState::Compacting) {
+            tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
+        }
         self.emit_compaction_event(true).await;
 
         let result = compactor
@@ -1065,6 +1080,13 @@ impl Agent {
             .await
             .map(Some);
 
+        if !self.context.transition_to(prev_state) {
+            tracing::warn!(
+                "Failed to transition back to {:?} from Compacting",
+                prev_state
+            );
+        }
+        self.emit_compaction_event(false).await;
         self.handle_compaction_result(result, old_count).await
     }
 
@@ -1123,13 +1145,11 @@ impl Agent {
             }
         };
 
-        self.emit_compaction_event(false).await;
         compact_result
     }
 
     /// Emit compaction start/end event.
     async fn emit_compaction_event(&self, active: bool) {
-        self.compacting.store(active, Ordering::Relaxed);
         if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
             agent_id: self.id.clone(),
             active,

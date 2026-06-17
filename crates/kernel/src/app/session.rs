@@ -398,11 +398,6 @@ impl Session {
             .is_some_and(|h| h.state() == AgentState::Streaming)
     }
 
-    /// Whether the main agent is currently compacting messages
-    pub fn is_compacting(&self) -> bool {
-        self.main_agent.as_ref().is_some_and(|h| h.is_compacting())
-    }
-
     pub const fn id(&self) -> &SessionId {
         &self.id
     }

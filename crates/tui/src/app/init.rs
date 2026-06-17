@@ -42,16 +42,16 @@ impl Model {
         Ok(())
     }
 
-    /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`
+    /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`.
+    /// Also syncs runtime status (streaming/compacting) into `InfoBar` so that switching
+    /// back to a session that is currently compacting shows the correct indicator.
     pub async fn init_session_messages(&mut self) -> Result<()> {
         use kernel::types::SessionId;
         let context_window = crate::config().agent.compactor.context_window;
 
-        let messages = match self
-            .coordinator
-            .get_session_messages(&SessionId(self.session_id.clone()))
-            .await
-        {
+        let session_id = SessionId(self.session_id.clone());
+
+        let messages = match self.coordinator.get_session_messages(&session_id).await {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::warn!("Failed to load session messages: {}", e);
@@ -62,32 +62,66 @@ impl Model {
         if messages.is_empty() {
             // Still initialize StatusBar with 0 tokens
             self.init_ctx_usage(0, context_window)?;
-            return Ok(());
+        } else {
+            // Calculate initial token usage from messages
+            let initial_tokens: u32 = messages
+                .iter()
+                .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
+                .next_back()
+                .unwrap_or_else(|| {
+                    // Estimate tokens from all messages if no usage data
+                    use kernel::utils::tokens;
+                    messages
+                        .iter()
+                        .map(|m| tokens::estimate_tokens(&m.text_content()))
+                        .sum::<usize>() as u32
+                });
+
+            // Initialize StatusBar with calculated tokens
+            self.init_ctx_usage(initial_tokens, context_window)?;
+
+            // Pass messages via Payload to avoid serialization
+            self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom(attr::INIT_HISTORY),
+                AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(messages))),
+            )?;
         }
 
-        // Calculate initial token usage from messages
-        let initial_tokens: u32 = messages
-            .iter()
-            .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
-            .next_back()
-            .unwrap_or_else(|| {
-                // Estimate tokens from all messages if no usage data
-                use kernel::utils::tokens;
-                messages
-                    .iter()
-                    .map(|m| tokens::estimate_tokens(&m.text_content()))
-                    .sum::<usize>() as u32
-            });
+        // Sync runtime status (streaming / compacting) so the InfoBar is accurate
+        // even when we switch to a session that is already in the middle of work.
+        match self.coordinator.get_session_status(&session_id).await {
+            Ok(status) => match status.phase.as_str() {
+                "streaming" => {
+                    self.state.is_streaming = true;
+                    self.app.attr(
+                        &Id::InfoBar,
+                        Attribute::Custom(attr::START_STREAMING),
+                        AttrValue::Flag(true),
+                    )?;
+                }
+                "compacting" => {
+                    self.app.attr(
+                        &Id::InfoBar,
+                        Attribute::Custom(attr::START_COMPACTING),
+                        AttrValue::Flag(true),
+                    )?;
+                }
+                "executing_tool" => {
+                    self.state.is_streaming = true;
+                    self.app.attr(
+                        &Id::InfoBar,
+                        Attribute::Custom(attr::START_STREAMING),
+                        AttrValue::Flag(true),
+                    )?;
+                }
+                _ => {}
+            },
+            Err(e) => {
+                tracing::warn!("Failed to get session status: {}", e);
+            }
+        }
 
-        // Initialize StatusBar with calculated tokens
-        self.init_ctx_usage(initial_tokens, context_window)?;
-
-        // Pass messages via Payload to avoid serialization
-        self.app.attr(
-            &Id::ChatView,
-            Attribute::Custom(attr::INIT_HISTORY),
-            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(messages))),
-        )?;
         Ok(())
     }
 
