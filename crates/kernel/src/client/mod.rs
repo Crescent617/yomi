@@ -82,6 +82,16 @@ pub trait CoordinatorApi: Send + Sync {
         target: RewindTarget,
     ) -> Result<()>;
     async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()>;
+    async fn pin_session(&self, session_id: &SessionId, emoji: Option<String>) -> Result<()>;
+    async fn unpin_session(&self, session_id: &SessionId) -> Result<()>;
+    async fn set_pinned_session_emoji(
+        &self,
+        session_id: &SessionId,
+        emoji: Option<String>,
+    ) -> Result<()>;
+    async fn list_pinned_sessions(
+        &self,
+    ) -> Result<Vec<crate::storage::pinned_session::PinnedSessionDetail>>;
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()>;
     async fn pause_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn resume_goal(&self, session_id: &SessionId) -> Result<()>;
@@ -119,6 +129,10 @@ pub trait CoordinatorApi: Send + Sync {
     async fn reload_agent_config(&self) -> Result<()>;
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
     async fn send_continue(&self, session_id: &SessionId) -> Result<()>;
+    async fn list_session_skills(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<Arc<crate::skill::Skill>>>;
 
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary>;
@@ -238,6 +252,28 @@ impl CoordinatorApi for Coordinator {
         Self::rename_session(self, session_id, title).await
     }
 
+    async fn pin_session(&self, session_id: &SessionId, emoji: Option<String>) -> Result<()> {
+        Self::pin_session(self, session_id, emoji).await
+    }
+
+    async fn unpin_session(&self, session_id: &SessionId) -> Result<()> {
+        Self::unpin_session(self, session_id).await
+    }
+
+    async fn set_pinned_session_emoji(
+        &self,
+        session_id: &SessionId,
+        emoji: Option<String>,
+    ) -> Result<()> {
+        Self::set_pinned_session_emoji(self, session_id, emoji).await
+    }
+
+    async fn list_pinned_sessions(
+        &self,
+    ) -> Result<Vec<crate::storage::pinned_session::PinnedSessionDetail>> {
+        Self::list_pinned_sessions(self).await
+    }
+
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         Self::start_goal(self, session_id, state).await
     }
@@ -335,6 +371,13 @@ impl CoordinatorApi for Coordinator {
 
     async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
         Self::send_continue(self, session_id).await
+    }
+
+    async fn list_session_skills(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<Arc<crate::skill::Skill>>> {
+        Self::list_session_skills(self, session_id).await
     }
 
     async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary> {
@@ -980,6 +1023,44 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(())
     }
 
+    async fn pin_session(&self, session_id: &SessionId, emoji: Option<String>) -> Result<()> {
+        self.call(RequestMethod::PinSession {
+            session_id: session_id.0.clone(),
+            icon_emoji: emoji,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn unpin_session(&self, session_id: &SessionId) -> Result<()> {
+        self.call(RequestMethod::UnpinSession {
+            session_id: session_id.0.clone(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn set_pinned_session_emoji(
+        &self,
+        session_id: &SessionId,
+        emoji: Option<String>,
+    ) -> Result<()> {
+        self.call(RequestMethod::SetPinnedSessionEmoji {
+            session_id: session_id.0.clone(),
+            icon_emoji: emoji,
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn list_pinned_sessions(
+        &self,
+    ) -> Result<Vec<crate::storage::pinned_session::PinnedSessionDetail>> {
+        let result = self.call(RequestMethod::ListPinnedSessions).await?;
+        let sessions = serde_json::from_value(result)?;
+        Ok(sessions)
+    }
+
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         self.call(RequestMethod::Command {
             session_id: session_id.0.clone(),
@@ -1164,6 +1245,19 @@ impl CoordinatorApi for RemoteCoordinator {
         })
         .await?;
         Ok(())
+    }
+
+    async fn list_session_skills(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<Arc<crate::skill::Skill>>> {
+        let result = self
+            .call(RequestMethod::ListSessionSkills {
+                session_id: session_id.0.clone(),
+            })
+            .await?;
+        let skills = serde_json::from_value(result)?;
+        Ok(skills)
     }
 
     async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary> {

@@ -1,29 +1,41 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "../../lib/api";
+  import { sessionState } from "../../lib/state.svelte";
   import { Wrench, RefreshCw } from "lucide-svelte";
 
-  let skills = $state<unknown[]>([]);
+  let skills = $state<api.SkillInfo[]>([]);
   let loading = $state(true);
   let error = $state("");
 
-  onMount(async () => {
+  async function loadSkills() {
+    const session_id = sessionState.activeSessionId;
+    if (!session_id) {
+      skills = [];
+      loading = false;
+      return;
+    }
     try {
-      skills = await api.listSkills();
+      loading = true;
+      error = "";
+      skills = await api.listSessionSkills(session_id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(loadSkills);
 
   async function reload() {
     try {
       await api.reloadConfig();
-      skills = await api.listSkills();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      return;
     }
+    await loadSkills();
   }
 </script>
 
@@ -50,15 +62,16 @@
     <div class="text-muted-foreground">No skills loaded</div>
   {:else}
     <div class="space-y-2">
-      {#each skills as skill (JSON.stringify(skill))}
+      {#each skills as skill (skill.name)}
         <div
           class="rounded-lg border border-border p-4 hover:bg-secondary/50 transition-colors"
         >
-          <pre class="text-xs overflow-x-auto">{JSON.stringify(
-              skill,
-              null,
-              2,
-            )}</pre>
+          <div class="font-medium">{skill.name}</div>
+          {#if skill.description}
+            <div class="text-sm text-muted-foreground mt-1">
+              {skill.description}
+            </div>
+          {/if}
         </div>
       {/each}
     </div>

@@ -35,6 +35,10 @@ pub struct Coordinator {
     agent_config: Arc<RwLock<AgentConfig>>,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
+    /// Pinned session store for sidebar pinning and emoji.
+    /// Kept separate from the main `SessionStore` so the public session
+    /// interface remains unchanged.
+    pinned_session_store: Arc<dyn crate::storage::PinnedSessionStore>,
     /// Cron store for scheduled job operations.
     /// Kept here so that the Coordinator can expose a unified API for both
     /// in-process and remote clients (via `CoordinatorApi`).
@@ -54,6 +58,11 @@ impl Coordinator {
             .session_store
             .clone()
             .expect("session_store not configured")
+    }
+
+    /// Get pinned session store
+    pub fn pinned_session_store(&self) -> Arc<dyn crate::storage::PinnedSessionStore> {
+        self.pinned_session_store.clone()
     }
 
     /// Get message store from `agent_shared`
@@ -136,6 +145,7 @@ impl Coordinator {
         let checkpoint_store = storage.checkpoint_store();
         let data_dir = storage.data_dir().to_path_buf();
         let project_store = storage.project_store();
+        let pinned_session_store = storage.pinned_session_store();
         let goal_store = storage.goal_store();
         let agent_shared = AgentShared::with_data_dir(
             provider,
@@ -183,6 +193,7 @@ impl Coordinator {
             last_activity_at,
             agent_config,
             project_store,
+            pinned_session_store,
             cron_store,
         })
     }
@@ -313,6 +324,32 @@ impl Coordinator {
             session.emit_title_updated(&title);
         }
         Ok(())
+    }
+
+    /// Pin a session to the top of the sidebar, optionally with an emoji.
+    pub async fn pin_session(&self, id: &SessionId, emoji: Option<String>) -> Result<()> {
+        self.pinned_session_store().pin(id, emoji.as_deref()).await
+    }
+
+    /// Unpin a session from the sidebar.
+    pub async fn unpin_session(&self, id: &SessionId) -> Result<()> {
+        self.pinned_session_store().unpin(id).await
+    }
+
+    /// Update the emoji for a pinned session.
+    pub async fn set_pinned_session_emoji(
+        &self,
+        id: &SessionId,
+        emoji: Option<String>,
+    ) -> Result<()> {
+        self.pinned_session_store()
+            .update_emoji(id, emoji.as_deref())
+            .await
+    }
+
+    /// List pinned sessions with their session metadata.
+    pub async fn list_pinned_sessions(&self) -> Result<Vec<crate::storage::PinnedSessionDetail>> {
+        self.pinned_session_store().list_with_details().await
     }
 
     /// Delete a project (only if it has no sessions)
@@ -676,6 +713,52 @@ impl Coordinator {
     /// Return the number of sessions currently live in memory.
     pub fn live_session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// List skills available to a session, merging global skills with workspace skills.
+    /// Workspace skills take precedence on name collision.
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
+    pub async fn list_session_skills(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<Arc<crate::skill::Skill>>> {
+        let session = self.require_session(session_id)?;
+        let session = session.read().await;
+
+        let global_skills = self.agent_config.read().await.skills.clone();
+
+        let workspace_skill_dir = session.workspace_skill_dir().cloned();
+        drop(session);
+
+        let mut skills = match workspace_skill_dir {
+            Some(dir) => {
+                match crate::skill::SkillLoader::new(vec![dir]).load_all() {
+                    Ok(mut ws_skills) => {
+                        // Merge global and workspace skills, workspace wins on collision.
+                        let mut merged = std::collections::HashMap::new();
+                        for skill in global_skills {
+                            merged.insert(skill.name.clone(), skill);
+                        }
+                        for skill in ws_skills.drain(..) {
+                            merged.insert(skill.name.clone(), skill);
+                        }
+                        merged.into_values().collect()
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load workspace skills for session {}: {}, using global skills only",
+                            session_id.0,
+                            e
+                        );
+                        global_skills
+                    }
+                }
+            }
+            None => global_skills,
+        };
+
+        crate::skill::deduplicate_skills(&mut skills);
+        Ok(skills)
     }
 
     /// Send a multi-modal message with content blocks

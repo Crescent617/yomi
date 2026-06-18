@@ -8,14 +8,18 @@
     Pencil,
     Trash2,
     Copy,
+    Pin,
+    PinOff,
   } from "lucide-svelte";
   import * as api from "../../api";
   import {
     sessionState,
     projectState,
     sessionCursors,
+    pinnedSessionMeta,
     setActiveSession,
     loadSessionMessages,
+    loadPinnedSessions,
     getSession,
     showNotification,
     syncSessionStatus,
@@ -27,7 +31,12 @@
   let expanded = $state<Record<string, boolean>>({});
   let loading = $state<Record<string, boolean>>({});
   let showMenu = $state<string | null>(null);
-  let showSessionMenu = $state<string | null>(null);
+  let pinnedMenu = $state<{ session_id: string; x: number; y: number } | null>(
+    null,
+  );
+  let projectMenu = $state<{ session_id: string; x: number; y: number } | null>(
+    null,
+  );
   let renamingProjectId = $state<string | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let renameValue = $state("");
@@ -46,6 +55,7 @@
               loadSessions(id);
             }
           }
+          loadPinnedSessions();
         })
         .catch(console.error);
     } else if (projectState.projects.length > 0) {
@@ -55,6 +65,7 @@
       for (const id of firstN) {
         loadSessions(id);
       }
+      loadPinnedSessions();
     }
   });
 
@@ -62,6 +73,25 @@
     return sessionState.sessions
       .filter((s) => s.project_id === project_id)
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  }
+
+  const pinnedList = $derived(
+    Object.entries(pinnedSessionMeta)
+      .map(([session_id, meta]) => {
+        const session = getSession(session_id);
+        return { session_id, session, meta };
+      })
+      .sort((a, b) =>
+        (b.meta.pinned_at ?? "").localeCompare(a.meta.pinned_at ?? ""),
+      ),
+  );
+
+  function projectName(project_id?: string | null): string {
+    if (!project_id) return "Default";
+    return (
+      projectState.projects.find((p) => p.id === project_id)?.name ??
+      project_id.slice(0, 8)
+    );
   }
 
   function has_more(project_id: string) {
@@ -170,6 +200,8 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
+      delete pinnedSessionMeta[id];
+      loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);
       showNotification("Session deleted", "success", 2000);
     } catch (e: unknown) {
@@ -287,9 +319,76 @@
       showNotification("Failed to copy", "error", 1500);
     }
   }
+
+  async function togglePin(session_id: string) {
+    const session = getSession(session_id);
+    if (!session) return;
+
+    if (session.is_pinned) {
+      session.is_pinned = false;
+      delete pinnedSessionMeta[session_id];
+      try {
+        await api.unpinSession(session_id);
+      } catch (e: unknown) {
+        session.is_pinned = true;
+        pinnedSessionMeta[session_id] = {
+          pinned_at: new Date().toISOString(),
+        };
+        console.error(
+          "Failed to unpin session:",
+          e instanceof Error ? e.message : e,
+        );
+        showNotification("Failed to unpin session", "error", 3000);
+      }
+    } else {
+      const now = new Date().toISOString();
+      session.is_pinned = true;
+      pinnedSessionMeta[session_id] = { pinned_at: now };
+      try {
+        await api.pinSession(session_id);
+      } catch (e: unknown) {
+        session.is_pinned = false;
+        delete pinnedSessionMeta[session_id];
+        console.error(
+          "Failed to pin session:",
+          e instanceof Error ? e.message : e,
+        );
+        showNotification("Failed to pin session", "error", 3000);
+      }
+    }
+  }
+
+  function openMenu(
+    e: MouseEvent,
+    target: "pinned" | "project",
+    session_id: string,
+  ) {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const menu = { session_id, x: rect.right, y: rect.bottom + 4 };
+    if (target === "pinned") {
+      pinnedMenu = menu;
+      projectMenu = null;
+    } else {
+      projectMenu = menu;
+      pinnedMenu = null;
+    }
+  }
+
+  function closeMenus() {
+    pinnedMenu = null;
+    projectMenu = null;
+  }
 </script>
 
 <div class="flex flex-col h-full {collapsed ? 'items-center' : ''}">
+  {#if pinnedMenu || projectMenu}
+    <div
+      class="fixed inset-0 z-40"
+      onclick={closeMenus}
+      aria-hidden="true"
+    ></div>
+  {/if}
   {#if !collapsed}
     <div class="shrink-0 p-2">
       <button
@@ -311,6 +410,105 @@
     </div>
   {/if}
 
+  {#if !collapsed && pinnedList.length > 0}
+    <div class="shrink-0 max-h-[33%] overflow-y-auto px-2 py-1">
+      <div
+        class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+      >
+        <Pin size={12} />
+        Pinned
+      </div>
+      <div class="space-y-0">
+        {#each pinnedList as { session_id, session, meta: _meta } (session_id)}
+          {@const active = sessionState.activeSessionId === session_id}
+          <div class="relative">
+            <div
+              class="group w-full flex items-center gap-2 rounded-lg px-3 py-1 cursor-pointer transition-colors {active
+                ? 'bg-primary/10 text-foreground'
+                : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
+              onclick={() => activateSession(session_id)}
+              role="button"
+              tabindex="0"
+              onkeydown={(e: KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ")
+                  activateSession(session_id);
+              }}
+            >
+              <span
+                class="flex-1 truncate text-sm font-medium"
+                title={session?.alias ?? "Untitled"}
+              >
+                {session?.alias ?? "Untitled"}
+              </span>
+              <span
+                class="shrink-0 text-[10px] text-muted-foreground/70 truncate max-w-[6rem]"
+                >{projectName(session?.project_id)}</span
+              >
+              <div class="flex items-center gap-1.5 shrink-0">
+                {#if session && session.phase !== "idle" && session.phase !== "closed"}
+                  <span
+                    class="w-1.5 h-1.5 rounded-full {session.phase ===
+                      'streaming' ||
+                    session.phase === 'executing_tool' ||
+                    session.phase === 'compacting'
+                      ? 'bg-primary'
+                      : 'bg-amber-500'} animate-pulse"
+                  ></span>
+                {/if}
+                <div class="relative">
+                  <button
+                    class="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-secondary/80 transition-all"
+                    onclick={(e: MouseEvent) =>
+                      openMenu(e, "pinned", session_id)}
+                  >
+                    <MoreVertical size={12} />
+                  </button>
+                  {#if pinnedMenu?.session_id === session_id}
+                    <div
+                      class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
+                      style="top: {pinnedMenu.y}px; left: {pinnedMenu.x}px; transform: translateX(-100%);"
+                    >
+                      <button
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                        onclick={(e: Event) => {
+                          e.stopPropagation();
+                          togglePin(session_id);
+                          pinnedMenu = null;
+                        }}
+                      >
+                        <PinOff size={12} /> Unpin
+                      </button>
+                      <button
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                        onclick={(e: Event) => {
+                          e.stopPropagation();
+                          copySessionId(session_id);
+                          pinnedMenu = null;
+                        }}
+                      >
+                        <Copy size={12} /> Copy ID
+                      </button>
+                      <button
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                        onclick={(e: Event) => {
+                          e.stopPropagation();
+                          deleteSession(session_id);
+                          pinnedMenu = null;
+                        }}
+                      >
+                        <Trash2 size={12} /> Delete
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </div>
+    <div class="h-px bg-border mx-2 mb-1 shrink-0"></div>
+  {/if}
   <div
     class="flex-1 min-h-0 overflow-y-auto py-1 {collapsed ? 'px-1' : 'px-2'}"
   >
@@ -438,10 +636,10 @@
           </div>
 
           {#if expanded[project.id]}
-            <div class="ml-4 pl-2 border-l border-border/40 space-y-0.5 pb-1">
+            <div class="ml-3 pl-2 border-l border-border/40 space-y-0 pb-1">
               {#each getSessions(project.id) as session (session.id)}
                 <div
-                  class="group w-full flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-colors {session.id ===
+                  class="group w-full flex items-center gap-2 rounded-lg pl-2 pr-3 py-1 cursor-pointer transition-colors {session.id ===
                   sessionState.activeSessionId
                     ? 'bg-primary/10 text-foreground'
                     : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
@@ -487,25 +685,37 @@
                     <div class="relative">
                       <button
                         class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100"
-                        onclick={(e: Event) => {
-                          e.stopPropagation();
-                          showSessionMenu =
-                            showSessionMenu === session.id ? null : session.id;
-                        }}
+                        onclick={(e: MouseEvent) =>
+                          openMenu(e, "project", session.id)}
                       >
                         <MoreVertical size={12} />
                       </button>
-                      {#if showSessionMenu === session.id}
+                      {#if projectMenu?.session_id === session.id}
                         <div
-                          class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1"
+                          class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
+                          style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
                         >
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              togglePin(session.id);
+                              projectMenu = null;
+                            }}
+                          >
+                            {#if session.is_pinned}
+                              <PinOff size={12} /> Unpin
+                            {:else}
+                              <Pin size={12} /> Pin to top
+                            {/if}
+                          </button>
                           <button
                             class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               renamingSessionId = session.id;
                               renameValue = session.alias ?? "Untitled";
-                              showSessionMenu = null;
+                              projectMenu = null;
                             }}
                           >
                             <Pencil size={12} /> Rename
@@ -515,7 +725,7 @@
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               copySessionId(session.id);
-                              showSessionMenu = null;
+                              projectMenu = null;
                             }}
                           >
                             <Copy size={12} /> Copy ID
@@ -525,16 +735,12 @@
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               deleteSession(session.id);
-                              showSessionMenu = null;
+                              projectMenu = null;
                             }}
                           >
                             <Trash2 size={12} /> Delete
                           </button>
                         </div>
-                        <div
-                          class="fixed inset-0 z-10"
-                          onclick={() => (showSessionMenu = null)}
-                        ></div>
                       {/if}
                     </div>
                   </div>

@@ -96,6 +96,14 @@ export interface SessionInfo {
   auto_approve_level?: string;
 }
 
+export interface PinnedSessionDetail {
+  session_id: string;
+  title?: string;
+  project_id?: string;
+  updated_at: string;
+  pinned_at: string;
+}
+
 export interface PaginatedSessions {
   sessions: SessionInfo[];
   has_more: boolean;
@@ -243,8 +251,17 @@ export async function rewind(
   });
 }
 
-export async function listSkills(): Promise<unknown[]> {
-  return invokeCmd("list_skills");
+export interface SkillInfo {
+  name: string;
+  description: string;
+}
+
+export async function listSessionSkills(
+  session_id: string,
+): Promise<SkillInfo[]> {
+  return invokeCmd<SkillInfo[]>("list_session_skills", {
+    session_id: session_id,
+  });
 }
 
 export async function reloadConfig(): Promise<void> {
@@ -359,6 +376,21 @@ export async function renameSession(
   title: string,
 ): Promise<void> {
   return invokeCmd("rename_session", { session_id: session_id, title });
+}
+
+export async function pinSession(session_id: string): Promise<void> {
+  return invokeCmd("pin_session", {
+    session_id: session_id,
+    icon_emoji: null,
+  });
+}
+
+export async function unpinSession(session_id: string): Promise<void> {
+  return invokeCmd("unpin_session", { session_id: session_id });
+}
+
+export async function listPinnedSessions(): Promise<PinnedSessionDetail[]> {
+  return invokeCmd<PinnedSessionDetail[]>("list_pinned_sessions");
 }
 
 export async function ping(): Promise<boolean> {

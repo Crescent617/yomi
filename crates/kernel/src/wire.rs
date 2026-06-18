@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 4;
+pub const WIRE_PROTOCOL_VERSION: u32 = 5;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,9 @@ pub enum RequestMethod {
         session_id: String,
         blocks: Vec<ContentBlock>,
     },
+    ListSessionSkills {
+        session_id: String,
+    },
     Command {
         session_id: String,
         cmd: ControlCommand,
@@ -79,6 +82,18 @@ pub enum RequestMethod {
         session_id: String,
         title: String,
     },
+    PinSession {
+        session_id: String,
+        icon_emoji: Option<String>,
+    },
+    UnpinSession {
+        session_id: String,
+    },
+    SetPinnedSessionEmoji {
+        session_id: String,
+        icon_emoji: Option<String>,
+    },
+    ListPinnedSessions,
     ShutdownSession {
         session_id: String,
     },

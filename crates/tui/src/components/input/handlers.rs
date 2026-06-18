@@ -121,6 +121,11 @@ impl InputComponent {
             return Some(self.handle_file_completion_input(ev));
         }
 
+        // Skill completion mode - handle special keys
+        if self.skill_completion.is_visible() {
+            return Some(self.handle_skill_completion_input(ev));
+        }
+
         // Command completion mode - handle special keys
         if self.command_completion.is_visible() {
             return Some(self.handle_command_completion_input(ev));
@@ -226,6 +231,11 @@ impl InputComponent {
                 modifiers: KeyModifiers::NONE,
             }) => {
                 // If completion is visible, accept it (same as Tab)
+                if self.skill_completion.is_visible() {
+                    self.accept_skill_completion();
+                    self.update_completion();
+                    return Some(Msg::InputChanged(self.component.content().to_string()));
+                }
                 if self.command_completion.is_visible() {
                     self.accept_completion();
                     self.update_completion();
@@ -382,7 +392,11 @@ impl InputComponent {
                 code: Key::Tab,
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
             }) => {
-                if self.command_completion.is_visible() {
+                if self.skill_completion.is_visible() {
+                    self.accept_skill_completion();
+                    self.update_completion();
+                    Some(Msg::InputChanged(self.component.content().to_string()))
+                } else if self.command_completion.is_visible() {
                     self.accept_completion();
                     self.update_completion();
                     Some(Msg::InputChanged(self.component.content().to_string()))
@@ -397,7 +411,10 @@ impl InputComponent {
                 code: Key::Up,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                if self.command_completion.is_visible() {
+                if self.skill_completion.is_visible() {
+                    self.skill_completion_prev();
+                    Some(Msg::Redraw)
+                } else if self.command_completion.is_visible() {
                     self.completion_prev();
                     Some(Msg::Redraw)
                 } else if self.file_completion.is_active() {
@@ -416,7 +433,10 @@ impl InputComponent {
                 code: Key::Down,
                 modifiers: KeyModifiers::NONE,
             }) => {
-                if self.command_completion.is_visible() {
+                if self.skill_completion.is_visible() {
+                    self.skill_completion_next();
+                    Some(Msg::Redraw)
+                } else if self.command_completion.is_visible() {
                     self.completion_next();
                     Some(Msg::Redraw)
                 } else if self.file_completion.is_active() {
@@ -435,7 +455,10 @@ impl InputComponent {
                 code: Key::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                if self.command_completion.is_visible() {
+                if self.skill_completion.is_visible() {
+                    self.skill_completion_prev();
+                    Some(Msg::Redraw)
+                } else if self.command_completion.is_visible() {
                     self.completion_prev();
                     Some(Msg::Redraw)
                 } else if self.file_completion.is_active() {
@@ -451,7 +474,10 @@ impl InputComponent {
                 code: Key::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
             }) => {
-                if self.command_completion.is_visible() {
+                if self.skill_completion.is_visible() {
+                    self.skill_completion_next();
+                    Some(Msg::Redraw)
+                } else if self.command_completion.is_visible() {
                     self.completion_next();
                     Some(Msg::Redraw)
                 } else if self.file_completion.is_active() {

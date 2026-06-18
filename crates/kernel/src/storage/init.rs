@@ -35,6 +35,8 @@ pub struct StorageSet {
     checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
     /// Project metadata store
     project_store: Arc<dyn super::ProjectStore>,
+    /// Pinned session metadata store
+    pinned_session_store: Arc<dyn super::PinnedSessionStore>,
     /// Cron job store
     cron_store: Arc<dyn crate::cron::CronStore>,
 }
@@ -51,6 +53,7 @@ impl std::fmt::Debug for StorageSet {
             .field("todo_store", &"<dyn TodoStore>")
             .field("checkpoint_store", &"<dyn CheckpointStore>")
             .field("project_store", &"<dyn ProjectStore>")
+            .field("pinned_session_store", &"<dyn PinnedSessionStore>")
             .field("cron_store", &"<dyn CronStore>")
             .finish()
     }
@@ -137,6 +140,8 @@ impl StorageSet {
             Arc::new(crate::goal::JsonGoalStore::new(&data_dir));
         let project_store: Arc<dyn super::ProjectStore> =
             Arc::new(super::SqliteProjectStore::new(pool.clone()));
+        let pinned_session_store: Arc<dyn super::PinnedSessionStore> =
+            Arc::new(super::SqlitePinnedSessionStore::new(pool.clone()));
         let cron_store: Arc<dyn crate::cron::CronStore> =
             Arc::new(SqliteCronStore::new(pool.clone()));
 
@@ -172,6 +177,7 @@ impl StorageSet {
             todo_store,
             checkpoint_store,
             project_store,
+            pinned_session_store,
             cron_store,
         })
     }
@@ -189,7 +195,8 @@ impl StorageSet {
             SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
                 .map_err(|e| KernelError::storage(format!("invalid db path: {e}")))?
                 .pragma("busy_timeout", "5000")
-                .pragma("journal_mode", "WAL");
+                .pragma("journal_mode", "WAL")
+                .pragma("foreign_keys", "ON");
 
         SqlitePool::connect_with(connect_options)
             .await
@@ -234,6 +241,11 @@ impl StorageSet {
     /// Get the data directory path
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Get the pinned session store
+    pub fn pinned_session_store(&self) -> Arc<dyn super::PinnedSessionStore> {
+        self.pinned_session_store.clone()
     }
 
     /// Get the cron store
