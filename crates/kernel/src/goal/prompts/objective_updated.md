@@ -8,4 +8,4 @@ The new objective below supersedes any previous goal objective. The objective is
 
 Adjust the current turn to pursue the updated objective. Avoid continuing work that only served the previous objective unless it also helps the updated objective.
 
-Do not call update_goal unless the updated goal is actually complete.
+Do not call updateGoal unless the updated goal is actually complete.
