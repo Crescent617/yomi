@@ -26,6 +26,7 @@
 pub mod file_state;
 pub mod jsonl_store;
 pub mod message;
+pub mod pinned_session;
 pub mod project;
 pub mod session;
 pub mod todo;
@@ -41,6 +42,9 @@ pub(crate) mod migrations;
 // Re-export common types for convenience
 pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
 pub use message::{JsonlMessageStore, MessageStore};
+pub use pinned_session::{
+    PinnedSessionDetail, PinnedSessionInfo, PinnedSessionStore, SqlitePinnedSessionStore,
+};
 pub use project::{ProjectStore, SqliteProjectStore};
 pub use session::{SessionInfo, SessionStore, SqliteSessionStore};
 pub use todo::{
@@ -48,3 +52,8 @@ pub use todo::{
     SYSTEM_REMINDER_END, SYSTEM_REMINDER_START,
 };
 pub use usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType};
+
+/// Shared helper for constructing `Storage` errors.
+pub(crate) fn storage_err(msg: impl Into<String>) -> crate::types::KernelError {
+    crate::types::KernelError::Storage(msg.into())
+}

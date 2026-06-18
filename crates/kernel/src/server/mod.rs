@@ -455,6 +455,12 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
+            RequestMethod::ListSessionSkills { session_id } => rpc_body(
+                "list_session_skills_failed",
+                self.coordinator
+                    .list_session_skills(&SessionId(session_id))
+                    .await,
+            ),
             RequestMethod::Command { session_id, cmd } => {
                 let sid = SessionId(session_id);
                 rpc_body(
@@ -601,6 +607,37 @@ impl KernelServer {
                     .rename_session(&SessionId(session_id), title)
                     .await
                     .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::PinSession {
+                session_id,
+                icon_emoji,
+            } => rpc_body(
+                "pin_session_failed",
+                self.coordinator
+                    .pin_session(&SessionId(session_id), icon_emoji)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::UnpinSession { session_id } => rpc_body(
+                "unpin_session_failed",
+                self.coordinator
+                    .unpin_session(&SessionId(session_id))
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::SetPinnedSessionEmoji {
+                session_id,
+                icon_emoji,
+            } => rpc_body(
+                "set_pinned_session_emoji_failed",
+                self.coordinator
+                    .set_pinned_session_emoji(&SessionId(session_id), icon_emoji)
+                    .await
+                    .map(|()| serde_json::Value::Null),
+            ),
+            RequestMethod::ListPinnedSessions => rpc_body(
+                "list_pinned_sessions_failed",
+                self.coordinator.list_pinned_sessions().await,
             ),
             RequestMethod::ShutdownSession { session_id } => rpc_body(
                 "shutdown_failed",

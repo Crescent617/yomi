@@ -148,6 +148,8 @@ export interface SessionState {
   queued_input: QueuedInput | null;
   updated_at: string;
   permission_level?: string;
+  /** derived from pinned_session table */
+  is_pinned?: boolean;
   token_usage?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -230,6 +232,11 @@ export const sessionState = $state({
   activeSessionId: null as string | null,
 });
 
+/** Metadata from the pinned_session table, keyed by session_id */
+export const pinnedSessionMeta = $state(
+  {} as Record<string, { pinned_at: string }>,
+);
+
 export const streamingMessages = $state<Record<string, ChatMessage[]>>({});
 
 export function openBrowser(session_id: string, url: string) {
@@ -302,6 +309,55 @@ export function refreshSessions() {
       }
     })
     .catch((e: Error) => console.error("Failed to refresh sessions:", e));
+}
+
+export function loadPinnedSessions() {
+  api
+    .listPinnedSessions()
+    .then((pinned) => {
+      // Reset all session pinned flags
+      for (const s of sessionState.sessions) {
+        s.is_pinned = false;
+      }
+      // Clear meta object without reassigning (Svelte 5 restriction)
+      for (const key of Object.keys(pinnedSessionMeta)) {
+        delete pinnedSessionMeta[key];
+      }
+
+      for (const p of pinned) {
+        pinnedSessionMeta[p.session_id] = {
+          pinned_at: p.pinned_at,
+        };
+
+        let session = getSession(p.session_id);
+        if (!session) {
+          session = {
+            id: p.session_id,
+            project_path: "",
+            project_id: p.project_id,
+            alias: p.title ?? "Untitled",
+            messages: [],
+            phase: "idle",
+            unread: 0,
+            checkpoints: [],
+            tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
+            active_tab_id: "chat",
+            pending_permissions: [],
+            pending_ask_user: null,
+            queued_input: null,
+            updated_at: p.updated_at,
+            is_pinned: true,
+          };
+          sessionState.sessions.push(session);
+        } else {
+          session.is_pinned = true;
+          session.alias = p.title ?? session.alias ?? "Untitled";
+          session.updated_at = p.updated_at ?? session.updated_at;
+          session.project_id = p.project_id ?? session.project_id;
+        }
+      }
+    })
+    .catch((e: Error) => console.error("Failed to load pinned sessions:", e));
 }
 
 export function getActiveSession(): SessionState | null {

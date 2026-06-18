@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Send, Command, Square, Clock, Paperclip, X } from "lucide-svelte";
+  import { Send, Command, Square, Clock, Paperclip, X, Wrench } from "lucide-svelte";
   import {
     levelDescription,
     levelIcon,
@@ -36,6 +36,14 @@
   let selectedCommandIdx = $state(0);
   let commandListRef: HTMLDivElement | null = $state(null);
 
+  // ── skill completion (/skill:) ──
+  let showSkills = $state(false);
+  let skillFilter = $state("");
+  let selectedSkillIdx = $state(0);
+  let skillListRef: HTMLDivElement | null = $state(null);
+  let availableSkills = $state<api.SkillInfo[]>([]);
+  let skillsLoadedForSessionId = $state<string | null>(null);
+
   // ── history picker ──
   let showHistory = $state(false);
   let selectedHistoryIdx = $state(0);
@@ -62,6 +70,25 @@
     if (showHistory) return; // Don't interfere with history search
     const cursorPos = textareaRef.selectionStart;
     const beforeCursor = content.slice(0, cursorPos);
+
+    // ── skill: starts with /skill: ──
+    if (content.startsWith("/skill:")) {
+      filePicker.close();
+      showCommands = false;
+      const query = content.slice(7);
+      const valid = /^[a-zA-Z0-9_\-:]*$/.test(query);
+      if (valid) {
+        showSkills = true;
+        skillFilter = query;
+        selectedSkillIdx = 0;
+        loadSkillsForActiveSession();
+      } else {
+        showSkills = false;
+      }
+      return;
+    }
+    showSkills = false;
+    skillFilter = "";
 
     // ── command: starts with / ──
     if (content.startsWith("/")) {
@@ -96,9 +123,31 @@
     }
   }
 
+  async function loadSkillsForActiveSession() {
+    const session_id = sessionState.activeSessionId;
+    if (!session_id || skillsLoadedForSessionId === session_id) return;
+    try {
+      availableSkills = await api.listSessionSkills(session_id);
+      skillsLoadedForSessionId = session_id;
+    } catch (e) {
+      console.error(
+        "Failed to load session skills:",
+        e instanceof Error ? e.message : e,
+      );
+      availableSkills = [];
+    }
+  }
+
   const filteredCommands = $derived.by(() => {
     const q = commandFilter.toLowerCase();
     return SLASH_COMMANDS.filter(([cmd]) => cmd.toLowerCase().includes(q));
+  });
+
+  const filteredSkills = $derived.by(() => {
+    const q = skillFilter.toLowerCase();
+    return availableSkills.filter(
+      (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+    );
   });
 
   const historyEntries = $derived.by(() => {
@@ -166,6 +215,14 @@
     }
     content = cmd + " ";
     showCommands = false;
+    textareaRef?.focus();
+    requestAnimationFrame(autoResize);
+  }
+
+  function acceptSkill(name: string) {
+    content = "/skill:" + name + " ";
+    showSkills = false;
+    skillFilter = "";
     textareaRef?.focus();
     requestAnimationFrame(autoResize);
   }
@@ -242,6 +299,7 @@
           break;
         case "/reload":
           await api.reloadConfig();
+          skillsLoadedForSessionId = null;
           showNotification("Skills and hooks reloaded", "info", 3000);
           break;
         case "/steer":
@@ -570,6 +628,34 @@
       return;
     }
 
+    // Skill picker navigation
+    if (showSkills) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (filteredSkills.length === 0) return;
+        selectedSkillIdx = (selectedSkillIdx + 1) % filteredSkills.length;
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (filteredSkills.length === 0) return;
+        selectedSkillIdx =
+          (selectedSkillIdx - 1 + filteredSkills.length) %
+          filteredSkills.length;
+        return;
+      }
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        const match = filteredSkills[selectedSkillIdx];
+        if (match) acceptSkill(match.name);
+        return;
+      }
+      if (e.key === "Escape") {
+        showSkills = false;
+        return;
+      }
+    }
+
     // Command picker navigation
     if (showCommands) {
       if (e.key === "ArrowDown") {
@@ -696,6 +782,16 @@
   });
 
   $effect(() => {
+    if (showSkills && skillListRef) {
+      const buttons = skillListRef.querySelectorAll("button");
+      const selected = buttons[selectedSkillIdx];
+      if (selected) {
+        selected.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }
+  });
+
+  $effect(() => {
     if (showHistory && historyListRef) {
       const buttons = historyListRef.querySelectorAll("button");
       const selected = buttons[selectedHistoryIdx];
@@ -709,6 +805,9 @@
     const currentId = activeSession?.id ?? null;
     if (prevSessionId !== currentId) {
       showHistory = false;
+      showSkills = false;
+      skillsLoadedForSessionId = null;
+      availableSkills = [];
       prevSessionId = currentId;
     }
   });
@@ -721,6 +820,7 @@
     const container = e.currentTarget as HTMLElement;
     if (!container.contains(e.relatedTarget as Node)) {
       showCommands = false;
+      showSkills = false;
       filePicker.close();
       showHistory = false;
     }
@@ -745,6 +845,30 @@
           <Command size={14} class="text-muted-foreground shrink-0" />
           <span class="font-mono text-primary shrink-0">{cmd}</span>
           <span class="text-muted-foreground text-xs truncate">{desc}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Skill completion dropdown -->
+  {#if showSkills && filteredSkills.length > 0}
+    <div
+      bind:this={skillListRef}
+      class="absolute bottom-full left-0 right-0 mb-1 mx-3 max-h-48 overflow-y-auto rounded-lg border border-border bg-background shadow-lg z-50"
+    >
+      {#each filteredSkills as skill, i (skill.name)}
+        <button
+          class="flex items-center gap-2 w-full px-3 py-2 text-left text-sm transition-colors {i ===
+          selectedSkillIdx
+            ? 'bg-secondary'
+            : 'hover:bg-secondary/50'}"
+          onclick={() => acceptSkill(skill.name)}
+        >
+          <Wrench size={14} class="text-muted-foreground shrink-0" />
+          <span class="font-mono text-primary shrink-0">{skill.name}</span>
+          {#if skill.description}
+            <span class="text-muted-foreground text-xs truncate">{skill.description}</span>
+          {/if}
         </button>
       {/each}
     </div>

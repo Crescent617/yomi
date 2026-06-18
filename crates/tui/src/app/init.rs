@@ -42,6 +42,34 @@ impl Model {
         Ok(())
     }
 
+    /// Load available skills for the current session and pass them to the input box
+    /// so that `/skill:` completion can suggest session-relevant skills.
+    pub async fn init_skills(&mut self) -> Result<()> {
+        use kernel::types::SessionId;
+        let session_id = SessionId(self.session_id.clone());
+
+        let skills: Vec<(String, String)> =
+            match self.coordinator.list_session_skills(&session_id).await {
+                Ok(skills) => skills
+                    .into_iter()
+                    .map(|s| (s.name.clone(), s.description.clone()))
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!("Failed to load session skills: {}", e);
+                    Vec::new()
+                }
+            };
+
+        if let Ok(skills_json) = serde_json::to_string(&skills) {
+            let _ = self.app.attr(
+                &Id::InputBox,
+                Attribute::Custom(attr::SKILLS),
+                AttrValue::String(skills_json),
+            );
+        }
+        Ok(())
+    }
+
     /// Display session messages in `ChatView` and calculate initial token usage for `StatusBar`.
     /// Also syncs runtime status (streaming/compacting) into `InfoBar` so that switching
     /// back to a session that is currently compacting shows the correct indicator.

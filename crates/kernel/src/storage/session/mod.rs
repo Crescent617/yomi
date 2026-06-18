@@ -1,6 +1,6 @@
 //! Session management - session lifecycle and metadata storage
 
-use crate::types::{KernelError, Result, SessionId};
+use crate::types::{Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -120,10 +120,7 @@ pub trait SessionStore: Send + Sync {
     async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>>;
 }
 
-/// Helper for storage errors
-fn storage_err(msg: impl Into<String>) -> KernelError {
-    KernelError::Storage(msg.into())
-}
+pub(crate) use crate::storage::storage_err;
 
 pub mod sqlite;
 pub use sqlite::SqliteSessionStore;

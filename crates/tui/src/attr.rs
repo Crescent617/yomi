@@ -180,6 +180,8 @@ pub const WORKING_DIR: &str = "working_dir";
 pub const INPUT_CONTENT: &str = "input_content";
 /// Attribute for pasting clipboard text at the current cursor position.
 pub const CLIPBOARD_PASTE: &str = "clipboard_paste";
+/// Attribute for setting available skills for `/skill:` completion (JSON string).
+pub const SKILLS: &str = "skills";
 
 // =============================================================================
 // Animation

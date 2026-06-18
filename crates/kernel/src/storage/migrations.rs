@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -104,6 +104,29 @@ const MIGRATIONS: &[Migration] = &[
             );",
             r"CREATE INDEX idx_cron_jobs_status_next_run ON cron_jobs(status, next_run_at);",
             r"CREATE INDEX idx_cron_jobs_next_run_active ON cron_jobs(next_run_at) WHERE status = 'active';",
+        ],
+    },
+    Migration {
+        version: 7,
+        name: "add_session_pinned_emoji",
+        sqls: &[
+            r"ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;",
+            r"ALTER TABLE sessions ADD COLUMN icon_emoji TEXT;",
+        ],
+    },
+    Migration {
+        version: 8,
+        name: "pinned_sessions_table",
+        sqls: &[
+            r"CREATE TABLE pinned_sessions (
+                session_id TEXT PRIMARY KEY,
+                icon_emoji TEXT,
+                pinned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );",
+            r"CREATE INDEX idx_pinned_sessions_pinned_at ON pinned_sessions(pinned_at DESC);",
+            r"ALTER TABLE sessions DROP COLUMN is_pinned;",
+            r"ALTER TABLE sessions DROP COLUMN icon_emoji;",
         ],
     },
 ];

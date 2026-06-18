@@ -83,9 +83,88 @@ impl InputComponent {
         self.command_completion.show(filtered);
     }
 
-    /// Update command completion state based on current input
+    /// Start skill completion at the given cursor position
+    pub(crate) fn start_skill_completion(&mut self, cursor_pos: usize) {
+        self.skill_query.clear();
+        self.skill_start_pos = cursor_pos;
+        self.refresh_skill_list();
+    }
+
+    /// Refresh skill list based on current query and cached available skills
+    pub(crate) fn refresh_skill_list(&mut self) {
+        let query = self.skill_query.to_lowercase();
+        let filtered: Vec<(String, String)> = self
+            .available_skills
+            .iter()
+            .filter(|(name, _)| {
+                if query.is_empty() {
+                    true
+                } else {
+                    name.to_lowercase().contains(&query)
+                }
+            })
+            .cloned()
+            .collect();
+        self.skill_completion.show(filtered);
+    }
+
+    /// Select next skill completion item
+    pub(crate) fn skill_completion_next(&mut self) {
+        self.skill_completion.next();
+    }
+
+    /// Select previous skill completion item
+    pub(crate) fn skill_completion_prev(&mut self) {
+        self.skill_completion.prev();
+    }
+
+    /// Accept the selected skill completion
+    pub(crate) fn accept_skill_completion(&mut self) {
+        if let Some((name, _)) = self.skill_completion.get_selected() {
+            let end = self.component.cursor_pos();
+            let start = self.skill_start_pos;
+            let chars_to_delete = {
+                let content = self.component.content();
+                content[start..end].chars().count()
+            };
+            for _ in 0..chars_to_delete {
+                self.component.backspace();
+            }
+            self.component.insert_str(name);
+            self.component.insert_char(' ');
+            self.skill_completion.hide();
+            self.skill_query.clear();
+        }
+    }
+
+    /// Cancel skill completion
+    pub(crate) fn cancel_skill_completion(&mut self) {
+        self.skill_completion.hide();
+        self.skill_query.clear();
+    }
+
+    /// Update command/skill completion state based on current input
     pub(crate) fn update_completion(&mut self) {
         let content = self.component.content();
+
+        // Skill completion: /skill:<query>
+        if let Some(prefix_end) = content.strip_prefix("/skill:") {
+            let valid = prefix_end
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == ':');
+            if valid && !self.skill_completion.is_visible() {
+                self.start_skill_completion(7); // len("/skill:")
+            } else if !valid {
+                self.skill_completion.hide();
+                self.skill_query.clear();
+            }
+            // Hide command completion while in skill completion
+            self.command_completion.hide();
+            self.command_query.clear();
+            return;
+        }
+        self.skill_completion.hide();
+        self.skill_query.clear();
 
         // Command names only contain alphanumeric, '_' or '-'
         let should_show = content.starts_with('/')
@@ -378,6 +457,166 @@ impl InputComponent {
                     self.component.content()[self.command_start_pos..cursor_pos].to_string();
             }
             self.refresh_command_list();
+        }
+    }
+
+    /// Handle input when skill completion is active
+    pub(crate) fn handle_skill_completion_input(
+        &mut self,
+        ev: &Event<crate::msg::UserEvent>,
+    ) -> Msg {
+        use tuirealm::event::{Key, KeyEvent, KeyModifiers};
+
+        match ev {
+            // Enter or Tab: accept completion
+            Event::Keyboard(KeyEvent {
+                code: Key::Enter | Key::Tab,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.accept_skill_completion();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Shift+Tab, Up arrow or Ctrl+P: navigate up
+            Event::Keyboard(
+                KeyEvent {
+                    code: Key::BackTab,
+                    modifiers: KeyModifiers::SHIFT,
+                }
+                | KeyEvent {
+                    code: Key::Up,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('p'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.skill_completion_prev();
+                Msg::Redraw
+            }
+            // Escape or Ctrl+C: cancel completion
+            Event::Keyboard(
+                KeyEvent {
+                    code: Key::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.cancel_skill_completion();
+                if matches!(
+                    ev,
+                    Event::Keyboard(KeyEvent {
+                        code: Key::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                    })
+                ) {
+                    self.component.clear();
+                }
+                Msg::Redraw
+            }
+            // Down arrow or Ctrl+N: navigate down
+            Event::Keyboard(
+                KeyEvent {
+                    code: Key::Down,
+                    modifiers: KeyModifiers::NONE,
+                }
+                | KeyEvent {
+                    code: Key::Char('n'),
+                    modifiers: KeyModifiers::CONTROL,
+                },
+            ) => {
+                self.skill_completion_next();
+                Msg::Redraw
+            }
+            // Space: cancel completion and insert space
+            Event::Keyboard(KeyEvent {
+                code: Key::Char(' '),
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.cancel_skill_completion();
+                self.component.insert_char(' ');
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Regular character: add to query and refresh
+            Event::Keyboard(KeyEvent {
+                code: Key::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+            }) => {
+                self.component.insert_char(*c);
+                self.skill_query.push(*c);
+                self.refresh_skill_list();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Backspace: remove from query and refresh
+            Event::Keyboard(KeyEvent {
+                code: Key::Backspace,
+                modifiers: KeyModifiers::NONE,
+            }) => {
+                self.component.backspace();
+                let cursor_pos = self.component.cursor_pos();
+                if cursor_pos < self.skill_start_pos {
+                    self.cancel_skill_completion();
+                } else {
+                    self.skill_query.pop();
+                    self.refresh_skill_list();
+                }
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            // Readline shortcuts: handle directly to avoid recursion
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.delete_word_backward();
+                self.update_skill_completion_after_edit();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('u'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component.kill_to_start_of_line();
+                self.update_skill_completion_after_edit();
+                Msg::InputChanged(self.component.content().to_string())
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('a'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component
+                    .move_and_clear_selection(|c| c.move_to_start_of_line());
+                if self.component.cursor_pos() < self.skill_start_pos {
+                    self.cancel_skill_completion();
+                }
+                Msg::Redraw
+            }
+            Event::Keyboard(KeyEvent {
+                code: Key::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            }) => {
+                self.component
+                    .move_and_clear_selection(|c| c.move_to_end_of_line());
+                Msg::Redraw
+            }
+            _ => Msg::Redraw,
+        }
+    }
+
+    /// Update skill completion state after edit
+    fn update_skill_completion_after_edit(&mut self) {
+        let cursor_pos = self.component.cursor_pos();
+        if cursor_pos < self.skill_start_pos {
+            self.cancel_skill_completion();
+        } else {
+            self.skill_query.clear();
+            if cursor_pos > self.skill_start_pos {
+                self.skill_query =
+                    self.component.content()[self.skill_start_pos..cursor_pos].to_string();
+            }
+            self.refresh_skill_list();
         }
     }
 

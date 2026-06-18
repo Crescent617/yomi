@@ -110,6 +110,56 @@ pub async fn shutdown_session(
     Ok(())
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pin_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    icon_emoji: Option<String>,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .pin_session(&sid, icon_emoji)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn unpin_session(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord.unpin_session(&sid).await.map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_pinned_session_emoji(
+    state: State<'_, AppState>,
+    session_id: String,
+    icon_emoji: Option<String>,
+) -> Result<(), GuiError> {
+    let coord = state.coordinator.clone();
+    let sid = SessionId(session_id);
+    coord
+        .set_pinned_session_emoji(&sid, icon_emoji)
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_pinned_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<kernel::storage::pinned_session::PinnedSessionDetail>, GuiError> {
+    let coord = state.coordinator.clone();
+    let result = coord
+        .list_pinned_sessions()
+        .await
+        .map_err(GuiError::kernel)?;
+    Ok(result)
+}
+
 fn parse_level(s: &str) -> Result<Level, GuiError> {
     match s.to_lowercase().as_str() {
         "safe" => Ok(Level::Safe),

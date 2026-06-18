@@ -32,6 +32,11 @@ pub struct InputComponent {
     pub(crate) command_completion: CompletionList<(String, String)>,
     pub(crate) command_query: String, // Current query string (text after /)
     pub(crate) command_start_pos: usize, // Position of '/' in the input
+    // Skill completion (/skill:)
+    pub(crate) skill_completion: CompletionList<(String, String)>,
+    pub(crate) skill_query: String, // Current query string (text after /skill:)
+    pub(crate) skill_start_pos: usize, // Position after '/skill:' in the input
+    pub(crate) available_skills: Vec<(String, String)>, // Cached skill names and descriptions
     // File completion (@-mention)
     pub(crate) file_completion: FileCompletion,
     // Paste support (images and text)
@@ -58,6 +63,10 @@ impl InputComponent {
             command_completion: CompletionList::new(),
             command_query: String::new(),
             command_start_pos: 0,
+            skill_completion: CompletionList::new(),
+            skill_query: String::new(),
+            skill_start_pos: 0,
+            available_skills: Vec::new(),
             file_completion: FileCompletion::new(),
             placeholder_counter: 0,
             image_paths: std::collections::HashMap::new(),
@@ -115,6 +124,37 @@ impl Component for InputComponent {
                 };
                 tuirealm::ratatui::text::Line::from(vec![
                     tuirealm::ratatui::text::Span::styled(cmd.as_str(), cmd_style),
+                    tuirealm::ratatui::text::Span::styled("  ", desc_style),
+                    tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
+                ])
+            },
+        );
+
+        // Render skill completion using generic helper
+        Self::render_completion_dropdown(
+            &mut self.skill_completion,
+            frame,
+            area,
+            6, // MAX_VISIBLE_ITEMS
+            0, // No footer
+            |(name, desc), i, selected_idx| {
+                let is_selected = i == selected_idx;
+                let name_style = if is_selected {
+                    tuirealm::ratatui::style::Style::default()
+                        .fg(colors::accent_system())
+                        .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                } else {
+                    tuirealm::ratatui::style::Style::default().fg(colors::text_primary())
+                };
+                let desc_style = if is_selected {
+                    tuirealm::ratatui::style::Style::default()
+                        .fg(colors::text_muted())
+                        .add_modifier(tuirealm::ratatui::style::Modifier::BOLD)
+                } else {
+                    tuirealm::ratatui::style::Style::default().fg(colors::text_muted())
+                };
+                tuirealm::ratatui::text::Line::from(vec![
+                    tuirealm::ratatui::text::Span::styled(name.as_str(), name_style),
                     tuirealm::ratatui::text::Span::styled("  ", desc_style),
                     tuirealm::ratatui::text::Span::styled(desc.as_str(), desc_style),
                 ])
@@ -224,6 +264,13 @@ impl Component for InputComponent {
             Attribute::Custom(attr::HAS_QUEUED_MESSAGE) => {
                 if let AttrValue::Flag(has_queued) = value {
                     self.has_queued_message = has_queued;
+                }
+            }
+            Attribute::Custom(attr::SKILLS) => {
+                if let AttrValue::String(data) = value {
+                    if let Ok(skills) = serde_json::from_str::<Vec<(String, String)>>(&data) {
+                        self.available_skills = skills;
+                    }
                 }
             }
             _ => self.component.attr(attr, value),
