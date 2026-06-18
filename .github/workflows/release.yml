@@ -21,8 +21,8 @@ jobs:
             os: macos-latest
 
           # ✅ Windows（关键：msvc）
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+          # - target: x86_64-pc-windows-msvc
+          #   os: windows-latest
 
     steps:
       - uses: actions/checkout@v4
