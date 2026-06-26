@@ -24,6 +24,8 @@ pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
+pub mod send_message;
+
 // Re-export from helper module
 pub use helper::{FileStateStore, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
 
@@ -40,6 +42,7 @@ pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
 pub use read::{ReadTool, READ_TOOL_NAME};
 pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
+pub use send_message::{SendMessageTool, SEND_MESSAGE_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};

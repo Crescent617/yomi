@@ -42,6 +42,9 @@ tauri-plugin-notification = { workspace = true }
 # Fix PATH for GUI apps (macOS / Linux / Windows)
 fix-path-env = { workspace = true }
 
+# rustls crypto provider (required before any TLS operations)
+rustls = { version = "0.23.37", features = ["ring"] }
+
 # Load ~/.env on startup
 dotenvy = { workspace = true }
 

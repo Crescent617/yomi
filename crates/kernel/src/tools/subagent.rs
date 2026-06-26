@@ -29,6 +29,8 @@ pub struct SubagentTool {
     /// Parent's `event_tx` for forwarding permission requests and progress
     /// Subagent's permission requests and progress will be sent here so TUI can show dialogs
     parent_event_tx: mpsc::Sender<Event>,
+    /// Tool blocklist inherited from parent agent
+    tool_blocklist: Vec<String>,
 }
 
 /// Parameters for executing a sub-agent.
@@ -54,6 +56,7 @@ impl SubagentTool {
         session_store: Option<Arc<dyn SessionStore>>,
         parent_session_id: String,
         parent_event_tx: mpsc::Sender<Event>,
+        tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
             parent_id,
@@ -62,6 +65,7 @@ impl SubagentTool {
             session_store,
             parent_session_id,
             parent_event_tx,
+            tool_blocklist,
         }
     }
 
@@ -140,6 +144,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             &self.shared,
             &self.parent_event_tx,
             session_id,
+            self.tool_blocklist.clone(),
         ))
     }
 }

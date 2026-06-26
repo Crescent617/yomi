@@ -39,6 +39,7 @@ pub enum RequestMethod {
     },
     RestoreSession {
         session_id: String,
+        tool_blocklist: Vec<String>,
     },
     ForkSession {
         parent_id: String,
@@ -100,7 +101,6 @@ pub enum RequestMethod {
     DeleteSession {
         session_id: String,
     },
-    ReloadAgentConfig,
 
     // ── Cron Job ─────────────────────────────────────────────────────────
     CreateCronJob {
@@ -142,6 +142,9 @@ pub enum RequestMethod {
     GetDailyUsage {
         days: i64,
     },
+
+    // ── Channel ────────────────────────────────────────────────────
+    ListChannels,
 }
 
 /// Response body — tagged union, no serde magic.

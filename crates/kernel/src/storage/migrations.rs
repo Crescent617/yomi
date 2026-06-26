@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -127,6 +127,20 @@ const MIGRATIONS: &[Migration] = &[
             r"CREATE INDEX idx_pinned_sessions_pinned_at ON pinned_sessions(pinned_at DESC);",
             r"ALTER TABLE sessions DROP COLUMN is_pinned;",
             r"ALTER TABLE sessions DROP COLUMN icon_emoji;",
+        ],
+    },
+    Migration {
+        version: 9,
+        name: "add_channel_session_mappings",
+        sqls: &[
+            r"CREATE TABLE channel_session_mappings (
+                channel_name TEXT NOT NULL,
+                external_chat_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (channel_name, external_chat_id)
+            );",
+            r"CREATE INDEX idx_channel_mapping_session ON channel_session_mappings(session_id);",
         ],
     },
 ];

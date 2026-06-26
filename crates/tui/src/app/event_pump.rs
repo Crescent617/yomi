@@ -132,7 +132,7 @@ impl EventPump {
                             "Session {} missing on daemon, attempting restore…",
                             session_id.0
                         );
-                        match coordinator.restore_session(session_id).await {
+                        match coordinator.restore_session(session_id, Vec::new()).await {
                             Ok(_) => {
                                 // Session restored — immediately retry subscribe.
                                 continue;

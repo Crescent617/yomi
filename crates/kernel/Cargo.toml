@@ -17,6 +17,10 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
 
+lark-websocket-protobuf = "0.1.1"
+
+prost = "0.13"
+
 tokio-util = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 smol_str = { workspace = true, features = ["serde"] }
@@ -46,6 +50,8 @@ dashmap = { workspace = true }
 
 tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 cron = { workspace = true }
+mime_guess = { workspace = true }
+teloxide-core = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-use crate::agent::{AgentConfig, AgentError, AgentInput, AgentShared, AgentState, CancelToken};
+use crate::agent::{AgentError, AgentInput, AgentState, CancelToken};
 use crate::permissions::Responder;
 use crate::tools::AskUserResponder;
 use crate::types::{AgentId, ContentBlock};
@@ -144,29 +144,6 @@ impl AgentHandle {
     pub async fn force_compact(&self) -> Result<(), AgentError> {
         self.input_tx
             .send(AgentInput::Compact)
-            .await
-            .map_err(|_| AgentError::ChannelClosed)
-    }
-
-    /// Dynamically reload the skill list for a running agent
-    pub async fn reload_skills(
-        &self,
-        skills: Vec<Arc<crate::skill::Skill>>,
-    ) -> Result<(), AgentError> {
-        self.input_tx
-            .send(AgentInput::ReloadSkills(skills))
-            .await
-            .map_err(|_| AgentError::ChannelClosed)
-    }
-
-    /// Dynamically reload the full agent configuration for a running agent
-    pub async fn reload_config(
-        &self,
-        config: AgentConfig,
-        shared: Arc<AgentShared>,
-    ) -> Result<(), AgentError> {
-        self.input_tx
-            .send(AgentInput::ReloadConfig(Box::new(config), shared))
             .await
             .map_err(|_| AgentError::ChannelClosed)
     }

@@ -40,12 +40,10 @@ impl Session {
     pub(crate) async fn init(
         id: SessionId,
         config: SessionConfig,
-        agent_shared: Arc<tokio::sync::RwLock<AgentShared>>,
+        agent_shared: Arc<AgentShared>,
     ) -> Result<(Self, mpsc::Receiver<Event>)> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
         let goal_store = agent_shared
-            .read()
-            .await
             .goal_store
             .clone()
             .expect("goal_store configured by coordinator");
@@ -66,8 +64,7 @@ impl Session {
         )
         .await?;
 
-        let base = agent_shared.read().await;
-        let session_store = base.session_store.clone();
+        let session_store = agent_shared.session_store.clone();
 
         let session = Self {
             id,
@@ -113,13 +110,12 @@ impl Session {
     async fn spawn_main_agent(
         id: &SessionId,
         config: &SessionConfig,
-        agent_shared: &Arc<tokio::sync::RwLock<AgentShared>>,
+        agent_shared: &Arc<AgentShared>,
         file_state_store: &Arc<crate::tools::helper::FileStateStore>,
         permission_state: Option<PermissionState>,
         workspace_skill_dir: Option<&PathBuf>,
     ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
-        let base = agent_shared.read().await;
-        let history = base
+        let history = agent_shared
             .message_store
             .as_ref()
             .ok_or_else(|| KernelError::from(SessionError::StoreNotConfigured))?
@@ -161,7 +157,9 @@ impl Session {
             .with_history(history)
             .with_max_iterations(config.agent.max_iterations)
             .with_subagent(config.agent.enable_subagent)
-            .with_file_state_store(Arc::clone(file_state_store));
+            .with_file_state_store(Arc::clone(file_state_store))
+            .with_tool_blocklist(config.agent.tool_blocklist.clone())
+            .with_allow_command_hooks(config.agent.allow_command_hooks);
 
         // Only set working_dir if resolved
         if let Some(cwd) = resolve_cwd(config) {
@@ -169,8 +167,7 @@ impl Session {
         }
 
         // Clone AgentShared so we can mutate skill_folders per-session
-        let mut base_clone = base.clone();
-        drop(base); // release read lock before we move base_clone
+        let mut base_clone: AgentShared = (**agent_shared).clone();
         if let Some(dir) = workspace_skill_dir {
             if !base_clone.skill_folders.contains(dir) {
                 base_clone.skill_folders.push(dir.clone());
@@ -190,7 +187,6 @@ impl Session {
     }
 
     /// Send a multi-modal message with content blocks
-    #[tracing::instrument(skip(self))]
     pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
         tracing::debug!("sending {} content blocks", blocks.len());
 
@@ -206,109 +202,8 @@ impl Session {
         }
     }
 
-    /// Reload skills for the main agent of this session.
-    /// If the session was started with a workspace skill directory, the workspace
-    /// skills are re-loaded and merged with the provided (global) skills — workspace
-    /// skills take precedence on name collision.
-    #[tracing::instrument(skip(self))]
-    pub async fn reload_skills(&self, skills: Vec<Arc<crate::skill::Skill>>) -> Result<()> {
-        let merged = if let Some(ref dir) = self.workspace_skill_dir {
-            match SkillLoader::new(vec![dir.clone()]).load_all() {
-                Ok(mut ws_skills) => {
-                    let ws_count = ws_skills.len();
-                    let mut merged = std::collections::HashMap::new();
-                    for skill in &skills {
-                        merged.insert(skill.name.clone(), skill.clone());
-                    }
-                    for skill in ws_skills.drain(..) {
-                        merged.insert(skill.name.clone(), skill);
-                    }
-                    let result: Vec<_> = merged.into_values().collect();
-                    tracing::info!(
-                        "reloaded with {} skill(s) ({} global + {} workspace, merged)",
-                        result.len(),
-                        skills.len(),
-                        ws_count
-                    );
-                    result
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to reload workspace skills from {}: {}, using global skills only",
-                        dir.display(),
-                        e
-                    );
-                    skills
-                }
-            }
-        } else {
-            skills
-        };
-
-        match &self.main_agent {
-            Some(handle) => {
-                handle.reload_skills(merged).await?;
-                Ok(())
-            }
-            None => Err(SessionError::NotInitialized.into()),
-        }
-    }
-
     pub fn workspace_skill_dir(&self) -> Option<&PathBuf> {
         self.workspace_skill_dir.as_ref()
-    }
-
-    /// Reload full agent configuration for the main agent of this session.
-    /// The caller (coordinator) provides the new `shared`, which already includes
-    /// the latest provider, `model_config`, and (if applicable) workspace skill folders.
-    #[tracing::instrument(skip(self, shared))]
-    pub async fn reload_config(
-        &self,
-        mut config: AgentConfig,
-        shared: Arc<AgentShared>,
-    ) -> Result<()> {
-        let merged = if let Some(ref dir) = self.workspace_skill_dir {
-            match SkillLoader::new(vec![dir.clone()]).load_all() {
-                Ok(mut ws_skills) => {
-                    let ws_count = ws_skills.len();
-                    let mut merged = std::collections::HashMap::new();
-                    for skill in &config.skills {
-                        merged.insert(skill.name.clone(), skill.clone());
-                    }
-                    for skill in ws_skills.drain(..) {
-                        merged.insert(skill.name.clone(), skill);
-                    }
-                    let result: Vec<_> = merged.into_values().collect();
-                    tracing::info!(
-                        "reloaded with {} skill(s) ({} global + {} workspace, merged)",
-                        result.len(),
-                        config.skills.len(),
-                        ws_count
-                    );
-                    result
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to reload workspace skills from {}: {}, using global skills only",
-                        dir.display(),
-                        e
-                    );
-                    config.skills
-                }
-            }
-        } else {
-            config.skills
-        };
-
-        config.skills = merged;
-
-        match &self.main_agent {
-            Some(handle) => {
-                handle.reload_config(config, shared).await?;
-                Ok(())
-            }
-            None => Err(SessionError::NotInitialized.into()),
-        }
     }
 
     /// Update session title from user message content (trim, collapse whitespace, first 20 chars).
@@ -617,4 +512,5 @@ fn resolve_cwd(config: &SessionConfig) -> Option<std::path::PathBuf> {
         .working_dir
         .clone()
         .or_else(|| config.project.as_ref().map(|p| p.dir.clone()))
+        .or_else(|| Some(config.data_dir.join("workspace")))
 }

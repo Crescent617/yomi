@@ -78,6 +78,8 @@ nucleo = "0.5"
 tokio-tungstenite = "0.29"
 cron = "0.16"
 duckduckgo = { version = "0.3", default-features = false }
+mime_guess = "2"
+teloxide-core = "0.10"
 notify-rust = "4.11"
 # Pin time to 0.3.47 to avoid E0119 conflict with mac-notification-sys blanket `From` impl.
 # time 0.3.48 added `From<HourBase>` which conflicts with `impl<I: ToString> From<I> for Sound`.

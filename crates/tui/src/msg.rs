@@ -75,7 +75,6 @@ pub enum Msg {
     CommandYolo,                     // /yolo - toggle yolo mode
     CommandBrowse,                   // /browse - toggle browse mode
     CommandCompact,                  // /compact - force message compaction
-    CommandReload,                   // /reload - reload skills and hooks in daemon
     CommandSteer(Vec<ContentBlock>), // /steer <content> - inject steer message before next streaming
     CommandHelp,                     // /help - show help dialog
     CommandSessions,                 // /sessions - switch session

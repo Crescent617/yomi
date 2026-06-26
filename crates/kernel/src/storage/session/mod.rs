@@ -77,7 +77,7 @@ impl Default for ListArgs {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Create a new session with the given ID, optional `project_id`, optional working directory,
-    /// and optional `auto_approve_level`
+    /// optional `auto_approve_level`, and optional `tool_blocklist` (JSON array)
     async fn create(
         &self,
         id: &SessionId,

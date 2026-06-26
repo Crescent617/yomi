@@ -27,11 +27,7 @@ pub fn expand_tilde(path: impl AsRef<str>) -> PathBuf {
 /// Generate default skill folders based on `data_dir`
 /// (project-level skills are resolved per-session by the coordinator).
 pub fn default_skill_folders(data_dir: &std::path::Path) -> Vec<PathBuf> {
-    vec![
-        data_dir.join("skills"),
-        expand_tilde("~/.agents/skills"),
-        expand_tilde("~/.claude/skills"),
-    ]
+    vec![data_dir.join("skills"), expand_tilde("~/.agents/skills")]
 }
 
 #[cfg(test)]
@@ -75,10 +71,8 @@ mod tests {
         let data = PathBuf::from("/data");
         let folders = default_skill_folders(&data);
 
-        assert_eq!(folders.len(), 3);
+        assert_eq!(folders.len(), 2);
         assert_eq!(folders[0], PathBuf::from("/data/skills"));
-        // [1] and [2] depend on HOME, just check they end correctly
         assert!(folders[1].to_string_lossy().ends_with("/.agents/skills"));
-        assert!(folders[2].to_string_lossy().ends_with("/.claude/skills"));
     }
 }

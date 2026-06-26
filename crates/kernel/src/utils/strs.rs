@@ -86,10 +86,12 @@ pub fn truncate_keep_edges(s: &str, max_bytes: usize, sep: &str) -> String {
     }
 
     // Find tail start boundary (valid UTF-8)
+    // Scan from the end backwards, expanding the tail window as long as it fits
     let mut tail_start = s.len();
-    for (i, _) in s.char_indices() {
-        if i >= s.len() - tail_budget {
+    for (i, _) in s.char_indices().rev() {
+        if s.len() - i <= tail_budget {
             tail_start = i;
+        } else {
             break;
         }
     }
@@ -242,6 +244,33 @@ mod tests {
             );
             assert!(std::str::from_utf8(result.as_bytes()).is_ok());
         }
+    }
+
+    #[test]
+    fn test_truncate_keep_edges_tail_with_wide_char() {
+        // Bug scenario: wide char at end with small tail_budget.
+        // "abcdefg🎉" = 11 bytes; max=10, sep="..." (3) -> content=7, head=3, tail=4
+        // Fixed scan should keep the 4-byte emoji tail.
+        let result = truncate_keep_edges("abcdefg🎉", 10, "...");
+        assert_eq!(result, "abc...🎉");
+        assert!(result.len() <= 10);
+
+        // Same string but max=8: tail_budget=3, emoji (4 bytes) doesn't fit -> tail dropped
+        let result = truncate_keep_edges("abcdefg🎉", 8, "...");
+        assert_eq!(result, "ab...");
+        assert!(result.len() <= 8);
+
+        // Multiple trailing wide chars: "Hello🎉🎊" = 13 bytes
+        let result = truncate_keep_edges("Hello🎉🎊", 10, "...");
+        // content=7, head=3, tail=4. tail should fit exactly one emoji
+        assert_eq!(result, "Hel...🎊");
+        assert!(result.len() <= 10);
+
+        // CJK trailing: "abcdefg你好" = 13 bytes. max=10, sep="..." (3)
+        // content=7, head=3, tail=4. tail should fit one CJK char (3 bytes)
+        let result = truncate_keep_edges("abcdefg你好", 10, "...");
+        assert_eq!(result, "abc...好");
+        assert!(result.len() <= 10);
     }
 
     #[test]

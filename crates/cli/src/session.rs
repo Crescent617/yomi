@@ -33,7 +33,7 @@ async fn send_with_retry(
                     "Session {} missing on daemon, attempting restore...",
                     session_id.0
                 );
-                match coordinator.restore_session(session_id).await {
+                match coordinator.restore_session(session_id, Vec::new()).await {
                     Ok(_) => {
                         tracing::info!("Session restored successfully");
                         restored = true;
@@ -110,6 +110,8 @@ pub async fn resolve_session(
             project_id: None,
             working_dir: Some(working_dir.to_path_buf()),
             auto_approve_level,
+
+            tool_blocklist: vec![],
         };
         return Ok(coordinator.create_session(input).await?);
     }
@@ -120,7 +122,7 @@ pub async fn resolve_session(
             let session_id = SessionId(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator.restore_session(&session_id).await {
+            match coordinator.restore_session(&session_id, Vec::new()).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
@@ -129,6 +131,8 @@ pub async fn resolve_session(
                         project_id: None,
                         working_dir: Some(working_dir.to_path_buf()),
                         auto_approve_level,
+
+                        tool_blocklist: vec![],
                     };
                     Ok(coordinator.create_session(input).await?)
                 }
@@ -140,7 +144,7 @@ pub async fn resolve_session(
                 let session_id = SessionId(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator.restore_session(&session_id).await {
+                match coordinator.restore_session(&session_id, Vec::new()).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
@@ -149,6 +153,7 @@ pub async fn resolve_session(
                             project_id: None,
                             working_dir: Some(working_dir.to_path_buf()),
                             auto_approve_level,
+                            tool_blocklist: vec![],
                         };
                         Ok(coordinator.create_session(input).await?)
                     }
@@ -160,6 +165,8 @@ pub async fn resolve_session(
                     project_id: None,
                     working_dir: Some(working_dir.to_path_buf()),
                     auto_approve_level,
+
+                    tool_blocklist: vec![],
                 };
                 Ok(coordinator.create_session(input).await?)
             }
@@ -170,6 +177,8 @@ pub async fn resolve_session(
                 project_id: None,
                 working_dir: Some(working_dir.to_path_buf()),
                 auto_approve_level,
+
+                tool_blocklist: vec![],
             };
             Ok(coordinator.create_session(input).await?)
         }
@@ -188,6 +197,8 @@ pub async fn resolve_session(
                     project_id: None,
                     working_dir: Some(working_dir.to_path_buf()),
                     auto_approve_level,
+
+                    tool_blocklist: vec![],
                 };
                 Ok(coordinator.create_session(input).await?)
             }

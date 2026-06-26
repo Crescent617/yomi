@@ -40,6 +40,8 @@ pub struct AgentSpawnArgs {
     pub cancel_token: Option<super::CancelToken>,
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
+    pub tool_blocklist: Vec<String>,
+    pub allow_command_hooks: bool,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -55,6 +57,8 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("working_dir", &self.working_dir)
             .field("cancel_token", &self.cancel_token.is_some())
             .field("file_state_store", &self.file_state_store.is_some())
+            .field("tool_blocklist", &self.tool_blocklist)
+            .field("allow_command_hooks", &self.allow_command_hooks)
             .finish()
     }
 }
@@ -73,6 +77,8 @@ impl AgentSpawnArgs {
             working_dir: std::path::PathBuf::new(),
             cancel_token: None,
             file_state_store: None,
+            tool_blocklist: Vec::new(),
+            allow_command_hooks: false,
         }
     }
 
@@ -138,6 +144,20 @@ impl AgentSpawnArgs {
         store: Arc<crate::tools::helper::FileStateStore>,
     ) -> Self {
         self.file_state_store = Some(store);
+        self
+    }
+
+    /// Set tool blocklist (regex patterns)
+    #[must_use]
+    pub fn with_tool_blocklist(mut self, blocklist: Vec<String>) -> Self {
+        self.tool_blocklist = blocklist;
+        self
+    }
+
+    /// Set whether command hooks are allowed to execute
+    #[must_use]
+    pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
+        self.allow_command_hooks = allow;
         self
     }
 }
@@ -299,12 +319,10 @@ pub struct AgentShared {
     pub data_dir: std::path::PathBuf,
     /// Optional user message interceptor for injecting reminders/context
     pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
-    /// Hook registry for lifecycle event handlers (wrapped for hot-reload)
-    pub hook_registry: Option<Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>>,
-    /// Tool blocklist (regex patterns) inherited from config
-    pub tool_blocklist: Vec<String>,
-    /// Allow command hooks to execute (default false for security)
-    pub allow_command_hooks: bool,
+    /// Hook registry for lifecycle event handlers
+    pub hook_registry: Option<Arc<crate::hooks::HookRegistry>>,
+    /// Channel manager for external platform integrations (Telegram, Feishu, etc.)
+    pub channel_hub: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Optional goal store for autonomous goal-mode execution
     pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
 }
@@ -374,9 +392,8 @@ impl AgentShared {
             data_dir,
             message_interceptor: None,
             hook_registry: None,
-            tool_blocklist: Vec::new(),
-            allow_command_hooks: false,
             goal_store: None,
+            channel_hub: None,
         }
     }
 
@@ -393,6 +410,7 @@ impl AgentShared {
             file_state_store,
             checkpoint_store,
             goal_store: self.goal_store.clone(),
+            channel_hub: self.channel_hub.clone(),
             ..self.clone()
         }
     }
@@ -414,27 +432,20 @@ impl AgentShared {
         self
     }
 
-    /// Set the hook registry (wrapped for hot-reload)
+    /// Set the hook registry
     #[must_use]
-    pub fn with_hook_registry(
-        mut self,
-        registry: Arc<tokio::sync::RwLock<crate::hooks::HookRegistry>>,
-    ) -> Self {
+    pub fn with_hook_registry(mut self, registry: Arc<crate::hooks::HookRegistry>) -> Self {
         self.hook_registry = Some(registry);
         self
     }
 
-    /// Set the tool blocklist
+    /// Set the channel manager for external platform integrations.
     #[must_use]
-    pub fn with_tool_blocklist(mut self, blocklist: Vec<String>) -> Self {
-        self.tool_blocklist = blocklist;
-        self
-    }
-
-    /// Set whether command hooks are allowed to execute
-    #[must_use]
-    pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
-        self.allow_command_hooks = allow;
+    pub fn with_channel_manager(
+        mut self,
+        manager: Option<Arc<crate::channels::hub::ChannelHub>>,
+    ) -> Self {
+        self.channel_hub = manager;
         self
     }
 

@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Available slash commands with descriptions
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Create new session"),
+    ("/continue", "Continue agent when idle"),
     (
         "/goal",
         "<description> Start goal mode with optional description",
@@ -27,7 +28,6 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/rewind", "Restore conversation/file checkpoint"),
     ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),
-    ("/reload", "Reload skills and hooks from disk"),
     (
         "/steer",
         "<content> Inject message before next streaming turn",

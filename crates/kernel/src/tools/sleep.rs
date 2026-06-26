@@ -32,7 +32,7 @@ impl Tool for SleepTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Pause execution for a specified number of seconds. Use when an external process needs time to settle or a rate-limit requires waiting. Do NOT use to wait for the result of a previous tool — those notify you automatically when finished."
+        "Sleep for a specified number of seconds. Use when an external process needs time to settle or requires waiting."
     }
 
     fn schema(&self) -> Value {

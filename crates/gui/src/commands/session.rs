@@ -47,6 +47,7 @@ pub async fn create_session(
         project_id: project_id.map(kernel::types::ProjectId),
         working_dir: working_dir.map(std::path::PathBuf::from),
         auto_approve_level: level,
+        tool_blocklist: vec![],
     };
     let session_id = coord
         .create_session(input)
@@ -63,7 +64,7 @@ pub async fn restore_session(
     let coord = state.coordinator.clone();
     let sid = SessionId(session_id);
     coord
-        .restore_session(&sid)
+        .restore_session(&sid, Vec::new())
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

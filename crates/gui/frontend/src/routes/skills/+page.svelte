@@ -28,13 +28,7 @@
 
   onMount(loadSkills);
 
-  async function reload() {
-    try {
-      await api.reloadConfig();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      return;
-    }
+  async function refresh() {
     await loadSkills();
   }
 </script>
@@ -46,11 +40,11 @@
       Skills
     </h1>
     <button
-      onclick={reload}
+      onclick={refresh}
       class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border hover:bg-secondary transition-colors text-sm"
     >
       <RefreshCw size={14} />
-      Reload
+      Refresh
     </button>
   </div>
 

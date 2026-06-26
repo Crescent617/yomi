@@ -12,16 +12,37 @@ const GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Check whether a process with the given PID exists.
 #[cfg(unix)]
-fn process_exists(pid: u32) -> bool {
+pub fn process_exists(pid: u32) -> bool {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
 }
 
 #[cfg(not(unix))]
-fn process_exists(_pid: u32) -> bool {
+pub fn process_exists(_pid: u32) -> bool {
     // We cannot reliably detect process liveness on Windows without
     // adding heavy dependencies (OpenProcess / GetExitCodeProcess).
     // Callers should use `try_connect()` as the ground-truth signal.
     false
+}
+
+/// Clean up the PID file if it is stale (non-existent process).
+/// Returns `true` if the file was removed, `false` if it is still valid or missing.
+pub async fn cleanup_stale_pid_file() -> bool {
+    let pid_file = pid_file_path();
+    if !pid_file.exists() {
+        return false;
+    }
+    let should_remove = match tokio::fs::read_to_string(&pid_file).await {
+        Ok(s) => match s.trim().parse::<u32>() {
+            Ok(pid) => !process_exists(pid),
+            Err(_) => true,
+        },
+        Err(_) => true,
+    };
+    if should_remove {
+        let _ = tokio::fs::remove_file(&pid_file).await;
+        tracing::info!("Removed stale PID file");
+    }
+    should_remove
 }
 
 /// Try connecting to the daemon.
@@ -30,20 +51,7 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     match kernel::transport::connect(&addr).await {
         Ok(stream) => Some(stream),
         Err(_) => {
-            let pid_file = pid_file_path();
-            if pid_file.exists() {
-                if let Ok(s) = tokio::fs::read_to_string(&pid_file).await {
-                    match s.trim().parse::<u32>() {
-                        Ok(pid) if !process_exists(pid) => {
-                            let _ = tokio::fs::remove_file(&pid_file).await;
-                        }
-                        Ok(_) => {}
-                        Err(_) => {
-                            let _ = tokio::fs::remove_file(&pid_file).await;
-                        }
-                    }
-                }
-            }
+            let _ = cleanup_stale_pid_file().await;
             None
         }
     }
@@ -100,11 +108,7 @@ pub async fn spawn_daemon() -> Result<()> {
 
     let mut child = cmd.spawn().context("Failed to spawn daemon process")?;
     let pid = child.id();
-    let pid_file = pid_file_path();
-    if let Some(parent) = pid_file.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(pid_file, pid.to_string()).await?;
+    tracing::info!("Spawned daemon process (PID {pid})");
 
     // Poll until the daemon socket is actually accepting connections.
     // Daemon initialisation (storage, provider, skills) can take a few
@@ -118,8 +122,7 @@ pub async fn spawn_daemon() -> Result<()> {
         sleep(SPAWN_READY_INTERVAL).await;
     }
 
-    // Daemon failed to become ready — clean up the orphan process and PID file
-    // so external tools don't think it's still alive.
+    // Daemon failed to become ready — clean up the orphan process.
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
         tokio::task::spawn_blocking(move || {
@@ -128,7 +131,6 @@ pub async fn spawn_daemon() -> Result<()> {
         }),
     )
     .await;
-    let _ = tokio::fs::remove_file(pid_file_path()).await;
     tracing::warn!(
         "Daemon spawned (PID {pid}) but did not become ready within {SPAWN_READY_TIMEOUT:?}"
     );
@@ -140,26 +142,27 @@ pub async fn spawn_daemon() -> Result<()> {
 /// Force-stop the daemon and wait for the process to actually exit.
 pub async fn stop_daemon() -> Result<()> {
     let pid_file = pid_file_path();
-    let mut pid = None;
-    if let Ok(pid_str) = tokio::fs::read_to_string(&pid_file).await {
-        if let Ok(p) = pid_str.trim().parse::<u32>() {
-            pid = Some(p);
-            tracing::info!("Sending kill signal to daemon (PID {p})...");
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("kill")
-                    .args(["-9", &p.to_string()])
-                    .output();
-            }
-            #[cfg(windows)]
-            {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &p.to_string(), "/F"])
-                    .output();
-            }
-        }
+    let pid = match tokio::fs::read_to_string(&pid_file).await {
+        Ok(s) => s.trim().parse::<u32>().ok(),
+        Err(_) => None,
+    };
+
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        tracing::info!("Sending SIGKILL to daemon (PID {pid})...");
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
     }
-    let _ = tokio::fs::remove_file(&pid_file).await;
+
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        tracing::info!("Sending kill signal to daemon (PID {pid})...");
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+    }
 
     // Wait for the process to actually exit so a subsequent spawn
     // doesn't race with the old process holding the socket.
@@ -169,6 +172,9 @@ pub async fn stop_daemon() -> Result<()> {
             sleep(Duration::from_millis(50)).await;
         }
     }
+
+    // Only remove PID file after confirming the process is gone.
+    let _ = tokio::fs::remove_file(&pid_file).await;
 
     tracing::info!("Daemon force-stopped");
     Ok(())
@@ -205,17 +211,18 @@ pub async fn graceful_shutdown() -> Result<()> {
             .output();
     }
 
-    let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, async {
-        while pid_file.exists() {
+    if let Some(pid) = pid {
+        let start = tokio::time::Instant::now();
+        while process_exists(pid) && start.elapsed() < GRACEFUL_SHUTDOWN_TIMEOUT {
             sleep(GRACEFUL_SHUTDOWN_POLL_INTERVAL).await;
         }
-    })
-    .await;
+    }
 
-    if pid_file.exists() {
+    if pid.is_some_and(process_exists) {
         tracing::warn!("Daemon did not exit gracefully, falling back to kill");
         stop_daemon().await?;
     } else {
+        let _ = tokio::fs::remove_file(&pid_file).await;
         tracing::info!("Daemon shut down gracefully");
     }
 
@@ -247,21 +254,9 @@ pub async fn daemon_status() -> Result<String> {
         return Ok("Daemon is running".to_string());
     }
 
-    let stale = if pid_file.exists() {
-        match tokio::fs::read_to_string(&pid_file).await {
-            Ok(s) => s
-                .trim()
-                .parse::<u32>()
-                .ok()
-                .is_none_or(|pid| !process_exists(pid)),
-            Err(_) => true,
-        }
-    } else {
-        false
-    };
+    let stale = cleanup_stale_pid_file().await;
 
     if stale {
-        let _ = tokio::fs::remove_file(&pid_file).await;
         tracing::info!("Daemon is not running, cleaned stale PID file");
         Ok("Daemon is not running (stale PID cleaned)".to_string())
     } else if pid_file.exists() {

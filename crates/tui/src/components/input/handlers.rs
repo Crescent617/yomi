@@ -96,7 +96,6 @@ impl InputComponent {
             "/browse" => Some(Msg::CommandBrowse),
             "/sessions" => Some(Msg::CommandSessions),
             "/compact" => Some(Msg::CommandCompact),
-            "/reload" => Some(Msg::CommandReload),
             "/rewind" => Some(Msg::CommandRewind),
             "/undo" => Some(Msg::CommandUndo),
             "/help" => Some(Msg::CommandHelp),

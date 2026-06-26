@@ -143,7 +143,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
-    let _log_guard = init_logging(&config)?;
+    let _log_guard = init_logging(&config, false)?;
 
     let coordinator: Arc<dyn CoordinatorApi> = if args.daemon {
         daemon::spawn_daemon().await?;
@@ -242,7 +242,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 }
 
 async fn create_local_coordinator(config: &Config) -> Result<Arc<kernel::Coordinator>> {
-    let coordinator = kernel::build_coordinator(config, false)
+    let coordinator = kernel::build_coordinator(config, false, false)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build coordinator: {e}"))?;
     Ok(coordinator)
@@ -265,6 +265,7 @@ fn print_startup_info(config: &Config) {
 
 pub(crate) fn init_logging(
     config: &Config,
+    stdio: bool,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let log_dir = config.log_dir();
 
@@ -284,16 +285,29 @@ pub(crate) fn init_logging(
         .or_else(|_| EnvFilter::try_new("info"))
         .context("Failed to create env filter")?;
 
-    // Use try_init to avoid panic if already initialized (e.g., in tests)
-    if tracing_subscriber::registry()
-        .with(env_filter)
-        .with(
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true);
+
+    let stdio_layer = if stdio {
+        Some(
             tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false)
+                .with_writer(std::io::stdout)
+                .with_ansi(true)
                 .with_target(true)
                 .with_thread_ids(true),
         )
+    } else {
+        None
+    };
+
+    // Use try_init to avoid panic if already initialized (e.g., in tests)
+    if tracing_subscriber::registry()
+        .with(env_filter)
+        .with(file_layer)
+        .with(stdio_layer)
         .try_init()
         .is_ok()
     {

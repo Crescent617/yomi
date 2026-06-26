@@ -35,6 +35,7 @@ pkgs.mkShell {
     mesa
     alsa-lib
     systemd # for libudev
+    protobuf
   ];
 
   shellHook = ''

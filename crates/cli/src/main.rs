@@ -184,6 +184,11 @@ struct UsageArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider before any TLS operations.
+    // This is required by rustls 0.23+ when multiple crypto providers
+    // are available in the dependency tree.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args = Args::parse();
 
     match args.command {

@@ -58,7 +58,11 @@ pub trait CoordinatorApi: Send + Sync {
 
     // ── Session ──────────────────────────────────────────────────────────
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
-    async fn restore_session(&self, id: &SessionId) -> Result<SessionId>;
+    async fn restore_session(
+        &self,
+        id: &SessionId,
+        tool_blocklist: Vec<String>,
+    ) -> Result<SessionId>;
     async fn fork_session(
         &self,
         parent: &SessionId,
@@ -126,7 +130,6 @@ pub trait CoordinatorApi: Send + Sync {
     ) -> Result<()>;
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
-    async fn reload_agent_config(&self) -> Result<()>;
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
     async fn send_continue(&self, session_id: &SessionId) -> Result<()>;
     async fn list_session_skills(
@@ -201,8 +204,12 @@ impl CoordinatorApi for Coordinator {
         Self::create_session(self, input).await
     }
 
-    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
-        Self::restore_session(self, id).await
+    async fn restore_session(
+        &self,
+        id: &SessionId,
+        tool_blocklist: Vec<String>,
+    ) -> Result<SessionId> {
+        Self::restore_session(self, id, tool_blocklist).await
     }
 
     async fn fork_session(
@@ -357,12 +364,6 @@ impl CoordinatorApi for Coordinator {
 
     async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
         Self::shutdown_session(self, session_id).await
-    }
-
-    async fn reload_agent_config(&self) -> Result<()> {
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let config_file = crate::config::Config::discover_file();
-        self.reload(config_file.as_ref(), &working_dir).await
     }
 
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
@@ -920,10 +921,15 @@ impl CoordinatorApi for RemoteCoordinator {
         Ok(SessionId(sid))
     }
 
-    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
+    async fn restore_session(
+        &self,
+        id: &SessionId,
+        tool_blocklist: Vec<String>,
+    ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::RestoreSession {
                 session_id: id.0.clone(),
+                tool_blocklist,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -1221,11 +1227,6 @@ impl CoordinatorApi for RemoteCoordinator {
             session_id: session_id.0.clone(),
         })
         .await?;
-        Ok(())
-    }
-
-    async fn reload_agent_config(&self) -> Result<()> {
-        self.call(RequestMethod::ReloadAgentConfig).await?;
         Ok(())
     }
 

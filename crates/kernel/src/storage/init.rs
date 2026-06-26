@@ -39,6 +39,8 @@ pub struct StorageSet {
     pinned_session_store: Arc<dyn super::PinnedSessionStore>,
     /// Cron job store
     cron_store: Arc<dyn crate::cron::CronStore>,
+    /// Channel session mapping store
+    channel_store: Arc<dyn crate::channels::ChannelStore>,
 }
 
 impl std::fmt::Debug for StorageSet {
@@ -55,6 +57,7 @@ impl std::fmt::Debug for StorageSet {
             .field("project_store", &"<dyn ProjectStore>")
             .field("pinned_session_store", &"<dyn PinnedSessionStore>")
             .field("cron_store", &"<dyn CronStore>")
+            .field("channel_store", &"<dyn ChannelStore>")
             .finish()
     }
 }
@@ -144,6 +147,9 @@ impl StorageSet {
             Arc::new(super::SqlitePinnedSessionStore::new(pool.clone()));
         let cron_store: Arc<dyn crate::cron::CronStore> =
             Arc::new(SqliteCronStore::new(pool.clone()));
+        let channel_store: Arc<dyn crate::channels::ChannelStore> = Arc::new(
+            crate::channels::store::SqliteChannelStore::new(pool.clone()),
+        );
 
         // Ensure default workspace project exists
         let default_project_id = crate::types::ProjectId::default_workspace();
@@ -179,6 +185,7 @@ impl StorageSet {
             project_store,
             pinned_session_store,
             cron_store,
+            channel_store,
         })
     }
 
@@ -253,7 +260,10 @@ impl StorageSet {
         self.cron_store.clone()
     }
 
-    /// Get a file state store for a specific session
+    /// Get the channel store
+    pub fn channel_store(&self) -> Arc<dyn crate::channels::ChannelStore> {
+        self.channel_store.clone()
+    }
     ///
     /// File state stores are per-session, so this returns a new instance each time
     pub fn file_state_store(&self, session_id: &str) -> super::JsonlFileStateStore {

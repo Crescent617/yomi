@@ -268,6 +268,15 @@ pub struct ImageUrl {
     pub detail: Option<String>, // auto, low, high
 }
 
+impl From<String> for ImageUrl {
+    fn from(url: String) -> Self {
+        Self {
+            url,
+            detail: Some("auto".to_string()),
+        }
+    }
+}
+
 /// Audio data structure
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioData {

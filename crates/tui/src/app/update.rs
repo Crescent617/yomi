@@ -404,23 +404,6 @@ impl Model {
                     self.show_notification(&Notification::info("Compacting messages...", 3000));
                     None
                 }
-                Msg::CommandReload => {
-                    let coord = Arc::clone(&self.coordinator);
-                    let tx = self.cmd_tx.clone();
-                    tokio::spawn(async move {
-                        let msg = match coord.reload_agent_config().await {
-                            Ok(()) => Msg::Notification(Notification::info("Reloaded", 3000)),
-                            Err(e) => Msg::Notification(Notification::error(
-                                format!("Reload failed: {e}"),
-                                5000,
-                            )),
-                        };
-                        if let Err(e) = tx.send(msg) {
-                            tracing::debug!("cmd channel closed, dropping async result: {e}");
-                        }
-                    });
-                    None
-                }
                 Msg::CommandSteer(blocks) => {
                     let _ = self
                         .ctrl_tx
