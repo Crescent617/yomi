@@ -1,6 +1,7 @@
 use crate::tools::helper::get_mtimes_concurrent;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -155,7 +156,14 @@ impl Tool for GlobTool {
 
         // Determine search directory
         let search_dir = match path {
-            Some(p) => ctx.working_dir.join(p),
+            Some(p) => {
+                let p = expand_tilde(p);
+                if p.is_absolute() {
+                    p
+                } else {
+                    ctx.working_dir.join(p)
+                }
+            }
             None => ctx.working_dir.clone(),
         };
 
