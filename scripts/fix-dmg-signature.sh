@@ -4,14 +4,17 @@ set -euo pipefail
 # Fix Tauri-generated DMG ad-hoc signature issues.
 # Must be run after `npx tauri build`.
 
-VERSION=$(grep -oE '"version":\s*"[^"]+"' crates/gui/tauri.conf.json | head -1 | cut -d'"' -f4)
+# Find repo root from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION=$(grep -oE '"version":\s*"[^"]+"' "${ROOT_DIR}/crates/gui/tauri.conf.json" | head -1 | cut -d'"' -f4)
 if [[ -z "$VERSION" ]]; then
     echo "Failed to read version from tauri.conf.json" >&2
     exit 1
 fi
 
-DMG="target/release/bundle/dmg/Yomi_${VERSION}_aarch64.dmg"
-
+DMG="${ROOT_DIR}/target/release/bundle/dmg/Yomi_${VERSION}_aarch64.dmg"
 if [[ ! -f "$DMG" ]]; then
     echo "DMG not found: $DMG" >&2
     exit 1
