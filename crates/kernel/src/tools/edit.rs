@@ -3,9 +3,9 @@ use crate::tools::helper::{
 };
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::Path;
 use std::sync::Arc;
 
 pub const EDIT_TOOL_NAME: &str = "edit";
@@ -200,10 +200,11 @@ impl Tool for EditTool {
             .ok_or_else(|| KernelError::tool("Missing 'new_str' argument"))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = if Path::new(path_str).is_absolute() {
-            std::path::PathBuf::from(path_str)
+        let path = expand_tilde(path_str);
+        let path = if path.is_absolute() {
+            path
         } else {
-            ctx.working_dir.join(path_str)
+            ctx.working_dir.join(path)
         };
 
         tracing::debug!("Edit: replace in {}", path.display());

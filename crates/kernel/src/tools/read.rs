@@ -6,9 +6,10 @@ use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
 use crate::utils::line_numbers::add_line_numbers;
+use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub const READ_TOOL_NAME: &str = "read";
@@ -162,10 +163,11 @@ impl Tool for ReadTool {
         let limit = args["limit"].as_u64().map(|n| n as usize);
         let line_numbers = args["line_numbers"].as_bool().unwrap_or(false);
 
-        let path = if Path::new(path_str).is_absolute() {
-            PathBuf::from(path_str)
+        let path = expand_tilde(path_str);
+        let path = if path.is_absolute() {
+            path
         } else {
-            ctx.working_dir.join(path_str)
+            ctx.working_dir.join(path)
         };
 
         tracing::debug!("Read: {}", path.display());

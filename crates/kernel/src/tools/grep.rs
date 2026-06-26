@@ -1,6 +1,7 @@
 use crate::tools::helper::{get_mtime, get_mtimes_concurrent, FileStateStore};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::path::expand_tilde;
 use crate::utils::rg_helper::parse_json_output;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -448,7 +449,14 @@ impl Tool for GrepTool {
 
         // Determine search path
         let search_path = match path {
-            Some(p) => ctx.working_dir.join(p),
+            Some(p) => {
+                let p = expand_tilde(p);
+                if p.is_absolute() {
+                    p
+                } else {
+                    ctx.working_dir.join(p)
+                }
+            }
             None => ctx.working_dir.clone(),
         };
 

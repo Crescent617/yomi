@@ -1,9 +1,9 @@
 use crate::tools::helper::{g_lock_timeout, get_mtime, FileStateStore, DEFAULT_LOCK_TIMEOUT};
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
@@ -74,10 +74,11 @@ impl Tool for WriteTool {
 
         // Note: file_path is expected to be absolute from the agent
         // But we also support relative paths for convenience
-        let path = if Path::new(file_path_str).is_absolute() {
-            PathBuf::from(file_path_str)
+        let path = expand_tilde(file_path_str);
+        let path = if path.is_absolute() {
+            path
         } else {
-            ctx.working_dir.join(file_path_str)
+            ctx.working_dir.join(path)
         };
 
         tracing::debug!("Write: {} (mode: {})", path.display(), mode);
