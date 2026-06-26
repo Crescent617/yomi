@@ -137,9 +137,23 @@ jobs:
         with:
           files: artifacts/**
 
+  # ==================== 检查 Secrets（前置）====================
+  check-secrets:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check HOMEBREW_TAP_TOKEN
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "❌ ERROR: HOMEBREW_TAP_TOKEN is not set!" >&2
+            echo "  Please add it to Repository secrets at: Settings → Secrets and variables → Actions → Repository secrets" >&2
+            exit 1
+          fi
+          echo "✅ HOMEBREW_TAP_TOKEN is set (length: ${#HOMEBREW_TAP_TOKEN})"
+
   # ==================== 更新 Homebrew Formula (TUI) ====================
   brew-tui:
-    needs: release
+    needs: [release, check-secrets]
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -154,7 +168,7 @@ jobs:
 
   # ==================== 更新 Homebrew Cask (GUI) ====================
   brew-gui:
-    needs: release
+    needs: [release, check-secrets, brew-tui]
     runs-on: ubuntu-latest
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
