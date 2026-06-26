@@ -1,7 +1,5 @@
 use anyhow::Result;
 use clap::Subcommand;
-use kernel::client::CoordinatorApi;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,15 +21,36 @@ pub enum DaemonCommands {
 }
 
 pub async fn run(cmd: DaemonCommands) -> Result<()> {
+    const IDLE_CHECK_INTERVAL: Duration = Duration::from_mins(1);
+    const DAEMON_IDLE_TIMEOUT_SECS: u64 = 300;
+    const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+    const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
     match cmd {
         DaemonCommands::Start { auto_exit } => {
-            const IDLE_CHECK_INTERVAL: Duration = Duration::from_mins(1);
-            const DAEMON_IDLE_TIMEOUT_SECS: u64 = 300;
-            const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-            const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(50);
+            // Guard against running multiple daemon instances
+            let pid_file = crate::daemon::pid_file_path();
+            if crate::daemon::try_connect().await.is_some() {
+                tracing::info!("Daemon already running, refusing to start");
+                println!("Daemon is already running");
+                return Ok(());
+            }
+            if let Ok(s) = tokio::fs::read_to_string(&pid_file).await {
+                if let Ok(pid) = s.trim().parse::<u32>() {
+                    if crate::daemon::process_exists(pid) {
+                        tracing::info!(pid = pid, "Daemon already running, refusing to start");
+                        println!("Daemon is already running (PID {pid})");
+                        return Ok(());
+                    }
+                }
+                // Stale PID file — clean it up
+                let _ = tokio::fs::remove_file(&pid_file).await;
+                tracing::info!("Stale PID file, cleaning up");
+            }
 
-            let (coordinator, config, config_file) = kernel::init_coordinator(None, true).await?;
-            let _log_guard = crate::commands::tui::init_logging(&config)?;
+            let (coordinator, config, _config_file) =
+                kernel::init_coordinator(None, true, true).await?;
+            let _log_guard = crate::commands::tui::init_logging(&config, true)?;
 
             let addr = crate::daemon::socket_addr();
 
@@ -39,13 +58,13 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             let listener = kernel::transport::bind(&addr).await?;
             tracing::info!("Daemon listening on {addr}");
 
-            let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
-                || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
-                PathBuf::from,
-            );
+            // Write PID file so external tools can find and signal us.
+            if let Some(parent) = pid_file.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
 
-            let server =
-                kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
+            let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
             let shutdown = tokio_util::sync::CancellationToken::new();
 
             {
@@ -152,12 +171,8 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             println!("{status}");
         }
         DaemonCommands::Reload => {
-            let addr = crate::daemon::socket_addr();
-            tracing::info!("Connecting to daemon at {addr} for reload...");
-            let coord = kernel::client::RemoteCoordinator::connect(&addr).await?;
-            coord.reload_agent_config().await?;
-            tracing::info!("Agent configuration reloaded in daemon at {addr}");
-            println!("Agent configuration reloaded in daemon");
+            println!("Restart the daemon to apply configuration changes.");
+            println!("Use: yomi daemon restart");
         }
     }
     Ok(())

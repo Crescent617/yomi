@@ -60,7 +60,7 @@ pub async fn subscribe(
         Ok(rx) => rx,
         Err(_) => {
             coord
-                .restore_session(&sid)
+                .restore_session(&sid, Vec::new())
                 .await
                 .map_err(GuiError::kernel)?;
             coord

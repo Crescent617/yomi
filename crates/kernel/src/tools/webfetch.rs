@@ -100,7 +100,12 @@ impl WebFetchTool {
             Err(e) => return Err(format!("Invalid URL: {e}")),
         };
 
-        // Basic hostname validation
+        // Allow file:// URLs for local file access
+        if parsed.scheme() == "file" {
+            return Ok(parsed.to_string());
+        }
+
+        // Basic hostname validation for network URLs
         let host = parsed.host_str().ok_or("URL must have a hostname")?;
 
         let parts: Vec<&str> = host.split('.').collect();
@@ -118,7 +123,7 @@ impl WebFetchTool {
         crate::utils::html::extract_content(html)
     }
 
-    /// Fetch content from URL
+    /// Fetch content from URL (HTTP or local file)
     async fn fetch_content(&self, url: &str) -> std::result::Result<(String, usize), String> {
         // Check cache first
         {
@@ -127,34 +132,41 @@ impl WebFetchTool {
                 if !entry.is_expired() {
                     return Ok((entry.content.clone(), entry.bytes));
                 }
-                // Remove expired entry
                 cache.pop(url);
             }
         }
 
-        // Make request using shared client
-        let response = get_client()
-            .get(url)
-            .header("Accept", "text/html, text/plain, application/json, */*")
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {e}"))?;
+        let parsed: reqwest::Url = url.parse().map_err(|e| format!("Invalid URL: {e}"))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!(
-                "HTTP error: {} {}",
-                status.as_u16(),
-                status.canonical_reason().unwrap_or("Unknown")
-            ));
-        }
+        let bytes = match parsed.scheme() {
+            "file" => tokio::fs::read(parsed.path())
+                .await
+                .map_err(|e| format!("Failed to read file: {e}"))?,
+            _ => {
+                let response = get_client()
+                    .get(url)
+                    .header("Accept", "text/html, text/plain, application/json, */*")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                    .send()
+                    .await
+                    .map_err(|e| format!("Request failed: {e}"))?;
 
-        // Read response body
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read response body: {e}"))?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(format!(
+                        "HTTP error: {} {}",
+                        status.as_u16(),
+                        status.canonical_reason().unwrap_or("Unknown")
+                    ));
+                }
+
+                response
+                    .bytes()
+                    .await
+                    .map(|b| b.to_vec())
+                    .map_err(|e| format!("Failed to read response body: {e}"))?
+            }
+        };
 
         if bytes.len() > MAX_CONTENT_LENGTH {
             return Err(format!(
@@ -164,7 +176,6 @@ impl WebFetchTool {
             ));
         }
 
-        // Convert to string
         let content = String::from_utf8_lossy(&bytes).to_string();
 
         let processed_content = if content.trim().starts_with('<') {
@@ -173,7 +184,6 @@ impl WebFetchTool {
             content
         };
 
-        // Truncate if too long (UTF-8 safe)
         let final_content = truncate_output(
             &processed_content,
             MAX_RESULT_LENGTH,
@@ -183,7 +193,6 @@ impl WebFetchTool {
             ),
         );
 
-        // Cache the result
         let entry = CacheEntry {
             content: final_content.clone(),
             bytes: bytes.len(),
@@ -360,6 +369,45 @@ mod tests {
             markdown.contains("My Page") || markdown.contains("Section"),
             "Should have either title or content"
         );
+    }
+
+    #[test]
+    fn test_validate_url_file_scheme() {
+        let url = "file:///home/user/doc.html";
+        let result = WebFetchTool::validate_url(url);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), url);
+
+        let url_no_host = "file:///etc/passwd";
+        let result = WebFetchTool::validate_url(url_no_host);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_content_file() {
+        let tool = WebFetchTool::new();
+        let temp = tempfile::NamedTempFile::with_suffix(".html").unwrap();
+        let html = r"<!DOCTYPE html>
+<html><body><h1>Hello</h1><p>World</p></body></html>";
+        tokio::fs::write(temp.path(), html).await.unwrap();
+
+        let url = format!("file://{}", temp.path().display());
+        let (content, bytes) = tool.fetch_content(&url).await.unwrap();
+        assert!(content.contains("Hello"));
+        assert_eq!(bytes, html.len());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_content_plain_text_file() {
+        let tool = WebFetchTool::new();
+        let temp = tempfile::NamedTempFile::with_suffix(".txt").unwrap();
+        let text = "Plain text content\nSecond line";
+        tokio::fs::write(temp.path(), text).await.unwrap();
+
+        let url = format!("file://{}", temp.path().display());
+        let (content, bytes) = tool.fetch_content(&url).await.unwrap();
+        assert!(content.contains("Plain text content"));
+        assert_eq!(bytes, text.len());
     }
 
     #[test]

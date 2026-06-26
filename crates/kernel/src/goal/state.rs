@@ -105,6 +105,6 @@ mod tests {
         assert!(p.contains("test goal"));
         assert!(p.contains("Completion audit"));
         assert!(p.contains("Blocked audit"));
-        assert!(p.contains("update_goal"));
+        assert!(p.contains("updateGoal"));
     }
 }

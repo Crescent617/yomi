@@ -319,15 +319,17 @@ pub fn build_registry(entries: &[HookEntry], allow_commands: bool) -> HookRegist
 /// Build a `HookRegistry` from a shared base (config hooks) plus skill-level hooks
 /// and an optional goal store.
 ///
-/// This is used both at agent spawn time and during hot-reload so the logic stays in one place.
+/// This is used at agent spawn time so the registry construction logic stays in one place.
+/// The optional `base` parameter allows extending a pre-built base registry (e.g., for
+/// workspace-level hooks that are discovered per-session).
 pub async fn build_hook_registry_with_skills(
-    base: Option<&tokio::sync::RwLock<HookRegistry>>,
+    base: Option<&HookRegistry>,
     skills: &[std::sync::Arc<crate::skill::Skill>],
     allow_commands: bool,
     goal_store: Option<std::sync::Arc<dyn crate::goal::GoalStore>>,
 ) -> HookRegistry {
     let mut registry = match base {
-        Some(arc) => arc.read().await.clone(),
+        Some(h) => h.clone(),
         None => HookRegistry::default(),
     };
 

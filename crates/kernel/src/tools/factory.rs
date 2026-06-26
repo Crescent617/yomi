@@ -1,4 +1,4 @@
-//! Tool registry factory for creating pre-configured tool registries.
+//! Tool registry for creating pre-configured tool registries.
 //!
 //! This module provides a factory for creating tool registries without depending
 //! on the Agent type, avoiding circular dependencies.
@@ -7,8 +7,9 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::tools::helper::file_state::FileStateStore;
 use crate::tools::{
-    AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
-    SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool, WebSearchTool, WriteTool,
+    AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool,
+    ShellToolCtx, SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool,
+    WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
 use std::sync::Arc;
@@ -66,6 +67,7 @@ impl<'a> ToolRegistryConfig<'a> {
         input_tx: &'a mpsc::Sender<AgentInput>,
         event_tx: &'a mpsc::Sender<Event>,
         session_id: &'a str,
+        tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
             agent_id,
@@ -75,7 +77,7 @@ impl<'a> ToolRegistryConfig<'a> {
             input_tx: Some(input_tx),
             file_state_store: None,
             ask_user_state: None,
-            tool_blocklist: shared.tool_blocklist.clone(),
+            tool_blocklist,
             flags: ToolFlags::for_agent(),
         }
     }
@@ -86,6 +88,7 @@ impl<'a> ToolRegistryConfig<'a> {
         shared: &'a Arc<crate::agent::AgentShared>,
         event_tx: &'a mpsc::Sender<Event>,
         session_id: &'a str,
+        tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
             agent_id,
@@ -95,7 +98,7 @@ impl<'a> ToolRegistryConfig<'a> {
             input_tx: None,
             file_state_store: None,
             ask_user_state: None,
-            tool_blocklist: shared.tool_blocklist.clone(),
+            tool_blocklist,
             flags: ToolFlags::for_subagent(),
         }
     }
@@ -177,6 +180,7 @@ impl ToolRegistryFactory {
                     config.shared.session_store.clone(),
                     config.session_id.to_owned(),
                     config.event_tx.clone(),
+                    config.tool_blocklist.clone(),
                 );
                 registry.register(subagent_tool);
             } else {
@@ -209,6 +213,11 @@ impl ToolRegistryFactory {
         if config.flags.sleep {
             registry.register(SleepTool::new());
         }
+
+        // Register send_message tool if a channel hub is configured
+        // if let Some(ref cm) = config.shared.channel_hub {
+        //     registry.register(SendMessageTool::new(Arc::clone(cm)));
+        // }
 
         // Register ask_user tool if state is provided
         if let Some(ask_user_state) = config.ask_user_state {

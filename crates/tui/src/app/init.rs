@@ -120,7 +120,7 @@ impl Model {
         // even when we switch to a session that is already in the middle of work.
         match self.coordinator.get_session_status(&session_id).await {
             Ok(status) => match status.phase.as_str() {
-                "streaming" => {
+                "streaming" | "executing_tool" => {
                     self.state.is_streaming = true;
                     self.app.attr(
                         &Id::InfoBar,
@@ -132,14 +132,6 @@ impl Model {
                     self.app.attr(
                         &Id::InfoBar,
                         Attribute::Custom(attr::START_COMPACTING),
-                        AttrValue::Flag(true),
-                    )?;
-                }
-                "executing_tool" => {
-                    self.state.is_streaming = true;
-                    self.app.attr(
-                        &Id::InfoBar,
-                        Attribute::Custom(attr::START_STREAMING),
                         AttrValue::Flag(true),
                     )?;
                 }

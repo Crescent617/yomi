@@ -264,10 +264,6 @@ export async function listSessionSkills(
   });
 }
 
-export async function reloadConfig(): Promise<void> {
-  return invokeCmd("reload_config");
-}
-
 export async function compactSession(session_id: string): Promise<void> {
   return invokeCmd("compact_session", { session_id: session_id });
 }

@@ -26,11 +26,10 @@ pub async fn list_session_skills(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn reload_config(state: State<'_, AppState>) -> Result<(), GuiError> {
-    let coord = state.coordinator.clone();
-    coord
-        .reload_agent_config()
-        .await
-        .map_err(GuiError::kernel)?;
-    Ok(())
+pub async fn reload_config(_state: State<'_, AppState>) -> Result<(), GuiError> {
+    Err(GuiError::kernel(kernel::types::KernelError::from(
+        kernel::types::SessionError::Other(
+            "Restart the application for configuration changes to take effect".to_string(),
+        ),
+    )))
 }

@@ -45,38 +45,10 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
     agent
 }
 
-fn reload_config(file_path: Option<&PathBuf>) -> Config {
-    let mut config = match file_path {
-        Some(path) => Config::from_file(path).unwrap_or_else(|e| {
-            tracing::error!(
-                "Failed to load config from {}: {e}, falling back to default",
-                path.display()
-            );
-            Config::default()
-        }),
-        None => match Config::discover_file() {
-            Some(path) => Config::from_file(&path).unwrap_or_else(|e| {
-                tracing::error!(
-                    "Failed to load discovered config from {}: {e}, falling back to default",
-                    path.display()
-                );
-                Config::default()
-            }),
-            None => Config::default(),
-        },
-    };
-    config.apply_env_overrides();
-    config.finalize();
-    config
-}
-
 /// Kernel daemon server. Bridges external connections to the local Coordinator.
 #[derive(Clone)]
 pub struct KernelServer {
     coordinator: Arc<Coordinator>,
-    config_file_path: Option<PathBuf>,
-    base_dir: PathBuf,
-    reload_lock: Arc<tokio::sync::Mutex<()>>,
     connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
     next_conn_id: Arc<std::sync::atomic::AtomicU64>,
     /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
@@ -88,11 +60,7 @@ pub struct KernelServer {
 }
 
 impl KernelServer {
-    pub fn new(
-        coordinator: Arc<Coordinator>,
-        config_file_path: Option<PathBuf>,
-        base_dir: PathBuf,
-    ) -> Self {
+    pub fn new(coordinator: Arc<Coordinator>) -> Self {
         let (cron_scheduler, cron_shutdown) = if let Some(store) = coordinator.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);
             let shutdown = tokio_util::sync::CancellationToken::new();
@@ -121,92 +89,11 @@ impl KernelServer {
 
         Self {
             coordinator,
-            config_file_path,
-            base_dir,
-            reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             cron_scheduler,
             cron_shutdown,
         }
-    }
-
-    /// Reload agent configuration from disk.
-    /// Returns `true` if reload succeeded, `false` if it fell back to defaults.
-    pub async fn reload(&self) -> bool {
-        let _guard = self.reload_lock.lock().await;
-        let file_path = self.config_file_path.clone();
-        let base_dir = self.base_dir.clone();
-        let (new_agent, hook_registry, provider, model_config, skill_folders) =
-            match tokio::task::spawn_blocking(move || {
-                let config = reload_config(file_path.as_ref());
-                let agent = build_agent_config(&config, &base_dir);
-                let hooks = config.features.hooks.then(|| {
-                    crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
-                });
-                let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
-                    match config.agent.model.provider {
-                        crate::config::ModelProvider::OpenAI => {
-                            match crate::providers::OpenAIProvider::new() {
-                                Ok(p) => Arc::new(p),
-                                Err(e) => {
-                                    tracing::error!("Failed to create OpenAI provider: {e}, falling back to NoKeyProvider");
-                                    Arc::new(crate::providers::NoKeyProvider)
-                                }
-                            }
-                        }
-                        crate::config::ModelProvider::Anthropic => {
-                            match crate::providers::AnthropicProvider::new() {
-                                Ok(p) => Arc::new(p),
-                                Err(e) => {
-                                    tracing::error!("Failed to create Anthropic provider: {e}, falling back to NoKeyProvider");
-                                    Arc::new(crate::providers::NoKeyProvider)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    tracing::warn!("No API key configured — using NoKeyProvider");
-                    Arc::new(crate::providers::NoKeyProvider)
-                };
-                let model_config = Arc::new(config.agent.model.clone());
-                let skill_folders = config
-                    .skill_folders()
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
-                    .collect::<Vec<_>>();
-                Some((agent, hooks, provider, model_config, skill_folders))
-            })
-            .await
-            {
-                Ok(Some(pair)) => pair,
-                Ok(None) => return false,
-                Err(e) => {
-                    tracing::error!("Reload task panicked: {e}");
-                    return false;
-                }
-            };
-        let model_id = new_agent.model.model_id.clone();
-        let skill_count = new_agent.skills.len();
-        self.coordinator
-            .update_agent_config(
-                new_agent,
-                hook_registry,
-                Some(provider),
-                Some(model_config),
-                Some(skill_folders),
-            )
-            .await;
-        tracing::info!("Reloaded agent config (model={model_id}, {skill_count} skill(s))");
-
-        // Reload cron scheduler if it is active
-        if let Some(ref scheduler) = self.cron_scheduler {
-            scheduler.reload();
-            tracing::info!("Reloaded cron scheduler");
-        }
-
-        true
     }
 
     /// Run the server on an IPC endpoint (Unix socket or TCP).
@@ -270,6 +157,9 @@ impl KernelServer {
         }
         if let Some(ref shutdown) = self.cron_shutdown {
             shutdown.cancel();
+        }
+        if let Some(ref mgr) = self.coordinator.channel_manager {
+            let _ = mgr.shutdown().await;
         }
     }
 
@@ -416,6 +306,7 @@ impl KernelServer {
                     project_id: project_id.map(ProjectId),
                     working_dir: working_dir.map(std::path::PathBuf::from),
                     auto_approve_level,
+                    tool_blocklist: Vec::new(),
                 };
                 rpc_body(
                     "create_session_failed",
@@ -425,12 +316,15 @@ impl KernelServer {
                         .map(|sid| sid.0),
                 )
             }
-            RequestMethod::RestoreSession { session_id } => {
+            RequestMethod::RestoreSession {
+                session_id,
+                tool_blocklist,
+            } => {
                 let sid = SessionId(session_id);
                 rpc_body(
                     "restore_session_failed",
                     self.coordinator
-                        .restore_session(&sid)
+                        .restore_session(&sid, tool_blocklist)
                         .await
                         .map(|sid| sid.0),
                 )
@@ -475,7 +369,7 @@ impl KernelServer {
                 let mut rx = self.coordinator.subscribe_session_events(&sid);
                 if rx.is_none() {
                     // Session not in memory - try to restore from storage
-                    match self.coordinator.restore_session(&sid).await {
+                    match self.coordinator.restore_session(&sid, Vec::new()).await {
                         Ok(_) => {
                             rx = self.coordinator.subscribe_session_events(&sid);
                         }
@@ -646,22 +540,6 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
-            RequestMethod::ReloadAgentConfig => {
-                let ok = self.reload().await;
-                if ok {
-                    ResponseBody::Ok {
-                        result: serde_json::Value::Null,
-                    }
-                } else {
-                    ResponseBody::Err {
-                        error: RpcError {
-                            code: "reload_failed".to_string(),
-                            message: "Failed to reload agent configuration".to_string(),
-                            detail: None,
-                        },
-                    }
-                }
-            }
 
             // ── Cron Job ──────────────────────────────────────────────────
             RequestMethod::CreateCronJob {
@@ -856,6 +734,12 @@ impl KernelServer {
                         },
                     },
                 }
+            }
+
+            // ── Channel ────────────────────────────────────────────────────
+            RequestMethod::ListChannels => {
+                let channels = self.coordinator.list_channels();
+                ok_body(channels)
             }
 
             RequestMethod::Hello => ok_body(ProtoResponse {

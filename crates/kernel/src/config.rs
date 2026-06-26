@@ -170,6 +170,9 @@ pub struct Config {
     pub features: FeaturesConfig,
     /// Maximum number of checkpoints to retain per session (default: 5)
     pub max_checkpoints: usize,
+    /// External platform channels (Telegram, Feishu, etc.)
+    #[serde(default)]
+    pub channels: Vec<crate::channels::ChannelConfig>,
 }
 
 impl Config {
@@ -231,6 +234,7 @@ impl Default for Config {
             hooks: Vec::new(),
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
+            channels: Vec::new(),
         }
     }
 }

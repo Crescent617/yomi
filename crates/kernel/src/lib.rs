@@ -25,6 +25,7 @@ pub mod event;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
+pub mod channels;
 pub mod cron;
 pub mod memory;
 pub mod permissions;
@@ -104,12 +105,15 @@ use std::sync::Arc;
 /// finalise, and build a `Coordinator` with the given cron setting.
 ///
 /// `config_path` overrides the default config discovery when provided.
+/// `start_channels` should be `true` only for daemon mode, where channel
+/// receivers can run persistently in the background.
 ///
 /// Returns `(coordinator, config, config_file)` so callers can derive `base_dir`
 /// from `config_file.parent()` if needed.
 pub async fn init_coordinator(
     config_path: Option<&PathBuf>,
     enable_cron: bool,
+    start_channels: bool,
 ) -> Result<(Arc<Coordinator>, Config, Option<PathBuf>)> {
     let config_file = config_path.cloned().or_else(Config::discover_file);
     let mut config = match &config_file {
@@ -120,7 +124,7 @@ pub async fn init_coordinator(
     config.apply_env_overrides();
     config.finalize();
 
-    let coordinator = build_coordinator(&config, enable_cron).await?;
+    let coordinator = build_coordinator(&config, enable_cron, start_channels).await?;
     Ok((coordinator, config, config_file))
 }
 
@@ -143,8 +147,15 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
 /// `config.data_dir` is used to resolve relative skill folders and build the agent config.
 /// This function does not discover or load config — callers must do that first.
 ///
+/// `start_channels` should be `true` only for daemon mode, where channel
+/// receivers can run persistently in the background.
+///
 /// Returns the fully constructed `Coordinator` wrapped in an `Arc`.
-pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc<Coordinator>> {
+pub async fn build_coordinator(
+    config: &Config,
+    enable_cron: bool,
+    start_channels: bool,
+) -> Result<Arc<Coordinator>> {
     tokio::fs::create_dir_all(&config.data_dir)
         .await
         .map_err(|e| KernelError::storage(format!("Failed to create data directory: {e}")))?;
@@ -183,7 +194,7 @@ pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc
         ))
     })?;
 
-    Ok(Coordinator::new(
+    let coordinator = Coordinator::new(
         &storage,
         provider,
         agent_config,
@@ -195,5 +206,22 @@ pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc
             .hooks
             .then(|| hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
         enable_cron,
-    ))
+        if config.channels.is_empty() {
+            None
+        } else {
+            Some(storage.channel_store())
+        },
+    );
+
+    // Start all configured channels only in daemon mode
+    if start_channels && !config.channels.is_empty() {
+        if let Some(ref mgr) = coordinator.channel_manager() {
+            let weak = Arc::downgrade(&coordinator);
+            if let Err(e) = mgr.start_all(config.channels.clone(), weak).await {
+                tracing::warn!(error = %e, "some channels failed to start");
+            }
+        }
+    }
+
+    Ok(coordinator)
 }

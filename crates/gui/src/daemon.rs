@@ -12,7 +12,6 @@
 use anyhow::{Context, Result};
 use kernel::transport::SocketAddr;
 pub use kernel::transport::{pid_file_path, socket_addr};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
@@ -83,16 +82,16 @@ pub async fn get_coordinator() -> Result<Arc<dyn kernel::client::CoordinatorApi>
 /// Start the kernel server in a background task.
 /// If a daemon is already accepting connections, returns Ok immediately.
 pub async fn spawn_daemon() -> Result<()> {
+    // Install rustls crypto provider before any TLS operations.
+    // Required by rustls 0.23+ when multiple crypto providers are available.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     if try_connect().await.is_some() {
         tracing::info!("daemon already running, skipping spawn");
         return Ok(());
     }
 
-    let (coordinator, _config, config_file) = kernel::init_coordinator(None, true).await?;
-    let base_dir = config_file.as_ref().and_then(|p| p.parent()).map_or_else(
-        || kernel::expand_tilde(kernel::DEFAULT_DATA_DIR),
-        PathBuf::from,
-    );
+    let (coordinator, _config, _config_file) = kernel::init_coordinator(None, true, true).await?;
 
     let addr = socket_addr();
     let listener = kernel::transport::bind(&addr)
@@ -100,7 +99,7 @@ pub async fn spawn_daemon() -> Result<()> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator), config_file, base_dir);
+    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
     let shutdown = CancellationToken::new();
 
     {

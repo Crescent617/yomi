@@ -47,13 +47,12 @@
   async function reload() {
     loading = true;
     try {
-      await api.reloadConfig();
-      showNotification("Config reloaded", "success", 2000);
       await load();
+      showNotification("Config refreshed", "success", 2000);
     } catch (e: unknown) {
-      console.error("Failed to reload config:", e);
+      console.error("Failed to refresh config:", e);
       showNotification(
-        `Failed to reload: ${e instanceof Error ? e.message : ""}`,
+        `Failed to refresh: ${e instanceof Error ? e.message : ""}`,
         "error",
         4000,
       );
@@ -67,11 +66,10 @@
     saving = true;
     try {
       await api.saveConfigToml(content);
-      await api.reloadConfig(); // apply to running agents
       dirty = false;
       saved = true;
       setTimeout(() => (saved = false), 2000);
-      showNotification("Config saved and reloaded", "success", 2000);
+      showNotification("Config saved. Restart to apply changes.", "success", 3000);
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
       full_config = c?.full_config ?? "";

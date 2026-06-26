@@ -297,11 +297,6 @@
           await api.compactSession(session_id);
           showNotification("Session compaction requested", "info", 3000);
           break;
-        case "/reload":
-          await api.reloadConfig();
-          skillsLoadedForSessionId = null;
-          showNotification("Skills and hooks reloaded", "info", 3000);
-          break;
         case "/steer":
           {
             const steerText = parts.slice(1).join(" ").trim();

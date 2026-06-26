@@ -2,7 +2,6 @@ use crate::agent::{AgentConfig, AgentShared, AgentState};
 use crate::app::session::{normalize_session_title, Session, SessionConfig};
 use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
-use crate::providers::ModelConfig;
 use crate::providers::Provider;
 use crate::storage::usage::{DailyUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
@@ -20,10 +19,11 @@ pub struct CreateSessionInput {
     pub project_id: Option<ProjectId>,
     pub working_dir: Option<std::path::PathBuf>,
     pub auto_approve_level: Level,
+    pub tool_blocklist: Vec<String>,
 }
 
 pub struct Coordinator {
-    agent_shared: Arc<tokio::sync::RwLock<AgentShared>>,
+    agent_shared: Arc<AgentShared>,
     sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
     /// Broadcast channels for session events (for forwarding and cleanup)
     session_event_senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
@@ -31,8 +31,7 @@ pub struct Coordinator {
     /// Updated by `forward_session_events` on every event.
     last_activity_at: Arc<AtomicU64>,
     /// Default agent configuration for new sessions.
-    /// Wrapped in `RwLock` so it can be hot-reloaded in daemon mode.
-    agent_config: Arc<RwLock<AgentConfig>>,
+    agent_config: AgentConfig,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
@@ -47,17 +46,29 @@ pub struct Coordinator {
     /// that would only work in local mode and break remote IPC mode. All cron
     /// operations MUST go through the Coordinator.
     pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
+    pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
 }
 
 impl Coordinator {
     /// Get session store from `agent_shared`
     pub async fn session_store(&self) -> Arc<dyn SessionStore> {
         self.agent_shared
-            .read()
-            .await
             .session_store
             .clone()
             .expect("session_store not configured")
+    }
+
+    /// List all channels and their status.
+    pub fn list_channels(&self) -> Vec<crate::channels::ChannelInfo> {
+        match &self.channel_manager {
+            Some(mgr) => mgr.list_channels(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Get the channel manager (if channels are configured).
+    pub fn channel_manager(&self) -> Option<Arc<crate::channels::hub::ChannelHub>> {
+        self.channel_manager.clone()
     }
 
     /// Get pinned session store
@@ -68,8 +79,6 @@ impl Coordinator {
     /// Get message store from `agent_shared`
     pub async fn message_store(&self) -> Arc<dyn MessageStore> {
         self.agent_shared
-            .read()
-            .await
             .message_store
             .clone()
             .expect("message_store not configured")
@@ -78,8 +87,6 @@ impl Coordinator {
     /// Get checkpoint store from `agent_shared`
     pub async fn checkpoint_store(&self) -> Arc<dyn crate::checkpoint::CheckpointStore> {
         self.agent_shared
-            .read()
-            .await
             .checkpoint_store
             .clone()
             .expect("checkpoint_store not configured")
@@ -92,14 +99,12 @@ impl Coordinator {
 
     /// Get data directory from `agent_shared`
     pub async fn data_dir(&self) -> std::path::PathBuf {
-        self.agent_shared.read().await.data_dir.clone()
+        self.agent_shared.data_dir.clone()
     }
 
     /// Get usage store from `agent_shared`
     pub async fn usage_store(&self) -> Arc<dyn UsageStore> {
         self.agent_shared
-            .read()
-            .await
             .usage_store
             .clone()
             .expect("usage_store not configured")
@@ -108,8 +113,6 @@ impl Coordinator {
     /// Get goal store from `agent_shared`
     pub async fn goal_store(&self) -> Arc<dyn crate::goal::GoalStore> {
         self.agent_shared
-            .read()
-            .await
             .goal_store
             .clone()
             .expect("goal_store not configured")
@@ -118,8 +121,6 @@ impl Coordinator {
     /// Get todo store from `agent_shared`
     pub async fn todo_store(&self) -> Arc<dyn crate::storage::TodoStore> {
         self.agent_shared
-            .read()
-            .await
             .todo_storage
             .clone()
             .expect("todo_storage not configured")
@@ -135,6 +136,7 @@ impl Coordinator {
         skill_folders: Vec<std::path::PathBuf>,
         hook_registry: Option<crate::hooks::HookRegistry>,
         enable_cron: bool,
+        channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
     ) -> Arc<Self> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -164,20 +166,24 @@ impl Coordinator {
         )
         .with_goal_store(goal_store)
         .with_message_interceptor(todo_interceptor);
-        let agent_shared = agent_shared.with_tool_blocklist(agent_config.tool_blocklist.clone());
-        let agent_shared = agent_shared.with_allow_command_hooks(agent_config.allow_command_hooks);
         let agent_shared = match hook_registry {
-            Some(registry) => {
-                agent_shared.with_hook_registry(Arc::new(tokio::sync::RwLock::new(registry)))
-            }
+            Some(registry) => agent_shared.with_hook_registry(Arc::new(registry)),
             None => agent_shared,
         };
 
-        let agent_shared = Arc::new(tokio::sync::RwLock::new(agent_shared));
+        let channel_manager = channel_store.map(|store| {
+            Arc::new(crate::channels::hub::ChannelHub::new(
+                store,
+                tokio_util::sync::CancellationToken::new(),
+            ))
+        });
+
+        let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
+        let agent_shared = Arc::new(agent_shared);
         let sessions = Arc::new(DashMap::new());
         let session_event_senders = Arc::new(DashMap::new());
         let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
-        let agent_config = Arc::new(RwLock::new(agent_config));
+        let agent_config = agent_config;
         let cron_store = if enable_cron {
             Some(storage.cron_store())
         } else {
@@ -195,6 +201,7 @@ impl Coordinator {
             project_store,
             pinned_session_store,
             cron_store,
+            channel_manager,
         })
     }
 
@@ -398,15 +405,22 @@ impl Coordinator {
             )
             .await?;
 
+        let mut agent_config = self.agent_config.clone();
+        if !input.tool_blocklist.is_empty() {
+            agent_config.tool_blocklist.extend(input.tool_blocklist);
+        }
+
         let config = SessionConfig {
-            agent: self.agent_config.read().await.clone(),
+            agent: agent_config,
             project,
             working_dir: working_dir.map(std::path::PathBuf::from),
             auto_approve_level: input.auto_approve_level,
             data_dir: self.data_dir().await.clone(),
         };
 
-        if let Err(e) = self.init_session(id.clone(), config).await {
+        let agent_shared = Arc::clone(&self.agent_shared);
+
+        if let Err(e) = self.init_session(id.clone(), config, agent_shared).await {
             let _ = self.session_store().await.delete(&id).await;
             return Err(e);
         }
@@ -419,7 +433,12 @@ impl Coordinator {
     }
 
     /// Initialize a session in memory.
-    async fn init_session(&self, session_id: SessionId, config: SessionConfig) -> Result<()> {
+    async fn init_session(
+        &self,
+        session_id: SessionId,
+        config: SessionConfig,
+        agent_shared: Arc<AgentShared>,
+    ) -> Result<()> {
         if self.sessions.contains_key(&session_id) {
             return Err(SessionError::AlreadyExists {
                 session_id: session_id.0,
@@ -428,7 +447,7 @@ impl Coordinator {
         }
 
         let (mut session, event_rx) =
-            Session::init(session_id.clone(), config, Arc::clone(&self.agent_shared)).await?;
+            Session::init(session_id.clone(), config, agent_shared).await?;
 
         let (broadcast_tx, _) = broadcast::channel::<Event>(256);
         session.set_event_sender(broadcast_tx.clone());
@@ -506,8 +525,12 @@ impl Coordinator {
         tracing::info!(session_id = %session_id.0, "removed from coordinator");
     }
 
-    /// Restore a session from storage by its ID.
-    pub async fn restore_session(&self, session_id: &SessionId) -> Result<SessionId> {
+    /// Restore a session from storage by its ID, optionally overriding the tool blocklist.
+    pub async fn restore_session(
+        &self,
+        session_id: &SessionId,
+        tool_blocklist: Vec<String>,
+    ) -> Result<SessionId> {
         let live = self.get_session(session_id).is_some();
         tracing::info!(session_id = %session_id.0, "restore_session: live={}", live);
 
@@ -539,15 +562,23 @@ impl Coordinator {
         };
         let working_dir = info.working_dir.map(std::path::PathBuf::from);
 
+        let mut agent_config = self.agent_config.clone();
+        if !tool_blocklist.is_empty() {
+            agent_config.tool_blocklist.extend(tool_blocklist);
+        }
+
         let config = SessionConfig {
-            agent: self.agent_config.read().await.clone(),
+            agent: agent_config,
             project,
             working_dir,
             auto_approve_level,
             data_dir: self.data_dir().await.clone(),
         };
         tracing::info!(session_id = %session_id.0, "Restoring from storage");
-        if let Err(e) = self.init_session(info.id.clone(), config).await {
+        if let Err(e) = self
+            .init_session(info.id.clone(), config, Arc::clone(&self.agent_shared))
+            .await
+        {
             if e.is_session_already_exists() {
                 tracing::debug!(session_id = %session_id.0, "already initialized — treating as restored");
                 return Ok(info.id);
@@ -653,14 +684,17 @@ impl Coordinator {
         };
 
         let config = SessionConfig {
-            agent: self.agent_config.read().await.clone(),
+            agent: self.agent_config.clone(),
             project,
             working_dir: parent_info.working_dir.map(std::path::PathBuf::from),
             auto_approve_level,
             data_dir: self.data_dir().await.clone(),
         };
 
-        if let Err(e) = self.init_session(new_id.clone(), config).await {
+        if let Err(e) = self
+            .init_session(new_id.clone(), config, Arc::clone(&self.agent_shared))
+            .await
+        {
             let _ = self.session_store().await.delete(&new_id).await;
             return Err(e);
         }
@@ -725,7 +759,7 @@ impl Coordinator {
         let session = self.require_session(session_id)?;
         let session = session.read().await;
 
-        let global_skills = self.agent_config.read().await.skills.clone();
+        let global_skills = self.agent_config.skills.clone();
 
         let workspace_skill_dir = session.workspace_skill_dir().cloned();
         drop(session);
@@ -988,154 +1022,10 @@ impl Coordinator {
 
     /// Get todo JSON for a session.
     pub async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
-        match &self.agent_shared.read().await.todo_storage {
+        match &self.agent_shared.todo_storage {
             Some(store) => store.load(&session_id.0).await,
             None => Ok(None),
         }
-    }
-
-    /// Update the agent configuration for new sessions.
-    pub async fn update_agent_config(
-        &self,
-        agent_config: AgentConfig,
-        hook_registry: Option<crate::hooks::HookRegistry>,
-        provider: Option<Arc<dyn Provider>>,
-        model_config: Option<Arc<ModelConfig>>,
-        skill_folders: Option<Vec<std::path::PathBuf>>,
-    ) {
-        let model_id = agent_config.model.model_id.clone();
-        let skills = agent_config.skills.clone();
-        let skill_count = skills.len();
-
-        // 1. Update global agent_shared first, so sessions get the latest.
-        if provider.is_some() || model_config.is_some() || skill_folders.is_some() {
-            let mut guard = self.agent_shared.write().await;
-            let mut updated = guard.clone();
-            if let Some(p) = provider {
-                updated = updated.with_provider(p);
-            }
-            if let Some(m) = model_config {
-                updated = updated.with_model_config(m);
-            }
-            if let Some(s) = skill_folders {
-                updated = updated.with_skill_folders(s);
-            }
-            *guard = updated;
-        }
-
-        if let Some(registry) = hook_registry {
-            let existing = self.agent_shared.read().await.hook_registry.clone();
-            if let Some(existing) = existing {
-                let mut guard = existing.write().await;
-                *guard = registry;
-                tracing::info!("Hot-reloaded shared hook registry");
-            } else {
-                let mut guard = self.agent_shared.write().await;
-                guard.hook_registry = Some(Arc::new(tokio::sync::RwLock::new(registry)));
-                tracing::info!("Initialized shared hook registry on reload");
-            }
-        }
-
-        // 2. Update global agent_config.
-        *self.agent_config.write().await = agent_config.clone();
-
-        // 3. Propagate to all live sessions.
-        let handles: Vec<_> = self
-            .sessions
-            .iter()
-            .map(|e| Arc::clone(e.value()))
-            .collect();
-        for session in handles {
-            let session = session.read().await;
-            let ws_dir = session.workspace_skill_dir().cloned();
-            let mut new_shared = self.agent_shared.read().await.clone();
-            if let Some(dir) = ws_dir {
-                if !new_shared.skill_folders.contains(&dir) {
-                    new_shared.skill_folders.push(dir);
-                }
-            }
-            if let Err(e) = session
-                .reload_config(agent_config.clone(), Arc::new(new_shared))
-                .await
-            {
-                let sid = session.id().clone();
-                tracing::warn!("Failed to reload config for {}: {}", sid.0, e);
-            }
-        }
-
-        tracing::info!("Updated agent config (model={model_id}, {skill_count} skill(s))");
-    }
-
-    /// Reload agent configuration from disk and environment.
-    pub async fn reload(
-        &self,
-        config_file: Option<&std::path::PathBuf>,
-        base_dir: &std::path::Path,
-    ) -> Result<()> {
-        let mut config = match config_file {
-            Some(path) => crate::config::Config::from_file(path).map_err(|e| {
-                crate::types::KernelError::from(crate::types::SessionError::Other(format!(
-                    "Failed to load config from {}: {e}",
-                    path.display()
-                )))
-            })?,
-            None => match crate::config::Config::discover_file() {
-                Some(path) => crate::config::Config::from_file(&path).map_err(|e| {
-                    crate::types::KernelError::from(crate::types::SessionError::Other(format!(
-                        "Failed to load discovered config from {}: {e}",
-                        path.display()
-                    )))
-                })?,
-                None => crate::config::Config::default(),
-            },
-        };
-        config.apply_env_overrides();
-        config.finalize();
-
-        let provider: Arc<dyn crate::providers::Provider> = if config.has_api_key() {
-            match config.agent.model.provider {
-                crate::config::ModelProvider::OpenAI => {
-                    Arc::new(crate::providers::OpenAIProvider::new().map_err(|e| {
-                        crate::types::KernelError::from(crate::types::SessionError::Other(format!(
-                            "Failed to create OpenAI provider: {e}"
-                        )))
-                    })?)
-                }
-                crate::config::ModelProvider::Anthropic => {
-                    Arc::new(crate::providers::AnthropicProvider::new().map_err(|e| {
-                        crate::types::KernelError::from(crate::types::SessionError::Other(format!(
-                            "Failed to create Anthropic provider: {e}"
-                        )))
-                    })?)
-                }
-            }
-        } else {
-            tracing::warn!("No API key configured — using NoKeyProvider");
-            Arc::new(crate::providers::NoKeyProvider)
-        };
-
-        let _skill_folders: Vec<std::path::PathBuf> = config
-            .skill_folders()
-            .iter()
-            .map(std::path::PathBuf::from)
-            .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
-            .collect();
-
-        let agent_config = crate::server::build_agent_config(&config, base_dir);
-        let hook_registry = config.features.hooks.then(|| {
-            crate::hooks::build_registry(&config.hooks, config.features.allow_command_hooks)
-        });
-
-        self.update_agent_config(
-            agent_config,
-            hook_registry,
-            Some(provider),
-            Some(Arc::new(config.agent.model)),
-            Some(_skill_folders),
-        )
-        .await;
-        tracing::info!("Reloaded agent configuration from disk");
-        Ok(())
     }
 
     /// Get aggregated usage summary for the last N days
@@ -1237,8 +1127,6 @@ impl Coordinator {
 
     /// Update a cron job.  Validates the schedule if changed, recalculates
     /// `next_run_at`, persists.  Returns `true` if the job existed.
-    ///
-    /// Caller is responsible for notifying the scheduler to reload if needed.
     pub async fn update_cron_job(
         &self,
         id: &crate::cron::CronJobId,
@@ -1261,8 +1149,6 @@ impl Coordinator {
     }
 
     /// Delete a cron job.  Returns `true` if the job existed.
-    ///
-    /// Caller is responsible for notifying the scheduler to reload if needed.
     pub async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
         let store = self
             .cron_store
@@ -1319,7 +1205,7 @@ impl crate::cron::CronExecutor for Coordinator {
             } => {
                 let sid = SessionId(session_id.clone());
                 if self.get_session(&sid).is_none() {
-                    self.restore_session(&sid)
+                    self.restore_session(&sid, Vec::new())
                         .await
                         .map_err(CronError::Session)?;
                 }

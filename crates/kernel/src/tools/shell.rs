@@ -9,6 +9,7 @@ use crate::utils::id::gen_base56_id;
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -24,8 +25,8 @@ static ANSI_REGEX: LazyLock<Regex> =
 
 /// Strip ANSI escape sequences from text
 #[inline]
-fn strip_ansi(text: &str) -> String {
-    ANSI_REGEX.replace_all(text, "").to_string()
+fn strip_ansi(text: &str) -> Cow<'_, str> {
+    ANSI_REGEX.replace_all(text, "")
 }
 
 pub const SHELL_TOOL_NAME: &str = "shell";
@@ -121,7 +122,9 @@ For long-running commands (e.g. start a server, run a script with unknown durati
         let command = args["command"]
             .as_str()
             .ok_or_else(|| KernelError::tool("Missing 'command' argument"))?;
-        let timeout_secs = args["timeout"].as_u64();
+        let timeout_secs = args["timeout"]
+            .as_u64()
+            .and_then(|s| if s > 0 { Some(s) } else { None });
         let background = args["background"].as_bool().unwrap_or(false);
 
         tracing::debug!("Executing bash command: {}", command);
@@ -140,11 +143,11 @@ For long-running commands (e.g. start a server, run a script with unknown durati
 impl ShellTool {
     /// Get the appropriate shell command for the current platform
     #[inline]
-    fn shell_command() -> (String, String) {
+    fn shell_command() -> (&'static str, &'static str) {
         if cfg!(target_os = "windows") {
-            ("cmd.exe".to_string(), "/C".to_string())
+            ("cmd.exe", "/C")
         } else {
-            ("bash".to_string(), "-c".to_string())
+            ("bash", "-c")
         }
     }
 
@@ -157,11 +160,11 @@ impl ShellTool {
         cancel_token: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolOutput> {
         let (shell, arg) = Self::shell_command();
-        let output_fut = Command::new(&shell)
-            .arg(&arg)
+        let output_fut = Command::new(shell)
+            .arg(arg)
             .arg(command)
             .current_dir(working_dir)
-            .stdin(Stdio::null()) // Prevent commands from hanging on interactive input
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -174,7 +177,6 @@ impl ShellTool {
                     biased;
                     () = token.cancelled() => {
                         tracing::info!("Bash command cancelled: {}", command);
-                        // output_fut is dropped here; .kill_on_drop(true) ensures the process is killed
                         return Ok(ToolOutput::error("Command cancelled"));
                     }
                     result = timeout(timeout_duration, output_fut) => result,
@@ -196,50 +198,46 @@ impl ShellTool {
             }
         };
 
-        let exit_code = output.status.code().unwrap_or(-1);
+        let status = format_exit_status(output.status);
+        let success = output.status.success();
 
-        // Strip ANSI escape sequences from output
-        let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-        let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
-
-        if exit_code == 0 {
-            tracing::debug!(
-                "Bash command completed successfully (exit code: {})",
-                exit_code
-            );
+        if success {
+            tracing::debug!("Bash command completed successfully ({status})");
         } else {
-            tracing::warn!(
-                "Bash command failed (exit code: {}): stderr={}",
-                exit_code,
-                stderr
-            );
+            tracing::warn!("Bash command failed ({status})");
         }
 
-        let output_text = if stderr.is_empty() {
-            stdout
-        } else if stdout.is_empty() {
-            format!("[stderr]\n{stderr}")
-        } else {
-            format!("[stdout]\n{stdout}\n\n[stderr]\n{stderr}")
-        };
+        let stdout_raw = String::from_utf8_lossy(&output.stdout);
+        let stderr_raw = String::from_utf8_lossy(&output.stderr);
+        let stdout = strip_ansi(&stdout_raw);
+        let stderr = strip_ansi(&stderr_raw);
 
-        let output_text = if output_text.len() > MAX_TOOL_OUTPUT_LENGTH {
-            truncate_keep_edges(
-                &output_text,
-                MAX_TOOL_OUTPUT_LENGTH,
-                "\n\n... [output truncated] ...\n\n",
+        let footer = format!(
+            "\n\n---\n[{status}] Command {}.",
+            if success { "completed" } else { "failed" }
+        );
+
+        let total_budget = MAX_TOOL_OUTPUT_LENGTH.saturating_sub(footer.len());
+        let has_out = !stdout.is_empty();
+        let has_err = !stderr.is_empty();
+
+        let content = if has_out && has_err {
+            let per_stream = total_budget / 2;
+            format!(
+                "[stdout]\n{}\n\n[stderr]\n{}",
+                format_stream(&stdout, per_stream),
+                format_stream(&stderr, per_stream)
             )
+        } else if has_out {
+            format!("[stdout]\n{}", format_stream(&stdout, total_budget))
+        } else if has_err {
+            format!("[stderr]\n{}", format_stream(&stderr, total_budget))
         } else {
-            output_text
+            String::new()
         };
 
-        if exit_code == 0 {
-            Ok(ToolOutput::text(output_text))
-        } else {
-            Ok(ToolOutput::text(format!(
-                "[exit code: {exit_code}]\n{output_text}"
-            )))
-        }
+        let output_text = format!("{content}{footer}");
+        Ok(ToolOutput::text(output_text))
     }
 
     /// Execute command in background and notify via `TaskResult` when complete
@@ -267,13 +265,14 @@ impl ShellTool {
 
         // Start the process and get PID immediately
         let (shell, arg) = Self::shell_command();
-        let child = Command::new(&shell)
-            .arg(&arg)
+        let child = Command::new(shell)
+            .arg(arg)
             .arg(command)
             .current_dir(working_dir)
-            .stdin(Stdio::null()) // Prevent commands from hanging on interactive input
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()?;
 
         let pid = child.id().unwrap_or(0);
@@ -331,6 +330,29 @@ impl ShellTool {
     }
 }
 
+fn format_exit_status(status: std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("exit code: {code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return format!("killed by signal {sig}");
+        }
+    }
+    "unknown exit status".to_string()
+}
+
+/// Format a single stream with optional truncation and label.
+fn format_stream(text: &str, budget: usize) -> String {
+    if text.len() > budget {
+        truncate_keep_edges(text, budget, "\n... [truncated] ...\n")
+    } else {
+        text.to_string()
+    }
+}
+
 /// Parse a successful `child.wait()` result.
 fn parse_wait_result(
     result: std::result::Result<std::process::ExitStatus, std::io::Error>,
@@ -365,8 +387,6 @@ async fn wait_for_child(
     timeout_secs: Option<u64>,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
 ) -> Result<(i32, bool, bool)> {
-    use tokio::time::timeout;
-
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 

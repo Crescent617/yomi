@@ -6,8 +6,9 @@ on:
       - "v*"
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  # ==================== TUI 构建 ====================
+  build-tui:
+    name: Build TUI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -32,6 +33,11 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
 
       # Linux 用 clang 避坑 aws-lc
       - name: Install clang (Linux only)
@@ -71,10 +77,49 @@ jobs:
           name: ${{ matrix.target }}
           path: |
             *.tar.gz
-            *.zip
 
+  # ==================== GUI 构建 (macOS DMG) ====================
+  build-gui:
+    name: Build GUI (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+
+      - name: Build & Sign DMG
+        run: |
+          cd crates/gui/frontend && npm install
+          cd .. && npm install
+          npx tauri build
+          bash ../../scripts/fix-dmg-signature.sh
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          DMG=$(ls ../../target/release/bundle/dmg/*.dmg | head -1)
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 "$DMG" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-dmg
+          path: ${{ steps.sha.outputs.dmg }}
+
+  # ==================== 创建 GitHub Release ====================
   release:
-    needs: build
+    needs: [build-tui, build-gui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,4 +132,41 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: artifacts/**
+
+  # ==================== 更新 Homebrew Formula (TUI) ====================
+  brew-tui:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release TUI to Homebrew
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          bash ./scripts/brew-release.sh "${GITHUB_REF_NAME#v}"
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # ==================== 更新 Homebrew Cask (GUI) ====================
+  brew-gui:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download DMG from Release
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG_URL="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/Yomi_${VERSION}_aarch64.dmg"
+          curl -fsL -o Yomi.dmg "$DMG_URL"
+          echo "DMG_SHA256=$(sha256sum Yomi.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Release GUI to Homebrew
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          bash ./scripts/brew-cask-release-ci.sh "${GITHUB_REF_NAME#v}" "$DMG_SHA256"
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

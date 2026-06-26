@@ -107,13 +107,19 @@ EOF
 # Clone or update homebrew-tap repo
 TAP_DIR="/tmp/homebrew-tap-$$"
 
+if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then
+    TAP_URL="https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git"
+else
+    TAP_URL="https://github.com/${TAP_REPO}.git"
+fi
+
 cleanup() {
     rm -rf "$TAP_DIR"
 }
 trap cleanup EXIT
 
 log "Cloning ${TAP_REPO}..."
-git clone --depth 1 "https://github.com/${TAP_REPO}.git" "$TAP_DIR" || git clone --depth 1 "git@github.com:${TAP_REPO}.git" "$TAP_DIR" 2>/dev/null
+git clone --depth 1 "$TAP_URL" "$TAP_DIR"
 
 
 FORMULA_PATH="${TAP_DIR}/Formula/${FORMULA_NAME}.rb"
