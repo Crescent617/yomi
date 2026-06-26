@@ -101,8 +101,9 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & Sign DMG
+        working-directory: crates/gui
         run: |
-          cd crates/gui/frontend && npm install
+          cd frontend && npm install
           cd .. && npm install
           npx tauri build
           bash ../../scripts/fix-dmg-signature.sh
@@ -110,7 +111,7 @@ jobs:
       - name: Calculate SHA256
         id: sha
         run: |
-          DMG=$(ls ../../target/release/bundle/dmg/*.dmg | head -1)
+          DMG=$(ls target/release/bundle/dmg/*.dmg | head -1)
           echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
           echo "sha256=$(shasum -a 256 "$DMG" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
