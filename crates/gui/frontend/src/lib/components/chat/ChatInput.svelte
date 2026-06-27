@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Send, Command, Square, Clock, Paperclip, X, Wrench } from "lucide-svelte";
+  import {
+    Send,
+    Command,
+    Square,
+    Clock,
+    Paperclip,
+    X,
+    Wrench,
+  } from "lucide-svelte";
   import {
     levelDescription,
     levelIcon,
@@ -146,7 +154,9 @@
   const filteredSkills = $derived.by(() => {
     const q = skillFilter.toLowerCase();
     return availableSkills.filter(
-      (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q),
     );
   });
 
@@ -862,7 +872,9 @@
           <Wrench size={14} class="text-muted-foreground shrink-0" />
           <span class="font-mono text-primary shrink-0">{skill.name}</span>
           {#if skill.description}
-            <span class="text-muted-foreground text-xs truncate">{skill.description}</span>
+            <span class="text-muted-foreground text-xs truncate"
+              >{skill.description}</span
+            >
           {/if}
         </button>
       {/each}

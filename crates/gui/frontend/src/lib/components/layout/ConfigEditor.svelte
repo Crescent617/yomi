@@ -69,7 +69,11 @@
       dirty = false;
       saved = true;
       setTimeout(() => (saved = false), 2000);
-      showNotification("Config saved. Restart to apply changes.", "success", 3000);
+      showNotification(
+        "Config saved. Restart to apply changes.",
+        "success",
+        3000,
+      );
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);
       full_config = c?.full_config ?? "";
