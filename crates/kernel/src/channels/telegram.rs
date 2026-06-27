@@ -9,22 +9,6 @@ use tracing::{debug, info, warn};
 
 use super::{ChannelError, ChannelMessage, PlatformAdapter};
 
-/// Escape characters that have special meaning in Telegram `MarkdownV2`.
-fn escape_markdown_v2(text: &str) -> String {
-    text.chars()
-        .fold(String::with_capacity(text.len() * 2), |mut s, c| {
-            match c {
-                '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '='
-                | '|' | '{' | '}' | '.' | '!' => {
-                    s.push('\\');
-                    s.push(c);
-                }
-                _ => s.push(c),
-            }
-            s
-        })
-}
-
 pub struct TelegramAdapter {
     bot: Bot,
     bot_username: tokio::sync::OnceCell<String>,
@@ -368,14 +352,19 @@ impl PlatformAdapter for TelegramAdapter {
             return Ok(());
         }
 
-        let safe_text = escape_markdown_v2(&text);
+        // Try MarkdownV2 first; fall back to plain text if Telegram rejects the markup.
         let mut req = self
             .bot
-            .send_message(Recipient::Id(ChatId(chat_id)), safe_text);
+            .send_message(Recipient::Id(ChatId(chat_id)), text.clone());
         req.parse_mode = Some(ParseMode::MarkdownV2);
-        req.send()
-            .await
-            .map_err(|e| ChannelError::Platform(format!("send_message failed: {e}")))?;
+        if let Err(e) = req.send().await {
+            warn!(error = %e, "MarkdownV2 send failed, falling back to plain text");
+            self.bot
+                .send_message(Recipient::Id(ChatId(chat_id)), text)
+                .send()
+                .await
+                .map_err(|e| ChannelError::Platform(format!("send_message failed: {e}")))?;
+        }
 
         Ok(())
     }
@@ -400,7 +389,7 @@ impl PlatformAdapter for TelegramAdapter {
             if mime.type_() == "image" {
                 let mut req = self.bot.send_photo(recipient.clone(), input);
                 if let Some(caption) = caption {
-                    req.caption = Some(escape_markdown_v2(caption));
+                    req.caption = Some(caption.to_string());
                     req.parse_mode = Some(ParseMode::MarkdownV2);
                 }
                 req.send()
@@ -409,7 +398,7 @@ impl PlatformAdapter for TelegramAdapter {
             } else {
                 let mut req = self.bot.send_document(recipient.clone(), input);
                 if let Some(caption) = caption {
-                    req.caption = Some(escape_markdown_v2(caption));
+                    req.caption = Some(caption.to_string());
                     req.parse_mode = Some(ParseMode::MarkdownV2);
                 }
                 req.send()
