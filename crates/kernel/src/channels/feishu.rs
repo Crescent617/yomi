@@ -336,8 +336,29 @@ impl PlatformAdapter for FeishuAdapter {
         if text.is_empty() {
             return Ok(());
         }
-        let content = json!({ "text": text }).to_string();
-        self.send_msg(&token, external_chat_id, &content, "text")
+
+        // Feishu schema 2.0 markdown supports tables/fenced code; old lark_md does not.
+        // Note: content must be the card root object, NOT wrapped in {"card": ...}.
+        const MAX_MD: usize = 30_000;
+        let text = if text.len() > MAX_MD {
+            let split = text
+                .char_indices()
+                .nth(MAX_MD)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
+            format!("{}\n\n...(内容已截断)", &text[..split])
+        } else {
+            text
+        };
+
+        let content = json!({
+            "schema": "2.0",
+            "body": {
+                "elements": [{ "tag": "markdown", "content": text }]
+            }
+        })
+        .to_string();
+        self.send_msg(&token, external_chat_id, &content, "interactive")
             .await
     }
 
@@ -376,11 +397,9 @@ impl PlatformAdapter for FeishuAdapter {
             if let Some(caption) = caption {
                 if !caption.is_empty() {
                     let content = json!({
-                        "card": {
-                            "schema": "2.0",
-                            "body": {
-                                "elements": [{ "tag": "markdown", "content": caption }]
-                            }
+                        "schema": "2.0",
+                        "body": {
+                            "elements": [{ "tag": "markdown", "content": caption }]
                         }
                     })
                     .to_string();
