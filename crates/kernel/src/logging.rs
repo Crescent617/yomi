@@ -16,7 +16,7 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
         return;
     };
 
-    let prefix_dot = format!("{}.", prefix);
+    let prefix_dot = format!("{prefix}.");
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -87,8 +87,7 @@ pub fn init_logging(
 
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)

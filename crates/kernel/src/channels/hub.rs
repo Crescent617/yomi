@@ -257,35 +257,21 @@ async fn handle_incoming_message(
     adapter: Arc<dyn PlatformAdapter>,
 ) -> Result<()> {
     let chat_id = msg.external_chat_id.clone();
+    let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
+    let mapping_key = msg.thread_id.clone().unwrap_or_else(|| chat_id.clone());
 
-    // 1. Find existing mapping
-    let session_id = if let Some(sid) = store.find_mapping(channel_name, &chat_id).await? {
-        if coordinator.get_session(&sid).is_some() {
-            // Session alive, reuse it
-            sid
-        } else {
-            // Session dormant, restore it
+    // 1. Find existing mapping or create new session
+    let session_id = if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+        if coordinator.get_session(&sid).is_none() {
             coordinator
                 .restore_session(
                     &sid,
                     vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
                 )
                 .await?;
-            // Spawn subscriber if not already running
-            spawn_subscriber_if_needed(
-                active_subs,
-                sid.clone(),
-                coordinator.clone(),
-                chat_id.clone(),
-                Arc::clone(&adapter),
-            )
-            .await;
-            sid
         }
+        sid
     } else {
-        // 2. No mapping — create new session
-        // Channels operate without interactive approval; every tool call is auto-approved
-        // because IM platforms have no mechanism for a user to click "Approve" mid-conversation.
         let sid = coordinator
             .create_session(CreateSessionInput {
                 project_id: None,
@@ -294,20 +280,11 @@ async fn handle_incoming_message(
                 tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
             })
             .await?;
-        store.save_mapping(channel_name, &chat_id, &sid).await?;
-        // Spawn subscriber for the new session
-        spawn_subscriber_if_needed(
-            active_subs,
-            sid.clone(),
-            coordinator.clone(),
-            chat_id.clone(),
-            Arc::clone(&adapter),
-        )
-        .await;
+        store.save_mapping(channel_name, &mapping_key, &sid).await?;
         sid
     };
 
-    // 3. Ensure subscriber is alive before sending the message so that replies
+    // 2. Ensure subscriber is alive before sending the message so that replies
     //    are not lost in a race between the agent generating output and the
     //    subscriber being spawned.
     spawn_subscriber_if_needed(
@@ -315,11 +292,12 @@ async fn handle_incoming_message(
         session_id.clone(),
         coordinator.clone(),
         chat_id.clone(),
+        reply_msg_id.clone(),
         Arc::clone(&adapter),
     )
     .await;
 
-    // 4. Send the message blocks to the session
+    // 3. Send the message blocks to the session
     coordinator.send_message(&session_id, msg.content).await?;
 
     Ok(())
@@ -330,6 +308,7 @@ async fn spawn_subscriber_if_needed(
     session_id: SessionId,
     coordinator: Arc<Coordinator>,
     external_chat_id: String,
+    reply_msg_id: Option<String>,
     adapter: Arc<dyn PlatformAdapter>,
 ) {
     // Clean up finished subscribers so dead tasks don't block respawning.
@@ -374,7 +353,10 @@ async fn spawn_subscriber_if_needed(
                     let blocks = vec![ContentBlock::Text {
                         text: buffer.clone(),
                     }];
-                    if let Err(e) = adapter.send_message(&external_chat_id, blocks).await {
+                    if let Err(e) = adapter
+                        .send_message(&external_chat_id, blocks, reply_msg_id.as_deref())
+                        .await
+                    {
                         error!(error = %e, "failed to send reply to platform");
                     }
                     buffer.clear();
@@ -382,7 +364,10 @@ async fn spawn_subscriber_if_needed(
                 Ok(Event::Model(ModelEvent::Error { error, .. })) => {
                     let text = format!("Error: {error}");
                     let blocks = vec![ContentBlock::Text { text }];
-                    if let Err(e) = adapter.send_message(&external_chat_id, blocks).await {
+                    if let Err(e) = adapter
+                        .send_message(&external_chat_id, blocks, reply_msg_id.as_deref())
+                        .await
+                    {
                         error!(error = %e, "failed to send error message to platform");
                     }
                     buffer.clear();
@@ -456,6 +441,7 @@ impl PlatformAdapter for MockAdapter {
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
+        _reply_msg_id: Option<&str>,
     ) -> std::result::Result<(), super::ChannelError> {
         self.outgoing
             .lock()
@@ -612,7 +598,7 @@ mod tests {
         let blocks = vec![ContentBlock::Text {
             text: "hello".into(),
         }];
-        adapter.send_message("chat1", blocks).await.unwrap();
+        adapter.send_message("chat1", blocks, None).await.unwrap();
         let out = adapter.outgoing.lock().await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, "chat1");

@@ -160,6 +160,23 @@ impl FeishuAdapter {
 
     // ── Send helpers ─────────────────────────────────────────────────
 
+    /// Send to chat or reply to a specific message, depending on whether
+    /// `reply_msg_id` is present.
+    async fn send_or_reply(
+        &self,
+        token: &str,
+        chat_id: &str,
+        reply_msg_id: Option<&str>,
+        content: &str,
+        msg_type: &str,
+    ) -> Result<(), ChannelError> {
+        if let Some(msg_id) = reply_msg_id {
+            self.reply_msg(token, msg_id, content, msg_type).await
+        } else {
+            self.send_msg(token, chat_id, content, msg_type).await
+        }
+    }
+
     async fn send_msg(
         &self,
         token: &str,
@@ -173,6 +190,28 @@ impl FeishuAdapter {
                 "{FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type={RECEIVE_ID_TYPE}"
             ),
             json!({ "receive_id": chat_id, "content": content, "msg_type": msg_type }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Reply to a specific message using the Feishu reply API.
+    /// This puts the response into the same thread as the original message.
+    async fn reply_msg(
+        &self,
+        token: &str,
+        msg_id: &str,
+        content: &str,
+        msg_type: &str,
+    ) -> Result<(), ChannelError> {
+        self.api_post(
+            token,
+            &format!("{FEISHU_BASE_URL}/open-apis/im/v1/messages/{msg_id}/reply"),
+            json!({
+                "content": content,
+                "msg_type": msg_type,
+                "reply_in_thread": true,
+            }),
         )
         .await?;
         Ok(())
@@ -330,6 +369,7 @@ impl PlatformAdapter for FeishuAdapter {
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
+        reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
         let text = super::blocks_to_text(&blocks);
@@ -344,31 +384,31 @@ impl PlatformAdapter for FeishuAdapter {
             let split = text
                 .char_indices()
                 .nth(MAX_MD)
-                .map(|(i, _)| i)
-                .unwrap_or(text.len());
+                .map_or(text.len(), |(i, _)| i);
             format!("{}\n\n...(内容已截断)", &text[..split])
         } else {
             text
         };
 
-        let content = json!({
-            "schema": "2.0",
-            "body": {
-                "elements": [{ "tag": "markdown", "content": text }]
-            }
-        })
-        .to_string();
-        self.send_msg(&token, external_chat_id, &content, "interactive")
-            .await
+        let content = Self::build_card(&text);
+
+        self.send_or_reply(
+            &token,
+            external_chat_id,
+            reply_msg_id,
+            &content,
+            "interactive",
+        )
+        .await
     }
 
     async fn send_files(
         &self,
         external_chat_id: &str,
         files: &[(&std::path::Path, Option<&str>)],
+        reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
-
         for (path, caption) in files {
             let bytes = tokio::fs::read(path)
                 .await
@@ -391,20 +431,20 @@ impl PlatformAdapter for FeishuAdapter {
                 .ok_or_else(|| api_err_str("no upload key"))?;
             let content = json!({ key_field: key }).to_string();
 
-            self.send_msg(&token, external_chat_id, &content, msg_type)
+            self.send_or_reply(&token, external_chat_id, reply_msg_id, &content, msg_type)
                 .await?;
 
             if let Some(caption) = caption {
                 if !caption.is_empty() {
-                    let content = json!({
-                        "schema": "2.0",
-                        "body": {
-                            "elements": [{ "tag": "markdown", "content": caption }]
-                        }
-                    })
-                    .to_string();
-                    self.send_msg(&token, external_chat_id, &content, "interactive")
-                        .await?;
+                    let content = Self::build_card(caption);
+                    self.send_or_reply(
+                        &token,
+                        external_chat_id,
+                        reply_msg_id,
+                        &content,
+                        "interactive",
+                    )
+                    .await?;
                 }
             }
         }
@@ -549,6 +589,36 @@ impl FeishuAdapter {
     }
 
     /// Parse event from JSON value (v2.0 or v1.x). Returns `message_id` if a message was forwarded.
+    fn parse_feishu_timestamp(value: &serde_json::Value) -> String {
+        value
+            .as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .or_else(|| value.as_i64())
+            .and_then(|ts| {
+                if ts < 10_000_000_000 {
+                    chrono::DateTime::from_timestamp(ts, 0)
+                } else if ts < 10_000_000_000_000 {
+                    chrono::DateTime::from_timestamp_millis(ts)
+                } else {
+                    chrono::DateTime::from_timestamp_millis(ts / 1000)
+                }
+            })
+            .map_or_else(
+                || chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            )
+    }
+
+    fn build_card(text: &str) -> String {
+        json!({
+            "schema": "2.0",
+            "body": {
+                "elements": [{ "tag": "markdown", "content": text }]
+            }
+        })
+        .to_string()
+    }
+
     async fn parse_event_json(
         &self,
         msg: &serde_json::Value,
@@ -568,13 +638,15 @@ impl FeishuAdapter {
 
         let event = msg.get("event").unwrap_or(msg);
         let message = &event["message"];
+        let sender = &event["sender"];
         let chat_id = message["chat_id"]
             .as_str()
             .ok_or_else(|| api_err_str("missing chat_id"))?;
         let msg_id = message["message_id"].as_str().unwrap_or("").to_string();
-        let user_id = message["sender"]["sender_id"]["union_id"]
+        let user_id = sender["sender_id"]["union_id"]
             .as_str()
-            .or_else(|| message["sender"]["sender_id"]["user_id"].as_str())
+            .or_else(|| sender["sender_id"]["user_id"].as_str())
+            .or_else(|| sender["sender_id"]["open_id"].as_str())
             .unwrap_or("unknown");
         let content_str = message["content"].as_str().unwrap_or("{}");
 
@@ -585,11 +657,24 @@ impl FeishuAdapter {
             return Ok(None);
         }
 
+        let thread_id = message["thread_id"].as_str().map(|s| s.to_string());
+
+        let ts = Self::parse_feishu_timestamp(&message["create_time"]);
+
         let chat_type = message["chat_type"].as_str().unwrap_or("");
         let is_mention = chat_type == "p2p"
             || message["mentions"]
                 .as_array()
                 .is_some_and(|a| !a.is_empty());
+
+        let thread_part = if let Some(ref tid) = thread_id {
+            format!("[thread: {tid}]")
+        } else {
+            String::new()
+        };
+        let formatted = format!(
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}[platform: feishu]\n{text}"
+        );
 
         info!(chat_id, msg_id, user_id, is_mention, text, "Feishu message");
 
@@ -602,9 +687,8 @@ impl FeishuAdapter {
                 Some(msg_id.clone())
             },
             is_mention,
-            content: vec![ContentBlock::Text {
-                text: text.to_string(),
-            }],
+            content: vec![ContentBlock::Text { text: formatted }],
+            thread_id: thread_id.clone(),
         };
 
         if incoming.send(channel_msg).await.is_err() {

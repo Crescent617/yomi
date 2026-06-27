@@ -102,18 +102,24 @@ impl Tool for SendMessageTool {
         if !resolved_paths.is_empty() {
             let refs: Vec<(&std::path::Path, Option<&str>)> =
                 resolved_paths.iter().map(|p| (p.as_path(), None)).collect();
-            adapter.send_files(&chat_id, &refs).await.map_err(|e| {
-                crate::types::KernelError::tool(format!("Failed to send files: {e}"))
-            })?;
+            adapter
+                .send_files(&chat_id, &refs, None)
+                .await
+                .map_err(|e| {
+                    crate::types::KernelError::tool(format!("Failed to send files: {e}"))
+                })?;
         }
 
         if let Some(text) = content {
             let blocks = vec![ContentBlock::Text {
                 text: text.to_string(),
             }];
-            adapter.send_message(&chat_id, blocks).await.map_err(|e| {
-                crate::types::KernelError::tool(format!("Failed to send message: {e}"))
-            })?;
+            adapter
+                .send_message(&chat_id, blocks, None)
+                .await
+                .map_err(|e| {
+                    crate::types::KernelError::tool(format!("Failed to send message: {e}"))
+                })?;
         }
 
         let parts: Vec<String> = [
