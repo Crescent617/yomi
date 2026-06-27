@@ -16,6 +16,8 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
         return;
     };
 
+    let prefix_dot = format!("{}.", prefix);
+
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("log") {
@@ -24,7 +26,7 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        if !stem.starts_with(prefix) {
+        if stem != prefix && !stem.starts_with(&prefix_dot) {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
@@ -33,8 +35,11 @@ pub fn cleanup_old_logs(log_dir: &Path, prefix: &str, days: u64) {
         let Ok(modified) = meta.modified() else {
             continue;
         };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
 
-        if now.duration_since(modified).unwrap_or_default() > max_age {
+        if age > max_age {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -104,12 +109,11 @@ pub fn init_logging(
         .with(file_layer)
         .with(console_layer)
         .try_init()
-        .is_ok()
+        .is_err()
     {
-        tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
-        Ok(Some(guard))
-    } else {
         drop(guard);
-        Ok(None)
+        return Ok(None);
     }
+    tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
+    Ok(Some(guard))
 }
