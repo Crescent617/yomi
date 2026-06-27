@@ -104,6 +104,10 @@ pub struct ChannelMessage {
     pub external_message_id: Option<String>,
     pub is_mention: bool,
     pub content: Vec<ContentBlock>,
+    /// Thread ID for platforms that support threaded conversations (e.g. Feishu).
+    /// When present, the hub uses this as the session mapping key instead of
+    /// `external_chat_id` so that each thread gets its own session.
+    pub thread_id: Option<String>,
 }
 
 /// Runtime info about a channel, for UI listing
@@ -158,10 +162,14 @@ pub trait PlatformAdapter: Send + Sync {
     ) -> Result<(), ChannelError>;
 
     /// Send a message (text, image, etc.) back to the platform.
+    ///
+    /// `reply_msg_id` is the original message ID to reply to. For Feishu, this
+    /// is used with the reply API to place the response in the same thread.
     async fn send_message(
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
+        reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError>;
 
     /// Send a reaction (emoji) to a message on the platform.
@@ -185,11 +193,13 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// Send multiple files to the platform.
     ///
+    /// `reply_msg_id` is forwarded the same way as in `send_message`.
     /// Default implementation does nothing for platforms that don't support it yet.
     async fn send_files(
         &self,
         _external_chat_id: &str,
         _files: &[(&std::path::Path, Option<&str>)],
+        _reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         Err(ChannelError::Platform(
             "send_files not supported for this platform".into(),

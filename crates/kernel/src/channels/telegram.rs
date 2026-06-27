@@ -16,8 +16,6 @@ pub struct TelegramAdapter {
 
 impl TelegramAdapter {
     pub fn new(token: String) -> Self {
-        // HTTP timeout must exceed getUpdates timeout (30s) to avoid premature
-        // disconnects that cause Conflict: terminated by other getUpdates.
         let client = teloxide_core::net::default_reqwest_settings()
             .timeout(std::time::Duration::from_mins(1))
             .build()
@@ -44,7 +42,6 @@ impl TelegramAdapter {
             .await
     }
 
-    /// Download a Telegram photo by `file_id` and convert it to a base64 data URL.
     async fn download_photo(&self, file_id: &str) -> Result<String, ChannelError> {
         let file = self
             .bot
@@ -65,42 +62,21 @@ impl TelegramAdapter {
         Ok(format!("data:{mime_type};base64,{base64}"))
     }
 
-    /// Format sender display name from a Telegram User.
-    fn format_user_name(user: &teloxide_core::types::User) -> String {
-        user.username
-            .as_deref()
-            .filter(|u| !u.is_empty())
-            .map_or_else(
-                || {
-                    let mut name = user.first_name.clone();
-                    if let Some(last) = user.last_name.as_deref() {
-                        if !last.is_empty() {
-                            name.push(' ');
-                            name.push_str(last);
-                        }
-                    }
-                    name
-                },
-                |u| u.to_string(),
-            )
-    }
-
-    /// Format a single message as a line with timestamp and sender.
-    fn format_message_line(msg: &teloxide_core::types::Message) -> Option<String> {
+    fn format_message_line(
+        msg: &teloxide_core::types::Message,
+        chat_id: &str,
+        user_id: &str,
+    ) -> Option<String> {
         let text = msg.text().or_else(|| msg.caption())?;
         if text.is_empty() {
             return None;
         }
-        let ts = msg.date.format("%H:%M:%S");
-        let from = msg
-            .from
-            .as_ref()
-            .map(Self::format_user_name)
-            .unwrap_or_default();
-        Some(format!("[{ts}][from: {from}] {text}"))
+        let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
+        Some(format!(
+            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][platform: telegram]\n{text}"
+        ))
     }
 
-    /// Build a batched `ChannelMessage` from a list of Telegram messages.
     async fn build_channel_message(
         &self,
         chat_id: &str,
@@ -114,7 +90,12 @@ impl TelegramAdapter {
         let mut content: Vec<ContentBlock> = Vec::new();
 
         for msg in msgs {
-            if let Some(line) = Self::format_message_line(msg) {
+            let user_id = msg
+                .from
+                .as_ref()
+                .map_or_else(|| chat_id.to_string(), |u| u.id.0.to_string());
+
+            if let Some(line) = Self::format_message_line(msg, chat_id, &user_id) {
                 lines.push(line);
             }
 
@@ -125,14 +106,9 @@ impl TelegramAdapter {
                     }),
                     Err(e) => {
                         warn!("Failed to download Telegram photo: {e}");
-                        let ts = msg.date.format("%H:%M:%S");
-                        let from = msg
-                            .from
-                            .as_ref()
-                            .map(Self::format_user_name)
-                            .unwrap_or_default();
+                        let ts = msg.date.format("%Y-%m-%d %H:%M:%S");
                         lines.push(format!(
-                            "[{ts}][from: {from}] [Failed to download image: {e}]"
+                            "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}][platform: telegram]\n[Failed to download image: {e}]"
                         ));
                     }
                 }
@@ -163,10 +139,10 @@ impl TelegramAdapter {
             external_message_id: msgs.last().map(|m| m.id.0.to_string()),
             is_mention,
             content,
+            thread_id: None,
         })
     }
 
-    /// Fire-and-forget a reaction emoji on a message.
     fn fire_reaction(&self, chat_id: &str, message_id: &str, emoji: &str) {
         let bot = self.bot.clone();
         let chat_id = chat_id.to_string();
@@ -190,14 +166,11 @@ impl TelegramAdapter {
         });
     }
 
-    /// Check if the message contains a mention of the bot itself.
     fn is_mention_of_bot(msg: &teloxide_core::types::Message, bot_username: &str) -> bool {
-        // In a private chat, every message is implicitly directed at the bot.
         if msg.chat.is_private() {
             return true;
         }
 
-        // Helper: check entities in a given text slice for @bot_username
         let check_entities = |entities: &[teloxide_core::types::MessageEntity], text: &str| {
             entities.iter().any(|e| {
                 if let MessageEntityKind::Mention = e.kind {
@@ -210,7 +183,6 @@ impl TelegramAdapter {
         };
 
         if bot_username.is_empty() {
-            // We don't know the bot username yet; conservatively treat any @mention as ours.
             let text_entities = msg.entities().is_some_and(|e| {
                 e.iter()
                     .any(|e| matches!(e.kind, MessageEntityKind::Mention))
@@ -271,7 +243,6 @@ impl PlatformAdapter for TelegramAdapter {
 
             match result {
                 Ok(updates) => {
-                    // Advance offset and collect valid messages
                     let mut messages = Vec::new();
                     for update in updates {
                         offset = offset.max(i64::from(update.id.0) + 1);
@@ -292,7 +263,6 @@ impl PlatformAdapter for TelegramAdapter {
                         continue;
                     }
 
-                    // Group by chat_id
                     let mut by_chat: std::collections::HashMap<
                         String,
                         Vec<teloxide_core::types::Message>,
@@ -306,7 +276,6 @@ impl PlatformAdapter for TelegramAdapter {
 
                     let bot_username = self.ensure_username().await;
 
-                    // Build and send batched ChannelMessage per chat
                     for (chat_id, msgs) in by_chat {
                         let Some(channel_msg) = self
                             .build_channel_message(&chat_id, &msgs, bot_username)
@@ -342,6 +311,7 @@ impl PlatformAdapter for TelegramAdapter {
         &self,
         external_chat_id: &str,
         blocks: Vec<ContentBlock>,
+        _reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
@@ -352,7 +322,6 @@ impl PlatformAdapter for TelegramAdapter {
             return Ok(());
         }
 
-        // Try MarkdownV2 first; fall back to plain text if Telegram rejects the markup.
         let mut req = self
             .bot
             .send_message(Recipient::Id(ChatId(chat_id)), text.clone());
@@ -373,6 +342,7 @@ impl PlatformAdapter for TelegramAdapter {
         &self,
         external_chat_id: &str,
         files: &[(&std::path::Path, Option<&str>)],
+        _reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
         let chat_id: i64 = external_chat_id
             .parse()
