@@ -141,6 +141,8 @@ jobs:
   check-secrets:
     needs: release
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - name: Check HOMEBREW_TAP_TOKEN
         run: |
