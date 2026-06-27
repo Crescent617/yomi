@@ -6,7 +6,6 @@ mod state;
 
 use state::AppState;
 use tauri::Manager;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -120,76 +119,18 @@ fn main() {
     if let Err(e) = fix_path_env::fix() {
         tracing::warn!("Failed to fix PATH environment: {e}");
     }
-    let _guard = init_logging();
-    run();
-}
 
-/// Initialise daily-rotating file logging to `~/.yomi/logs/gui-app.<date>.log` **and stderr**.
-/// Falls back to stderr-only if the log directory cannot be created.
-fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let config_file = kernel::config::Config::discover_file();
-    let mut config = config_file
-        .as_ref()
-        .and_then(|p| kernel::config::Config::from_file(p).ok())
+    let mut config = kernel::config::Config::discover_file()
+        .and_then(|p| kernel::config::Config::from_file(&p).ok())
         .unwrap_or_default();
-
     config.finalize();
 
-    let log_dir = config.log_dir();
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!(
-            "Failed to create log directory '{}': {e}. Logging to stderr only.",
-            log_dir.display()
-        );
-        let _ = tracing_subscriber::fmt::try_init();
-        return None;
-    }
-
-    let file_appender = match tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("gui-app")
-        .filename_suffix("log")
-        .build(&log_dir)
-    {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!(
-                "Failed to create rolling file appender in '{}': {e}. Logging to stderr only.",
-                log_dir.display()
-            );
-            let _ = tracing_subscriber::fmt::try_init();
-            return None;
-        }
-    };
-
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(true);
-
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_ansi(true)
-        .with_target(true);
-
-    if tracing_subscriber::registry()
-        .with(env_filter)
-        .with(file_layer)
-        .with(stderr_layer)
-        .try_init()
-        .is_ok()
-    {
-        tracing::info!("Logging initialised. Log directory: {}", log_dir.display());
-        Some(guard)
-    } else {
-        drop(guard);
+    let _guard = kernel::logging::init_logging(&config, "gui", true).unwrap_or_else(|e| {
+        eprintln!("Failed to initialize file logging: {e}. Logging to stderr only.");
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
+            .try_init();
         None
-    }
+    });
+    run();
 }

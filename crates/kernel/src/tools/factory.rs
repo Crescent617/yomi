@@ -7,9 +7,8 @@ use crate::agent::AgentInput;
 use crate::event::Event;
 use crate::tools::helper::file_state::FileStateStore;
 use crate::tools::{
-    AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool,
-    ShellToolCtx, SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool,
-    WebSearchTool, WriteTool,
+    AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
+    SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::types::AgentId;
 use std::sync::Arc;

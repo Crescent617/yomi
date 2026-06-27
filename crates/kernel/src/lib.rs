@@ -25,6 +25,7 @@ pub mod event;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
+pub mod logging;
 pub mod channels;
 pub mod cron;
 pub mod memory;

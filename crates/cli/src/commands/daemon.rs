@@ -50,7 +50,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
 
             let (coordinator, config, _config_file) =
                 kernel::init_coordinator(None, true, true).await?;
-            let _log_guard = crate::commands::tui::init_logging(&config, true)?;
+            let _log_guard = kernel::logging::init_logging(&config, "daemon", true)?;
 
             let addr = crate::daemon::socket_addr();
 

@@ -5,7 +5,7 @@ use crate::{
     storage::AppStorage,
     utils::DEBUG_MODE,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use kernel::{
     client::{CoordinatorApi, RemoteCoordinator},
     config::Config,
@@ -14,7 +14,6 @@ use kernel::{
 };
 use std::io::{self, IsTerminal, Read};
 use std::sync::Arc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Maximum stdin size to prevent OOM (400KB)
 const MAX_STDIN_SIZE: u64 = 400 * 1024;
@@ -143,7 +142,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
-    let _log_guard = init_logging(&config, false)?;
+    let _log_guard = kernel::logging::init_logging(&config, "tui", false)?;
 
     let coordinator: Arc<dyn CoordinatorApi> = if args.daemon {
         daemon::spawn_daemon().await?;
@@ -260,61 +259,5 @@ fn print_startup_info(config: &Config) {
             "not set".to_string()
         };
         println!("API Key: {key_preview}\n");
-    }
-}
-
-pub(crate) fn init_logging(
-    config: &Config,
-    stdio: bool,
-) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
-    let log_dir = config.log_dir();
-
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
-
-    let file_appender = tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("app")
-        .filename_suffix("log")
-        .build(&log_dir)
-        .map_err(|e| anyhow::anyhow!("Failed to create rolling file appender: {e}"))?;
-
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .context("Failed to create env filter")?;
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(true);
-
-    let stdio_layer = if stdio {
-        Some(
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stdout)
-                .with_ansi(true)
-                .with_target(true)
-                .with_thread_ids(true),
-        )
-    } else {
-        None
-    };
-
-    // Use try_init to avoid panic if already initialized (e.g., in tests)
-    if tracing_subscriber::registry()
-        .with(env_filter)
-        .with(file_layer)
-        .with(stdio_layer)
-        .try_init()
-        .is_ok()
-    {
-        tracing::info!("Logging initialized. Log directory: {}", log_dir.display());
-        Ok(Some(guard))
-    } else {
-        drop(guard);
-        Ok(None)
     }
 }
