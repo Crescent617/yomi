@@ -81,8 +81,10 @@ impl Tool for ShellTool {
     fn desc(&self) -> &'static str {
         const BG_GUIDE: &str = r"
 ## What is background mode
-- When `background` is true, the command runs at background and will not block the agent. The tool returns immediately with a `task_id`, `pid`, and output file path. When the command completes, the agent receives a message with the `task_id` and command output automatically.
+- When `background` is true, the command runs at background, and returns immediately with a `task_id`, `pid`, and output file path.
 - The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
+- No need to sleep. When the command completes, you'll be notified automatically.
+
 ## When to using background mode
 For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary.";
         const_concat!(
