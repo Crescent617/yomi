@@ -2,17 +2,14 @@
   description = "Yomi - AI coding assistant with TUI, CLI, and Tauri GUI";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # Unstable has rustc 1.94+ which sqlx 0.9 and tauri-plugin-pilot require
-        pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
 
         # 从 Cargo.toml 自动读取 workspace 版本
         version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
@@ -49,134 +46,120 @@
               !isJunk && pkgs.lib.cleanSourceFilter path type;
         };
 
-        cargoLock = {
-          lockFile = ./Cargo.lock;
-          outputHashes = {
-            "fix-path-env-0.0.0" = "sha256-UygkxJZoiJlsgp8PLf1zaSVsJZx1GGdQyTXqaFv3oGk=";
-            "tauri-plugin-pilot-0.6.0" = "sha256-S7brFCDqpXoPBNYIQdakLxbmmlZYSrodniRe44m3Ir0=";
-          };
-        };
+        cargoHash = "sha256-p90tr1htCJ31LYzS4kMaeUp+e1rO116TVT1Zakv3JBk=";
 
-        npmDeps = pkgs.fetchNpmDeps {
-          src = ./crates/gui/frontend;
-          hash = "sha256-xUEzQYIs7JZsvyfJnv1QXwCDr+ezbHLvkRwbJuCdPt4=";
-        };
+        # 前端 npm 依赖 hash（同上，第一次构建失败后替换）
+        # 当前值：基于 crates/gui/frontend/package-lock.json 计算
+        npmDepsHash = "sha256-M6KP09fT61LJCV8Bo2RAUmEOvcdKMu6hKekqRgpcVNI=";
 
         commonNativeBuildInputs = with pkgs; [
           pkg-config
           cmake
+          protobuf
         ];
 
         commonBuildInputs = with pkgs; [
           openssl
         ];
 
-        # Unstable rustPlatform for newer rustc (1.94+)
-        rustPlatform = pkgs-unstable.rustPlatform;
-
         commonMeta = with pkgs.lib; {
           license = licenses.mit;
           homepage = "https://github.com/Crescent617/yomi";
         };
 
-        yomi-cli = rustPlatform.buildRustPackage {
-          inherit src cargoLock version;
-          pname = "yomi-cli";
-
-          cargoBuildFlags = [ "-p" "cli" ];
-          cargoCheckFlags = [ "-p" "cli" ];
-
-          nativeBuildInputs = commonNativeBuildInputs;
-          buildInputs = commonBuildInputs;
-
-          meta = commonMeta // {
-            description = "Yomi CLI - AI coding assistant command-line interface";
-            mainProgram = "yomi";
-          };
-        };
-
-        yomi-gui = rustPlatform.buildRustPackage {
-          inherit src cargoLock npmDeps version;
-          pname = "yomi-gui";
-
-          cargoBuildFlags = [ "-p" "yomi-gui" ];
-          cargoCheckFlags = [ "-p" "yomi-gui" ];
-
-          nativeBuildInputs = with pkgs; [
-            npmHooks.npmConfigHook
-            nodejs
-            wrapGAppsHook4
-          ] ++ commonNativeBuildInputs;
-
-          buildInputs = with pkgs; [
-            webkitgtk_4_1
-            gtk3
-            libsoup_3
-            libappindicator-gtk3
-            glib
-            gdk-pixbuf
-            pango
-            cairo
-            harfbuzz
-            at-spi2-atk
-            dbus
-          ] ++ commonBuildInputs;
-
-          npmRoot = "crates/gui/frontend";
-
-          # Build frontend before cargo build so tauri-build can find frontendDist
-          preBuild = ''
-            cd crates/gui/frontend
-            npm run build
-            cd ../..
-          '';
-
-          postInstall = ''
-            install -Dm644 crates/gui/icons/128x128.png $out/share/icons/hicolor/128x128/apps/yomi.png
-            install -Dm644 crates/gui/icons/32x32.png $out/share/icons/hicolor/32x32/apps/yomi.png
-
-            mkdir -p $out/share/applications
-            cat > $out/share/applications/yomi.desktop <<EOF
-[Desktop Entry]
-Name=Yomi
-Exec=yomi-gui
-Icon=yomi
-Type=Application
-Categories=Utility;
-EOF
-          '';
-
-          meta = commonMeta // {
-            description = "Yomi GUI - Tauri-based AI coding assistant desktop app";
-            mainProgram = "yomi-gui";
-          };
-        };
-
-        rustDev = [
-          pkgs-unstable.rustc
-          pkgs-unstable.cargo
-          pkgs-unstable.clippy
-          pkgs-unstable.rustfmt
-          pkgs-unstable.rust-analyzer
+        rustDev = with pkgs; [
+          rustc
+          cargo
+          clippy
+          rustfmt
+          rust-analyzer
         ];
 
       in {
         apps = {
-          yomi-cli = flake-utils.lib.mkApp { drv = yomi-cli; };
-          yomi-gui = flake-utils.lib.mkApp { drv = yomi-gui; };
-          default = flake-utils.lib.mkApp { drv = yomi-cli; };
+          yomi-cli = flake-utils.lib.mkApp { drv = self.packages.${system}.yomi-cli; };
+          yomi-gui = flake-utils.lib.mkApp { drv = self.packages.${system}.yomi-gui; };
+          default = flake-utils.lib.mkApp { drv = self.packages.${system}.yomi-cli; };
         };
 
         packages = {
-          inherit yomi-cli yomi-gui;
-          default = yomi-cli;
+          yomi-cli = pkgs.rustPlatform.buildRustPackage {
+            inherit src version cargoHash;
+            pname = "yomi-cli";
+
+            cargoBuildFlags = [ "-p" "cli" ];
+
+            nativeBuildInputs = commonNativeBuildInputs;
+            buildInputs = commonBuildInputs;
+
+            # 构建阶段的 checkPhase 在 sandbox 中测试 kernel 包需要 ripgrep/git，
+            # 而 cargoCheckFlags 在 nixpkgs 的 cargoCheckHook 中实际不生效（被当作 test binary 参数）。
+            # 测试应在开发环境或 CI 中单独运行：cargo test -p cli
+            doCheck = false;
+
+            meta = commonMeta // {
+              description = "Yomi CLI - AI coding assistant command-line interface";
+              mainProgram = "yomi";
+            };
+          };
+
+          yomi-gui = pkgs.rustPlatform.buildRustPackage {
+            inherit src version cargoHash;
+            pname = "yomi-gui";
+
+            # Tauri 后端在 workspace 子目录中。
+            # 注意：workspace 项目的 Cargo.lock 在根目录，因此不设置 cargoRoot
+            #（cargoRoot 控制 cargoDeps 的 lockfile 查找路径）。
+            # buildAndTestSubdir 仅用于构建/测试阶段的 pushd，不影响 cargoDeps 生成。
+            buildAndTestSubdir = "crates/gui";
+
+            # 前端 npm 依赖（package-lock.json 在 crates/gui/frontend/）
+            npmDeps = pkgs.fetchNpmDeps {
+              src = ./crates/gui/frontend;
+              hash = npmDepsHash;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              cargo-tauri.hook
+              nodejs
+              npmHooks.npmConfigHook
+              wrapGAppsHook4
+            ] ++ commonNativeBuildInputs;
+
+            buildInputs = with pkgs; [
+              webkitgtk_4_1
+              gtk3
+              libsoup_3
+              libappindicator-gtk3
+              glib
+              gdk-pixbuf
+              pango
+              cairo
+              harfbuzz
+              at-spi2-atk
+              dbus
+            ] ++ commonBuildInputs;
+
+            # npmHooks.npmConfigHook 在 crates/gui/frontend/ 运行 npm ci
+            npmRoot = "crates/gui/frontend";
+
+            # Tauri 构建在 sandbox 中无法运行测试（需要显示/WebKit），且 workspace 测试依赖外部命令
+            doCheck = false;
+
+            meta = commonMeta // {
+              description = "Yomi GUI - Tauri-based AI coding assistant desktop app";
+              mainProgram = "yomi-gui";
+            };
+          };
+
+          default = self.packages.${system}.yomi-cli;
         };
 
         devShells = {
           default = pkgs.mkShell {
             nativeBuildInputs = commonNativeBuildInputs ++ rustDev ++ [ pkgs.nodejs ];
             buildInputs = commonBuildInputs;
-            RUST_SRC_PATH = "${pkgs-unstable.rustPlatform.rustLibSrc}";
+            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };
 
           gui = pkgs.mkShell {
@@ -198,7 +181,7 @@ EOF
               at-spi2-atk
               dbus
             ] ++ commonBuildInputs;
-            RUST_SRC_PATH = "${pkgs-unstable.rustPlatform.rustLibSrc}";
+            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           };
         };
       }
