@@ -123,7 +123,9 @@
               cargo-tauri.hook
               nodejs
               npmHooks.npmConfigHook
+              pkg-config
               wrapGAppsHook4
+              makeWrapper
             ] ++ commonNativeBuildInputs;
 
             buildInputs = with pkgs; [
@@ -143,8 +145,38 @@
             # npmHooks.npmConfigHook 在 crates/gui/frontend/ 运行 npm ci
             npmRoot = "crates/gui/frontend";
 
+            # 禁用 beforeBuildCommand，避免递归（preBuild 已手动构建前端）
+            postPatch = ''
+              substituteInPlace crates/gui/tauri.conf.json \
+                --replace-fail '"beforeBuildCommand": "cd frontend && npm run build"' \
+                '"beforeBuildCommand": "true"'
+            '';
+
+            # 在 cargo tauri build 之前手动构建前端
+            # cargo-tauri.hook 的 beforeBuildCommand 在递归调用中可能被跳过
+            preBuild = ''
+              pushd crates/gui/frontend
+              npm run build
+              popd
+            '';
+
             # Tauri 构建在 sandbox 中无法运行测试（需要显示/WebKit），且 workspace 测试依赖外部命令
             doCheck = false;
+
+            postFixup = ''
+              # 确保前端产物在 store 中的正确位置
+              mkdir -p $out/frontend
+              cp -r crates/gui/frontend/build $out/frontend/
+
+              # wrapGAppsHook 在 fixupPhase 的 main body 中已经创建了 wrapper
+              # 我们在其 wrapper 之上再包一层 cd wrapper
+              if [ -f "$out/bin/.yomi-gui-wrapped" ]; then
+                mv $out/bin/yomi-gui $out/bin/.yomi-gui-gtk-wrapped
+                makeWrapper $out/bin/.yomi-gui-gtk-wrapped $out/bin/yomi-gui \
+                  --chdir "$out" \
+                  --inherit-argv0
+              fi
+            '';
 
             meta = commonMeta // {
               description = "Yomi GUI - Tauri-based AI coding assistant desktop app";
