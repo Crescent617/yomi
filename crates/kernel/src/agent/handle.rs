@@ -153,7 +153,7 @@ impl AgentHandle {
         &self,
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
-    ) -> Result<Result<(), String>, AgentError> {
+    ) -> Result<(), AgentError> {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         self.input_tx
             .send(AgentInput::Rewind {
@@ -164,7 +164,7 @@ impl AgentHandle {
             .await
             .map_err(|_| AgentError::ChannelClosed)?;
 
-        result_rx.await.map_err(|_| AgentError::ChannelClosed)
+        result_rx.await.map_err(|_| AgentError::ChannelClosed)?
     }
 
     /// Send a steer message to be injected before the next streaming turn.
