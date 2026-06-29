@@ -407,7 +407,7 @@ impl Session {
         Ok(())
     }
 
-    /// Resume goal auto-continue. Does not trigger agent — next turn will PreStop-continue.
+    /// Resume goal auto-continue. Does not trigger agent — next step will PreStop-continue.
     #[tracing::instrument(skip(self))]
     pub async fn resume_goal(&mut self) -> Result<()> {
         let mut state = self

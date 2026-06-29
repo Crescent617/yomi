@@ -322,7 +322,7 @@
             await api.sendSteer(session_id, blocks);
             clearInlineImages();
             showNotification(
-              "Steer message queued for next turn",
+              "Steer message queued for next step",
               "info",
               3000,
             );

@@ -90,7 +90,7 @@ export interface SessionInfo {
   id: string;
   project_path: string;
   created_at: string;
-  ended_at?: string;
+  updated_at?: string;
   title?: string;
   project_id?: string;
   auto_approve_level?: string;
@@ -106,7 +106,7 @@ export interface PinnedSessionDetail {
 
 export interface PaginatedSessions {
   sessions: SessionInfo[];
-  has_more: boolean;
+  next_cursor: string | null;
 }
 
 export async function listSessions(
@@ -114,7 +114,7 @@ export async function listSessions(
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
-  const result = await invokeCmd<{ sessions: unknown[]; has_more: boolean }>(
+  const result = await invokeCmd<{ sessions: unknown[]; next_cursor: string | null }>(
     "list_sessions",
     { project_id: project_id, before, limit },
   );
@@ -125,7 +125,7 @@ export async function listSessions(
         id: String(session.id ?? ""),
         project_path: String(session.working_dir ?? ""),
         created_at: String(session.created_at ?? ""),
-        ended_at: session.updated_at ? String(session.updated_at) : undefined,
+        updated_at: session.updated_at ? String(session.updated_at) : undefined,
         title: session.title ? String(session.title) : undefined,
         project_id: session.project_id ? String(session.project_id) : undefined,
         auto_approve_level: session.auto_approve_level
@@ -133,7 +133,7 @@ export async function listSessions(
           : undefined,
       };
     }),
-    has_more: result.has_more,
+    next_cursor: result.next_cursor,
   };
 }
 

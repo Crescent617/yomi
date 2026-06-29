@@ -97,13 +97,14 @@ pub trait SessionStore: Send + Sync {
 
     /// List sessions with cursor-based pagination.
     /// `project_id` = None returns all sessions (including independent ones).
-    /// Returns `(sessions, has_more)`.
+    /// Returns `(sessions, next_cursor)` where `next_cursor` is the `updated_at` of the last
+    /// session if there are more pages, or None if this is the last page.
     async fn list(
         &self,
         project_id: Option<&crate::types::ProjectId>,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
-    ) -> Result<(Vec<SessionInfo>, bool)>;
+    ) -> Result<(Vec<SessionInfo>, Option<String>)>;
 
     /// Update message count for a session
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()>;

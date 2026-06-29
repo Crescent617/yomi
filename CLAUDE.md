@@ -1,5 +1,6 @@
 # AGENTS.md
 
+
 ## Build Commands
 
 ```bash
@@ -30,6 +31,12 @@ cargo fmt -- --check
 - **crates/cli/** - Command-line interface and main entry point
 - **crates/gui/** - Desktop GUI built with Tauri v2
 - **crates/tui/** - Terminal UI components using tuirealm
+
+
+## Apps
+### yomi-gui
+using tauri with npm for pkg manager
+
 
 ## Key Patterns
 

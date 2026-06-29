@@ -82,7 +82,7 @@ impl SessionStore for SqliteSessionStore {
         project_id: Option<&crate::types::ProjectId>,
         before: Option<chrono::DateTime<chrono::Utc>>,
         limit: usize,
-    ) -> Result<(Vec<SessionInfo>, bool)> {
+    ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
             "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level
              FROM sessions WHERE 1=1",
@@ -108,7 +108,13 @@ impl SessionStore for SqliteSessionStore {
 
         let has_more = rows.len() > limit;
         let sessions: Vec<SessionInfo> = rows.into_iter().take(limit).map(Into::into).collect();
-        Ok((sessions, has_more))
+        let next_cursor = has_more.then(|| {
+            sessions
+                .last()
+                .map(|s| s.updated_at.to_rfc3339())
+                .unwrap_or_default()
+        });
+        Ok((sessions, next_cursor))
     }
 
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()> {
@@ -328,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_limit_and_has_more() {
+    async fn test_list_limit_and_next_cursor() {
         let store = create_test_store().await;
 
         // Create 5 sessions with distinct updated_at timestamps to ensure pagination works
@@ -352,20 +358,20 @@ mod tests {
         }
 
         // Test limit
-        let (list, has_more) = store.list(None, None, 2).await.unwrap();
+        let (list, cursor) = store.list(None, None, 2).await.unwrap();
         assert_eq!(list.len(), 2);
-        assert!(has_more);
+        assert!(cursor.is_some());
 
         // Get next page using cursor
         let before = list.last().unwrap().updated_at;
-        let (next_list, next_has_more) = store.list(None, Some(before), 2).await.unwrap();
+        let (next_list, next_cursor) = store.list(None, Some(before), 2).await.unwrap();
         assert_eq!(next_list.len(), 2);
-        assert!(next_has_more);
+        assert!(next_cursor.is_some());
 
         // Full list for comparison
-        let (full_list, full_has_more) = store.list(None, None, 100).await.unwrap();
+        let (full_list, full_cursor) = store.list(None, None, 100).await.unwrap();
         assert_eq!(full_list.len(), 5);
-        assert!(!full_has_more);
+        assert!(full_cursor.is_none());
 
         // Next page results should be different from first page
         assert_ne!(next_list[0].id.0, list[0].id.0);
