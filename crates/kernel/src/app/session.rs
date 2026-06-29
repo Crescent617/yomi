@@ -358,10 +358,10 @@ impl Session {
         );
         match &self.main_agent {
             Some(handle) => {
-                let result = handle.rewind(message_id, target).await.map_err(|e| {
-                    KernelError::from(SessionError::SendFailed(format!("rewind request: {e}")))
-                })?;
-                result.map_err(|e| SessionError::RewindFailed(e.clone()).into())
+                handle
+                    .rewind(message_id, target)
+                    .await
+                    .map_err(|e| KernelError::from(SessionError::RewindFailed(e.to_string())))
             }
             None => Err(SessionError::NotInitialized.into()),
         }

@@ -43,7 +43,7 @@ pub enum AgentInput {
         message_id: MessageId,
         target: crate::checkpoint::RewindTarget,
         /// Channel to send the result back
-        result_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+        result_tx: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
     },
 }
 
@@ -498,7 +498,7 @@ impl Agent {
         &mut self,
         message_id: MessageId,
         target: crate::checkpoint::RewindTarget,
-        result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+        result_tx: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
     ) -> Result<(), AgentError> {
         if let Some(turn) = self.current_turn.take() {
             if let Err(e) = turn.cancel().await {
@@ -508,15 +508,12 @@ impl Agent {
 
         let truncated = self.truncate_at(&message_id);
         if !truncated {
-            if let Err(e) =
-                result_tx.send(Err(format!("Message {} not found", message_id.as_str())))
-            {
-                tracing::warn!("Failed to send rewind error result: {:?}", e);
-            }
-            return Err(AgentError::Serialization(format!(
+            let err = AgentError::Serialization(format!(
                 "Message {} not found",
                 message_id.as_str()
-            )));
+            ));
+            let _ = result_tx.send(Err(err.clone()));
+            return Err(err);
         }
 
         let result = super::turn::Turn::rewind_to_checkpoint(
@@ -528,10 +525,9 @@ impl Agent {
         .await;
 
         if let Err(e) = &result {
-            if let Err(e) = result_tx.send(Err(e.to_string())) {
-                tracing::warn!("Failed to send rewind error result: {:?}", e);
-            }
-            return Err(AgentError::Serialization(e.to_string()));
+            let err = AgentError::Serialization(e.to_string());
+            let _ = result_tx.send(Err(err.clone()));
+            return Err(err);
         }
 
         let remaining_messages: Vec<Message> = self
