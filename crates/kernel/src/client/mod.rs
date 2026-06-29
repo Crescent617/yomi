@@ -36,10 +36,10 @@ type PendingMap = dashmap::DashMap<
 type EventRouterMap = dashmap::DashMap<String, broadcast::Sender<Event>>;
 
 /// Paginated session list result
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PaginatedSessions {
     pub sessions: Vec<crate::storage::session::SessionInfo>,
-    pub has_more: bool,
+    pub next_cursor: Option<String>,
 }
 
 /// Unified API for both local (in-process) and remote (IPC) coordinators.
@@ -338,8 +338,7 @@ impl CoordinatorApi for Coordinator {
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions> {
-        let (sessions, has_more) = Self::list_sessions(self, project_id, before, limit).await?;
-        Ok(PaginatedSessions { sessions, has_more })
+        Self::list_sessions(self, project_id, before, limit).await
     }
 
     async fn get_checkpoints(
@@ -1174,12 +1173,8 @@ impl CoordinatorApi for RemoteCoordinator {
                 limit,
             })
             .await?;
-        let sessions: Vec<crate::storage::session::SessionInfo> = serde_json::from_value(result)?;
-        // Remote server doesn't return has_more separately in this version;
-        // we infer from the result length.
-        let has_more = sessions.len() > limit;
-        let sessions = sessions.into_iter().take(limit).collect();
-        Ok(PaginatedSessions { sessions, has_more })
+        let paginated: PaginatedSessions = serde_json::from_value(result)?;
+        Ok(paginated)
     }
 
     async fn get_checkpoints(

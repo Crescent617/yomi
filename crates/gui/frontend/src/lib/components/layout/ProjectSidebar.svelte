@@ -94,33 +94,20 @@
     );
   }
 
-  function has_more(project_id: string) {
-    // Only show "Load more" when we have an actual page token (cursor is a string).
-    // Cursor lifecycle:
-    //   undefined = not loaded yet (initial load triggered by expand)
-    //   string    = has next page
-    //   null      = no more pages
-    return typeof sessionCursors.get(project_id) === "string";
-  }
-
   async function toggle(project_id: string) {
-    const next = { ...expanded, [project_id]: !expanded[project_id] };
-    expanded = next;
-    if (next[project_id]) {
+    expanded[project_id] = !expanded[project_id];
+    if (expanded[project_id]) {
       await loadSessions(project_id);
     }
   }
 
   async function loadSessions(project_id: string) {
     if (loading[project_id]) return;
-    const cursor = sessionCursors.get(project_id);
-    // cursor === null  → already reached end, skip
-    // cursor === undefined → first load (triggered by expand), load page 1
-    if (cursor === null) return;
 
-    loading = { ...loading, [project_id]: true };
+    loading[project_id] = true;
     try {
-      const result = await api.listSessions(project_id, cursor, 20);
+      const cursor = sessionCursors[project_id];
+      const result = await api.listSessions(project_id, cursor, 5);
       for (const s of result.sessions) {
         const existing = sessionState.sessions.find((sess) => sess.id === s.id);
         if (!existing) {
@@ -138,7 +125,7 @@
             pending_permissions: [],
             pending_ask_user: null,
             queued_input: null,
-            updated_at: s.ended_at ?? s.created_at,
+            updated_at: s.updated_at ?? s.created_at,
             permission_level: s.auto_approve_level ?? "caution",
           });
         } else {
@@ -146,24 +133,21 @@
           existing.permission_level =
             s.auto_approve_level ?? existing.permission_level;
           existing.updated_at =
-            s.ended_at ?? s.created_at ?? existing.updated_at;
+            s.updated_at ?? s.created_at ?? existing.updated_at;
         }
       }
-      const last = result.sessions[result.sessions.length - 1];
-      if (result.has_more && last) {
-        sessionCursors.set(project_id, last.ended_at ?? last.created_at);
+      if (result.next_cursor) {
+        sessionCursors[project_id] = result.next_cursor;
       } else {
-        sessionCursors.set(project_id, null);
+        delete sessionCursors[project_id];
       }
     } catch (e: unknown) {
       console.error(
         "Failed to load sessions:",
         e instanceof Error ? e.message : e,
       );
-      // Keep cursor as-is so user can retry. If this was the first load,
-      // cursor is still undefined and expand will retry on next toggle.
     } finally {
-      loading = { ...loading, [project_id]: false };
+      loading[project_id] = false;
     }
   }
 
@@ -751,9 +735,9 @@
                   Loading...
                 </div>
               {/if}
-              {#if has_more(project.id)}
+              {#if project.id in sessionCursors}
                 <button
-                  class="w-full text-left px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
                   onclick={() => loadSessions(project.id)}
                 >
                   Load more...

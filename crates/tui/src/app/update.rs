@@ -409,7 +409,7 @@ impl Model {
                         .ctrl_tx
                         .try_send(ControlCommand::Steer { content: blocks });
                     self.show_notification(&Notification::info(
-                        "Steer message queued for next turn",
+                        "Steer message queued for next step",
                         3000,
                     ));
                     None

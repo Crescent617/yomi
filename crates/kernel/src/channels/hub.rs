@@ -90,7 +90,7 @@ impl ChannelHub {
         let name = config.name.clone();
         info!(channel = %name, "starting channel");
 
-        let adapter = build_adapter(&config.platform);
+        let adapter = build_adapter(&config.platform, config.require_mention);
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelMessage>(256);
@@ -396,13 +396,16 @@ async fn spawn_subscriber_if_needed(
     }
 }
 
-fn build_adapter(platform: &super::PlatformConfig) -> Arc<dyn PlatformAdapter> {
+fn build_adapter(
+    platform: &super::PlatformConfig,
+    require_mention: bool,
+) -> Arc<dyn PlatformAdapter> {
     match platform {
         super::PlatformConfig::Telegram { token } => {
             Arc::new(super::telegram::TelegramAdapter::new(token.clone()))
         }
         super::PlatformConfig::Feishu { app_id, app_secret } => Arc::new(
-            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone()),
+            super::feishu::FeishuAdapter::new(app_id.clone(), app_secret.clone(), require_mention),
         ),
     }
 }

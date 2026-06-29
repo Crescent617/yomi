@@ -708,11 +708,16 @@ impl Coordinator {
         project_id: Option<&ProjectId>,
         before: Option<DateTime<Utc>>,
         limit: usize,
-    ) -> Result<(Vec<crate::storage::session::SessionInfo>, bool)> {
-        self.session_store()
+    ) -> Result<crate::client::PaginatedSessions> {
+        let (sessions, next_cursor) = self
+            .session_store()
             .await
             .list(project_id, before, limit)
-            .await
+            .await?;
+        Ok(crate::client::PaginatedSessions {
+            sessions,
+            next_cursor,
+        })
     }
 
     pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {

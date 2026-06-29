@@ -366,7 +366,7 @@
             pending_permissions: [],
             pending_ask_user: null,
             queued_input: null,
-            updated_at: s.ended_at ?? s.created_at,
+            updated_at: s.updated_at ?? s.created_at,
             permission_level: s.auto_approve_level ?? level ?? "caution",
             goal: null,
           });
@@ -1197,7 +1197,7 @@
                     .sendSteer(activeSession.id, blocks)
                     .then(() => {
                       showNotification(
-                        "Steer message queued for next turn",
+                        "Steer message queued for next step",
                         "info",
                         3000,
                       );

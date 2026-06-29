@@ -177,8 +177,7 @@ export const projectState = $state({
 });
 
 // Per-project session cursors for pagination
-export const sessionCursors = $state(new Map<string, string | null>());
-
+export const sessionCursors = $state<Record<string, string>>({});
 import { pushToast } from "./toast.svelte";
 
 export function showNotification(

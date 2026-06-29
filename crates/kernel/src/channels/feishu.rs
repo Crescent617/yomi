@@ -23,6 +23,9 @@ const MSG_TYPE_EVENT: &str = "event";
 const MSG_TYPE_PING: &str = "ping";
 const MSG_TYPE_PONG: &str = "pong";
 
+const PAYLOAD_GZIP: u8 = 1;
+const PAYLOAD_PB: u8 = 2;
+
 // ── Types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -45,10 +48,12 @@ pub struct FeishuAdapter {
     app_secret: String,
     client: Client,
     token_cache: Mutex<Option<TokenCache>>,
+    bot_open_id: tokio::sync::Mutex<Option<String>>,
+    require_mention: bool,
 }
 
 impl FeishuAdapter {
-    pub fn new(app_id: String, app_secret: String) -> Self {
+    pub fn new(app_id: String, app_secret: String, require_mention: bool) -> Self {
         Self {
             app_id,
             app_secret,
@@ -57,23 +62,49 @@ impl FeishuAdapter {
                 .build()
                 .expect("reqwest client build"),
             token_cache: Mutex::new(None),
+            bot_open_id: tokio::sync::Mutex::new(None),
+            require_mention,
         }
+    }
+
+    async fn ensure_bot_open_id(&self, token: &str) -> Option<String> {
+        // Fast path: check cache.
+        {
+            let guard = self.bot_open_id.lock().await;
+            if let Some(ref id) = *guard {
+                return Some(id.clone());
+            }
+        }
+
+        // Slow path: fetch from API (no lock held).
+        let resp = self
+            .client
+            .get(format!("{FEISHU_BASE_URL}/open-apis/bot/v3/info"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        let open_id = json["bot"]["open_id"].as_str().map(|s| s.to_string());
+
+        // Store in cache.
+        let mut guard = self.bot_open_id.lock().await;
+        *guard = open_id.clone();
+        open_id
     }
 
     // ── Token ────────────────────────────────────────────────────────
 
     async fn get_token(&self) -> Result<String, ChannelError> {
-        // Fast path: check under lock.
+        // Try cache first.
         {
             let cache = self.token_cache.lock().await;
-            if let Some(ref cached) = *cache {
-                if std::time::Instant::now() < cached.expires_at {
-                    return Ok(cached.token.clone());
-                }
+            if let Some(t) = cached_token(&cache) {
+                return Ok(t);
             }
-        } // lock dropped
+        }
 
-        // Slow path: fetch new token (no lock held during HTTP).
+        // Fetch new token.
         let resp: TokenResp = self
             .client
             .post(format!(
@@ -96,16 +127,14 @@ impl FeishuAdapter {
 
         let token = resp
             .tenant_access_token
-            .ok_or_else(|| api_err_str("no token"))?;
+            .ok_or_else(|| api_err("no token", ""))?;
         let expires = std::time::Instant::now()
             + std::time::Duration::from_secs(resp.expire.unwrap_or(7200) as u64 * 9 / 10);
 
         // Double-check: another task may have refreshed while we were fetching.
         let mut cache = self.token_cache.lock().await;
-        if let Some(ref cached) = *cache {
-            if std::time::Instant::now() < cached.expires_at {
-                return Ok(cached.token.clone());
-            }
+        if let Some(t) = cached_token(&cache) {
+            return Ok(t);
         }
         *cache = Some(TokenCache {
             token: token.clone(),
@@ -160,8 +189,6 @@ impl FeishuAdapter {
 
     // ── Send helpers ─────────────────────────────────────────────────
 
-    /// Send to chat or reply to a specific message, depending on whether
-    /// `reply_msg_id` is present.
     async fn send_or_reply(
         &self,
         token: &str,
@@ -195,8 +222,6 @@ impl FeishuAdapter {
         Ok(())
     }
 
-    /// Reply to a specific message using the Feishu reply API.
-    /// This puts the response into the same thread as the original message.
     async fn reply_msg(
         &self,
         token: &str,
@@ -240,7 +265,7 @@ impl FeishuAdapter {
 
         let url = resp["data"]["URL"]
             .as_str()
-            .ok_or_else(|| api_err_str("no ws URL"))?
+            .ok_or_else(|| api_err("no ws URL", ""))?
             .to_string();
 
         let service_id = url
@@ -377,8 +402,6 @@ impl PlatformAdapter for FeishuAdapter {
             return Ok(());
         }
 
-        // Feishu schema 2.0 markdown supports tables/fenced code; old lark_md does not.
-        // Note: content must be the card root object, NOT wrapped in {"card": ...}.
         const MAX_MD: usize = 30_000;
         let text = if text.len() > MAX_MD {
             let split = text
@@ -428,7 +451,7 @@ impl PlatformAdapter for FeishuAdapter {
 
             let key = resp["data"][key_field]
                 .as_str()
-                .ok_or_else(|| api_err_str("no upload key"))?;
+                .ok_or_else(|| api_err("no upload key", ""))?;
             let content = json!({ key_field: key }).to_string();
 
             self.send_or_reply(&token, external_chat_id, reply_msg_id, &content, msg_type)
@@ -451,39 +474,26 @@ impl PlatformAdapter for FeishuAdapter {
         Ok(())
     }
 
+    /// refer: <https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce?lang=zh-CN>
     async fn send_reaction(
         &self,
         _external_chat_id: &str,
         message_id: &str,
-        emoji: &str,
+        _emoji: &str,
     ) -> Result<(), ChannelError> {
         let token = self.get_token().await?;
         let url = format!("{FEISHU_BASE_URL}/open-apis/im/v1/messages/{message_id}/reactions");
-        let emoji_type = map_emoji(emoji);
 
-        info!(message_id, emoji, emoji_type, "Feishu sending reaction");
+        info!(message_id, "Feishu sending reaction");
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .json(&json!({ "reaction_type": { "emoji_type": emoji_type } }))
-            .send()
-            .await
-            .map_err(|e| api_err("reaction request", e))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| api_err("reaction parse", e))?;
+        self.api_post(
+            &token,
+            &url,
+            json!({ "reaction_type": { "emoji_type": "OneSecond" } }),
+        )
+        .await?;
 
-        let code = resp["code"].as_i64().unwrap_or(-1);
-        if code != 0 {
-            return Err(ChannelError::Platform(format!(
-                "reaction error {code}: {}",
-                resp["msg"].as_str().unwrap_or("unknown")
-            )));
-        }
-
-        info!(message_id, emoji, "Feishu reaction sent");
+        info!(message_id, "Feishu reaction sent");
         Ok(())
     }
 }
@@ -504,11 +514,12 @@ impl FeishuAdapter {
             return Ok(());
         }
 
-        let (body, is_gzip) = if data.len() > 1 && (data[0] == 1 || data[0] == 2) {
-            (&data[1..], data[0] == 1)
-        } else {
-            (data, false)
-        };
+        let (body, is_gzip) =
+            if data.len() > 1 && (data[0] == PAYLOAD_GZIP || data[0] == PAYLOAD_PB) {
+                (&data[1..], data[0] == PAYLOAD_GZIP)
+            } else {
+                (data, false)
+            };
 
         if is_gzip {
             warn!("gzip protobuf not supported");
@@ -516,7 +527,7 @@ impl FeishuAdapter {
         }
 
         let frame = lark_websocket_protobuf::pbbp2::Frame::decode(body)
-            .map_err(|e| api_err_str(&format!("protobuf decode: {e}")))?;
+            .map_err(|e| api_err("protobuf decode", e))?;
 
         let msg_type = frame
             .headers
@@ -529,7 +540,6 @@ impl FeishuAdapter {
                 debug!("pong received");
             }
             FRAME_TYPE_DATA => {
-                // ACK within 3s
                 let ack = build_ack(&frame);
                 write
                     .send(tungstenite::Message::Binary(ack.into()))
@@ -540,11 +550,7 @@ impl FeishuAdapter {
                     if let Some(ref payload) = frame.payload {
                         let text = String::from_utf8_lossy(payload);
                         debug!(payload = %text, "event payload");
-                        if let Ok(Some(msg_id)) = self.parse_event(&text, incoming).await {
-                            if let Err(e) = self.send_reaction("", &msg_id, "👀").await {
-                                warn!(error = %e, "reaction failed");
-                            }
-                        }
+                        let _ = self.parse_event(&text, incoming).await;
                     }
                 }
             }
@@ -562,11 +568,7 @@ impl FeishuAdapter {
             serde_json::from_str(text).map_err(|e| api_err("JSON parse", e))?;
         match msg["type"].as_str().unwrap_or("") {
             "event" => {
-                if let Ok(Some(msg_id)) = self.parse_event_json(&msg, incoming).await {
-                    if let Err(e) = self.send_reaction("", &msg_id, "👀").await {
-                        warn!(error = %e, "reaction failed");
-                    }
-                }
+                let _ = self.parse_event_json(&msg, incoming).await;
                 Ok(())
             }
             "ping" | "pong" | "auth_result" => {
@@ -574,6 +576,12 @@ impl FeishuAdapter {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    async fn add_reaction_or_warn(&self, msg_id: &str) {
+        if let Err(e) = self.send_reaction("", msg_id, "").await {
+            warn!(error = %e, "reaction failed");
         }
     }
 
@@ -588,25 +596,26 @@ impl FeishuAdapter {
         self.parse_event_json(&msg, incoming).await
     }
 
-    /// Parse event from JSON value (v2.0 or v1.x). Returns `message_id` if a message was forwarded.
+    /// Feishu `create_time` is in milliseconds, but some v1.x events may be in
+    /// seconds or microseconds. Normalise to seconds and format.
     fn parse_feishu_timestamp(value: &serde_json::Value) -> String {
-        value
+        let ts = value
             .as_str()
             .and_then(|s| s.parse::<i64>().ok())
             .or_else(|| value.as_i64())
-            .and_then(|ts| {
-                if ts < 10_000_000_000 {
-                    chrono::DateTime::from_timestamp(ts, 0)
-                } else if ts < 10_000_000_000_000 {
-                    chrono::DateTime::from_timestamp_millis(ts)
-                } else {
-                    chrono::DateTime::from_timestamp_millis(ts / 1000)
-                }
-            })
-            .map_or_else(
-                || chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            )
+            .unwrap_or_else(|| chrono::Local::now().timestamp());
+
+        let dt = if ts < 10_000_000_000 {
+            chrono::DateTime::from_timestamp(ts, 0)
+        } else if ts < 10_000_000_000_000 {
+            chrono::DateTime::from_timestamp_millis(ts)
+        } else {
+            chrono::DateTime::from_timestamp_millis(ts / 1000)
+        };
+        dt.map_or_else(
+            || chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        )
     }
 
     fn build_card(text: &str) -> String {
@@ -624,8 +633,7 @@ impl FeishuAdapter {
         msg: &serde_json::Value,
         incoming: &mpsc::Sender<ChannelMessage>,
     ) -> Result<Option<String>, ChannelError> {
-        // v2.0: {"schema":"2.0","header":{"event_type":"..."},"event":{"message":{...}}}
-        // v1.x: {"type":"im.message.receive_v1","event":{"message":{...}}}
+        // v2.0: header.event_type; v1.x: type
         let event_type = msg["header"]["event_type"]
             .as_str()
             .or_else(|| msg["type"].as_str())
@@ -636,22 +644,22 @@ impl FeishuAdapter {
             return Ok(None);
         }
 
-        let event = msg.get("event").unwrap_or(msg);
+        let event = &msg["event"];
         let message = &event["message"];
         let sender = &event["sender"];
         let chat_id = message["chat_id"]
             .as_str()
-            .ok_or_else(|| api_err_str("missing chat_id"))?;
-        let msg_id = message["message_id"].as_str().unwrap_or("").to_string();
-        let user_id = sender["sender_id"]["union_id"]
+            .ok_or_else(|| api_err("missing chat_id", ""))?;
+        let msg_id = message["message_id"]
             .as_str()
-            .or_else(|| sender["sender_id"]["user_id"].as_str())
-            .or_else(|| sender["sender_id"]["open_id"].as_str())
-            .unwrap_or("unknown");
-        let content_str = message["content"].as_str().unwrap_or("{}");
-
+            .ok_or_else(|| api_err("missing message_id", ""))?
+            .to_string();
+        let user_id = sender["sender_id"]["open_id"].as_str().unwrap_or("unknown");
+        let content_str = message["content"]
+            .as_str()
+            .ok_or_else(|| api_err("missing content", ""))?;
         let content_json: serde_json::Value =
-            serde_json::from_str(content_str).unwrap_or_else(|_| json!({}));
+            serde_json::from_str(content_str).map_err(|e| api_err("content JSON", e))?;
         let text = content_json["text"].as_str().unwrap_or("");
         if text.is_empty() {
             return Ok(None);
@@ -661,17 +669,24 @@ impl FeishuAdapter {
 
         let ts = Self::parse_feishu_timestamp(&message["create_time"]);
 
-        let chat_type = message["chat_type"].as_str().unwrap_or("");
-        let is_mention = chat_type == "p2p"
-            || message["mentions"]
-                .as_array()
-                .is_some_and(|a| !a.is_empty());
+        let token = self.get_token().await?;
+        let bot_open_id = self.ensure_bot_open_id(&token).await;
 
-        let thread_part = if let Some(ref tid) = thread_id {
-            format!("[thread: {tid}]")
+        let chat_type = message["chat_type"].as_str().unwrap_or("");
+        let is_mention = if chat_type == "p2p" {
+            true
+        } else if let Some(ref bot_id) = bot_open_id {
+            message["mentions"].as_array().is_some_and(|a| {
+                a.iter()
+                    .any(|m| m["id"]["open_id"].as_str() == Some(bot_id))
+            })
         } else {
-            String::new()
+            false
         };
+
+        let thread_part = thread_id
+            .as_ref()
+            .map_or(String::new(), |tid| format!("[thread: {tid}]"));
         let formatted = format!(
             "[{ts}][from_user_id: {user_id}][chat_id: {chat_id}]{thread_part}[platform: feishu]\n{text}"
         );
@@ -681,24 +696,20 @@ impl FeishuAdapter {
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id.to_string(),
-            external_message_id: if msg_id.is_empty() {
-                None
-            } else {
-                Some(msg_id.clone())
-            },
+            external_message_id: Some(msg_id.clone()),
             is_mention,
             content: vec![ContentBlock::Text { text: formatted }],
-            thread_id: thread_id.clone(),
+            thread_id,
         };
 
         if incoming.send(channel_msg).await.is_err() {
             return Err(ChannelError::Platform("incoming closed".to_string()));
         }
-        Ok(if msg_id.is_empty() {
-            None
-        } else {
-            Some(msg_id)
-        })
+
+        if !self.require_mention || is_mention {
+            self.add_reaction_or_warn(&msg_id).await;
+        }
+        Ok(Some(msg_id))
     }
 }
 
@@ -720,7 +731,7 @@ fn build_ping(service_id: i32) -> Vec<u8> {
         log_id_new: None,
     };
     let mut buf = Vec::new();
-    let _ = frame.encode(&mut buf);
+    frame.encode(&mut buf).expect("protobuf encode");
     buf
 }
 
@@ -728,65 +739,29 @@ fn build_ack(original: &lark_websocket_protobuf::pbbp2::Frame) -> Vec<u8> {
     let mut ack = original.clone();
     ack.payload = Some(r#"{"code":200}"#.as_bytes().to_vec());
     let mut buf = Vec::new();
-    let _ = ack.encode(&mut buf);
+    ack.encode(&mut buf).expect("protobuf encode");
     buf
-}
-
-// ── Emoji mapping ──────────────────────────────────────────────────
-
-#[allow(clippy::match_same_arms)]
-fn map_emoji(emoji: &str) -> &'static str {
-    // Only these emoji_type values are valid for Feishu reaction API:
-    // THUMBSUP, LAUGH, WOW, ANGRY, CLAP, MUSCLE, GIFT, ROSE, SMILE, OK, THINKING, HEART, SALUTE
-    match emoji {
-        "👍" => "THUMBSUP",
-        "😂" => "LAUGH",
-        "😮" => "WOW",
-        "😠" => "ANGRY",
-        "👏" => "CLAP",
-        "💪" => "MUSCLE",
-        "🎁" => "GIFT",
-        "🌹" => "ROSE",
-        "😊" => "SMILE",
-        "🆗" | "✅" => "OK",
-        "🤔" => "THINKING",
-        "❤️" | "❤" | "😍" | "💖" => "HEART",
-        "🫡" => "SALUTE",
-        "👀" => "THINKING",     // Feishu doesn't have EYES, closest is THINKING
-        "👎" => "THUMBSUP",     // Feishu doesn't have THUMBSDOWN
-        "😢" | "😭" => "LAUGH", // Feishu doesn't have SAD
-        "🔥" => "HEART",
-        "🎉" => "CLAP",
-        "🙏" => "OK",
-        "🌞" => "SMILE",
-        "☕" => "SMILE",
-        "🌸" => "ROSE",
-        "🍚" => "OK",
-        "💰" => "OK",
-        "🏆" => "OK",
-        "🧠" => "THINKING",
-        "👻" => "OK",
-        "✨" => "OK",
-        "🦋" => "OK",
-        "🪨" => "OK",
-        "🎹" => "OK",
-        "🎱" => "OK",
-        "🚫" => "THUMBSUP",
-        "🔔" => "OK",
-        "💯" => "OK",
-        "🎯" => "OK",
-        _ => "OK",
-    }
 }
 
 // ── Small helpers ──────────────────────────────────────────────────
 
-fn api_err(action: &str, e: impl std::fmt::Display) -> ChannelError {
-    ChannelError::Platform(format!("{action} failed: {e}"))
+fn cached_token(cache: &Option<TokenCache>) -> Option<String> {
+    cache.as_ref().and_then(|c| {
+        if std::time::Instant::now() < c.expires_at {
+            Some(c.token.clone())
+        } else {
+            None
+        }
+    })
 }
 
-fn api_err_str(msg: &str) -> ChannelError {
-    ChannelError::Platform(msg.to_string())
+fn api_err(action: &str, e: impl std::fmt::Display) -> ChannelError {
+    let e = format!("{e}");
+    if e.is_empty() {
+        ChannelError::Platform(action.to_string())
+    } else {
+        ChannelError::Platform(format!("{action}: {e}"))
+    }
 }
 
 fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelError> {
@@ -800,7 +775,6 @@ fn check_api_resp(resp: serde_json::Value) -> Result<serde_json::Value, ChannelE
     Ok(resp)
 }
 
-/// Returns (`form_field`, `upload_url`, `response_key_field`, `msg_type`) for a file path.
 fn file_upload_info(path: &std::path::Path) -> (&'static str, String, &'static str, &'static str) {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     if mime.type_() == "image" {

@@ -387,10 +387,7 @@ mod tests {
         let output = tool.exec(args, ctx).await;
         assert!(output.is_ok(), "Tool execution failed: {:?}", output.err());
         let output = output.unwrap();
-        assert!(
-            !output.contents.is_empty(),
-            "Tool returned empty content"
-        );
+        assert!(!output.contents.is_empty(), "Tool returned empty content");
         println!("Tool contents: {:#?}", output.contents);
         println!("Is error: {}", output.is_error);
     }

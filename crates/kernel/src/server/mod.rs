@@ -483,7 +483,7 @@ impl KernelServer {
                     .coordinator
                     .list_sessions(pid.as_ref(), before, limit)
                     .await;
-                rpc_body("list_sessions_failed", result.map(|(s, _)| s))
+                rpc_body("list_sessions_failed", result)
             }
             RequestMethod::GetCheckpoints { session_id } => rpc_body(
                 "get_checkpoints_failed",
