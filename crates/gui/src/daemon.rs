@@ -91,7 +91,7 @@ pub async fn spawn_daemon() -> Result<()> {
         return Ok(());
     }
 
-    let (coordinator, _config, _config_file) = kernel::init_coordinator(None, true, true).await?;
+    let (coordinator, config, _config_file) = kernel::init_coordinator(None, true).await?;
 
     let addr = socket_addr();
     let listener = kernel::transport::bind(&addr)
@@ -100,6 +100,7 @@ pub async fn spawn_daemon() -> Result<()> {
     tracing::info!("Daemon listening on {addr}");
 
     let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
+    server.start(config.channels.clone()).await;
     let shutdown = CancellationToken::new();
 
     {
@@ -160,7 +161,7 @@ pub async fn spawn_daemon() -> Result<()> {
         if let Err(e) = result {
             tracing::error!("Daemon server error: {e}");
         }
-        server_clone.shutdown().await;
+        server_clone.shutdown();
         let _ = tokio::fs::remove_file(pid_file_path()).await;
         if let SocketAddr::Unix(ref path) = addr_clone {
             let _ = tokio::fs::remove_file(path).await;

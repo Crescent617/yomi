@@ -11,7 +11,7 @@ export interface CronJob {
   name: string;
   schedule: string;
   action: {
-    ty: string;
+    type: string;
     session_id?: string;
     content?: string;
     command?: string;

@@ -15,7 +15,7 @@ pub enum Event {
 
 /// Control command from TUI to kernel
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "ty", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlCommand {
     /// Cancel current operation
     Cancel,

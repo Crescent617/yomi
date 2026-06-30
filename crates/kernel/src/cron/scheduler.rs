@@ -21,14 +21,12 @@ pub struct CronScheduler {
     running: Arc<RwLock<HashSet<CronJobId>>>,
     /// 有新任务变更时通知调度循环重新加载（watch channel 保证不丢信号）
     reload_tx: tokio::sync::watch::Sender<u64>,
-    pub(crate) shutdown: CancellationToken,
 }
 
 impl CronScheduler {
     pub fn new(
         store: Arc<dyn CronStore>,
         task_tx: mpsc::Sender<CronJob>,
-        shutdown: CancellationToken,
     ) -> Self {
         let (reload_tx, _reload_rx) = tokio::sync::watch::channel(0u64);
         Self {
@@ -38,12 +36,11 @@ impl CronScheduler {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(HashSet::new())),
             reload_tx,
-            shutdown,
         }
     }
 
     /// 启动调度主循环
-    pub async fn run(self: Arc<Self>) {
+    pub async fn run(self: Arc<Self>, token: CancellationToken) {
         if let Err(e) = self.load_jobs().await {
             tracing::error!("Failed to load cron jobs: {e}");
         }
@@ -72,7 +69,7 @@ impl CronScheduler {
 
             tokio::select! {
                 biased;
-                () = self.shutdown.cancelled() => {
+                () = token.cancelled() => {
                     tracing::info!("Cron scheduler shutting down");
                     break;
                 }
@@ -462,8 +459,8 @@ mod tests {
             last_run_at: None,
             run_count,
             max_runs,
-            expires_at,
             last_error: None,
+            expires_at,
         }
     }
 
@@ -476,7 +473,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store, tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(store, tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -506,7 +503,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store, tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(store, tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -532,7 +529,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store, tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(store, tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -561,11 +558,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(
-            store.clone(),
-            tx,
-            CancellationToken::new(),
-        ));
+        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -596,11 +589,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(
-            store.clone(),
-            tx,
-            CancellationToken::new(),
-        ));
+        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -629,7 +618,7 @@ mod tests {
         let job = make_job("j1", "0 0 9 * * *", Some(past), None, None, 0);
 
         let store = Arc::new(MockStore::new(HashMap::new()));
-        let scheduler = Arc::new(CronScheduler::new(store, tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(store, tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -655,7 +644,7 @@ mod tests {
         jobs.insert("j1".to_string(), job1.clone());
         jobs.insert("j2".to_string(), job2.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(store, tx, CancellationToken::new()));
+        let scheduler = Arc::new(CronScheduler::new(store, tx));
 
         {
             let mut q = scheduler.queue.write().await;
@@ -684,11 +673,7 @@ mod tests {
         let mut jobs = HashMap::new();
         jobs.insert("j1".to_string(), job.clone());
         let store = Arc::new(MockStore::new(jobs));
-        let scheduler = Arc::new(CronScheduler::new(
-            store.clone(),
-            tx,
-            CancellationToken::new(),
-        ));
+        let scheduler = Arc::new(CronScheduler::new(store.clone(), tx));
 
         {
             let mut q = scheduler.queue.write().await;

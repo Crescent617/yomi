@@ -89,15 +89,15 @@ class Client:
     def request(self, method: str, **kwargs) -> dict:
         """Send a request and wait for the matching Response."""
         req_id = self._next_req_id()
-        msg = {"ty": "request", "id": req_id, "method": {method: kwargs}}
+        msg = {"type": "request", "id": req_id, "method": {method: kwargs}}
         self._send_frame(msg)
 
         while True:
             frame = self._recv_frame()
-            if frame.get("ty") == "response" and frame.get("id") == req_id:
+            if frame.get("type") == "response" and frame.get("id") == req_id:
                 return frame
-            if frame.get("ty") == "ping":
-                self._send_frame({"ty": "pong"})
+            if frame.get("type") == "ping":
+                self._send_frame({"type": "pong"})
             # Events and responses for other requests are dropped here.
 
     def hello(self) -> dict:

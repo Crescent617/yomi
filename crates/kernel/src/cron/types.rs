@@ -27,7 +27,7 @@ impl std::fmt::Display for CronJobId {
 /// 任务触发时要执行的动作
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
-    tag = "ty",
+    tag = "type",
     rename_all = "snake_case",
     rename_all_fields = "snake_case"
 )]
