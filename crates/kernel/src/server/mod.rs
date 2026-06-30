@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::cron::CronJobId;
 use crate::skill::{deduplicate_skills, SkillLoader};
 use crate::transport::{recv_frame, send_frame};
-use crate::types::{KernelError, ProjectId, Result, SessionError, SessionId};
+use crate::types::{ProjectId, Result, SessionId};
 use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -365,14 +365,10 @@ impl KernelServer {
             RequestMethod::Subscribe { session_id } => {
                 let sid = SessionId(session_id.clone());
 
-                // Try to subscribe directly first
-                let mut rx = self.coordinator.subscribe_session_events(&sid);
-                if rx.is_none() {
-                    // Session not in memory - try to restore from storage
+                // Ensure session is in memory (restore if needed)
+                if self.coordinator.get_session(&sid).is_none() {
                     match self.coordinator.restore_session(&sid, Vec::new()).await {
-                        Ok(_) => {
-                            rx = self.coordinator.subscribe_session_events(&sid);
-                        }
+                        Ok(_) => {}
                         Err(e) => {
                             return ResponseBody::Err {
                                 error: RpcError {
@@ -385,23 +381,7 @@ impl KernelServer {
                     }
                 }
 
-                let rx = match rx {
-                    Some(rx) => rx,
-                    None => {
-                        let err = SessionError::NotFound {
-                            session_id: sid.0.clone(),
-                        };
-                        return ResponseBody::Err {
-                            error: RpcError {
-                                code: "session_error".to_string(),
-                                message: KernelError::from(err.clone()).to_string(),
-                                detail: Some(
-                                    serde_json::to_value(&err).expect("SessionError serializes"),
-                                ),
-                            },
-                        };
-                    }
-                };
+                let rx = self.coordinator.subscribe_session_events(&sid);
 
                 let session_id_for_task = session_id.clone();
                 let send_tx2 = send_tx.clone();
@@ -418,9 +398,9 @@ impl KernelServer {
                         let event = tokio::select! {
                             biased;
                             () = cancel2.cancelled() => break,
-                            result = rx.recv() => match result {
-                                Ok(ev) => ev,
-                                Err(_) => break,
+                            opt = rx.recv() => match opt {
+                                Some((_sid, ev)) => ev,
+                                None => break,
                             },
                         };
                         let msg = WireMsg::Event {

@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -141,6 +141,15 @@ const MIGRATIONS: &[Migration] = &[
                 PRIMARY KEY (channel_name, external_chat_id)
             );",
             r"CREATE INDEX idx_channel_mapping_session ON channel_session_mappings(session_id);",
+        ],
+    },
+    Migration {
+        version: 10,
+        name: "add_channel_routing_columns",
+        sqls: &[
+            r"ALTER TABLE channel_session_mappings ADD COLUMN actual_chat_id TEXT;",
+            r"ALTER TABLE channel_session_mappings ADD COLUMN reply_msg_id TEXT;",
+            r"UPDATE channel_session_mappings SET actual_chat_id = external_chat_id WHERE actual_chat_id IS NULL;",
         ],
     },
 ];

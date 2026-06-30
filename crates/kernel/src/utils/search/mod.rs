@@ -329,7 +329,7 @@ mod tests {
             assert!(!r.title.is_empty());
             assert!(!r.url.is_empty());
         }
-        println!("DDG results: {:#?}", results);
+        println!("DDG results: {results:#?}");
     }
 
     #[tokio::test]
@@ -344,7 +344,7 @@ mod tests {
             assert!(!r.title.is_empty());
             assert!(!r.url.is_empty());
         }
-        println!("Bing results: {:#?}", results);
+        println!("Bing results: {results:#?}");
     }
 
     #[tokio::test]
@@ -356,7 +356,7 @@ mod tests {
         assert!(results.is_ok(), "search_all failed: {:?}", results.err());
         let results = results.unwrap();
         assert!(!results.is_empty(), "search_all returned no results");
-        println!("Merged results: {:#?}", results);
+        println!("Merged results: {results:#?}");
     }
 
     #[tokio::test]

@@ -114,10 +114,10 @@ export async function listSessions(
   before?: string,
   limit?: number,
 ): Promise<PaginatedSessions> {
-  const result = await invokeCmd<{ sessions: unknown[]; next_cursor: string | null }>(
-    "list_sessions",
-    { project_id: project_id, before, limit },
-  );
+  const result = await invokeCmd<{
+    sessions: unknown[];
+    next_cursor: string | null;
+  }>("list_sessions", { project_id: project_id, before, limit });
   return {
     sessions: result.sessions.map((s: unknown) => {
       const session = s as Record<string, unknown>;

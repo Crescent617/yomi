@@ -325,6 +325,8 @@ pub struct AgentShared {
     pub channel_hub: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Optional goal store for autonomous goal-mode execution
     pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
+    /// Global event bus for all agents and sessions
+    pub event_bus: Option<Arc<crate::event_bus::EventBus>>,
 }
 
 impl AgentShared {
@@ -394,6 +396,7 @@ impl AgentShared {
             hook_registry: None,
             goal_store: None,
             channel_hub: None,
+            event_bus: None,
         }
     }
 
@@ -411,6 +414,7 @@ impl AgentShared {
             checkpoint_store,
             goal_store: self.goal_store.clone(),
             channel_hub: self.channel_hub.clone(),
+            event_bus: self.event_bus.clone(),
             ..self.clone()
         }
     }
@@ -460,6 +464,13 @@ impl AgentShared {
     #[must_use]
     pub fn with_model_config(mut self, model_config: Arc<crate::providers::ModelConfig>) -> Self {
         self.model_config = model_config;
+        self
+    }
+
+    /// Set the event bus
+    #[must_use]
+    pub fn with_event_bus(mut self, event_bus: Arc<crate::event_bus::EventBus>) -> Self {
+        self.event_bus = Some(event_bus);
         self
     }
 

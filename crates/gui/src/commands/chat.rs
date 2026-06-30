@@ -75,7 +75,7 @@ pub async fn subscribe(
     let sid_cleanup = session_id.clone();
     let tasks_cleanup = state.event_tasks.clone();
     let handle = tauri::async_runtime::spawn(async move {
-        while let Ok(event) = rx.recv().await {
+        while let Some((_sid, event)) = rx.recv().await {
             let mut event_value = serde_json::to_value(&event).unwrap_or_default();
 
             if let Event::System(SystemEvent::Rewound { ref messages, .. }) = event {

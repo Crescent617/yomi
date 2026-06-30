@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use super::{
     ChannelConfig, ChannelInfo, ChannelMessage, ChannelStatus, ChannelStore, PlatformAdapter,
+    SessionRouting,
 };
 
 const STATUS_IDLE: u8 = 0;
@@ -29,10 +30,7 @@ struct ChannelInstance {
 pub struct ChannelHub {
     store: Arc<dyn ChannelStore>,
     cancel: CancellationToken,
-    instances: DashMap<String, ChannelInstance>,
-    /// Track which sessions already have an event subscriber running.
-    /// Stores `AbortHandle` so we can detect finished tasks and clean them up.
-    active_subscribers: Arc<DashMap<SessionId, tokio::task::AbortHandle>>,
+    instances: Arc<DashMap<String, ChannelInstance>>,
 }
 
 impl ChannelHub {
@@ -40,8 +38,7 @@ impl ChannelHub {
         Self {
             store,
             cancel,
-            instances: DashMap::new(),
-            active_subscribers: Arc::new(DashMap::new()),
+            instances: Arc::new(DashMap::new()),
         }
     }
 
@@ -67,6 +64,14 @@ impl ChannelHub {
                 errors.push(e);
             }
         }
+
+        // Start the global event forwarder if we have a coordinator with an event bus.
+        if let Some(coord) = coordinator.upgrade() {
+            if let Some(bus) = coord.event_bus() {
+                self.start_event_forwarder(bus).await;
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -96,7 +101,6 @@ impl ChannelHub {
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelMessage>(256);
         let sub_cancel = self.cancel.child_token();
         let store = Arc::clone(&self.store);
-        let active_subs = Arc::clone(&self.active_subscribers);
 
         let adapter_clone = Arc::clone(&adapter);
         let cancel_clone = sub_cancel.clone();
@@ -121,7 +125,6 @@ impl ChannelHub {
         let config_proc = config.clone();
 
         // Spawn the message processing loop
-        let adapter_for_proc = Arc::clone(&adapter);
         let proc_handle = tokio::spawn(async move {
             let mut incoming_rx = incoming_rx;
             loop {
@@ -149,10 +152,8 @@ impl ChannelHub {
                             &name_proc,
                             &config_proc,
                             &store,
-                            &active_subs,
                             coord,
                             msg,
-                            Arc::clone(&adapter_for_proc),
                         ).await {
                             error!(error = %e, "failed to handle incoming message");
                         }
@@ -185,16 +186,81 @@ impl ChannelHub {
         Ok(())
     }
 
+    /// Start a single background task that subscribes to the global event bus
+    /// and forwards model/system events for all channel-backed sessions.
+    async fn start_event_forwarder(&self, event_bus: Arc<crate::event_bus::EventBus>) {
+        let store = Arc::clone(&self.store);
+        let instances = Arc::clone(&self.instances);
+        let cancel = self.cancel.child_token();
+
+        tokio::spawn(async move {
+            let mut rx = event_bus.subscribe_all();
+
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    Some((session_id, event)) = rx.recv() => {
+                        let routing = match store.find_routing_by_session(&session_id).await {
+                            Ok(Some(r)) => r,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                error!(error = %e, "failed to look up routing for session");
+                                continue;
+                            }
+                        };
+
+                        let Some(instance) = instances.get(&routing.channel_name) else { continue };
+                        let adapter = Arc::clone(&instance.adapter);
+
+                        match event {
+                            Event::Model(ModelEvent::Request { .. }) => {
+                                let chat_id = routing.external_chat_id.clone();
+                                tokio::spawn(async move {
+                                    let _ = adapter.send_typing(&chat_id).await;
+                                });
+                            }
+                            Event::Model(ModelEvent::End { content, .. }) => {
+                                let text = super::blocks_to_text(&content);
+                                if !text.is_empty() {
+                                    Self::spawn_reply(adapter, routing, text);
+                                }
+                            }
+                            Event::Model(ModelEvent::Error { error, .. }) => {
+                                Self::spawn_reply(adapter, routing, format!("Error: {error}"));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            info!("channel event forwarder exited");
+        });
+    }
+
+    fn spawn_reply(
+        adapter: Arc<dyn PlatformAdapter>,
+        routing: SessionRouting,
+        text: impl Into<String>,
+    ) {
+        let chat_id = routing.external_chat_id;
+        let reply_msg_id = routing.reply_msg_id;
+        let blocks = vec![ContentBlock::Text { text: text.into() }];
+        tokio::spawn(async move {
+            if let Err(e) = adapter
+                .send_message(&chat_id, blocks, reply_msg_id.as_deref())
+                .await
+            {
+                error!(error = %e, "failed to send reply to platform");
+            }
+        });
+    }
+
     /// Gracefully stop all channels and wait for tasks to exit.
     pub async fn shutdown(&self) -> Result<()> {
         info!("shutting down channel hub");
         self.cancel.cancel();
-
-        // Abort all active subscriber tasks before waiting for channels.
-        for entry in self.active_subscribers.iter() {
-            entry.value().abort();
-        }
-        self.active_subscribers.clear();
 
         let mut handles = Vec::new();
         for mut entry in self.instances.iter_mut() {
@@ -232,18 +298,23 @@ impl ChannelHub {
             .collect()
     }
 
-    /// Find the channel adapter for a session if it belongs to an active channel.
-    pub async fn get_adapter_for_session(
+    /// Get routing info and adapter for a session.
+    pub async fn get_routing_for_session(
         &self,
         session_id: &SessionId,
-    ) -> Result<Option<(String, Arc<dyn PlatformAdapter>)>> {
-        let maybe = self.store.find_by_session_id(session_id).await?;
-        if let Some((channel_name, chat_id)) = maybe {
-            if let Some(instance) = self.instances.get(&channel_name) {
-                return Ok(Some((chat_id, Arc::clone(&instance.adapter))));
-            }
-        }
-        Ok(None)
+    ) -> Result<Option<(SessionRouting, Arc<dyn PlatformAdapter>)>> {
+        let routing = match self.store.find_routing_by_session(session_id).await? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let adapter = if let Some(instance) = self.instances.get(&routing.channel_name) {
+            Arc::clone(&instance.adapter)
+        } else {
+            return Ok(None);
+        };
+
+        Ok(Some((routing, adapter)))
     }
 }
 
@@ -251,10 +322,8 @@ async fn handle_incoming_message(
     channel_name: &str,
     _config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
-    active_subs: &Arc<DashMap<SessionId, tokio::task::AbortHandle>>,
     coordinator: Arc<Coordinator>,
     msg: ChannelMessage,
-    adapter: Arc<dyn PlatformAdapter>,
 ) -> Result<()> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
@@ -280,120 +349,33 @@ async fn handle_incoming_message(
                 tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
             })
             .await?;
-        store.save_mapping(channel_name, &mapping_key, &sid).await?;
+        store
+            .save_mapping(
+                channel_name,
+                &mapping_key,
+                &sid,
+                &chat_id,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
         sid
     };
 
-    // 2. Ensure subscriber is alive before sending the message so that replies
-    //    are not lost in a race between the agent generating output and the
-    //    subscriber being spawned.
-    spawn_subscriber_if_needed(
-        active_subs,
-        session_id.clone(),
-        coordinator.clone(),
-        chat_id.clone(),
-        reply_msg_id.clone(),
-        Arc::clone(&adapter),
-    )
-    .await;
+    // 2. Update routing info in database (covers new messages in existing thread).
+    store
+        .save_mapping(
+            channel_name,
+            &mapping_key,
+            &session_id,
+            &chat_id,
+            reply_msg_id.as_deref(),
+        )
+        .await?;
 
     // 3. Send the message blocks to the session
     coordinator.send_message(&session_id, msg.content).await?;
 
     Ok(())
-}
-
-async fn spawn_subscriber_if_needed(
-    active_subs: &Arc<DashMap<SessionId, tokio::task::AbortHandle>>,
-    session_id: SessionId,
-    coordinator: Arc<Coordinator>,
-    external_chat_id: String,
-    reply_msg_id: Option<String>,
-    adapter: Arc<dyn PlatformAdapter>,
-) {
-    // Clean up finished subscribers so dead tasks don't block respawning.
-    active_subs.retain(|_, handle| !handle.is_finished());
-
-    if active_subs.contains_key(&session_id) {
-        return; // Already subscribed (or still running)
-    }
-
-    let session_id_for_spawn = session_id.clone();
-    let handle = tokio::spawn(async move {
-        let mut rx = match coordinator.subscribe_session_events(&session_id_for_spawn) {
-            Some(r) => r,
-            None => {
-                error!(session_id = %session_id_for_spawn.0, "failed to subscribe to session events");
-                return;
-            }
-        };
-
-        let mut buffer = String::new();
-
-        loop {
-            match rx.recv().await {
-                Ok(Event::Model(ModelEvent::Request { .. })) => {
-                    buffer.clear();
-                    let adapter = Arc::clone(&adapter);
-                    let chat_id = external_chat_id.clone();
-                    tokio::spawn(async move {
-                        let _ = adapter.send_typing(&chat_id).await;
-                    });
-                }
-                Ok(Event::Model(ModelEvent::Chunk {
-                    content: crate::event::ContentChunk::Text(text),
-                    ..
-                })) => {
-                    buffer.push_str(&text);
-                }
-                Ok(Event::Model(ModelEvent::Completed { .. })) => {
-                    if buffer.is_empty() {
-                        continue;
-                    }
-                    let blocks = vec![ContentBlock::Text {
-                        text: buffer.clone(),
-                    }];
-                    if let Err(e) = adapter
-                        .send_message(&external_chat_id, blocks, reply_msg_id.as_deref())
-                        .await
-                    {
-                        error!(error = %e, "failed to send reply to platform");
-                    }
-                    buffer.clear();
-                }
-                Ok(Event::Model(ModelEvent::Error { error, .. })) => {
-                    let text = format!("Error: {error}");
-                    let blocks = vec![ContentBlock::Text { text }];
-                    if let Err(e) = adapter
-                        .send_message(&external_chat_id, blocks, reply_msg_id.as_deref())
-                        .await
-                    {
-                        error!(error = %e, "failed to send error message to platform");
-                    }
-                    buffer.clear();
-                }
-                Ok(Event::System(crate::event::SystemEvent::Shutdown { .. })) => {
-                    info!(session_id = %session_id_for_spawn.0, "session shutdown, stopping subscriber");
-                    break;
-                }
-                Err(_) => {
-                    info!(session_id = %session_id_for_spawn.0, "event channel closed, stopping subscriber");
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
-    // Atomic insert: if another concurrent call already inserted, abort our task.
-    match active_subs.entry(session_id) {
-        dashmap::Entry::Occupied(_) => {
-            handle.abort();
-        }
-        dashmap::Entry::Vacant(entry) => {
-            entry.insert(handle.abort_handle());
-        }
-    }
 }
 
 fn build_adapter(
@@ -472,6 +454,8 @@ mod tests {
                 channel_name TEXT NOT NULL,
                 external_chat_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
+                actual_chat_id TEXT NOT NULL,
+                reply_msg_id TEXT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (channel_name, external_chat_id)
             );

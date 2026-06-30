@@ -43,11 +43,12 @@ impl Turn {
     #[tracing::instrument(skip(summary, store, data_dir, session_id), fields(user_msg_id = %user_msg_id.as_str()))]
     pub fn new(
         user_msg_id: MessageId,
-        session_id: String,
+        session_id: impl Into<String>,
         summary: impl Into<String>,
         store: Arc<dyn CheckpointStore>,
         data_dir: &std::path::Path,
     ) -> Self {
+        let session_id = session_id.into();
         let checkpoint_dir = data_dir
             .join("checkpoints")
             .join(&session_id)

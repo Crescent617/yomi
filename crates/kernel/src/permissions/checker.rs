@@ -1,10 +1,11 @@
 use super::level::{exceeds_threshold, Level};
 use crate::event::{AgentEvent, Event};
+use crate::event_bus::EventBusHandle;
 use crate::tools::{EDIT_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use crate::types::{AgentId, KernelError, Result, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 /// Result of checking permissions for a batch of tool calls
@@ -176,7 +177,7 @@ impl PermissionState {
 pub struct Checker {
     state: PermissionState,
     agent_id: AgentId,
-    event_tx: mpsc::Sender<Event>,
+    event_tx: EventBusHandle,
 }
 
 impl Checker {
@@ -184,7 +185,7 @@ impl Checker {
     ///
     /// Uses shared `PermissionState` so all agents in a session share
     /// the same permission configuration and pending requests.
-    pub fn new(state: PermissionState, agent_id: AgentId, event_tx: mpsc::Sender<Event>) -> Self {
+    pub fn new(state: PermissionState, agent_id: AgentId, event_tx: EventBusHandle) -> Self {
         Self {
             state,
             agent_id,
@@ -358,16 +359,17 @@ impl Responder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ToolCall;
+    use crate::types::{SessionId, ToolCall};
     use serde_json::json;
 
     #[tokio::test]
     async fn test_permission_checker_auto_approve() {
-        let (event_tx, _event_rx) = mpsc::channel(100);
+        let bus = crate::event_bus::EventBus::new();
+        let handle = bus.handle(SessionId::new());
 
         // Caution 阈值 - Safe 工具应该自动通过
         let (state, _responder) = PermissionState::new(Level::Caution);
-        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
+        let checker = Checker::new(state, AgentId::new(), handle);
 
         let safe_tool = ToolCall {
             id: "test1".to_string(),
@@ -384,10 +386,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_responder() {
-        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let bus = crate::event_bus::EventBus::new();
+        let handle = bus.handle(SessionId::new());
 
         let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 工具需要确认
-        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
+        let checker = Checker::new(state, AgentId::new(), handle.clone());
 
         // 创建一个 Caution 级别的工具调用
         let caution_tool = ToolCall {
@@ -403,8 +406,9 @@ mod tests {
                 .await
         });
 
-        // 接收权限请求事件
-        let event = event_rx.recv().await.unwrap();
+        // 接收权限请求事件（从 EventBus 的 subscribe 获取）
+        let mut sub = bus.subscribe_all();
+        let event = sub.recv().await.unwrap().1;
         let req_id = match event {
             Event::Agent(AgentEvent::PermissionRequest { req_id, .. }) => req_id,
             _ => panic!("Expected PermissionRequest event"),
@@ -421,10 +425,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_remember_per_tool() {
-        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let bus = crate::event_bus::EventBus::new();
+        let handle = bus.handle(SessionId::new());
 
         let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 和 Dangerous 需要确认
-        let checker = Checker::new(state, AgentId::new(), event_tx.clone());
+        let checker = Checker::new(state, AgentId::new(), handle.clone());
 
         // Wrap checker in Arc so we can use it after spawning
         let checker = Arc::new(checker);
@@ -443,7 +448,8 @@ mod tests {
                 .await
         });
 
-        let event = event_rx.recv().await.unwrap();
+        let mut sub = bus.subscribe_all();
+        let event = sub.recv().await.unwrap().1;
         let req_id = match event {
             Event::Agent(AgentEvent::PermissionRequest { req_id, .. }) => req_id,
             _ => panic!("Expected PermissionRequest event"),
@@ -470,7 +476,7 @@ mod tests {
 
         // 没有事件发送（因为 Edit 已自动批准）
         let timeout_result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), event_rx.recv()).await;
+            tokio::time::timeout(std::time::Duration::from_millis(100), sub.recv()).await;
         assert!(
             timeout_result.is_err(),
             "Should not receive event for auto-approved Edit tool"
@@ -492,14 +498,14 @@ mod tests {
         });
 
         // Write 工具应该触发权限请求事件（因为只记住了 Edit）
-        let event = event_rx.recv().await;
+        let event = sub.recv().await;
         assert!(
             event.is_some(),
             "Write tool should trigger permission request"
         );
 
         // 清理：响应并结束任务
-        if let Some(Event::Agent(AgentEvent::PermissionRequest { req_id, .. })) = event {
+        if let Some((_, Event::Agent(AgentEvent::PermissionRequest { req_id, .. }))) = event {
             responder.respond(&req_id, true, false).await;
         }
         let _ = checker_task.await;

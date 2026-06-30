@@ -22,6 +22,7 @@ pub mod client;
 pub mod compactor;
 pub mod config;
 pub mod event;
+pub mod event_bus;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};

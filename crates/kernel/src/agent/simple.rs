@@ -12,13 +12,13 @@
 //! the full Agent infrastructure.
 
 use crate::event::{Event, ModelEvent, ToolEvent};
+use crate::event_bus::EventBusHandle;
 use crate::permissions::Checker;
 use crate::providers::{ModelConfig, Provider};
 use crate::tools::{ToolExecCtx, ToolRegistry};
 use crate::types::{AgentId, KernelError, Message, MessageId, Result, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Create a cancellation error
@@ -52,8 +52,8 @@ pub struct SimpleAgent {
     max_iterations: usize,
     /// Optional permission checker for tool execution
     permission_checker: Option<Arc<Checker>>,
-    /// Event sender for tool events (permission requests, started, etc.)
-    event_tx: Option<mpsc::Sender<Event>>,
+    /// Event bus handle for tool events (permission requests, started, etc.)
+    event_bus: Option<EventBusHandle>,
     /// Agent ID for events
     agent_id: AgentId,
     /// Working directory for tool execution
@@ -78,7 +78,7 @@ impl SimpleAgent {
             tool_registry,
             max_iterations: 100,
             permission_checker: None,
-            event_tx: None,
+            event_bus: None,
             agent_id: AgentId::new(),
             working_dir: working_dir.into(),
             session_id: session_id.into(),
@@ -100,10 +100,10 @@ impl SimpleAgent {
         self
     }
 
-    /// Set event sender for tool events
+    /// Set event bus handle for tool events
     #[must_use]
-    pub fn with_event_tx(mut self, event_tx: mpsc::Sender<Event>) -> Self {
-        self.event_tx = Some(event_tx);
+    pub fn with_event_bus(mut self, event_bus: EventBusHandle) -> Self {
+        self.event_bus = Some(event_bus);
         self
     }
 
@@ -382,9 +382,17 @@ impl SimpleAgent {
             msg.tool_calls = Some(result.tool_calls);
         }
 
+        let end_content = msg.content.clone();
+
         on_event(Event::Model(ModelEvent::Completed {
             agent_id: self.agent_id.clone(),
             message_id: msg.id.clone(),
+        }));
+
+        on_event(Event::Model(ModelEvent::End {
+            agent_id: self.agent_id.clone(),
+            message_id: msg.id.clone(),
+            content: end_content,
         }));
 
         if result.finish_reason.is_none() {

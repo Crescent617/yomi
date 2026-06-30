@@ -4,11 +4,14 @@ use super::{
     CancelToken, InterceptCtx,
 };
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
-use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
+use crate::event::{
+    AgentEvent, AgentStatus, Event, ModelEvent, StopReason, SystemEvent, ToolEvent,
+};
+use crate::event_bus::EventBusHandle;
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
-use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role};
+use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
@@ -51,11 +54,11 @@ pub struct Agent {
     id: AgentId,
     shared: Arc<AgentShared>,
     message_buffer: MessageBuffer,
-    event_tx: mpsc::Sender<Event>,
+    event_bus: EventBusHandle,
     input_rx: mpsc::Receiver<AgentInput>,
     context: AgentExecutionContext,
     cancel_token: CancelToken,
-    session_id: String,
+    session_id: SessionId,
     max_iterations: usize,
     // Tool registry - each agent has its own set of tools
     tool_registry: crate::tools::ToolRegistry,
@@ -84,12 +87,19 @@ impl Agent {
         id: AgentId,
         shared: &Arc<AgentShared>,
         args: AgentSpawnArgs,
-    ) -> (AgentHandle, mpsc::Receiver<Event>) {
+    ) -> AgentHandle {
         let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
-        let (event_tx, event_rx) = mpsc::channel(100);
         let (steer_tx, steer_rx) = mpsc::channel::<Vec<ContentBlock>>(20);
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
         let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
+
+        // Get event bus handle from shared
+        let session_id = SessionId(args.session_id.clone());
+        let event_bus = shared
+            .event_bus
+            .as_ref()
+            .expect("event_bus must be configured")
+            .handle(session_id.clone());
 
         // Build system prompt with project memory and skills
         let system_prompt = SystemPromptBuilder::new()
@@ -115,7 +125,7 @@ impl Agent {
                 &id,
                 &shared,
                 &input_tx,
-                &event_tx,
+                &event_bus,
                 &args.session_id,
                 args.tool_blocklist.clone(),
             )
@@ -139,7 +149,7 @@ impl Agent {
         // If no permission_state in shared (YOLO mode), all tools auto-approve
         let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
             Some(state) => {
-                let checker = Checker::new(state.clone(), id.clone(), event_tx.clone());
+                let checker = Checker::new(state.clone(), id.clone(), event_bus.clone());
                 let responder = state.create_responder();
                 (Some(Arc::new(checker)), Some(responder))
             }
@@ -158,16 +168,15 @@ impl Agent {
 
         let data_dir = shared.data_dir.clone();
 
-        let session_id = args.session_id.clone();
         let agent = Self {
             id: id.clone(),
             shared,
             message_buffer,
-            event_tx: event_tx.clone(),
+            event_bus: event_bus.clone(),
             input_rx,
             context,
             cancel_token: cancel_token.clone(),
-            session_id: args.session_id,
+            session_id: session_id.clone(),
             max_iterations: args.max_iterations,
             tool_registry,
             permission_checker,
@@ -181,7 +190,7 @@ impl Agent {
             steer_rx,
         };
 
-        let span = info_span!("agent", session_id = %session_id);
+        let span = info_span!("agent", session_id = %session_id.0);
 
         tokio::spawn(
             async move {
@@ -189,13 +198,17 @@ impl Agent {
                 if let Err(ref e) = result {
                     tracing::error!("Agent failed: {}", e);
                 }
-                // Note: Session shutdown is detected by coordinator when event_rx closes
+                // Explicitly send shutdown event
+                let _ = event_bus.try_send(Event::System(SystemEvent::Shutdown {
+                    session_id: session_id.clone(),
+                    error: None,
+                }));
                 info!("agent closed");
             }
             .instrument(span),
         );
 
-        let handle = AgentHandle::new(
+        AgentHandle::new(
             id,
             input_tx,
             state_rx,
@@ -204,8 +217,7 @@ impl Agent {
             Some(ask_user_responder),
             Arc::clone(&input_stale_since),
             steer_tx,
-        );
-        (handle, event_rx)
+        )
     }
 
     /// Create a runtime `CancellationToken` linked to the Agent's custom `CancelToken`.
@@ -261,7 +273,7 @@ impl Agent {
                         "reached max iterations during streaming, cancelling and returning to waiting for input"
                     );
                     // Notify TUI that max iterations reached
-                    if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                    if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
                         state: AgentStatus::Stopped {
                             reason: StopReason::MaxIterations {
@@ -287,7 +299,7 @@ impl Agent {
                     self.start_turn_if_needed().await;
                     tracing::debug!("starting streaming");
                     // Notify UI that streaming has started
-                    if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+                    if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
                         agent_id: self.id.clone(),
                         state: AgentStatus::Running,
                     })) {
@@ -366,7 +378,7 @@ impl Agent {
         let error_msg = format!("{context}: {error}");
         tracing::error!("failed: {}", error_msg);
         let _n = self
-            .event_tx
+            .event_bus
             .send(Event::Agent(AgentEvent::Lifecycle {
                 agent_id: self.id.clone(),
                 state: AgentStatus::Stopped {
@@ -385,7 +397,7 @@ impl Agent {
             tracing::error!("{:?} error: {}", phase, error);
         }
 
-        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Error {
+        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Error {
             agent_id: self.id.clone(),
             phase,
             error: error.to_string(),
@@ -397,7 +409,7 @@ impl Agent {
 
     /// Emit retrying event
     async fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str) {
-        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Retrying {
+        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Retrying {
             agent_id: self.id.clone(),
             attempt,
             max_attempts,
@@ -409,7 +421,7 @@ impl Agent {
 
     /// Emit operation cancelled event
     async fn emit_operation_cancelled(&self, operation: &str) {
-        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
             agent_id: self.id.clone(),
             state: AgentStatus::Stopped {
                 reason: StopReason::Cancelled {
@@ -423,7 +435,7 @@ impl Agent {
 
     /// Emit `Stopped` lifecycle event with completed reason.
     fn emit_stopped_completed(&self, finish_reason: Option<crate::types::FinishReason>) {
-        if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
+        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
             agent_id: self.id.clone(),
             state: AgentStatus::Stopped {
                 reason: StopReason::Completed { finish_reason },
@@ -440,7 +452,7 @@ impl Agent {
         content: &[crate::types::ContentBlock],
     ) {
         if let Err(e) = self
-            .event_tx
+            .event_bus
             .try_send(Event::User(crate::event::UserEvent::Message {
                 message_id: message_id.clone(),
                 content: content.to_vec(),
@@ -482,7 +494,7 @@ impl Agent {
                 let summary = Self::extract_summary(&msg.content);
                 let turn = Arc::new(super::turn::Turn::new(
                     msg.id.clone(),
-                    self.session_id.clone(),
+                    self.session_id.0.clone(),
                     summary,
                     self.checkpoint_store.clone(),
                     &self.data_dir,
@@ -508,10 +520,8 @@ impl Agent {
 
         let truncated = self.truncate_at(&message_id);
         if !truncated {
-            let err = AgentError::Serialization(format!(
-                "Message {} not found",
-                message_id.as_str()
-            ));
+            let err =
+                AgentError::Serialization(format!("Message {} not found", message_id.as_str()));
             let _ = result_tx.send(Err(err.clone()));
             return Err(err);
         }
@@ -547,9 +557,9 @@ impl Agent {
 
         let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
         if let Err(e) = self
-            .event_tx
+            .event_bus
             .try_send(Event::System(crate::event::SystemEvent::Rewound {
-                session_id: crate::types::SessionId(self.session_id.clone()),
+                session_id: self.session_id.clone(),
                 messages: updated_messages,
             }))
         {
@@ -724,7 +734,7 @@ impl Agent {
         );
 
         let assistant_msg_id = MessageId::new();
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Request {
+        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Request {
             agent_id: self.id.clone(),
             message_id: assistant_msg_id.clone(),
             message_count: self.message_buffer.len(),
@@ -785,6 +795,8 @@ impl Agent {
             .collect_stream_output(&mut stream, assistant_msg_id.clone())
             .await?;
 
+        let end_content = result.content_blocks.clone();
+
         if !result.content_blocks.is_empty() || !result.tool_calls.is_empty() {
             let mut msg = Message::with_blocks(Role::Assistant, result.content_blocks);
             msg.id = assistant_msg_id.clone();
@@ -809,11 +821,19 @@ impl Agent {
             self.message_buffer.push(msg);
         }
 
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Completed {
+        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Completed {
             agent_id: self.id.clone(),
             message_id: assistant_msg_id.clone(),
         })) {
             tracing::warn!("Failed to send completed event: {}", e);
+        }
+
+        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::End {
+            agent_id: self.id.clone(),
+            message_id: assistant_msg_id.clone(),
+            content: end_content,
+        })) {
+            tracing::warn!("Failed to send model end event: {}", e);
         }
 
         if result.finish_reason.is_none() {
@@ -850,7 +870,7 @@ impl Agent {
                     Ok(Some(item)) => match item {
                         ModelStreamItem::Chunk(chunk) => {
                             state.handle_chunk(&chunk);
-                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Chunk {
+                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Chunk {
                                 agent_id: self.id.clone(),
                                 message_id: message_id.clone(),
                                 content: chunk,
@@ -860,7 +880,7 @@ impl Agent {
                         }
                         ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
                             // Forward incremental tool call update to TUI for UI feedback
-                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::ToolCallDelta {
+                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::ToolCallDelta {
                                 agent_id: self.id.clone(),
                                 message_id: message_id.clone(),
                                 tool_id: id,
@@ -875,7 +895,7 @@ impl Agent {
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
-                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Fallback {
+                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Fallback {
                                 agent_id: self.id.clone(),
                                 message_id: message_id.clone(),
                                 from,
@@ -897,7 +917,7 @@ impl Agent {
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
                                 .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
-                            if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::TokenUsage {
+                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::TokenUsage {
                                 agent_id: self.id.clone(),
                                 message_id: message_id.clone(),
                                 prompt_tokens: usage.prompt_tokens,
@@ -910,7 +930,7 @@ impl Agent {
                             // Record token usage
                             if let Some(store) = &self.shared.usage_store {
                                 let record = crate::storage::UsageRecord::new(
-                                    crate::types::SessionId(self.session_id.clone()),
+                                    self.session_id.clone(),
                                     self.id.clone(),
                                     usage,
                                     self.shared.model_config.model_id.clone(),
@@ -1071,10 +1091,13 @@ impl Agent {
 
     /// Emit compaction start/end event.
     async fn emit_compaction_event(&self, active: bool) {
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
-            agent_id: self.id.clone(),
-            active,
-        })) {
+        if let Err(e) = self
+            .event_bus
+            .try_send(Event::Model(ModelEvent::Compacting {
+                agent_id: self.id.clone(),
+                active,
+            }))
+        {
             tracing::warn!("Failed to send compacting event (active={}): {}", active, e);
         }
     }
@@ -1086,7 +1109,7 @@ impl Agent {
         }
         if let Some(store) = &self.shared.usage_store {
             let record = crate::storage::UsageRecord::new(
-                crate::types::SessionId(self.session_id.clone()),
+                self.session_id.clone(),
                 self.id.clone(),
                 usage,
                 self.shared.model_config.model_id.clone(),
@@ -1188,7 +1211,7 @@ impl Agent {
         }
 
         // No tool calls: check PreStop hooks for goal auto-continue
-        let ctx = crate::hooks::HookContext::pre_stop(&self.session_id, &self.data_dir);
+        let ctx = crate::hooks::HookContext::pre_stop(&self.session_id.0, &self.data_dir);
         let result = self.hook_registry.run_pre_stop(&ctx).await;
 
         if let crate::hooks::HookResult::PreStop(decision) = result {
@@ -1212,9 +1235,9 @@ impl Agent {
         if let Some(ref store) = self.shared.goal_store {
             if let Ok(Some(goal)) = store.load(&self.session_id).await {
                 if !matches!(goal.status, crate::goal::GoalStatus::Active) {
-                    let _ = self.event_tx.try_send(Event::System(
+                    let _ = self.event_bus.try_send(Event::System(
                         crate::event::SystemEvent::GoalUpdated {
-                            session_id: crate::types::SessionId(self.session_id.clone()),
+                            session_id: self.session_id.clone(),
                             description: goal.description.clone(),
                             status: goal.status.as_str().to_string(),
                         },
@@ -1252,7 +1275,7 @@ impl Agent {
         for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let message_id = tool_message_ids[&call.id].clone();
-            if let Err(e) = self.event_tx.try_send(Event::Tool(ToolEvent::Start {
+            if let Err(e) = self.event_bus.try_send(Event::Tool(ToolEvent::Start {
                 agent_id: self.id.clone(),
                 message_id,
                 tool_id: call.id.clone(),
@@ -1358,7 +1381,7 @@ impl Agent {
             if self.cancel_token.is_cancelled() {
                 return Err(AgentError::Cancelled("tool execution".into()));
             }
-            if let Err(e) = self.event_tx.try_send(Event::Tool(result.event)) {
+            if let Err(e) = self.event_bus.try_send(Event::Tool(result.event)) {
                 tracing::warn!("Failed to send tool end event: {}", e);
             }
             self.persist_message(&result.message).await;

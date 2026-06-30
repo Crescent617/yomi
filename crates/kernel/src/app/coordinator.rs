@@ -1,6 +1,5 @@
 use crate::agent::{AgentConfig, AgentShared, AgentState};
 use crate::app::session::{normalize_session_title, Session, SessionConfig};
-use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
 use crate::storage::usage::{DailyUsage, UsageSummary};
@@ -11,7 +10,7 @@ use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::RwLock;
 
 /// Input for creating a new session
 #[derive(Debug, Clone)]
@@ -25,26 +24,15 @@ pub struct CreateSessionInput {
 pub struct Coordinator {
     agent_shared: Arc<AgentShared>,
     sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
-    /// Broadcast channels for session events (for forwarding and cleanup)
-    session_event_senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
     /// Epoch seconds of the last event received from any session.
-    /// Updated by `forward_session_events` on every event.
     last_activity_at: Arc<AtomicU64>,
     /// Default agent configuration for new sessions.
     agent_config: AgentConfig,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
-    /// Kept separate from the main `SessionStore` so the public session
-    /// interface remains unchanged.
     pinned_session_store: Arc<dyn crate::storage::PinnedSessionStore>,
     /// Cron store for scheduled job operations.
-    /// Kept here so that the Coordinator can expose a unified API for both
-    /// in-process and remote clients (via `CoordinatorApi`).
-    ///
-    /// DESIGN PRINCIPLE: Never let the client layer hold a `CronStore` directly;
-    /// that would only work in local mode and break remote IPC mode. All cron
-    /// operations MUST go through the Coordinator.
     pub(crate) cron_store: Option<Arc<dyn crate::cron::CronStore>>,
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
 }
@@ -179,9 +167,10 @@ impl Coordinator {
         });
 
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
+        let event_bus = crate::event_bus::EventBus::new();
+        let agent_shared = agent_shared.with_event_bus(event_bus);
         let agent_shared = Arc::new(agent_shared);
         let sessions = Arc::new(DashMap::new());
-        let session_event_senders = Arc::new(DashMap::new());
         let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
         let agent_config = agent_config;
         let cron_store = if enable_cron {
@@ -190,12 +179,11 @@ impl Coordinator {
             None
         };
 
-        Self::spawn_session_pruner(Arc::clone(&sessions), Arc::clone(&session_event_senders));
+        Self::spawn_session_pruner(Arc::clone(&sessions));
 
         Arc::new(Self {
             agent_shared,
             sessions,
-            session_event_senders,
             last_activity_at,
             agent_config,
             project_store,
@@ -212,43 +200,41 @@ impl Coordinator {
             .as_secs()
     }
 
-    /// Spawn a background task that shuts down idle sessions which no longer
-    /// have any subscribers. This prevents unbounded memory growth when TUI
-    /// clients disconnect while the agent is waiting for input.
-    fn spawn_session_pruner(
-        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
-        senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
-    ) {
+    /// Spawn a background task that shuts down idle sessions.
+    /// A session is considered idle when:
+    /// 1. The agent is in `Idle` state (not streaming/running).
+    /// 2. No user activity for more than `IDLE_TIMEOUT_SECS` (10 minutes).
+    ///
+    /// This prevents unbounded memory growth when TUI clients disconnect
+    /// while the agent is waiting for input.
+    fn spawn_session_pruner(sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>) {
+        const IDLE_TIMEOUT_SECS: u64 = 600;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 let mut to_shutdown = Vec::new();
-                for entry in senders.iter() {
+                for entry in sessions.iter() {
                     let sid = entry.key().clone();
-                    let tx = entry.value();
-                    if tx.receiver_count() == 0 {
-                        if let Some(s_entry) = sessions.get(&sid) {
-                            if let Some(AgentState::Idle) =
-                                s_entry.value().read().await.agent_state()
-                            {
-                                to_shutdown.push(sid);
-                            }
+                    let session = entry.value().read().await;
+                    if let Some(AgentState::Idle) = session.agent_state() {
+                        if session.idle_seconds() >= IDLE_TIMEOUT_SECS {
+                            to_shutdown.push(sid);
                         }
                     }
                 }
                 for sid in to_shutdown {
-                    tracing::info!("idle with no subscribers — shutting down");
-                    // Close the agent so it exits cleanly (Shutdown transitions
-                    // to Closed, which breaks the agent loop). Then remove
-                    // directly from the maps so memory is freed regardless
-                    // of whether forward_session_events finishes.
                     if let Some(s_entry) = sessions.get(&sid) {
-                        s_entry.value().read().await.close().await;
+                        let session = s_entry.value().read().await;
+                        if let Some(AgentState::Idle) = session.agent_state() {
+                            if session.idle_seconds() >= IDLE_TIMEOUT_SECS {
+                                tracing::info!(session_id = %sid.0, "idle for too long — shutting down");
+                                session.close().await;
+                                sessions.remove(&sid);
+                            }
+                        }
                     }
-                    sessions.remove(&sid);
-                    senders.remove(&sid);
                 }
             }
         });
@@ -260,7 +246,6 @@ impl Coordinator {
         let session = self.require_session(session_id)?;
         session.read().await.close().await;
         self.sessions.remove(session_id);
-        self.session_event_senders.remove(session_id);
         tracing::info!("shut down");
         Ok(())
     }
@@ -446,11 +431,7 @@ impl Coordinator {
             .into());
         }
 
-        let (mut session, event_rx) =
-            Session::init(session_id.clone(), config, agent_shared).await?;
-
-        let (broadcast_tx, _) = broadcast::channel::<Event>(256);
-        session.set_event_sender(broadcast_tx.clone());
+        let session = Session::init(session_id.clone(), config, agent_shared).await?;
 
         let session_arc = Arc::new(RwLock::new(session));
 
@@ -466,63 +447,8 @@ impl Coordinator {
             }
             .into());
         }
-        self.session_event_senders
-            .insert(session_id.clone(), broadcast_tx.clone());
-
-        // Spawn event forwarding task
-        let sessions_clone = Arc::clone(&self.sessions);
-        let senders_clone = Arc::clone(&self.session_event_senders);
-        let activity_clone = Arc::clone(&self.last_activity_at);
-        let sid_clone = session_id.clone();
-        tokio::spawn(async move {
-            Self::forward_session_events(
-                sid_clone,
-                event_rx,
-                broadcast_tx,
-                sessions_clone,
-                senders_clone,
-                activity_clone,
-            )
-            .await;
-        });
 
         Ok(())
-    }
-
-    /// Forward events from agent to broadcast channel and handle cleanup
-    async fn forward_session_events(
-        session_id: SessionId,
-        mut agent_rx: mpsc::Receiver<Event>,
-        broadcast_tx: broadcast::Sender<Event>,
-        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
-        senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>,
-        last_activity_at: Arc<AtomicU64>,
-    ) {
-        tracing::info!(session_id = %session_id.0, "event forwarding started");
-
-        // Forward events until the channel closes (agent ended)
-        while let Some(event) = agent_rx.recv().await {
-            last_activity_at.store(Self::now_epoch(), Ordering::Relaxed);
-            if broadcast_tx.send(event).is_err() {
-                // No active subscribers (this is ok, receivers can come and go)
-                tracing::trace!(session_id = %session_id.0, "No active subscribers for events");
-            }
-        }
-
-        // Agent channel closed - session is shutting down
-        tracing::info!(session_id = %session_id.0, "main agent closed");
-
-        // Broadcast shutdown event
-        let shutdown_event = Event::System(SystemEvent::Shutdown {
-            session_id: session_id.clone(),
-            error: None, // TODO: capture error from agent if needed
-        });
-        let _ = broadcast_tx.send(shutdown_event);
-
-        // Remove session from coordinator
-        sessions.remove(&session_id);
-        senders.remove(&session_id);
-        tracing::info!(session_id = %session_id.0, "removed from coordinator");
     }
 
     /// Restore a session from storage by its ID, optionally overriding the tool blocklist.
@@ -820,13 +746,17 @@ impl Coordinator {
     pub fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Option<broadcast::Receiver<Event>> {
-        Some(
-            self.session_event_senders
-                .get(session_id)?
-                .value()
-                .subscribe(),
-        )
+    ) -> crate::event_bus::EventBusSubscriber {
+        self.agent_shared
+            .event_bus
+            .as_ref()
+            .expect("event_bus must be configured")
+            .subscribe(session_id.clone())
+    }
+
+    /// Get the global event bus.
+    pub fn event_bus(&self) -> Option<Arc<crate::event_bus::EventBus>> {
+        self.agent_shared.event_bus.clone()
     }
 
     #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tuirealm::{
     props::{AttrValue, Attribute},
     terminal::{CrosstermTerminalAdapter, TerminalAdapter},
@@ -10,7 +10,8 @@ use tuirealm::{
 
 use crate::{attr, components::info_bar::Notification, id::Id};
 use kernel::client::CoordinatorApi;
-use kernel::event::{ControlCommand, Event};
+use kernel::event::ControlCommand;
+use kernel::event_bus::EventBusSubscriber;
 use kernel::types::ContentBlock;
 
 use super::types::{AppMode, AppState, Model, StreamingStatus};
@@ -28,7 +29,7 @@ impl Model {
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        event_rx: broadcast::Receiver<Event>,
+        event_rx: EventBusSubscriber,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
         ctrl_tx: mpsc::Sender<ControlCommand>,
         coordinator: Arc<dyn CoordinatorApi>,
