@@ -73,6 +73,26 @@ pub fn init_logging(
     // delete the file we just started writing to.
     cleanup_old_logs(&log_dir, prefix, 7);
 
+    // Also schedule periodic cleanup while the process is running.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let log_dir = log_dir.clone();
+        let prefix = prefix.to_string();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_hours(24));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let log_dir = log_dir.clone();
+                let prefix = prefix.clone();
+                tokio::task::spawn_blocking(move || {
+                    cleanup_old_logs(&log_dir, &prefix, 7);
+                })
+                .await
+                .ok();
+            }
+        });
+    }
+
     let file_appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(prefix)

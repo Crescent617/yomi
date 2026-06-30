@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::{broadcast, Mutex};
 
 /// How long to retry connecting to the daemon on first use.
@@ -111,7 +112,7 @@ pub trait CoordinatorApi: Send + Sync {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<broadcast::Receiver<Event>>;
+    ) -> Result<crate::event_bus::EventBusSubscriber>;
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
@@ -323,13 +324,8 @@ impl CoordinatorApi for Coordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<broadcast::Receiver<Event>> {
-        Self::subscribe_session_events(self, session_id).ok_or_else(|| {
-            SessionError::NotFound {
-                session_id: session_id.0.clone(),
-            }
-            .into()
-        })
+    ) -> Result<crate::event_bus::EventBusSubscriber> {
+        Ok(Self::subscribe_session_events(self, session_id))
     }
 
     async fn list_sessions(
@@ -827,7 +823,7 @@ impl RemoteCoordinator {
     async fn subscribe_events_internal(
         &self,
         session_id: &SessionId,
-    ) -> Result<broadcast::Receiver<Event>> {
+    ) -> Result<crate::event_bus::EventBusSubscriber> {
         use dashmap::mapref::entry::Entry;
 
         let tx = match self.event_routers.entry(session_id.0.clone()) {
@@ -854,7 +850,19 @@ impl RemoteCoordinator {
             }
             return Err(result.unwrap_err());
         }
-        Ok(tx.subscribe())
+
+        let mut broadcast_rx = tx.subscribe();
+        let (mpsc_tx, mpsc_rx) = mpsc::channel::<(SessionId, Event)>(256);
+        let sid = session_id.clone();
+        tokio::spawn(async move {
+            while let Ok(ev) = broadcast_rx.recv().await {
+                if mpsc_tx.send((sid.clone(), ev)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(crate::event_bus::EventBusSubscriber::from_receiver(mpsc_rx))
     }
 }
 
@@ -1156,7 +1164,7 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<broadcast::Receiver<Event>> {
+    ) -> Result<crate::event_bus::EventBusSubscriber> {
         self.subscribe_events_internal(session_id).await
     }
 

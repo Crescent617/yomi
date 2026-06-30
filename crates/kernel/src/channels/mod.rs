@@ -118,6 +118,14 @@ pub struct ChannelInfo {
     pub status: ChannelStatus,
 }
 
+/// Runtime routing info for a session that belongs to an external channel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRouting {
+    pub channel_name: String,
+    pub external_chat_id: String,
+    pub reply_msg_id: Option<String>,
+}
+
 // ── Store trait ──────────────────────────────────────────────────────
 
 #[async_trait::async_trait]
@@ -125,23 +133,25 @@ pub trait ChannelStore: Send + Sync {
     async fn save_mapping(
         &self,
         channel_name: &str,
-        external_chat_id: &str,
+        mapping_key: &str,
         session_id: &SessionId,
+        actual_chat_id: &str,
+        reply_msg_id: Option<&str>,
     ) -> KernelResult<()>;
 
     async fn find_mapping(
         &self,
         channel_name: &str,
-        external_chat_id: &str,
+        mapping_key: &str,
     ) -> KernelResult<Option<SessionId>>;
 
     async fn list_mappings(&self, channel_name: &str) -> KernelResult<Vec<(String, SessionId)>>;
 
-    /// Find the channel name and `external_chat_id` for a given `session_id`.
-    async fn find_by_session_id(
+    /// Find routing info for a session (actual `chat_id` and `reply_msg_id`).
+    async fn find_routing_by_session(
         &self,
         session_id: &SessionId,
-    ) -> KernelResult<Option<(String, String)>>;
+    ) -> KernelResult<Option<SessionRouting>>;
 }
 
 // ── Platform adapter trait ─────────────────────────────────────────

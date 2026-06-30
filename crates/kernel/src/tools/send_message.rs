@@ -60,9 +60,9 @@ impl Tool for SendMessageTool {
         }
 
         let session_id = SessionId(ctx.session_id.clone());
-        let (chat_id, adapter) = self
+        let (routing, adapter) = self
             .channel_manager
-            .get_adapter_for_session(&session_id)
+            .get_routing_for_session(&session_id)
             .await
             .map_err(|e| crate::types::KernelError::tool(format!("Failed to find channel: {e}")))?
             .ok_or_else(|| {
@@ -98,12 +98,15 @@ impl Tool for SendMessageTool {
             }
         }
 
+        let chat_id = &routing.external_chat_id;
+        let reply_msg_id = routing.reply_msg_id.as_deref();
+
         // Send files first, then text (so text appears after files in chat).
         if !resolved_paths.is_empty() {
             let refs: Vec<(&std::path::Path, Option<&str>)> =
                 resolved_paths.iter().map(|p| (p.as_path(), None)).collect();
             adapter
-                .send_files(&chat_id, &refs, None)
+                .send_files(chat_id, &refs, reply_msg_id)
                 .await
                 .map_err(|e| {
                     crate::types::KernelError::tool(format!("Failed to send files: {e}"))
@@ -115,7 +118,7 @@ impl Tool for SendMessageTool {
                 text: text.to_string(),
             }];
             adapter
-                .send_message(&chat_id, blocks, None)
+                .send_message(chat_id, blocks, reply_msg_id)
                 .await
                 .map_err(|e| {
                     crate::types::KernelError::tool(format!("Failed to send message: {e}"))

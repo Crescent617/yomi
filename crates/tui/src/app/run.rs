@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tuirealm::{application::PollStrategy, terminal::TerminalAdapter};
 
 use kernel::client::CoordinatorApi;
-use kernel::event::{ControlCommand, Event};
+use kernel::event::ControlCommand;
 use kernel::types::ContentBlock;
 
 use super::types::{Model, TuiResult};
@@ -166,7 +166,7 @@ impl Model {
 /// Run the TUI application
 #[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn run_tui(
-    event_rx: broadcast::Receiver<Event>,
+    event_rx: kernel::event_bus::EventBusSubscriber,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
     coordinator: Arc<dyn CoordinatorApi>,

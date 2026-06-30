@@ -6,7 +6,15 @@ use crate::storage::file_state::JsonlFileStateStore;
 use crate::types::{AgentId, KernelError, Result, SessionError, SessionId};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 pub struct Session {
     id: SessionId,
@@ -17,11 +25,13 @@ pub struct Session {
     goal_store: Arc<dyn crate::goal::GoalStore>,
     /// Session store for title updates
     session_store: Option<Arc<dyn crate::storage::SessionStore>>,
-    /// Event broadcast sender for emitting session-level events (e.g. title updates)
-    event_tx: Option<broadcast::Sender<Event>>,
+    /// Event bus handle for emitting session-level events (e.g. title updates)
+    event_bus: Option<crate::event_bus::EventBusHandle>,
     /// Workspace skill directory (e.g. `<cwd>/.agents/skills`) loaded when the session starts.
     /// Kept so that `refresh_skills` can re-merge workspace skills after a global reload.
     workspace_skill_dir: Option<PathBuf>,
+    /// Epoch seconds of the last user activity (send_blocks, etc.).
+    last_activity_at: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -36,12 +46,11 @@ pub struct SessionConfig {
 impl Session {
     /// Initialize a new session with the main agent spawned.
     /// This is the single entry point for session creation.
-    /// Returns (Session, `mpsc::Receiver<Event>`) - the receiver must be consumed by caller.
     pub(crate) async fn init(
         id: SessionId,
         config: SessionConfig,
         agent_shared: Arc<AgentShared>,
-    ) -> Result<(Self, mpsc::Receiver<Event>)> {
+    ) -> Result<Self> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
         let goal_store = agent_shared
             .goal_store
@@ -54,7 +63,7 @@ impl Session {
             .map(|cwd| cwd.join(".agents/skills"))
             .filter(|d| d.exists());
 
-        let (main_agent, event_rx) = Self::spawn_main_agent(
+        let main_agent = Self::spawn_main_agent(
             &id,
             &config,
             &agent_shared,
@@ -66,16 +75,22 @@ impl Session {
 
         let session_store = agent_shared.session_store.clone();
 
+        let event_bus = agent_shared
+            .event_bus
+            .as_ref()
+            .map(|bus| bus.handle(id.clone()));
+
         let session = Self {
             id,
             main_agent: Some(main_agent),
             permission_state,
             goal_store,
             session_store,
-            event_tx: None,
+            event_bus,
             workspace_skill_dir,
+            last_activity_at: AtomicU64::new(now_epoch()),
         };
-        Ok((session, event_rx))
+        Ok(session)
     }
 
     /// Create and populate the file state store for this session
@@ -114,7 +129,7 @@ impl Session {
         file_state_store: &Arc<crate::tools::helper::FileStateStore>,
         permission_state: Option<PermissionState>,
         workspace_skill_dir: Option<&PathBuf>,
-    ) -> Result<(AgentHandle, mpsc::Receiver<Event>)> {
+    ) -> Result<AgentHandle> {
         let history = agent_shared
             .message_store
             .as_ref()
@@ -180,15 +195,16 @@ impl Session {
             checkpoint_store,
         ));
 
-        let (handle, event_rx) = Agent::spawn(AgentId::new(), &shared, spawn_args).await;
+        let handle = Agent::spawn(AgentId::new(), &shared, spawn_args).await;
         tracing::info!("main agent {} spawned", handle.id);
 
-        Ok((handle, event_rx))
+        Ok(handle)
     }
 
     /// Send a multi-modal message with content blocks
     pub async fn send_blocks(&self, blocks: Vec<crate::types::ContentBlock>) -> Result<()> {
         tracing::debug!("sending {} content blocks", blocks.len());
+        self.touch();
 
         // Update session title from first text block of user message
         self.update_title(&blocks).await;
@@ -214,8 +230,8 @@ impl Session {
             if !title.is_empty() {
                 match session_store.update_title(&self.id, &title).await {
                     Ok(()) => {
-                        if let Some(ref tx) = self.event_tx {
-                            let _ = tx.send(Event::System(SystemEvent::TitleUpdated {
+                        if let Some(ref bus) = self.event_bus {
+                            let _ = bus.try_send(Event::System(SystemEvent::TitleUpdated {
                                 session_id: self.id.clone(),
                                 title: title.clone(),
                             }));
@@ -227,11 +243,6 @@ impl Session {
                 }
             }
         }
-    }
-
-    /// Set the event broadcast sender so the session can emit events.
-    pub fn set_event_sender(&mut self, tx: broadcast::Sender<Event>) {
-        self.event_tx = Some(tx);
     }
 
     #[tracing::instrument(skip(self))]
@@ -284,6 +295,16 @@ impl Session {
 
     pub fn agent_state(&self) -> Option<AgentState> {
         self.main_agent.as_ref().map(|h| h.state())
+    }
+
+    /// Record the current time as the last activity timestamp.
+    pub fn touch(&self) {
+        self.last_activity_at.store(now_epoch(), Ordering::Relaxed);
+    }
+
+    /// Seconds since the last recorded activity.
+    pub fn idle_seconds(&self) -> u64 {
+        now_epoch().saturating_sub(self.last_activity_at.load(Ordering::Relaxed))
     }
 
     /// Whether the main agent is currently streaming
@@ -357,12 +378,10 @@ impl Session {
             target
         );
         match &self.main_agent {
-            Some(handle) => {
-                handle
-                    .rewind(message_id, target)
-                    .await
-                    .map_err(|e| KernelError::from(SessionError::RewindFailed(e.to_string())))
-            }
+            Some(handle) => handle
+                .rewind(message_id, target)
+                .await
+                .map_err(|e| KernelError::from(SessionError::RewindFailed(e.to_string()))),
             None => Err(SessionError::NotInitialized.into()),
         }
     }
@@ -471,31 +490,31 @@ impl Session {
 
     /// Emit `TitleUpdated` event if event sender is configured.
     pub(crate) fn emit_title_updated(&self, title: &str) {
-        if let Some(ref tx) = self.event_tx {
-            let _ = tx.send(Event::System(SystemEvent::TitleUpdated {
-                session_id: self.id.clone(),
-                title: title.to_string(),
-            }));
-        }
+        self.emit_system(SystemEvent::TitleUpdated {
+            session_id: self.id.clone(),
+            title: title.to_string(),
+        });
     }
 
     /// Emit `GoalUpdated` event if event sender is configured.
     fn emit_goal_updated(&self, state: &crate::goal::GoalState) {
-        if let Some(ref tx) = self.event_tx {
-            let _ = tx.send(Event::System(SystemEvent::GoalUpdated {
-                session_id: self.id.clone(),
-                description: state.description.clone(),
-                status: state.status.as_str().to_string(),
-            }));
-        }
+        self.emit_system(SystemEvent::GoalUpdated {
+            session_id: self.id.clone(),
+            description: state.description.clone(),
+            status: state.status.as_str().to_string(),
+        });
     }
 
     /// Emit `GoalStopped` event if event sender is configured.
     fn emit_goal_stopped(&self) {
-        if let Some(ref tx) = self.event_tx {
-            let _ = tx.send(Event::System(SystemEvent::GoalStopped {
-                session_id: self.id.clone(),
-            }));
+        self.emit_system(SystemEvent::GoalStopped {
+            session_id: self.id.clone(),
+        });
+    }
+
+    fn emit_system(&self, event: SystemEvent) {
+        if let Some(ref bus) = self.event_bus {
+            let _ = bus.try_send(Event::System(event));
         }
     }
 }

@@ -82,6 +82,13 @@ pub struct Project {
 #[serde(transparent)]
 pub struct SessionId(pub String);
 
+impl std::ops::Deref for SessionId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
 impl SessionId {
     pub fn new() -> Self {
         Self(Uuid::now_v7().to_string())

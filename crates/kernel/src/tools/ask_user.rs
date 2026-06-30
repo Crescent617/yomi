@@ -1,4 +1,5 @@
 use crate::event::{AgentEvent, Event};
+use crate::event_bus::EventBusHandle;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{AgentId, KernelError, Result, ToolOutput};
 use async_trait::async_trait;
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 pub const ASK_USER_TOOL_NAME: &str = "askUser";
@@ -107,19 +108,15 @@ impl AskUserResponder {
 /// Tool that blocks until the user answers a set of multiple-choice questions.
 pub struct AskUserTool {
     agent_id: AgentId,
-    event_tx: mpsc::Sender<Event>,
+    event_bus: EventBusHandle,
     ask_user_state: AskUserState,
 }
 
 impl AskUserTool {
-    pub fn new(
-        agent_id: AgentId,
-        event_tx: mpsc::Sender<Event>,
-        ask_user_state: AskUserState,
-    ) -> Self {
+    pub fn new(agent_id: AgentId, event_bus: EventBusHandle, ask_user_state: AskUserState) -> Self {
         Self {
             agent_id,
-            event_tx,
+            event_bus,
             ask_user_state,
         }
     }
@@ -239,7 +236,7 @@ impl Tool for AskUserTool {
             pending.insert(req_id.clone(), tx);
         }
 
-        self.event_tx
+        self.event_bus
             .send(Event::Agent(AgentEvent::AskUserQuestion {
                 agent_id: self.agent_id.clone(),
                 req_id: req_id.clone(),

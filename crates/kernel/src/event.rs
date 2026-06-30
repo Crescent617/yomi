@@ -180,6 +180,14 @@ pub enum ModelEvent {
         agent_id: AgentId,
         message_id: MessageId,
     },
+    /// Model response fully assembled with all content blocks.
+    /// For consumers that need the complete message (e.g. channel reply),
+    /// not incremental chunks.
+    End {
+        agent_id: AgentId,
+        message_id: MessageId,
+        content: Vec<crate::types::ContentBlock>,
+    },
     Error {
         agent_id: AgentId,
         message_id: MessageId,

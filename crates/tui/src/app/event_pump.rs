@@ -1,16 +1,17 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 use kernel::client::CoordinatorApi;
 use kernel::event::{Event, SystemEvent};
+use kernel::event_bus::EventBusSubscriber;
 use kernel::permissions::Level;
 use kernel::types::SessionId;
 
 /// Transparent event pump that hides connection churn from the TUI.
 ///
-/// Holds the kernel-side `broadcast::Receiver` and forwards events into
-/// a stable `mpsc::Receiver`.  When the broadcast channel is closed
+/// Holds the kernel-side `EventBusSubscriber` and forwards events into
+/// a stable `mpsc::Receiver`.  When the subscriber is closed
 /// (daemon restart / network drop) the pump automatically re-subscribes
 /// and restores the session — the TUI sees a continuous stream of events
 /// plus explicit `Connected` / `ConnectionLost` notifications when the
@@ -27,7 +28,7 @@ impl Drop for EventPump {
 
 impl EventPump {
     pub fn spawn(
-        initial_rx: broadcast::Receiver<Event>,
+        initial_rx: EventBusSubscriber,
         coordinator: Arc<dyn CoordinatorApi>,
         session_id: String,
         _auto_approve: Level,
@@ -50,7 +51,7 @@ impl EventPump {
             }
 
             'outer: loop {
-                // When broadcast is closed, resubscribe (infinite retry).
+                // When subscriber is closed, resubscribe (infinite retry).
                 if current_rx.is_none() {
                     match Self::resubscribe(&coordinator, &sid, _auto_approve, &cancel_for_task)
                         .await
@@ -79,20 +80,16 @@ impl EventPump {
                     biased;
                     () = cancel_for_task.cancelled() => break 'outer,
 
-                    result = r.recv() => {
-                        match result {
-                            Ok(ev) => {
-                                if let Err(e) = tx.send(ev).await {
+                    opt = r.recv() => {
+                        match opt {
+                            Some((_sid, event)) => {
+                                if let Err(e) = tx.send(event).await {
                                     tracing::warn!("EventPump mpsc closed: {e}");
                                     break 'outer;
                                 }
                             }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                tracing::warn!("Broadcast closed, will resubscribe");
-                                current_rx = None;
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("EventPump lagged by {n} events, forcing resubscribe");
+                            None => {
+                                tracing::warn!("Subscriber closed, will resubscribe");
                                 current_rx = None;
                             }
                         }
@@ -113,7 +110,7 @@ impl EventPump {
         session_id: &SessionId,
         _auto_approve: Level,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Option<broadcast::Receiver<Event>> {
+    ) -> Option<EventBusSubscriber> {
         let mut retries: u32 = 0;
         loop {
             if cancel.is_cancelled() {

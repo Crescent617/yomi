@@ -89,7 +89,7 @@ impl FeishuAdapter {
 
         // Store in cache.
         let mut guard = self.bot_open_id.lock().await;
-        *guard = open_id.clone();
+        guard.clone_from(&open_id);
         open_id
     }
 
@@ -99,7 +99,7 @@ impl FeishuAdapter {
         // Try cache first.
         {
             let cache = self.token_cache.lock().await;
-            if let Some(t) = cached_token(&cache) {
+            if let Some(t) = cached_token(cache.as_ref()) {
                 return Ok(t);
             }
         }
@@ -133,7 +133,7 @@ impl FeishuAdapter {
 
         // Double-check: another task may have refreshed while we were fetching.
         let mut cache = self.token_cache.lock().await;
-        if let Some(t) = cached_token(&cache) {
+        if let Some(t) = cached_token(cache.as_ref()) {
             return Ok(t);
         }
         *cache = Some(TokenCache {
@@ -396,13 +396,12 @@ impl PlatformAdapter for FeishuAdapter {
         blocks: Vec<ContentBlock>,
         reply_msg_id: Option<&str>,
     ) -> Result<(), ChannelError> {
+        const MAX_MD: usize = 30_000;
         let token = self.get_token().await?;
         let text = super::blocks_to_text(&blocks);
         if text.is_empty() {
             return Ok(());
         }
-
-        const MAX_MD: usize = 30_000;
         let text = if text.len() > MAX_MD {
             let split = text
                 .char_indices()
@@ -745,8 +744,8 @@ fn build_ack(original: &lark_websocket_protobuf::pbbp2::Frame) -> Vec<u8> {
 
 // ── Small helpers ──────────────────────────────────────────────────
 
-fn cached_token(cache: &Option<TokenCache>) -> Option<String> {
-    cache.as_ref().and_then(|c| {
+fn cached_token(cache: Option<&TokenCache>) -> Option<String> {
+    cache.and_then(|c| {
         if std::time::Instant::now() < c.expires_at {
             Some(c.token.clone())
         } else {

@@ -1,5 +1,6 @@
 use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
 use crate::event::{Event, ModelEvent, ToolEvent};
+use crate::event_bus::EventBusHandle;
 use crate::skill::Skill;
 use crate::storage::SessionStore;
 use crate::tools::{
@@ -26,9 +27,8 @@ pub struct SubagentTool {
     session_store: Option<Arc<dyn SessionStore>>,
     /// Parent session ID for task store sharing
     parent_session_id: String,
-    /// Parent's `event_tx` for forwarding permission requests and progress
-    /// Subagent's permission requests and progress will be sent here so TUI can show dialogs
-    parent_event_tx: mpsc::Sender<Event>,
+    /// Parent's event bus handle for forwarding permission requests and progress
+    parent_event_bus: EventBusHandle,
     /// Tool blocklist inherited from parent agent
     tool_blocklist: Vec<String>,
 }
@@ -40,7 +40,7 @@ struct SubAgentExecParams<'a> {
     history: Option<Vec<Arc<Message>>>,
     task: String,
     cancel_token: tokio_util::sync::CancellationToken,
-    parent_event_tx: &'a mpsc::Sender<Event>,
+    parent_event_bus: &'a EventBusHandle,
     parent_id: &'a AgentId,
     tool_id: &'a str,
     shared: Arc<AgentShared>,
@@ -55,7 +55,7 @@ impl SubagentTool {
         parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
         session_store: Option<Arc<dyn SessionStore>>,
         parent_session_id: String,
-        parent_event_tx: mpsc::Sender<Event>,
+        parent_event_bus: EventBusHandle,
         tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
@@ -64,7 +64,7 @@ impl SubagentTool {
             parent_input_tx,
             session_store,
             parent_session_id,
-            parent_event_tx,
+            parent_event_bus,
             tool_blocklist,
         }
     }
@@ -118,7 +118,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             std::sync::Arc::new(Checker::new(
                 state.clone(),
                 agent_id.clone(),
-                self.parent_event_tx.clone(),
+                self.parent_event_bus.clone(),
             ))
         });
 
@@ -130,7 +130,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             session_id,
         )
         .with_agent_id(agent_id)
-        .with_event_tx(self.parent_event_tx.clone())
+        .with_event_bus(self.parent_event_bus.clone())
         .with_permission_checker_opt(permission_checker)
         .with_skills(skills)
     }
@@ -142,7 +142,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
         crate::tools::ToolRegistryFactory::create(crate::tools::ToolRegistryConfig::for_subagent(
             agent_id,
             &self.shared,
-            &self.parent_event_tx,
+            &self.parent_event_bus,
             session_id,
             self.tool_blocklist.clone(),
         ))
@@ -315,7 +315,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             SubAgentMode::Async => {
                 // Clone values for the async block
                 let parent_tx = self.parent_input_tx.clone();
-                let parent_event_tx = self.parent_event_tx.clone();
+                let parent_event_bus = self.parent_event_bus.clone();
                 let parent_id = self.parent_id.clone();
                 let desc = description.clone();
                 let sub_id = sub_agent_id.clone();
@@ -335,7 +335,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                                 history,
                                 task: prompt,
                                 cancel_token,
-                                parent_event_tx: &parent_event_tx,
+                                parent_event_bus: &parent_event_bus,
                                 parent_id: &parent_id,
                                 tool_id: &tool_id,
                                 shared,
@@ -369,7 +369,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     history,
                     task: prompt,
                     cancel_token,
-                    parent_event_tx: &self.parent_event_tx,
+                    parent_event_bus: &self.parent_event_bus,
                     parent_id: &self.parent_id,
                     tool_id: ctx.tool_call_id,
                     shared: self.shared.clone(),
@@ -429,14 +429,14 @@ impl SubagentTool {
 
     /// Send a progress event, logging any errors
     fn send_progress(
-        event_tx: &mpsc::Sender<Event>,
+        event_bus: &EventBusHandle,
         agent_id: AgentId,
         tool_id: &str,
         message: String,
         tokens: Option<u32>,
         message_id: crate::types::MessageId,
     ) {
-        if let Err(e) = event_tx.try_send(Event::Tool(ToolEvent::Progress {
+        if let Err(e) = event_bus.try_send(Event::Tool(ToolEvent::Progress {
             agent_id,
             message_id,
             tool_id: tool_id.to_string(),
@@ -451,7 +451,7 @@ impl SubagentTool {
     fn handle_model_event(
         event: &Event,
         iteration_count: &mut usize,
-        event_tx: &mpsc::Sender<Event>,
+        event_bus: &EventBusHandle,
         agent_id: AgentId,
         tool_id: &str,
         message_id: &crate::types::MessageId,
@@ -464,7 +464,7 @@ impl SubagentTool {
             }) => {
                 let total = prompt_tokens + completion_tokens;
                 Self::send_progress(
-                    event_tx,
+                    event_bus,
                     agent_id,
                     tool_id,
                     format!(
@@ -478,7 +478,7 @@ impl SubagentTool {
             Event::Model(ModelEvent::Request { .. }) => {
                 *iteration_count += 1;
                 Self::send_progress(
-                    event_tx,
+                    event_bus,
                     agent_id,
                     tool_id,
                     format!("iteration {iteration_count} · running..."),
@@ -489,7 +489,7 @@ impl SubagentTool {
             // Show tool calls in progress for BROWSE mode
             Event::Tool(ToolEvent::Start { tool_name, .. }) => {
                 Self::send_progress(
-                    event_tx,
+                    event_bus,
                     agent_id,
                     tool_id,
                     format!("iteration {iteration_count} · {tool_name}"),
@@ -517,7 +517,7 @@ impl SubagentTool {
     async fn execute_simple_agent_with_shared(
         params: SubAgentExecParams<'_>,
     ) -> (String, SubAgentStatus) {
-        let event_tx = params.parent_event_tx.clone();
+        let event_bus = params.parent_event_bus.clone();
         let agent_id = params.parent_id.clone();
         let tool_id_owned = params.tool_id.to_string();
         let mut iteration_count = 0usize;
@@ -533,7 +533,7 @@ impl SubagentTool {
                     Self::handle_model_event(
                         &event,
                         &mut iteration_count,
-                        &event_tx,
+                        &event_bus,
                         agent_id.clone(),
                         &tool_id_owned,
                         &params.message_id,
@@ -558,7 +558,7 @@ impl SubagentTool {
 
                 let status = if metrics.completed {
                     Self::send_progress(
-                        params.parent_event_tx,
+                        params.parent_event_bus,
                         params.parent_id.clone(),
                         params.tool_id,
                         format!("completed · {} tokens", format_actual_tokens(total)),
@@ -569,7 +569,7 @@ impl SubagentTool {
                 } else {
                     // Max iterations reached without completing
                     Self::send_progress(
-                        params.parent_event_tx,
+                        params.parent_event_bus,
                         params.parent_id.clone(),
                         params.tool_id,
                         format!(
@@ -599,7 +599,7 @@ impl SubagentTool {
                     )
                 };
                 Self::send_progress(
-                    params.parent_event_tx,
+                    params.parent_event_bus,
                     params.parent_id.clone(),
                     params.tool_id,
                     msg,

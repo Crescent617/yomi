@@ -4,7 +4,7 @@
 //! on the Agent type, avoiding circular dependencies.
 
 use crate::agent::AgentInput;
-use crate::event::Event;
+use crate::event_bus::EventBusHandle;
 use crate::tools::helper::file_state::FileStateStore;
 use crate::tools::{
     AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
@@ -49,7 +49,7 @@ impl ToolFlags {
 pub struct ToolRegistryConfig<'a> {
     pub agent_id: &'a AgentId,
     pub shared: &'a Arc<crate::agent::AgentShared>,
-    pub event_tx: &'a mpsc::Sender<Event>,
+    pub event_bus: &'a EventBusHandle,
     pub session_id: &'a str,
     pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
@@ -64,14 +64,14 @@ impl<'a> ToolRegistryConfig<'a> {
         agent_id: &'a AgentId,
         shared: &'a Arc<crate::agent::AgentShared>,
         input_tx: &'a mpsc::Sender<AgentInput>,
-        event_tx: &'a mpsc::Sender<Event>,
+        event_bus: &'a EventBusHandle,
         session_id: &'a str,
         tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
             agent_id,
             shared,
-            event_tx,
+            event_bus,
             session_id,
             input_tx: Some(input_tx),
             file_state_store: None,
@@ -85,14 +85,14 @@ impl<'a> ToolRegistryConfig<'a> {
     pub fn for_subagent(
         agent_id: &'a AgentId,
         shared: &'a Arc<crate::agent::AgentShared>,
-        event_tx: &'a mpsc::Sender<Event>,
+        event_bus: &'a EventBusHandle,
         session_id: &'a str,
         tool_blocklist: Vec<String>,
     ) -> Self {
         Self {
             agent_id,
             shared,
-            event_tx,
+            event_bus,
             session_id,
             input_tx: None,
             file_state_store: None,
@@ -178,7 +178,7 @@ impl ToolRegistryFactory {
                     tx.clone(),
                     config.shared.session_store.clone(),
                     config.session_id.to_owned(),
-                    config.event_tx.clone(),
+                    config.event_bus.clone(),
                     config.tool_blocklist.clone(),
                 );
                 registry.register(subagent_tool);
@@ -222,7 +222,7 @@ impl ToolRegistryFactory {
         if let Some(ask_user_state) = config.ask_user_state {
             registry.register(AskUserTool::new(
                 config.agent_id.clone(),
-                config.event_tx.clone(),
+                config.event_bus.clone(),
                 ask_user_state,
             ));
         }
