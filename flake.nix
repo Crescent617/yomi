@@ -46,11 +46,11 @@
               !isJunk && pkgs.lib.cleanSourceFilter path type;
         };
 
-        cargoHash = "sha256-p90tr1htCJ31LYzS4kMaeUp+e1rO116TVT1Zakv3JBk=";
+        cargoHash = "sha256-dLVOH+JVc3Yaz6Anq1aoCv54FjVETbg5Xk0gwY3TLmc=";
 
         # 前端 npm 依赖 hash（同上，第一次构建失败后替换）
         # 当前值：基于 crates/gui/frontend/package-lock.json 计算
-        npmDepsHash = "sha256-M6KP09fT61LJCV8Bo2RAUmEOvcdKMu6hKekqRgpcVNI=";
+        npmDepsHash = "sha256-r2EE7lWXWw50KmD0xW4TUEbhMErHbym7duONhP9jkWM=";
 
         commonNativeBuildInputs = with pkgs; [
           pkg-config
