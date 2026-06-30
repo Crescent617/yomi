@@ -21,8 +21,6 @@ pub struct Session {
     main_agent: Option<AgentHandle>,
     /// Shared permission state for runtime level updates
     permission_state: Option<PermissionState>,
-    /// Goal store for persisting active goal state
-    goal_store: Arc<dyn crate::goal::GoalStore>,
     /// Session store for title updates
     session_store: Option<Arc<dyn crate::storage::SessionStore>>,
     /// Event bus handle for emitting session-level events (e.g. title updates)
@@ -52,10 +50,6 @@ impl Session {
         agent_shared: Arc<AgentShared>,
     ) -> Result<Self> {
         let file_state_store = Self::create_file_state_store(&id, &config).await?;
-        let goal_store = agent_shared
-            .goal_store
-            .clone()
-            .expect("goal_store configured by coordinator");
 
         let permission_state = Some(Self::create_permission_state(&config));
 
@@ -84,7 +78,6 @@ impl Session {
             id,
             main_agent: Some(main_agent),
             permission_state,
-            goal_store,
             session_store,
             event_bus,
             workspace_skill_dir,
@@ -386,129 +379,11 @@ impl Session {
         }
     }
 
-    /// Start autonomous goal-mode execution.
-    ///
-    /// 1. Persist the goal state.
-    /// 2. Inject the goal continuation prompt as a steer message.
-    /// 3. Send Continue to trigger the agent from Idle to Streaming.
-    #[tracing::instrument(skip(self))]
-    pub async fn start_goal(&mut self, state: crate::goal::GoalState) -> Result<()> {
-        self.goal_store.save(&self.id.0, &state).await?;
-        if let Some(ref handle) = self.main_agent {
-            handle
-                .send_steer(vec![crate::types::ContentBlock::Text {
-                    text: state.build_continue_prompt(),
-                }])
-                .map_err(|e| SessionError::SendFailed(format!("goal start steer: {e}")))?;
-            if handle.state() == AgentState::Idle {
-                if let Err(e) = handle.send_continue() {
-                    tracing::warn!("goal start continue failed: {}", e);
-                }
-            }
-        }
-        self.emit_goal_updated(&state);
-        tracing::info!("goal mode started");
-        Ok(())
-    }
-
-    /// Pause goal auto-continue. The agent will stop after the current turn.
-    #[tracing::instrument(skip(self))]
-    pub async fn pause_goal(&mut self) -> Result<()> {
-        let mut state = self
-            .goal_store
-            .load(&self.id.0)
-            .await?
-            .ok_or_else(|| SessionError::Other("no active goal to pause".to_string()))?;
-        state.status = crate::goal::GoalStatus::Paused;
-        self.goal_store.save(&self.id.0, &state).await?;
-        self.emit_goal_updated(&state);
-        tracing::info!("goal paused");
-        Ok(())
-    }
-
-    /// Resume goal auto-continue. Does not trigger agent — next step will PreStop-continue.
-    #[tracing::instrument(skip(self))]
-    pub async fn resume_goal(&mut self) -> Result<()> {
-        let mut state = self
-            .goal_store
-            .load(&self.id.0)
-            .await?
-            .ok_or_else(|| SessionError::Other("no goal to resume".to_string()))?;
-        state.status = crate::goal::GoalStatus::Active;
-        self.goal_store.save(&self.id.0, &state).await?;
-        self.emit_goal_updated(&state);
-        tracing::info!("goal resumed");
-        Ok(())
-    }
-
-    /// Get current goal state, if any.
-    pub async fn get_goal(&self) -> Result<Option<crate::goal::GoalState>> {
-        self.goal_store.load(&self.id.0).await
-    }
-
-    /// Update an active goal's description and inject an objective-updated prompt.
-    /// If no goal exists, creates a new active goal.
-    #[tracing::instrument(skip(self, description))]
-    pub async fn update_goal(&mut self, description: impl Into<String>) -> Result<()> {
-        let description = description.into();
-
-        let mut state = self
-            .goal_store
-            .load(&self.id.0)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| crate::goal::GoalState::new(&description));
-
-        state.description = description;
-        state.status = crate::goal::GoalStatus::Active;
-
-        // Persist the updated goal
-        self.goal_store.save(&self.id.0, &state).await?;
-
-        // Inject objective-updated prompt as a steer message
-        let prompt = state.objective_updated_prompt();
-        let blocks = vec![crate::types::ContentBlock::Text { text: prompt }];
-        self.send_steer(blocks)
-            .map_err(|e| SessionError::SendFailed(format!("update goal steer: {e}")))?;
-
-        self.emit_goal_updated(&state);
-        tracing::info!("goal updated: {}", state.description);
-        Ok(())
-    }
-
-    /// Stop autonomous goal-mode execution
-    #[tracing::instrument(skip(self))]
-    pub async fn stop_goal(&mut self) -> Result<()> {
-        // Always clear storage first so that resume never restores a stale goal,
-        // even if the agent handle is already closed.
-        self.goal_store.delete(&self.id.0).await?;
-        self.emit_goal_stopped();
-        tracing::info!("goal mode stopped");
-        Ok(())
-    }
-
     /// Emit `TitleUpdated` event if event sender is configured.
     pub(crate) fn emit_title_updated(&self, title: &str) {
         self.emit_system(SystemEvent::TitleUpdated {
             session_id: self.id.clone(),
             title: title.to_string(),
-        });
-    }
-
-    /// Emit `GoalUpdated` event if event sender is configured.
-    fn emit_goal_updated(&self, state: &crate::goal::GoalState) {
-        self.emit_system(SystemEvent::GoalUpdated {
-            session_id: self.id.clone(),
-            description: state.description.clone(),
-            status: state.status.as_str().to_string(),
-        });
-    }
-
-    /// Emit `GoalStopped` event if event sender is configured.
-    fn emit_goal_stopped(&self) {
-        self.emit_system(SystemEvent::GoalStopped {
-            session_id: self.id.clone(),
         });
     }
 
