@@ -159,9 +159,8 @@ impl Coordinator {
             None => agent_shared,
         };
 
-        let channel_manager = channel_store.map(|store| {
-            Arc::new(crate::channels::hub::ChannelHub::new(store))
-        });
+        let channel_manager =
+            channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));
 
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
         let event_bus = crate::event_bus::EventBus::new();
@@ -661,14 +660,17 @@ impl Coordinator {
 
     /// Get runtime status for a session (streaming, compacting, etc.)
     pub async fn get_session_status(&self, id: &SessionId) -> Result<crate::types::SessionStatus> {
-        let session = self.require_session(id)?;
-        let session = session.read().await;
-        let phase = match session.agent_state() {
-            Some(crate::agent::AgentState::Streaming) => "streaming",
-            Some(crate::agent::AgentState::ExecutingTool) => "executing_tool",
-            Some(crate::agent::AgentState::Compacting) => "compacting",
-            Some(crate::agent::AgentState::Closed) => "closed",
-            _ => "idle",
+        let phase = if let Some(session) = self.get_session(id) {
+            let session = session.read().await;
+            match session.agent_state() {
+                Some(crate::agent::AgentState::Streaming) => "streaming",
+                Some(crate::agent::AgentState::ExecutingTool) => "executing_tool",
+                Some(crate::agent::AgentState::Compacting) => "compacting",
+                Some(crate::agent::AgentState::Closed) => "closed",
+                _ => "idle",
+            }
+        } else {
+            "idle"
         };
         Ok(crate::types::SessionStatus {
             phase: phase.to_string(),
@@ -813,8 +815,9 @@ impl Coordinator {
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        session.read().await.cancel();
+        if let Some(session) = self.get_session(session_id) {
+            session.read().await.cancel();
+        }
         Ok(())
     }
 
@@ -826,7 +829,7 @@ impl Coordinator {
         approved: bool,
         remember: bool,
     ) -> Result<()> {
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         session
             .read()
             .await
@@ -842,7 +845,7 @@ impl Coordinator {
         req_id: &str,
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         session
             .read()
             .await
@@ -878,7 +881,7 @@ impl Coordinator {
     /// Request compaction for a session's message buffer
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         let result = session.read().await.compact().await;
         if let Err(ref e) = result {
             tracing::error!("failed to compact: {}", e);
@@ -896,7 +899,7 @@ impl Coordinator {
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     ) -> Result<()> {
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         let result = session.read().await.rewind(message_id, target).await;
         if let Err(ref e) = result {
             tracing::error!("failed to rewind: {}", e);
@@ -912,30 +915,86 @@ impl Coordinator {
         session_id: &SessionId,
         state: crate::goal::GoalState,
     ) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        let mut session_guard = session.write().await;
-        session_guard.start_goal(state).await
+        let store = self.goal_store().await;
+        store.save(&session_id.0, &state).await?;
+
+        if let Some(session) = self.get_session(session_id) {
+            let session = session.read().await;
+            let _ = session
+                .send_steer(vec![crate::types::ContentBlock::Text {
+                    text: state.build_continue_prompt(),
+                }])
+                .map_err(|e| tracing::warn!("goal start steer failed: {}", e));
+            if session.agent_state() == Some(crate::agent::AgentState::Idle) {
+                let _ = session
+                    .send_continue()
+                    .await
+                    .map_err(|e| tracing::warn!("goal start continue failed: {}", e));
+            }
+        }
+
+        if let Some(ref bus) = self.event_bus() {
+            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
+                crate::event::SystemEvent::GoalUpdated {
+                    session_id: session_id.clone(),
+                    description: state.description.clone(),
+                    status: state.status.as_str().to_string(),
+                },
+            ));
+        }
+        tracing::info!("goal mode started");
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        let mut session_guard = session.write().await;
-        session_guard.pause_goal().await
+        let store = self.goal_store().await;
+        let mut state = store
+            .load(&session_id.0)
+            .await?
+            .ok_or_else(|| crate::types::SessionError::Other("no active goal to pause".to_string()))?;
+        state.status = crate::goal::GoalStatus::Paused;
+        store.save(&session_id.0, &state).await?;
+
+        if let Some(ref bus) = self.event_bus() {
+            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
+                crate::event::SystemEvent::GoalUpdated {
+                    session_id: session_id.clone(),
+                    description: state.description.clone(),
+                    status: state.status.as_str().to_string(),
+                },
+            ));
+        }
+        tracing::info!("goal paused");
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        let mut session_guard = session.write().await;
-        session_guard.resume_goal().await
+        let store = self.goal_store().await;
+        let mut state = store
+            .load(&session_id.0)
+            .await?
+            .ok_or_else(|| crate::types::SessionError::Other("no goal to resume".to_string()))?;
+        state.status = crate::goal::GoalStatus::Active;
+        store.save(&session_id.0, &state).await?;
+
+        if let Some(ref bus) = self.event_bus() {
+            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
+                crate::event::SystemEvent::GoalUpdated {
+                    session_id: session_id.clone(),
+                    description: state.description.clone(),
+                    status: state.status.as_str().to_string(),
+                },
+            ));
+        }
+        tracing::info!("goal resumed");
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
-        let session = self.require_session(session_id)?;
-        let session_guard = session.read().await;
-        session_guard.get_goal().await
+        self.goal_store().await.load(&session_id.0).await
     }
 
     #[tracing::instrument(skip(self, description), fields(session_id = %session_id.0))]
@@ -944,16 +1003,54 @@ impl Coordinator {
         session_id: &SessionId,
         description: impl Into<String>,
     ) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        let mut session_guard = session.write().await;
-        session_guard.update_goal(description).await
+        let description = description.into();
+        let store = self.goal_store().await;
+        let mut state = store
+            .load(&session_id.0)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| crate::goal::GoalState::new(&description));
+
+        state.description = description;
+        state.status = crate::goal::GoalStatus::Active;
+        store.save(&session_id.0, &state).await?;
+
+        if let Some(session) = self.get_session(session_id) {
+            let session = session.read().await;
+            let prompt = state.objective_updated_prompt();
+            let blocks = vec![crate::types::ContentBlock::Text { text: prompt }];
+            let _ = session
+                .send_steer(blocks)
+                .map_err(|e| tracing::warn!("update goal steer failed: {}", e));
+        }
+
+        if let Some(ref bus) = self.event_bus() {
+            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
+                crate::event::SystemEvent::GoalUpdated {
+                    session_id: session_id.clone(),
+                    description: state.description.clone(),
+                    status: state.status.as_str().to_string(),
+                },
+            ));
+        }
+        tracing::info!("goal updated: {}", state.description);
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        let mut session_guard = session.write().await;
-        session_guard.stop_goal().await
+        self.goal_store().await.delete(&session_id.0).await?;
+
+        if let Some(ref bus) = self.event_bus() {
+            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
+                crate::event::SystemEvent::GoalStopped {
+                    session_id: session_id.clone(),
+                },
+            ));
+        }
+        tracing::info!("goal mode stopped");
+        Ok(())
     }
 
     /// Delete a session from storage
