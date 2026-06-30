@@ -159,7 +159,7 @@ pub enum ResponseBody {
 ///
 /// Uses JSON over length-prefixed frames.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "ty", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum WireMsg {
     /// Client → Server: request with id.
     Request { id: u64, method: RequestMethod },

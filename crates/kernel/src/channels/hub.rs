@@ -22,22 +22,19 @@ struct ChannelInstance {
     config: ChannelConfig,
     status: Arc<AtomicU8>,
     adapter: Arc<dyn PlatformAdapter>,
-    handle: tokio::task::JoinHandle<()>,
 }
 
 /// Manages the lifecycle of all platform channels and routes incoming
 /// messages to the coordinator.
 pub struct ChannelHub {
     store: Arc<dyn ChannelStore>,
-    cancel: CancellationToken,
     instances: Arc<DashMap<String, ChannelInstance>>,
 }
 
 impl ChannelHub {
-    pub fn new(store: Arc<dyn ChannelStore>, cancel: CancellationToken) -> Self {
+    pub fn new(store: Arc<dyn ChannelStore>) -> Self {
         Self {
             store,
-            cancel,
             instances: Arc::new(DashMap::new()),
         }
     }
@@ -46,6 +43,7 @@ impl ChannelHub {
     /// If a channel with the same name already exists, it is skipped.
     pub async fn start_all(
         &self,
+        token: CancellationToken,
         configs: Vec<ChannelConfig>,
         coordinator: std::sync::Weak<Coordinator>,
     ) -> Result<()> {
@@ -59,7 +57,7 @@ impl ChannelHub {
                 warn!(channel = %config.name, "channel already running, skipping");
                 continue;
             }
-            if let Err(e) = self.start_instance(config, coordinator.clone()).await {
+            if let Err(e) = self.start_instance(config, token.child_token(), coordinator.clone()).await {
                 error!(error = %e, "failed to start channel");
                 errors.push(e);
             }
@@ -68,7 +66,7 @@ impl ChannelHub {
         // Start the global event forwarder if we have a coordinator with an event bus.
         if let Some(coord) = coordinator.upgrade() {
             if let Some(bus) = coord.event_bus() {
-                self.start_event_forwarder(bus).await;
+                self.start_event_forwarder(bus, token.child_token()).await;
             }
         }
 
@@ -90,6 +88,7 @@ impl ChannelHub {
     async fn start_instance(
         &self,
         config: ChannelConfig,
+        token: CancellationToken,
         coordinator: std::sync::Weak<Coordinator>,
     ) -> Result<()> {
         let name = config.name.clone();
@@ -99,7 +98,7 @@ impl ChannelHub {
         let status = Arc::new(AtomicU8::new(STATUS_CONNECTING));
 
         let (incoming_tx, incoming_rx) = mpsc::channel::<ChannelMessage>(256);
-        let sub_cancel = self.cancel.child_token();
+        let sub_cancel = token.child_token();
         let store = Arc::clone(&self.store);
 
         let adapter_clone = Arc::clone(&adapter);
@@ -167,9 +166,7 @@ impl ChannelHub {
         });
 
         let name_done = name.clone();
-
-        // Combine handles
-        let handle = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             let _ = recv_handle.await;
             let _ = proc_handle.await;
             info!(channel = %name_done, "channel instance fully shut down");
@@ -179,7 +176,6 @@ impl ChannelHub {
             config,
             status: Arc::clone(&status),
             adapter,
-            handle,
         };
 
         self.instances.insert(name, instance);
@@ -188,10 +184,13 @@ impl ChannelHub {
 
     /// Start a single background task that subscribes to the global event bus
     /// and forwards model/system events for all channel-backed sessions.
-    async fn start_event_forwarder(&self, event_bus: Arc<crate::event_bus::EventBus>) {
+    async fn start_event_forwarder(
+        &self,
+        event_bus: Arc<crate::event_bus::EventBus>,
+        token: CancellationToken,
+    ) {
         let store = Arc::clone(&self.store);
         let instances = Arc::clone(&self.instances);
-        let cancel = self.cancel.child_token();
 
         tokio::spawn(async move {
             let mut rx = event_bus.subscribe_all();
@@ -199,7 +198,7 @@ impl ChannelHub {
             loop {
                 tokio::select! {
                     biased;
-                    () = cancel.cancelled() => break,
+                    () = token.cancelled() => break,
                     Some((session_id, event)) = rx.recv() => {
                         let routing = match store.find_routing_by_session(&session_id).await {
                             Ok(Some(r)) => r,
@@ -257,29 +256,6 @@ impl ChannelHub {
         });
     }
 
-    /// Gracefully stop all channels and wait for tasks to exit.
-    pub async fn shutdown(&self) -> Result<()> {
-        info!("shutting down channel hub");
-        self.cancel.cancel();
-
-        let mut handles = Vec::new();
-        for mut entry in self.instances.iter_mut() {
-            let instance = entry.value_mut();
-            handles.push(std::mem::replace(
-                &mut instance.handle,
-                tokio::spawn(async {}),
-            ));
-        }
-
-        for handle in handles {
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), handle).await;
-        }
-
-        self.instances.clear();
-        info!("channel hub shut down");
-        Ok(())
-    }
-
     /// List current channel states.
     pub fn list_channels(&self) -> Vec<ChannelInfo> {
         self.instances
@@ -331,14 +307,6 @@ async fn handle_incoming_message(
 
     // 1. Find existing mapping or create new session
     let session_id = if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-        if coordinator.get_session(&sid).is_none() {
-            coordinator
-                .restore_session(
-                    &sid,
-                    vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
-                )
-                .await?;
-        }
         sid
     } else {
         let sid = coordinator
@@ -372,7 +340,7 @@ async fn handle_incoming_message(
         )
         .await?;
 
-    // 3. Send the message blocks to the session
+    // 3. Send the message blocks to the session (auto-restore if pruned)
     coordinator.send_message(&session_id, msg.content).await?;
 
     Ok(())
@@ -472,7 +440,7 @@ mod tests {
     async fn test_start_and_shutdown() {
         let (_pool, store) = create_test_pool().await;
         let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store, cancel.clone());
+        let hub = ChannelHub::new(store);
 
         let configs = vec![
             ChannelConfig {
@@ -503,24 +471,21 @@ mod tests {
             },
         ];
 
-        hub.start_all(configs, std::sync::Weak::new())
+        hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
             .await
             .unwrap();
 
         let channels = hub.list_channels();
         assert_eq!(channels.len(), 2);
 
-        hub.shutdown().await.unwrap();
-
-        let channels = hub.list_channels();
-        assert!(channels.is_empty());
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_disabled_channel_skipped() {
         let (_pool, store) = create_test_pool().await;
         let cancel = CancellationToken::new();
-        let ch = ChannelHub::new(store, cancel.clone());
+        let ch = ChannelHub::new(store);
 
         let configs = vec![
             ChannelConfig {
@@ -541,20 +506,20 @@ mod tests {
             },
         ];
 
-        ch.start_all(configs, std::sync::Weak::new()).await.unwrap();
+        ch.start_all(cancel.clone(), configs, std::sync::Weak::new()).await.unwrap();
 
         let channels = ch.list_channels();
         assert_eq!(channels.len(), 1);
         assert_eq!(channels[0].name, "enabled");
 
-        ch.shutdown().await.unwrap();
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_skip_existing_channel() {
         let (_pool, store) = create_test_pool().await;
         let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store, cancel.clone());
+        let hub = ChannelHub::new(store);
 
         let config = ChannelConfig {
             name: "only_once".to_string(),
@@ -565,18 +530,18 @@ mod tests {
             ..Default::default()
         };
 
-        hub.start_all(vec![config.clone()], std::sync::Weak::new())
+        hub.start_all(cancel.clone(), vec![config.clone()], std::sync::Weak::new())
             .await
             .unwrap();
         assert_eq!(hub.list_channels().len(), 1);
 
         // Second attempt should be skipped
-        hub.start_all(vec![config], std::sync::Weak::new())
+        hub.start_all(cancel.clone(), vec![config], std::sync::Weak::new())
             .await
             .unwrap();
         assert_eq!(hub.list_channels().len(), 1);
 
-        hub.shutdown().await.unwrap();
+        cancel.cancel();
     }
 
     #[tokio::test]
@@ -595,7 +560,7 @@ mod tests {
     async fn test_skip_duplicate_channel() {
         let (_pool, store) = create_test_pool().await;
         let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store, cancel.clone());
+        let hub = ChannelHub::new(store);
 
         // Create a huge number of configs with the same name to trigger skip
         let configs = vec![
@@ -618,11 +583,11 @@ mod tests {
         ];
 
         // Should succeed but only start one
-        hub.start_all(configs, std::sync::Weak::new())
+        hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
             .await
             .unwrap();
         assert_eq!(hub.list_channels().len(), 1);
 
-        hub.shutdown().await.unwrap();
+        cancel.cancel();
     }
 }

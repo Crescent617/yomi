@@ -160,10 +160,7 @@ impl Coordinator {
         };
 
         let channel_manager = channel_store.map(|store| {
-            Arc::new(crate::channels::hub::ChannelHub::new(
-                store,
-                tokio_util::sync::CancellationToken::new(),
-            ))
+            Arc::new(crate::channels::hub::ChannelHub::new(store))
         });
 
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
@@ -179,8 +176,6 @@ impl Coordinator {
             None
         };
 
-        Self::spawn_session_pruner(Arc::clone(&sessions));
-
         Arc::new(Self {
             agent_shared,
             sessions,
@@ -191,6 +186,10 @@ impl Coordinator {
             cron_store,
             channel_manager,
         })
+    }
+
+    pub fn start_background(&self, token: tokio_util::sync::CancellationToken) {
+        Self::spawn_session_pruner(Arc::clone(&self.sessions), token);
     }
 
     fn now_epoch() -> u64 {
@@ -207,13 +206,23 @@ impl Coordinator {
     ///
     /// This prevents unbounded memory growth when TUI clients disconnect
     /// while the agent is waiting for input.
-    fn spawn_session_pruner(sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>) {
+    fn spawn_session_pruner(
+        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
+        token: tokio_util::sync::CancellationToken,
+    ) {
         const IDLE_TIMEOUT_SECS: u64 = 600;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => {
+                        tracing::info!("Session pruner shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {}
+                }
                 let mut to_shutdown = Vec::new();
                 for entry in sessions.iter() {
                     let sid = entry.key().clone();
@@ -675,6 +684,22 @@ impl Coordinator {
         })
     }
 
+    async fn require_session_or_restore(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Arc<RwLock<Session>>> {
+        if let Some(session) = self.get_session(session_id) {
+            return Ok(session);
+        }
+        self.restore_session(session_id, Vec::new()).await?;
+        self.get_session(session_id).ok_or_else(|| {
+            SessionError::NotFound {
+                session_id: session_id.0.clone(),
+            }
+            .into()
+        })
+    }
+
     /// Return the number of sessions currently live in memory.
     pub fn live_session_count(&self) -> usize {
         self.sessions.len()
@@ -734,7 +759,7 @@ impl Coordinator {
         blocks: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
         tracing::debug!("sending {} content blocks", blocks.len());
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         let result = session.read().await.send_blocks(blocks).await;
         if let Err(ref e) = result {
             tracing::error!("failed to send blocks: {}", e);
@@ -766,7 +791,7 @@ impl Coordinator {
         content: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
         tracing::debug!("sending steer");
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         let result = session.read().await.send_steer(content);
         if let Err(ref e) = result {
             tracing::error!("failed to send steer: {}", e);
@@ -778,7 +803,7 @@ impl Coordinator {
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
         tracing::debug!("sending continue");
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         let result = session.read().await.send_continue().await;
         if let Err(ref e) = result {
             tracing::error!("failed to send continue: {}", e);
@@ -788,7 +813,7 @@ impl Coordinator {
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
+        let session = self.require_session_or_restore(session_id).await?;
         session.read().await.cancel();
         Ok(())
     }

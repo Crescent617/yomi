@@ -12,7 +12,6 @@ pub struct CronWorker {
     task_rx: mpsc::Receiver<CronJob>,
     store: Arc<dyn CronStore>,
     scheduler: Option<Arc<CronScheduler>>,
-    shutdown: CancellationToken,
 }
 
 impl CronWorker {
@@ -21,22 +20,20 @@ impl CronWorker {
         task_rx: mpsc::Receiver<CronJob>,
         store: Arc<dyn CronStore>,
         scheduler: Option<Arc<CronScheduler>>,
-        shutdown: CancellationToken,
     ) -> Self {
         Self {
             executor,
             task_rx,
             store,
             scheduler,
-            shutdown,
         }
     }
 
-    pub async fn run(mut self) {
+    pub async fn run(mut self, token: CancellationToken) {
         loop {
             tokio::select! {
                 biased;
-                () = self.shutdown.cancelled() => {
+                () = token.cancelled() => {
                     tracing::info!("Cron worker shutting down");
                     break;
                 }

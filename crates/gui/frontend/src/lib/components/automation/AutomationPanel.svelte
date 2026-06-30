@@ -261,7 +261,7 @@
               Action
             </h3>
             <div class="bg-muted/30 rounded-lg p-3 text-sm space-y-1">
-              {#if job.action.ty === "send_message"}
+              {#if job.action.type === "send_message"}
                 <div class="flex items-center gap-2">
                   <span class="text-base">💬</span>
                   <span class="font-medium">Send Message</span>
@@ -278,7 +278,7 @@
                     class="mt-1 bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
                       .action.content}</pre>
                 {/if}
-              {:else if job.action.ty === "shell"}
+              {:else if job.action.type === "shell"}
                 <div class="flex items-center gap-2">
                   <span class="text-base">🔧</span>
                   <span class="font-medium">Shell Command</span>
@@ -296,7 +296,7 @@
                   </div>
                 {/if}
               {:else}
-                <div>Unknown action type: {job.action.ty}</div>
+                <div>Unknown action type: {job.action.type}</div>
               {/if}
             </div>
           </section>

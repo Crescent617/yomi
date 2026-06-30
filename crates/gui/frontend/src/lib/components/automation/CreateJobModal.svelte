@@ -20,7 +20,7 @@
 
   let name = $state(editingJob?.name ?? "");
   let schedule = $state(editingJob?.schedule ?? "");
-  let actionType = $state(editingJob?.action.ty ?? "send_message");
+  let actionType = $state(editingJob?.action.type ?? "send_message");
   let use_new_session = $state(editingJob ? false : true);
   let session_id = $state(editingJob?.action.session_id ?? "");
   let content = $state(editingJob?.action.content ?? "");
@@ -126,7 +126,7 @@
       }
     }
 
-    const action: Record<string, unknown> = { ty: actionType };
+    const action: Record<string, unknown> = { type: actionType };
     if (actionType === "send_message") {
       action.session_id = final_session_id.trim() || undefined;
       action.content = content;

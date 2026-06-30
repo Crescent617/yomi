@@ -54,45 +54,52 @@ pub struct KernelServer {
     /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
     /// of the cron subsystem (start / reload / shutdown) independently of the
     /// `Coordinator`, which only provides the data layer (`CronStore`).
-    cron_scheduler: Option<Arc<crate::cron::CronScheduler>>,
-    /// Shutdown token shared by the cron scheduler and worker.
-    cron_shutdown: Option<tokio_util::sync::CancellationToken>,
+    cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl KernelServer {
     pub fn new(coordinator: Arc<Coordinator>) -> Self {
-        let (cron_scheduler, cron_shutdown) = if let Some(store) = coordinator.cron_store.as_ref() {
-            let (task_tx, task_rx) = mpsc::channel(64);
-            let shutdown = tokio_util::sync::CancellationToken::new();
-            let scheduler = Arc::new(crate::cron::CronScheduler::new(
-                Arc::clone(store),
-                task_tx,
-                shutdown.clone(),
-            ));
-
-            let sched_clone = Arc::clone(&scheduler);
-            tokio::spawn(async move { sched_clone.run().await });
-
-            let worker = crate::cron::CronWorker::new(
-                Arc::clone(&coordinator) as Arc<dyn crate::cron::CronExecutor>,
-                task_rx,
-                Arc::clone(store),
-                Some(Arc::clone(&scheduler)),
-                shutdown.clone(),
-            );
-            tokio::spawn(async move { worker.run().await });
-
-            (Some(scheduler), Some(shutdown))
-        } else {
-            (None, None)
-        };
-
         Self {
             coordinator,
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            cron_scheduler,
-            cron_shutdown,
+            cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
+            shutdown: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    pub async fn start(&self, configs: Vec<crate::channels::ChannelConfig>) {
+        self.coordinator.start_background(self.shutdown.clone());
+
+        if let Some(store) = self.coordinator.cron_store.as_ref() {
+            let (task_tx, task_rx) = mpsc::channel(64);
+            let scheduler = Arc::new(crate::cron::CronScheduler::new(
+                Arc::clone(store),
+                task_tx,
+            ));
+
+            let sched_clone = Arc::clone(&scheduler);
+            let cron_token = self.shutdown.child_token();
+            tokio::spawn(async move { sched_clone.run(cron_token).await });
+
+            let worker = crate::cron::CronWorker::new(
+                Arc::clone(&self.coordinator) as Arc<dyn crate::cron::CronExecutor>,
+                task_rx,
+                Arc::clone(store),
+                Some(Arc::clone(&scheduler)),
+            );
+            let worker_token = self.shutdown.child_token();
+            tokio::spawn(async move { worker.run(worker_token).await });
+
+            *self.cron_scheduler.lock().unwrap() = Some(scheduler);
+        }
+
+        if let Some(ref mgr) = self.coordinator.channel_manager {
+            let weak = Arc::downgrade(&self.coordinator);
+            if let Err(e) = mgr.start_all(self.shutdown.clone(), configs, weak).await {
+                tracing::warn!(error = %e, "some channels failed to start");
+            }
         }
     }
 
@@ -116,6 +123,10 @@ impl KernelServer {
         loop {
             tokio::select! {
                 biased;
+                () = self.shutdown.cancelled() => {
+                    tracing::info!("Server shutting down, stopping accept loop");
+                    break;
+                }
                 () = shutdown.cancelled() => {
                     tracing::info!("Server shutting down, stopping accept loop");
                     break;
@@ -134,14 +145,12 @@ impl KernelServer {
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let server = Arc::new(self.clone());
                     let connections = Arc::clone(&self.connections);
+                    let cancel = self.shutdown.child_token();
+                    connections.insert(conn_id, cancel.clone());
                     tokio::spawn(async move {
-                        let cancel = tokio_util::sync::CancellationToken::new();
-                        connections.insert(conn_id, cancel.clone());
-
-                        if let Err(e) = server.handle_connection(stream, cancel.clone()).await {
+                        if let Err(e) = server.handle_connection(stream, cancel).await {
                             tracing::warn!("Connection {conn_id} error: {e}");
                         }
-
                         connections.remove(&conn_id);
                         tracing::debug!("Connection {conn_id} closed");
                     });
@@ -151,16 +160,8 @@ impl KernelServer {
         Ok(())
     }
 
-    pub async fn shutdown(&self) {
-        for entry in self.connections.iter() {
-            entry.value().cancel();
-        }
-        if let Some(ref shutdown) = self.cron_shutdown {
-            shutdown.cancel();
-        }
-        if let Some(ref mgr) = self.coordinator.channel_manager {
-            let _ = mgr.shutdown().await;
-        }
+    pub fn shutdown(&self) {
+        self.shutdown.cancel();
     }
 
     pub fn connection_count(&self) -> usize {
@@ -365,22 +366,6 @@ impl KernelServer {
             RequestMethod::Subscribe { session_id } => {
                 let sid = SessionId(session_id.clone());
 
-                // Ensure session is in memory (restore if needed)
-                if self.coordinator.get_session(&sid).is_none() {
-                    match self.coordinator.restore_session(&sid, Vec::new()).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            return ResponseBody::Err {
-                                error: RpcError {
-                                    code: "restore_failed".to_string(),
-                                    message: e.to_string(),
-                                    detail: None,
-                                },
-                            };
-                        }
-                    }
-                }
-
                 let rx = self.coordinator.subscribe_session_events(&sid);
 
                 let session_id_for_task = session_id.clone();
@@ -538,7 +523,7 @@ impl KernelServer {
                 };
                 match self.coordinator.create_cron_job(input).await {
                     Ok(job_id) => {
-                        if let Some(ref scheduler) = self.cron_scheduler {
+                        if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
                             scheduler.reload();
                         }
                         ok_body(JobIdResponse { job_id: job_id.0 })
@@ -634,7 +619,7 @@ impl KernelServer {
                     // Return true/false so the client can distinguish "updated" from "not found".
                     Ok(updated) => {
                         if updated {
-                            if let Some(ref scheduler) = self.cron_scheduler {
+                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
                                 scheduler.reload();
                             }
                         }
@@ -656,7 +641,7 @@ impl KernelServer {
                     // Return true/false so the client can distinguish "deleted" from "not found".
                     Ok(deleted) => {
                         if deleted {
-                            if let Some(ref scheduler) = self.cron_scheduler {
+                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
                                 scheduler.reload();
                             }
                         }

@@ -32,6 +32,7 @@ pub async fn resolve_safe_path(base: &std::path::Path, path: &str) -> Option<std
         Err(_) => {
             // File may not exist yet; verify logically within base.
             let base_canonical = tokio::fs::canonicalize(base).await.ok()?;
+            let joined = base_canonical.join(path);
             if joined.starts_with(&base_canonical) {
                 Some(joined)
             } else {
@@ -80,7 +81,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         let resolved = resolve_safe_path(base, "does_not_exist.txt").await;
-        assert_eq!(resolved, Some(base.join("does_not_exist.txt")));
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().file_name(), Some(std::ffi::OsStr::new("does_not_exist.txt")));
     }
 
     #[tokio::test]

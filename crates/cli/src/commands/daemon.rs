@@ -49,7 +49,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             }
 
             let (coordinator, config, _config_file) =
-                kernel::init_coordinator(None, true, true).await?;
+                kernel::init_coordinator(None, true).await?;
             let _log_guard = kernel::logging::init_logging(&config, "daemon", true)?;
 
             let addr = crate::daemon::socket_addr();
@@ -65,6 +65,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
 
             let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
+            server.start(config.channels.clone()).await;
             let shutdown = tokio_util::sync::CancellationToken::new();
 
             {
@@ -121,26 +122,34 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                     );
                     let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
                     loop {
-                        interval.tick().await;
-                        let idle = coord_for_exit.idle_seconds();
-                        let clients = server_for_exit.connection_count();
-                        if idle >= DAEMON_IDLE_TIMEOUT_SECS
-                            && clients == 0
-                            && coord_for_exit.live_session_count() == 0
-                        {
-                            tracing::info!(
-                                "Auto-exiting daemon after {idle}s idle with no clients or sessions"
-                            );
-                            shutdown_clone.cancel();
-                            break;
+                        tokio::select! {
+                            biased;
+                            () = shutdown_clone.cancelled() => {
+                                tracing::info!("Idle checker shutting down");
+                                break;
+                            }
+                            _ = interval.tick() => {
+                                let idle = coord_for_exit.idle_seconds();
+                                let clients = server_for_exit.connection_count();
+                                if idle >= DAEMON_IDLE_TIMEOUT_SECS
+                                    && clients == 0
+                                    && coord_for_exit.live_session_count() == 0
+                                {
+                                    tracing::info!(
+                                        "Auto-exiting daemon after {idle}s idle with no clients or sessions"
+                                    );
+                                    shutdown_clone.cancel();
+                                    break;
+                                }
+                            }
                         }
                     }
                 });
             }
 
             let serve_result = server.serve_listener(listener, shutdown).await;
-            // Cancel all active connections so the process can actually exit.
-            server.shutdown().await;
+            // Cancel all active connections and background tasks so the process can actually exit.
+            server.shutdown();
             let start = tokio::time::Instant::now();
             while server.connection_count() > 0 && start.elapsed() < SHUTDOWN_WAIT_TIMEOUT {
                 tokio::time::sleep(SHUTDOWN_POLL_INTERVAL).await;

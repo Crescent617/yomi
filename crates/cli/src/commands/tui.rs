@@ -241,7 +241,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
 }
 
 async fn create_local_coordinator(config: &Config) -> Result<Arc<kernel::Coordinator>> {
-    let coordinator = kernel::build_coordinator(config, false, false)
+    let coordinator = kernel::build_coordinator(config, false)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build coordinator: {e}"))?;
     Ok(coordinator)
