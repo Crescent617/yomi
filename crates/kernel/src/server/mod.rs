@@ -70,7 +70,7 @@ impl KernelServer {
     }
 
     pub async fn start(&self, configs: Vec<crate::channels::ChannelConfig>) {
-        self.coordinator.start_background(self.shutdown.clone());
+        self.coordinator.start(self.shutdown.clone());
 
         if let Some(store) = self.coordinator.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);

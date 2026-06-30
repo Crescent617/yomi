@@ -188,7 +188,7 @@ impl Coordinator {
         })
     }
 
-    pub fn start_background(&self, token: tokio_util::sync::CancellationToken) {
+    pub fn start(&self, token: tokio_util::sync::CancellationToken) {
         Self::spawn_session_pruner(Arc::clone(&self.sessions), token);
     }
 
