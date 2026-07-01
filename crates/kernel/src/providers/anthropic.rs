@@ -35,7 +35,6 @@ impl AnthropicProvider {
         messages
             .iter()
             .filter_map(|m| {
-
                 let role = match m.role {
                     Role::System => return None, // System is handled separately
                     Role::User | Role::Tool => "user",

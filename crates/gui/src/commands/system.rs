@@ -9,6 +9,15 @@ pub async fn ping(_state: State<'_, AppState>) -> Result<bool, GuiError> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn read_asset(state: State<'_, AppState>, url: String) -> Result<Vec<u8>, GuiError> {
+    if let Some(bytes) = kernel::utils::asset::read_asset(&url, &state.data_dir).await {
+        Ok(bytes)
+    } else {
+        Err(GuiError::unknown(format!("Asset not found: {url}")))
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn get_cwd() -> Result<String, GuiError> {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())

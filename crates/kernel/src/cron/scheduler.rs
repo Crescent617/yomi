@@ -24,10 +24,7 @@ pub struct CronScheduler {
 }
 
 impl CronScheduler {
-    pub fn new(
-        store: Arc<dyn CronStore>,
-        task_tx: mpsc::Sender<CronJob>,
-    ) -> Self {
+    pub fn new(store: Arc<dyn CronStore>, task_tx: mpsc::Sender<CronJob>) -> Self {
         let (reload_tx, _reload_rx) = tokio::sync::watch::channel(0u64);
         Self {
             store,

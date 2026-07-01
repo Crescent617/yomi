@@ -11,13 +11,15 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[derive(Debug, Clone)]
 pub struct JsonlMessageStore {
     base_dir: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl JsonlMessageStore {
     /// Create new store with the given sessions directory
-    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(base_dir: impl Into<PathBuf>, data_dir: impl Into<PathBuf>) -> Self {
         Self {
             base_dir: base_dir.into(),
+            data_dir: data_dir.into(),
         }
     }
 
@@ -53,6 +55,19 @@ impl JsonlMessageStore {
 
         Ok(messages)
     }
+
+    /// Serialize a message (extracting inline images) and write it to the file.
+    async fn write_message(&self, file: &mut File, msg: &mut Message) -> Result<()> {
+        crate::utils::asset::extract_inline_image(msg, &self.data_dir).await;
+        let line = serde_json::to_string(msg).map_err(|e| storage_err(e.to_string()))?;
+        file.write_all(line.as_bytes())
+            .await
+            .map_err(|e| storage_err(e.to_string()))?;
+        file.write_all(b"\n")
+            .await
+            .map_err(|e| storage_err(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -75,13 +90,8 @@ impl MessageStore for JsonlMessageStore {
             .map_err(|e| storage_err(e.to_string()))?;
 
         for msg in messages {
-            let line = serde_json::to_string(msg).map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(line.as_bytes())
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(b"\n")
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
+            let mut msg = msg.clone();
+            self.write_message(&mut file, &mut msg).await?;
         }
 
         file.flush().await.map_err(|e| storage_err(e.to_string()))?;
@@ -109,13 +119,8 @@ impl MessageStore for JsonlMessageStore {
             .map_err(|e| storage_err(e.to_string()))?;
 
         for msg in messages {
-            let line = serde_json::to_string(msg).map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(line.as_bytes())
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
-            file.write_all(b"\n")
-                .await
-                .map_err(|e| storage_err(e.to_string()))?;
+            let mut msg = msg.clone();
+            self.write_message(&mut file, &mut msg).await?;
         }
 
         file.flush().await.map_err(|e| storage_err(e.to_string()))?;
@@ -138,7 +143,7 @@ mod tests {
 
     fn create_test_store() -> (JsonlMessageStore, TempDir) {
         let temp = TempDir::new().unwrap();
-        let store = JsonlMessageStore::new(temp.path());
+        let store = JsonlMessageStore::new(temp.path(), temp.path());
         (store, temp)
     }
 

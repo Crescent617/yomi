@@ -147,10 +147,7 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
 /// This function does not discover or load config — callers must do that first.
 ///
 /// Returns the fully constructed `Coordinator` wrapped in an `Arc`.
-pub async fn build_coordinator(
-    config: &Config,
-    enable_cron: bool,
-) -> Result<Arc<Coordinator>> {
+pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc<Coordinator>> {
     tokio::fs::create_dir_all(&config.data_dir)
         .await
         .map_err(|e| KernelError::storage(format!("Failed to create data directory: {e}")))?;

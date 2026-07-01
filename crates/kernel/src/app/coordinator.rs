@@ -934,13 +934,15 @@ impl Coordinator {
         }
 
         if let Some(ref bus) = self.event_bus() {
-            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
-                crate::event::SystemEvent::GoalUpdated {
-                    session_id: session_id.clone(),
-                    description: state.description.clone(),
-                    status: state.status.as_str().to_string(),
-                },
-            ));
+            let _ = bus
+                .handle(session_id.clone())
+                .try_send(crate::event::Event::System(
+                    crate::event::SystemEvent::GoalUpdated {
+                        session_id: session_id.clone(),
+                        description: state.description.clone(),
+                        status: state.status.as_str().to_string(),
+                    },
+                ));
         }
         tracing::info!("goal mode started");
         Ok(())
@@ -949,21 +951,22 @@ impl Coordinator {
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
         let store = self.goal_store().await;
-        let mut state = store
-            .load(&session_id.0)
-            .await?
-            .ok_or_else(|| crate::types::SessionError::Other("no active goal to pause".to_string()))?;
+        let mut state = store.load(&session_id.0).await?.ok_or_else(|| {
+            crate::types::SessionError::Other("no active goal to pause".to_string())
+        })?;
         state.status = crate::goal::GoalStatus::Paused;
         store.save(&session_id.0, &state).await?;
 
         if let Some(ref bus) = self.event_bus() {
-            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
-                crate::event::SystemEvent::GoalUpdated {
-                    session_id: session_id.clone(),
-                    description: state.description.clone(),
-                    status: state.status.as_str().to_string(),
-                },
-            ));
+            let _ = bus
+                .handle(session_id.clone())
+                .try_send(crate::event::Event::System(
+                    crate::event::SystemEvent::GoalUpdated {
+                        session_id: session_id.clone(),
+                        description: state.description.clone(),
+                        status: state.status.as_str().to_string(),
+                    },
+                ));
         }
         tracing::info!("goal paused");
         Ok(())
@@ -980,13 +983,15 @@ impl Coordinator {
         store.save(&session_id.0, &state).await?;
 
         if let Some(ref bus) = self.event_bus() {
-            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
-                crate::event::SystemEvent::GoalUpdated {
-                    session_id: session_id.clone(),
-                    description: state.description.clone(),
-                    status: state.status.as_str().to_string(),
-                },
-            ));
+            let _ = bus
+                .handle(session_id.clone())
+                .try_send(crate::event::Event::System(
+                    crate::event::SystemEvent::GoalUpdated {
+                        session_id: session_id.clone(),
+                        description: state.description.clone(),
+                        status: state.status.as_str().to_string(),
+                    },
+                ));
         }
         tracing::info!("goal resumed");
         Ok(())
@@ -1026,13 +1031,15 @@ impl Coordinator {
         }
 
         if let Some(ref bus) = self.event_bus() {
-            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
-                crate::event::SystemEvent::GoalUpdated {
-                    session_id: session_id.clone(),
-                    description: state.description.clone(),
-                    status: state.status.as_str().to_string(),
-                },
-            ));
+            let _ = bus
+                .handle(session_id.clone())
+                .try_send(crate::event::Event::System(
+                    crate::event::SystemEvent::GoalUpdated {
+                        session_id: session_id.clone(),
+                        description: state.description.clone(),
+                        status: state.status.as_str().to_string(),
+                    },
+                ));
         }
         tracing::info!("goal updated: {}", state.description);
         Ok(())
@@ -1043,11 +1050,13 @@ impl Coordinator {
         self.goal_store().await.delete(&session_id.0).await?;
 
         if let Some(ref bus) = self.event_bus() {
-            let _ = bus.handle(session_id.clone()).try_send(crate::event::Event::System(
-                crate::event::SystemEvent::GoalStopped {
-                    session_id: session_id.clone(),
-                },
-            ));
+            let _ = bus
+                .handle(session_id.clone())
+                .try_send(crate::event::Event::System(
+                    crate::event::SystemEvent::GoalStopped {
+                        session_id: session_id.clone(),
+                    },
+                ));
         }
         tracing::info!("goal mode stopped");
         Ok(())

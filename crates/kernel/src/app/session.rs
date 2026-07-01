@@ -5,8 +5,8 @@ use crate::skill::SkillLoader;
 use crate::storage::file_state::JsonlFileStateStore;
 use crate::types::{AgentId, KernelError, Result, SessionError, SessionId};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now_epoch() -> u64 {
@@ -28,7 +28,7 @@ pub struct Session {
     /// Workspace skill directory (e.g. `<cwd>/.agents/skills`) loaded when the session starts.
     /// Kept so that `refresh_skills` can re-merge workspace skills after a global reload.
     workspace_skill_dir: Option<PathBuf>,
-    /// Epoch seconds of the last user activity (send_blocks, etc.).
+    /// Epoch seconds of the last user activity (`send_blocks`, etc.).
     last_activity_at: AtomicU64,
 }
 

@@ -74,10 +74,7 @@ impl KernelServer {
 
         if let Some(store) = self.coordinator.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);
-            let scheduler = Arc::new(crate::cron::CronScheduler::new(
-                Arc::clone(store),
-                task_tx,
-            ));
+            let scheduler = Arc::new(crate::cron::CronScheduler::new(Arc::clone(store), task_tx));
 
             let sched_clone = Arc::clone(&scheduler);
             let cron_token = self.shutdown.child_token();

@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 export function formatShortId(id: string): string {
   return id.slice(-8);
 }
@@ -104,4 +106,36 @@ export function collapseHome(path: string, home: string): string {
     return "~" + normalizedPath.slice(normalizedHome.length);
   }
   return path;
+}
+
+// LRU cache for asset blob URLs (max 64 entries) to prevent memory leaks.
+const MAX_ASSET_CACHE = 64;
+const assetCache = new Map<string, string>();
+
+function setAssetCache(url: string, blobUrl: string) {
+  if (assetCache.size >= MAX_ASSET_CACHE && !assetCache.has(url)) {
+    const firstKey = assetCache.keys().next().value;
+    if (firstKey) {
+      const old = assetCache.get(firstKey);
+      if (old) URL.revokeObjectURL(old);
+      assetCache.delete(firstKey);
+    }
+  }
+  assetCache.set(url, blobUrl);
+}
+
+export async function resolveAssetUrl(url: string): Promise<string> {
+  if (!url.startsWith("asset://")) return url;
+  const cached = assetCache.get(url);
+  if (cached) return cached;
+  try {
+    const bytes: number[] = await invoke("read_asset", { url });
+    const blob = new Blob([new Uint8Array(bytes)]);
+    const blobUrl = URL.createObjectURL(blob);
+    setAssetCache(url, blobUrl);
+    return blobUrl;
+  } catch (e) {
+    console.error("Failed to resolve asset:", e);
+    return url;
+  }
 }

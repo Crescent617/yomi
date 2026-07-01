@@ -135,7 +135,7 @@ impl StorageSet {
         let session_store: Arc<dyn super::SessionStore> =
             Arc::new(super::SqliteSessionStore::new(pool.clone()));
         let message_store: Arc<dyn super::MessageStore> =
-            Arc::new(super::JsonlMessageStore::new(&sessions_dir));
+            Arc::new(super::JsonlMessageStore::new(&sessions_dir, &data_dir));
         let usage_store: Arc<dyn super::UsageStore> =
             Arc::new(super::SqliteUsageStore::new(pool.clone()));
         let todo_store: Arc<dyn super::TodoStore> = Arc::new(super::JsonTodoStore::new(&data_dir));

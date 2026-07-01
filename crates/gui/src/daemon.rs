@@ -66,29 +66,38 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
 ///
 /// Returns an error if neither succeeds. The GUI does not fall back to an
 /// in-process coordinator — the daemon is the only supported path.
-pub async fn get_coordinator() -> Result<Arc<dyn kernel::client::CoordinatorApi>, String> {
+pub async fn get_coordinator(
+) -> Result<(Arc<dyn kernel::client::CoordinatorApi>, std::path::PathBuf), String> {
     let addr = socket_addr();
+    let default_config = kernel::config::Config::default();
+    let data_dir = default_config.data_dir.clone();
     if try_connect().await.is_some() {
         tracing::info!("Connected to existing daemon at {addr}");
-        return Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)));
+        return Ok((
+            Arc::new(kernel::client::RemoteCoordinator::new(addr)),
+            data_dir,
+        ));
     }
-    spawn_daemon()
+    let config = spawn_daemon()
         .await
         .map_err(|e| format!("failed to spawn daemon: {e}"))?;
     tracing::info!("Connected to spawned daemon at {addr}");
-    Ok(Arc::new(kernel::client::RemoteCoordinator::new(addr)))
+    Ok((
+        Arc::new(kernel::client::RemoteCoordinator::new(addr)),
+        config.data_dir,
+    ))
 }
 
 /// Start the kernel server in a background task.
 /// If a daemon is already accepting connections, returns Ok immediately.
-pub async fn spawn_daemon() -> Result<()> {
+pub async fn spawn_daemon() -> Result<kernel::config::Config> {
     // Install rustls crypto provider before any TLS operations.
     // Required by rustls 0.23+ when multiple crypto providers are available.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     if try_connect().await.is_some() {
         tracing::info!("daemon already running, skipping spawn");
-        return Ok(());
+        return Ok(kernel::config::Config::default());
     }
 
     let (coordinator, config, _config_file) = kernel::init_coordinator(None, true).await?;
@@ -174,7 +183,7 @@ pub async fn spawn_daemon() -> Result<()> {
     while start.elapsed() < SPAWN_READY_TIMEOUT {
         if try_connect().await.is_some() {
             tracing::info!("daemon ready after {:?}", start.elapsed());
-            return Ok(());
+            return Ok(config);
         }
         sleep(SPAWN_READY_INTERVAL).await;
     }

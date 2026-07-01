@@ -129,6 +129,7 @@ Complete the task fully — don't gold-plate, but don't leave it half-done. When
             working_dir,
             session_id,
         )
+        .with_data_dir(self.shared.data_dir.clone())
         .with_agent_id(agent_id)
         .with_event_bus(self.parent_event_bus.clone())
         .with_permission_checker_opt(permission_checker)

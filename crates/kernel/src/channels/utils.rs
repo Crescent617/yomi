@@ -82,7 +82,10 @@ mod tests {
         let base = tmp.path();
         let resolved = resolve_safe_path(base, "does_not_exist.txt").await;
         assert!(resolved.is_some());
-        assert_eq!(resolved.unwrap().file_name(), Some(std::ffi::OsStr::new("does_not_exist.txt")));
+        assert_eq!(
+            resolved.unwrap().file_name(),
+            Some(std::ffi::OsStr::new("does_not_exist.txt"))
+        );
     }
 
     #[tokio::test]
