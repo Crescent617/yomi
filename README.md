@@ -8,7 +8,7 @@
 
 | TUI | GUI |
 |-----|-----|
-| ![tui-demo](docs/tui-demo1.png) | ![gui-demo](docs/gui-demo1.png) |
+| ![tui-demo](docs/assets/tui-demo1.png) | ![gui-demo](docs/assets/gui-demo1.png) |
 
 ## Features
 

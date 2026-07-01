@@ -37,6 +37,10 @@ cargo fmt -- --check
 ### yomi-gui
 using tauri with npm for pkg manager
 
+## Docs
+
+design docs path: ./docs/design
+
 
 ## Key Patterns
 
