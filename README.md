@@ -4,16 +4,19 @@
 [![Release](https://github.com/crescent617/yomi/actions/workflows/release.yml/badge.svg)](https://github.com/crescent617/yomi/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> A minimalist AI coding assistant CLI built in Rust.
+> A minimalist AI coding assistant built in Rust, with both terminal and desktop interfaces.
 
-![demo](docs/demo.png)
+| TUI | GUI |
+|-----|-----|
+| ![tui-demo](docs/demo.png) | ![gui-demo](docs/gui-demo1.png) |
 
 ## Features
 
-- TUI: minimalist terminal interface for seamless interaction
-- Tools: built-in file operations (read/write/edit), glob/grep, shell command execution, and more
-- Configurable: context window, agent tools, and LLM provider settings
-- Confirmation: all operations require user confirmation to prevent unintended changes except in YOLO mode
+- **TUI** — minimalist terminal interface for seamless interaction
+- **GUI** — desktop app built with Tauri for a richer experience
+- **Tools** — built-in file operations (read/write/edit), glob/grep, shell command execution, and more
+- **Configurable** — context window, agent tools, and LLM provider settings
+- **Safe by default** — all operations require user confirmation except in YOLO mode
 
 ## Quick Start
 
@@ -29,9 +32,19 @@
 
 ### Installation
 
+#### CLI / TUI
+
 ```bash
 brew update && brew install crescent617/tap/yomi
 ```
+
+#### GUI
+
+```bash
+brew update && brew install crescent617/tap/yomi-gui
+```
+
+Or download the latest `.dmg` from the [releases page](https://github.com/crescent617/yomi/releases).
 
 ### Configuration
 
@@ -54,6 +67,12 @@ export ANTHROPIC_MODEL=xxx
 ```
 
 ### Usage
+
+#### GUI Mode
+
+```bash
+yomi-gui
+```
 
 #### Interactive TUI Mode
 
@@ -89,5 +108,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Built with [Tokio](https://tokio.rs) async runtime
 - TUI powered by [tuirealm](https://github.com/veeso/tuirealm)
+- GUI powered by [Tauri](https://tauri.app)
 - File operations use [ignore](https://crates.io/crates/ignore) crate for git-aware walking
 - Inspired by [Claude Code](https://claude.ai/code) and similar AI coding assistants
