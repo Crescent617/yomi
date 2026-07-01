@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod commands;
 mod daemon;
 mod error;
@@ -16,9 +16,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            let coordinator = tauri::async_runtime::block_on(daemon::get_coordinator())
+            let (coordinator, data_dir) = tauri::async_runtime::block_on(daemon::get_coordinator())
                 .map_err(|e| format!("failed to get coordinator: {e}"))?;
-            app.manage(AppState::new(coordinator));
+            app.manage(AppState::new(coordinator, data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -67,6 +67,7 @@ pub fn run() {
             commands::checkpoint::rewind,
             commands::skill::list_session_skills,
             commands::skill::reload_config,
+            commands::system::read_asset,
             commands::system::ping,
             commands::system::get_cwd,
             commands::system::get_config_toml,

@@ -1,5 +1,6 @@
 //! Utility functions for the kernel crate
 
+pub mod asset;
 pub mod env;
 pub mod html;
 pub mod id;

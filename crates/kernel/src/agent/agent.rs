@@ -763,6 +763,8 @@ impl Agent {
 
         // Clone messages and tools for the spawned task (needs 'static)
         let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
+        let messages =
+            crate::utils::asset::resolve_messages(&messages, &self.shared.data_dir).await;
 
         // Spawn provider request in a separate task to allow cancellation
         let provider = self.shared.provider.clone();

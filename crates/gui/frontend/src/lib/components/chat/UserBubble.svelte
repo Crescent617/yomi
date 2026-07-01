@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ChatMessage } from "../../state.svelte";
   import { Marked } from "marked";
+  import { resolveAssetUrl } from "../../utils";
   import OperationBar from "./OperationBar.svelte";
 
   let { message, session_id }: { message: ChatMessage; session_id: string } =
@@ -13,8 +14,6 @@
     md.parse(message.content || "", { async: false }) as string,
   );
 
-  // Escape unknown HTML tags so they display as text (e.g. <system_reminder>)
-  // while preserving markdown-generated tags like <p>, <strong>, <code>, etc.
   const allowedTags = new Set([
     "p",
     "strong",
@@ -83,12 +82,33 @@
       <div class="flex flex-wrap gap-2">
         {#each message.content_blocks ?? [] as block (block.type + (block.image_url?.url ?? block.text ?? ""))}
           {#if block.type === "image_url" && block.image_url?.url}
-            <img
-              src={block.image_url.url}
-              alt="Uploaded image"
-              class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-              onclick={() => window.open(block.image_url!.url, "_blank")}
-            />
+            {#if block.image_url.url.startsWith("asset://")}
+              {#await resolveAssetUrl(block.image_url.url)}
+                <div
+                  class="w-[200px] h-[200px] rounded-lg bg-muted animate-pulse"
+                />
+              {:then src}
+                <img
+                  {src}
+                  alt="Uploaded image"
+                  class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                  onclick={() => window.open(src, "_blank")}
+                />
+              {:catch}
+                <div
+                  class="w-[200px] h-[200px] rounded-lg bg-muted flex items-center justify-center text-xs text-muted-foreground"
+                >
+                  Failed to load image
+                </div>
+              {/await}
+            {:else}
+              <img
+                src={block.image_url.url}
+                alt="Uploaded image"
+                class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                onclick={() => window.open(block.image_url!.url, "_blank")}
+              />
+            {/if}
           {/if}
         {/each}
       </div>

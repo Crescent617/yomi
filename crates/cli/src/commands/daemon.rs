@@ -48,8 +48,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 tracing::info!("Stale PID file, cleaning up");
             }
 
-            let (coordinator, config, _config_file) =
-                kernel::init_coordinator(None, true).await?;
+            let (coordinator, config, _config_file) = kernel::init_coordinator(None, true).await?;
             let _log_guard = kernel::logging::init_logging(&config, "daemon", true)?;
 
             let addr = crate::daemon::socket_addr();

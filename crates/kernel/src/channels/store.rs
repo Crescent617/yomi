@@ -94,11 +94,13 @@ impl ChannelStore for SqliteChannelStore {
         .await
         .map_err(|e| storage_err(format!("Failed to find routing by session: {e}")))?;
 
-        Ok(row.map(|(channel_name, actual_chat_id, reply_msg_id)| SessionRouting {
-            channel_name,
-            external_chat_id: actual_chat_id.unwrap_or_default(),
-            reply_msg_id,
-        }))
+        Ok(row.map(
+            |(channel_name, actual_chat_id, reply_msg_id)| SessionRouting {
+                channel_name,
+                external_chat_id: actual_chat_id.unwrap_or_default(),
+                reply_msg_id,
+            },
+        ))
     }
 }
 

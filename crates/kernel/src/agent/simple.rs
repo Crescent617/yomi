@@ -62,6 +62,8 @@ pub struct SimpleAgent {
     session_id: String,
     /// Skills to pass to tools via `ToolExecCtx` (for nested subagents)
     skills: Vec<Arc<crate::skill::Skill>>,
+    /// Data directory for resolving asset:// images
+    data_dir: std::path::PathBuf,
 }
 
 impl SimpleAgent {
@@ -83,7 +85,14 @@ impl SimpleAgent {
             working_dir: working_dir.into(),
             session_id: session_id.into(),
             skills: Vec::new(),
+            data_dir: std::path::PathBuf::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_data_dir(mut self, data_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.data_dir = data_dir.into();
+        self
     }
 
     /// Set permission checker for tool execution
@@ -308,10 +317,11 @@ impl SimpleAgent {
         use futures::TryStreamExt;
 
         let tools = self.tool_registry.definitions();
+        let messages = crate::utils::asset::resolve_messages(messages, &self.data_dir).await;
 
         let mut stream = self
             .provider
-            .stream(messages, &tools, &self.model_config)
+            .stream(&messages, &tools, &self.model_config)
             .await
             .map_err(crate::agent::AgentError::from)?;
 

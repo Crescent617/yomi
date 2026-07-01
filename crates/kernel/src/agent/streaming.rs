@@ -54,11 +54,11 @@ impl StreamingHandler {
         tools: Vec<crate::types::ToolDefinition>,
         cancel_token: &super::CancelToken,
     ) -> Result<ModelStream, AgentError> {
+        let tools_arc: Vec<Arc<crate::types::ToolDefinition>> =
+            tools.into_iter().map(Arc::new).collect();
         // Spawn provider request in a separate task to allow cancellation
         let provider = self.provider.clone();
         let model_config = self.model_config.clone();
-        let tools_arc: Vec<Arc<crate::types::ToolDefinition>> =
-            tools.into_iter().map(Arc::new).collect();
         let stream_task =
             tokio::spawn(
                 async move { provider.stream(&messages, &tools_arc, &model_config).await },

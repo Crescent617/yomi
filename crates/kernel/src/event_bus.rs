@@ -225,11 +225,7 @@ async fn run_forwarder(
 }
 
 /// 尝试向 listener 列表发送事件，移除已关闭的 listener。
-fn try_send_to_listeners(
-    listeners: &mut Vec<Listener>,
-    sid: &SessionId,
-    ev: &Event,
-) {
+fn try_send_to_listeners(listeners: &mut Vec<Listener>, sid: &SessionId, ev: &Event) {
     let mut to_remove = Vec::new();
     for l in &*listeners {
         match l.tx.try_send((sid.clone(), ev.clone())) {

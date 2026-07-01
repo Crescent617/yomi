@@ -57,7 +57,10 @@ impl ChannelHub {
                 warn!(channel = %config.name, "channel already running, skipping");
                 continue;
             }
-            if let Err(e) = self.start_instance(config, token.child_token(), coordinator.clone()).await {
+            if let Err(e) = self
+                .start_instance(config, token.child_token(), coordinator.clone())
+                .await
+            {
                 error!(error = %e, "failed to start channel");
                 errors.push(e);
             }
@@ -506,7 +509,9 @@ mod tests {
             },
         ];
 
-        ch.start_all(cancel.clone(), configs, std::sync::Weak::new()).await.unwrap();
+        ch.start_all(cancel.clone(), configs, std::sync::Weak::new())
+            .await
+            .unwrap();
 
         let channels = ch.list_channels();
         assert_eq!(channels.len(), 1);
