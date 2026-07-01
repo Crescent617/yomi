@@ -32,16 +32,22 @@
 
 ### Installation
 
-#### CLI / TUI
+#### Both (CLI + GUI)
+
+```bash
+brew update && brew install crescent617/tap/yomi-app crescent617/tap/yomi
+```
+
+#### CLI / TUI only
 
 ```bash
 brew update && brew install crescent617/tap/yomi
 ```
 
-#### GUI
+#### GUI only
 
 ```bash
-brew update && brew install crescent617/tap/yomi-gui
+brew update && brew install crescent617/tap/yomi-app
 ```
 
 Or download the latest `.dmg` from the [releases page](https://github.com/crescent617/yomi/releases).
