@@ -48,6 +48,8 @@ pub enum AgentInput {
         /// Channel to send the result back
         result_tx: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
     },
+    /// Clear the agent's context (messages, file state, todos, persisted history)
+    Clear,
 }
 
 pub struct Agent {
@@ -106,6 +108,7 @@ impl Agent {
             .base_prompt(&args.base_prompt)
             .with_skills(&args.skills)
             .with_working_dir(&args.working_dir)
+            .with_session_id(&args.session_id)
             .build()
             .await;
 
@@ -228,6 +231,51 @@ impl Agent {
         // Obtain the parent agent's tokio CancellationToken directly
         // No bridge task needed since CancelToken internally wraps a CancellationToken
         self.cancel_token.runtime_token()
+    }
+
+    /// Clear the agent's context (messages, file state, todos, persisted history).
+    /// Keeps the system prompt message.
+    pub(crate) async fn handle_clear(&mut self) {
+        tracing::info!("clearing agent context");
+
+        // 1. Keep system prompt (first message if it's system role)
+        let system_msg = self
+            .message_buffer
+            .messages()
+            .first()
+            .filter(|m| m.role == Role::System)
+            .cloned();
+
+        // 2. Clear message buffer and push system prompt back
+        self.message_buffer.clear();
+        if let Some(sys) = system_msg {
+            self.message_buffer.push_arc(sys.clone());
+        }
+
+        // 3. Clear file state store
+        if let Some(ref store) = self.shared.file_state_store {
+            store.clear().await;
+        }
+
+        // 4. Clear todo storage
+        if let Some(ref store) = self.shared.todo_storage {
+            if let Err(e) = store.clear(&self.session_id.0).await {
+                tracing::warn!("failed to clear todo storage: {}", e);
+            }
+        }
+
+        // 5. Replace persisted messages with just system prompt
+        if let Some(ref store) = self.shared.message_store {
+            let to_persist: Vec<Message> = self
+                .message_buffer
+                .messages()
+                .iter()
+                .map(|m| (**m).clone())
+                .collect();
+            if let Err(e) = store.replace(&self.session_id.0, &to_persist).await {
+                tracing::warn!("failed to clear persisted messages: {}", e);
+            }
+        }
     }
 
     /// Persist a single message to storage
@@ -657,6 +705,10 @@ impl Agent {
             }) => {
                 tracing::info!("received rewind to {}", message_id.as_str());
                 self.process_rewind(message_id, target, result_tx).await?;
+                Ok(())
+            }
+            Some(AgentInput::Clear) => {
+                self.handle_clear().await;
                 Ok(())
             }
             None => {

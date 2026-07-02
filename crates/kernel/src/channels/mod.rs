@@ -152,6 +152,13 @@ pub trait ChannelStore: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> KernelResult<Option<SessionRouting>>;
+
+    /// Delete a channel session mapping
+    async fn delete_mapping(
+        &self,
+        channel_name: &str,
+        mapping_key: &str,
+    ) -> KernelResult<()>;
 }
 
 // ── Platform adapter trait ─────────────────────────────────────────

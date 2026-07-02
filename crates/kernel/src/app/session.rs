@@ -246,6 +246,18 @@ impl Session {
         }
     }
 
+    /// Clear the agent's context (messages, file state, todos, persisted history).
+    #[tracing::instrument(skip(self))]
+    pub async fn clear(&self) -> Result<()> {
+        match &self.main_agent {
+            Some(handle) => {
+                handle.clear().await?;
+                Ok(())
+            }
+            None => Err(SessionError::NotInitialized.into()),
+        }
+    }
+
     /// Gracefully shut down the main agent (sends Shutdown signal).
     #[tracing::instrument(skip(self))]
     pub async fn close(&self) {

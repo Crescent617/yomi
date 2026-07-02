@@ -102,6 +102,24 @@ impl ChannelStore for SqliteChannelStore {
             },
         ))
     }
+
+    async fn delete_mapping(
+        &self,
+        channel_name: &str,
+        mapping_key: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM channel_session_mappings
+             WHERE channel_name = ? AND external_chat_id = ?",
+        )
+        .bind(channel_name)
+        .bind(mapping_key)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("Failed to delete channel mapping: {e}")))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

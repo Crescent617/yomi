@@ -821,6 +821,19 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Clear the session's agent context (messages, file state, todos, persisted history).
+    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
+    pub async fn clear_session(&self, session_id: &SessionId) -> Result<()> {
+        let session = self.require_session_or_restore(session_id).await?;
+        let result = session.read().await.clear().await;
+        if let Err(ref e) = result {
+            tracing::error!("failed to clear session: {}", e);
+        } else {
+            tracing::info!("session cleared");
+        }
+        result
+    }
+
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn send_permission_response(
         &self,
