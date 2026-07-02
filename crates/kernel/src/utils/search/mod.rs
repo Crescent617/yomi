@@ -382,6 +382,7 @@ mod tests {
             message_id: MessageId::new(),
             turn: None,
             skills: vec![],
+            max_tool_output_length: 40_000,
         };
 
         let output = tool.exec(args, ctx).await;

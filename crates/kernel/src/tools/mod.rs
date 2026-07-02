@@ -27,7 +27,7 @@ pub mod write;
 pub mod send_message;
 
 // Re-export from helper module
-pub use helper::{FileStateStore, MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH};
+pub use helper::{FileStateStore, DEFAULT_MAX_TOOL_OUTPUT_LENGTH, MAX_FILE_SIZE};
 
 // Re-export from executor and factory directly
 pub use executor::{execute_tools_parallel, ToolExecutionResult};
@@ -73,6 +73,8 @@ pub struct ToolExecCtx<'a> {
     pub turn: Option<std::sync::Arc<crate::agent::Turn>>,
     /// Skills available to this agent (for tools like `SubagentTool` that need to pass them on)
     pub skills: Vec<Arc<crate::skill::Skill>>,
+    /// Maximum tool output length in bytes
+    pub max_tool_output_length: usize,
 }
 
 impl<'a> ToolExecCtx<'a> {
@@ -91,6 +93,7 @@ impl<'a> ToolExecCtx<'a> {
             message_id: crate::types::MessageId::default(),
             turn: None,
             skills: Vec::new(),
+            max_tool_output_length: 40_000,
         }
     }
 
@@ -114,6 +117,7 @@ impl<'a> ToolExecCtx<'a> {
             message_id,
             turn: None,
             skills: Vec::new(),
+            max_tool_output_length: 40_000,
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::tools::helper::{
     g_lock_timeout, get_mtime, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
-    MAX_FILE_SIZE, MAX_TOOL_OUTPUT_LENGTH,
+    MAX_FILE_SIZE,
 };
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
@@ -71,6 +71,7 @@ impl ReadTool {
         offset: usize,
         limit: Option<usize>,
         line_numbers: bool,
+        max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
         // Acquire lock before reading to coordinate with writers
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
@@ -105,13 +106,13 @@ impl ReadTool {
             let notice = format!(
                 "\n\n[Stopped at line {end} of {total_lines}. Use offset/limit to read more.]"
             );
-            if output.len() + notice.len() <= MAX_TOOL_OUTPUT_LENGTH {
+            if output.len() + notice.len() <= max_tool_output_length {
                 output + &notice
             } else {
-                maybe_truncate_output(output, MAX_TOOL_OUTPUT_LENGTH, offset)
+                maybe_truncate_output(output, max_tool_output_length, offset)
             }
         } else {
-            maybe_truncate_output(output, MAX_TOOL_OUTPUT_LENGTH, offset)
+            maybe_truncate_output(output, max_tool_output_length, offset)
         };
 
         Ok(ToolOutput::text(output))
@@ -191,7 +192,14 @@ impl Tool for ReadTool {
         if is_image_extension(&path) {
             self.read_image(&path, path_str).await
         } else {
-            self.read_text(&path, offset, limit, line_numbers).await
+            self.read_text(
+                &path,
+                offset,
+                limit,
+                line_numbers,
+                ctx.max_tool_output_length,
+            )
+            .await
         }
     }
 }
@@ -199,6 +207,7 @@ impl Tool for ReadTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::DEFAULT_MAX_TOOL_OUTPUT_LENGTH;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -408,7 +417,7 @@ mod tests {
         // Create a large file that will trigger truncation
         // Each line is about 100 chars, create enough lines to exceed limit
         let line = "x".repeat(100);
-        let lines_needed = MAX_TOOL_OUTPUT_LENGTH / 100 + 10;
+        let lines_needed = DEFAULT_MAX_TOOL_OUTPUT_LENGTH / 100 + 10;
         let mut content = String::with_capacity(line.len() * lines_needed + lines_needed);
         for _ in 0..lines_needed {
             content.push_str(&line);
@@ -431,6 +440,6 @@ mod tests {
         // Should indicate line number where truncated
         assert!(text.contains("at line"));
         // Length should be close to limit (allowing for truncation notice overhead)
-        assert!(text.len() <= MAX_TOOL_OUTPUT_LENGTH + 100);
+        assert!(text.len() <= DEFAULT_MAX_TOOL_OUTPUT_LENGTH + 100);
     }
 }

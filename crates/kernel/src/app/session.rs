@@ -167,7 +167,8 @@ impl Session {
             .with_subagent(config.agent.enable_subagent)
             .with_file_state_store(Arc::clone(file_state_store))
             .with_tool_blocklist(config.agent.tool_blocklist.clone())
-            .with_allow_command_hooks(config.agent.allow_command_hooks);
+            .with_allow_command_hooks(config.agent.allow_command_hooks)
+            .with_max_tool_output_length(config.agent.max_tool_output_length);
 
         // Only set working_dir if resolved
         if let Some(cwd) = resolve_cwd(config) {

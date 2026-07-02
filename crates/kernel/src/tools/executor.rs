@@ -1,5 +1,5 @@
 use crate::event::ToolEvent;
-use crate::tools::helper::truncate::{truncate_output, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE};
+use crate::tools::helper::truncate::{truncate_output, TRUNCATION_MESSAGE};
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME, SHELL_TOOL_NAME};
 use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
 use std::collections::BTreeMap;
@@ -25,6 +25,7 @@ fn tool_handles_truncation(tool_name: &str) -> bool {
 fn truncate_and_convert_blocks(
     blocks: &[crate::types::ToolOutputBlock],
     tool_name: &str,
+    max_tool_output_length: usize,
 ) -> Vec<crate::types::ToolOutputBlock> {
     // Skip truncation for tools that handle it themselves
     let should_truncate = !tool_handles_truncation(tool_name);
@@ -34,7 +35,7 @@ fn truncate_and_convert_blocks(
         .map(|block| match block {
             crate::types::ToolOutputBlock::Text { text } => crate::types::ToolOutputBlock::Text {
                 text: if should_truncate {
-                    truncate_output(text, MAX_TOOL_OUTPUT_LENGTH, TRUNCATION_MESSAGE)
+                    truncate_output(text, max_tool_output_length, TRUNCATION_MESSAGE)
                 } else {
                     text.clone()
                 },
@@ -75,9 +76,11 @@ fn build_tool_result(
     output: &ToolOutput,
     elapsed_ms: u64,
     message_id: MessageId,
+    max_tool_output_length: usize,
 ) -> (ToolEvent, Message) {
     let (blocks, content, is_error) = if output.success() {
-        let truncated = truncate_and_convert_blocks(&output.contents, tool_name);
+        let truncated =
+            truncate_and_convert_blocks(&output.contents, tool_name, max_tool_output_length);
         let content = to_content_blocks(&truncated);
         (truncated, content, false)
     } else {
@@ -160,6 +163,7 @@ pub struct ToolExecParams<'a> {
     pub message_ids: &'a BTreeMap<String, MessageId>,
     pub turn: Option<Arc<crate::agent::Turn>>,
     pub skills: &'a [Arc<crate::skill::Skill>],
+    pub max_tool_output_length: usize,
 }
 
 /// Execute multiple tool calls in parallel with optional cancellation support
@@ -204,6 +208,7 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
         let working_dir = params.working_dir.to_path_buf();
         let turn_for_task = params.turn.clone();
         let skills_for_task: Vec<Arc<crate::skill::Skill>> = params.skills.to_vec();
+        let max_tool_output_length = params.max_tool_output_length;
 
         join_set.spawn(
             async move {
@@ -218,6 +223,7 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
                 )
                 .with_skills(skills_for_task);
                 ctx.turn = turn_for_task;
+                ctx.max_tool_output_length = max_tool_output_length;
                 let result = match tool_opt {
                     Some(tool) => execute_single_tool_with_ctx(tool, arguments, ctx).await,
                     None => ToolOutput::error(format!("Unknown tool: {call_name}")),
@@ -231,6 +237,7 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
                     &result,
                     elapsed,
                     message_id.clone(),
+                    max_tool_output_length,
                 );
 
                 ToolExecutionResult {

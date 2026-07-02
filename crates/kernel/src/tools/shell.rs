@@ -1,7 +1,6 @@
 use crate::agent::AgentInput;
 use crate::const_concat;
 use crate::tools::helper::truncate::truncate_keep_edges;
-use crate::tools::helper::truncate::MAX_TOOL_OUTPUT_LENGTH;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
 use crate::utils::id::gen_base56_id;
@@ -136,8 +135,14 @@ For long-running commands (e.g. start a server, run a script with unknown durati
             self.exec_async(command, timeout_secs, &ctx.working_dir, cancel_token)
                 .await
         } else {
-            self.exec_sync(command, timeout_secs, &ctx.working_dir, cancel_token)
-                .await
+            self.exec_sync(
+                command,
+                timeout_secs,
+                &ctx.working_dir,
+                cancel_token,
+                ctx.max_tool_output_length,
+            )
+            .await
         }
     }
 }
@@ -160,6 +165,7 @@ impl ShellTool {
         timeout_secs: Option<u64>,
         working_dir: &std::path::Path,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
+        max_tool_output_length: usize,
     ) -> Result<ToolOutput> {
         let (shell, arg) = Self::shell_command();
         let output_fut = Command::new(shell)
@@ -219,7 +225,7 @@ impl ShellTool {
             if success { "completed" } else { "failed" }
         );
 
-        let total_budget = MAX_TOOL_OUTPUT_LENGTH.saturating_sub(footer.len());
+        let total_budget = max_tool_output_length.saturating_sub(footer.len());
         let has_out = !stdout.is_empty();
         let has_err = !stderr.is_empty();
 
