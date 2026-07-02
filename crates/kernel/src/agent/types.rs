@@ -23,6 +23,8 @@ pub struct AgentConfig {
     pub compactor: Compactor,
     /// Allow command hooks to execute (default false for security)
     pub allow_command_hooks: bool,
+    /// Maximum tool output length in bytes (default `40_000`)
+    pub max_tool_output_length: usize,
 }
 
 /// Configuration for spawning a new agent
@@ -42,6 +44,8 @@ pub struct AgentSpawnArgs {
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     pub tool_blocklist: Vec<String>,
     pub allow_command_hooks: bool,
+    /// Maximum tool output length in bytes
+    pub max_tool_output_length: usize,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -59,6 +63,7 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("file_state_store", &self.file_state_store.is_some())
             .field("tool_blocklist", &self.tool_blocklist)
             .field("allow_command_hooks", &self.allow_command_hooks)
+            .field("max_tool_output_length", &self.max_tool_output_length)
             .finish()
     }
 }
@@ -79,6 +84,7 @@ impl AgentSpawnArgs {
             file_state_store: None,
             tool_blocklist: Vec::new(),
             allow_command_hooks: false,
+            max_tool_output_length: 40_000,
         }
     }
 
@@ -160,6 +166,13 @@ impl AgentSpawnArgs {
         self.allow_command_hooks = allow;
         self
     }
+
+    /// Set max tool output length
+    #[must_use]
+    pub const fn with_max_tool_output_length(mut self, max: usize) -> Self {
+        self.max_tool_output_length = max;
+        self
+    }
 }
 
 impl Default for AgentConfig {
@@ -173,6 +186,7 @@ impl Default for AgentConfig {
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
             allow_command_hooks: false,
+            max_tool_output_length: 40_000,
         }
     }
 }

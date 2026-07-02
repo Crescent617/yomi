@@ -82,6 +82,8 @@ pub struct Agent {
     skills: Vec<Arc<crate::skill::Skill>>,
     /// Channel for receiving steer messages injected before each streaming turn
     steer_rx: mpsc::Receiver<Vec<ContentBlock>>,
+    /// Maximum tool output length in bytes
+    max_tool_output_length: usize,
 }
 
 impl Agent {
@@ -191,6 +193,7 @@ impl Agent {
             current_turn: None,
             skills: args.skills.clone(),
             steer_rx,
+            max_tool_output_length: args.max_tool_output_length,
         };
 
         let span = info_span!("agent", session_id = %session_id.0);
@@ -1409,6 +1412,7 @@ impl Agent {
                 message_ids: &tool_message_ids,
                 turn: turn_for_tools,
                 skills: &self.skills,
+                max_tool_output_length: self.max_tool_output_length,
             })
             .await
         };

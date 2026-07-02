@@ -14,6 +14,6 @@ pub use file_state::FileStateStore;
 pub use file_utils::{get_mtime, get_mtimes_concurrent, MAX_FILE_SIZE};
 pub use g_lock::{g_lock, g_lock_timeout, GLockError, GLockGuard, DEFAULT_LOCK_TIMEOUT};
 pub use truncate::{
-    maybe_truncate_output, truncate_output, truncate_with_message, MAX_TOOL_OUTPUT_LENGTH,
+    maybe_truncate_output, truncate_output, truncate_with_message, DEFAULT_MAX_TOOL_OUTPUT_LENGTH,
     TRUNCATION_MESSAGE,
 };

@@ -60,6 +60,8 @@ pub mod env_names {
     pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
     /// Allow command hooks to execute (default false for security)
     pub const ALLOW_COMMAND_HOOKS: &str = env_name!("ALLOW_COMMAND_HOOKS");
+    /// Maximum tool output length in bytes (default `40_000`)
+    pub const MAX_TOOL_OUTPUT_LENGTH: &str = env_name!("MAX_TOOL_OUTPUT_LENGTH");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
     /// Brave Search API key (optional, no prefix)
@@ -387,6 +389,11 @@ impl Config {
         // Allow command hooks (security flag, default false)
         if let Some(val) = env_bool_opt(env_names::ALLOW_COMMAND_HOOKS) {
             self.features.allow_command_hooks = val;
+        }
+
+        // Maximum tool output length
+        if let Some(max_len) = env_parse::<usize>(env_names::MAX_TOOL_OUTPUT_LENGTH) {
+            self.agent.max_tool_output_length = max_len;
         }
     }
 
