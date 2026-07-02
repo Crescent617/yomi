@@ -46,11 +46,8 @@
               !isJunk && pkgs.lib.cleanSourceFilter path type;
         };
 
-        cargoHash = "sha256-dLVOH+JVc3Yaz6Anq1aoCv54FjVETbg5Xk0gwY3TLmc=";
-
-        # 前端 npm 依赖 hash（同上，第一次构建失败后替换）
-        # 当前值：基于 crates/gui/frontend/package-lock.json 计算
-        npmDepsHash = "sha256-r2EE7lWXWw50KmD0xW4TUEbhMErHbym7duONhP9jkWM=";
+        # 前端 npm 依赖 hash（基于 crates/gui/frontend/package-lock.json 计算）
+        npmDepsHash = "sha256-eMkF/gch0BRX4Qx+Kh8Ru7J2/wyhQXNxJ+MSgxS/qHQ=";
 
         commonNativeBuildInputs = with pkgs; [
           pkg-config
@@ -84,8 +81,13 @@
 
         packages = {
           yomi-cli = pkgs.rustPlatform.buildRustPackage {
-            inherit src version cargoHash;
+            inherit src version;
             pname = "yomi-cli";
+
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              allowBuiltinFetchGit = true;
+            };
 
             cargoBuildFlags = [ "-p" "cli" ];
 
@@ -104,8 +106,13 @@
           };
 
           yomi-gui = pkgs.rustPlatform.buildRustPackage {
-            inherit src version cargoHash;
+            inherit src version;
             pname = "yomi-gui";
+
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              allowBuiltinFetchGit = true;
+            };
 
             # Tauri 后端在 workspace 子目录中。
             # 注意：workspace 项目的 Cargo.lock 在根目录，因此不设置 cargoRoot
