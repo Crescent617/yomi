@@ -123,6 +123,7 @@ impl ChannelHub {
             }
         });
 
+        let adapter_proc = Arc::clone(&adapter);
         let name_proc = name.clone();
         let config_proc = config.clone();
 
@@ -150,14 +151,31 @@ impl ChannelHub {
                             warn!("coordinator gone, stopping processing loop");
                             break;
                         };
-                        if let Err(e) = handle_incoming_message(
+                        match handle_incoming_message(
                             &name_proc,
                             &config_proc,
                             &store,
                             coord,
-                            msg,
+                            msg.clone(),
                         ).await {
-                            error!(error = %e, "failed to handle incoming message");
+                            Ok(Some(reply_text)) => {
+                                let chat_id = msg.external_chat_id.clone();
+                                let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
+                                let adapter = Arc::clone(&adapter_proc);
+                                tokio::spawn(async move {
+                                    if let Err(e) = adapter.send_message(
+                                        &chat_id,
+                                        vec![ContentBlock::Text { text: reply_text }],
+                                        reply_msg_id.as_deref(),
+                                    ).await {
+                                        error!(error = %e, "failed to send command reply");
+                                    }
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!(error = %e, "failed to handle incoming message");
+                            }
                         }
                     }
                     else => {
@@ -303,50 +321,113 @@ async fn handle_incoming_message(
     store: &Arc<dyn ChannelStore>,
     coordinator: Arc<Coordinator>,
     msg: ChannelMessage,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
     let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
     let mapping_key = msg.thread_id.clone().unwrap_or_else(|| chat_id.clone());
 
-    // 1. Find existing mapping or create new session
-    let session_id = if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-        sid
-    } else {
-        let sid = coordinator
-            .create_session(CreateSessionInput {
-                project_id: None,
-                working_dir: None,
-                auto_approve_level: crate::permissions::Level::Dangerous,
-                tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
-            })
-            .await?;
-        store
-            .save_mapping(
+    let cmd = parse_channel_command(&msg.content);
+    match cmd {
+        ChannelCommand::Clear => {
+            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+                coordinator.clear_session(&sid).await?;
+            }
+            Ok(Some("Context cleared.".to_string()))
+        }
+        ChannelCommand::Stop => {
+            if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
+                coordinator.cancel(&sid).await?;
+                return Ok(Some("Stopped.".to_string()));
+            }
+            Ok(Some("No active session to stop.".to_string()))
+        }
+        ChannelCommand::Steer(text) => {
+            let sid = get_or_create_session(
                 channel_name,
-                &mapping_key,
-                &sid,
+                store,
+                &coordinator,
                 &chat_id,
+                &mapping_key,
                 reply_msg_id.as_deref(),
             )
             .await?;
-        sid
+            coordinator
+                .send_steer(&sid, vec![ContentBlock::Text { text }])
+                .await?;
+            Ok(None)
+        }
+        ChannelCommand::None => {
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &coordinator,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            coordinator.send_message(&sid, msg.content).await?;
+            Ok(None)
+        }
+    }
+}
+
+/// Get an existing session or create a new one, updating routing info.
+async fn get_or_create_session(
+    channel_name: &str,
+    store: &Arc<dyn ChannelStore>,
+    coordinator: &Coordinator,
+    chat_id: &str,
+    mapping_key: &str,
+    reply_msg_id: Option<&str>,
+) -> Result<SessionId> {
+    if let Some(sid) = store.find_mapping(channel_name, mapping_key).await? {
+        store
+            .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
+            .await?;
+        return Ok(sid);
+    }
+
+    let sid = coordinator
+        .create_session(CreateSessionInput {
+            project_id: None,
+            working_dir: None,
+            auto_approve_level: crate::permissions::Level::Dangerous,
+            tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
+        })
+        .await?;
+    store
+        .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
+        .await?;
+    Ok(sid)
+}
+
+/// Parsed channel command from an incoming message.
+enum ChannelCommand {
+    /// Clear context and start fresh.
+    Clear,
+    /// Stop current streaming.
+    Stop,
+    /// Inject a steer message before the next turn.
+    Steer(String),
+    /// Not a command.
+    None,
+}
+
+fn parse_channel_command(content: &[ContentBlock]) -> ChannelCommand {
+    let text = match content.first() {
+        Some(ContentBlock::Text { text }) => text.as_str(),
+        _ => return ChannelCommand::None,
     };
 
-    // 2. Update routing info in database (covers new messages in existing thread).
-    store
-        .save_mapping(
-            channel_name,
-            &mapping_key,
-            &session_id,
-            &chat_id,
-            reply_msg_id.as_deref(),
-        )
-        .await?;
+    let (cmd, rest) = text.split_once([' ', '\n']).unwrap_or((text, ""));
 
-    // 3. Send the message blocks to the session (auto-restore if pruned)
-    coordinator.send_message(&session_id, msg.content).await?;
-
-    Ok(())
+    match cmd {
+        "/clear" => ChannelCommand::Clear,
+        "/stop" => ChannelCommand::Stop,
+        "/steer" => ChannelCommand::Steer(rest.to_string()),
+        _ => ChannelCommand::None,
+    }
 }
 
 fn build_adapter(

@@ -10,6 +10,7 @@ pub struct SystemPromptBuilder<'a> {
     base_prompt: Option<&'a str>,
     skills: &'a [Arc<Skill>],
     working_dir: Option<&'a std::path::Path>,
+    session_id: Option<&'a str>,
 }
 
 const SKILL_SECTION_HEADER: &str = "# Skills\nIMPORTANT: before replying, you must scan available skills and load skill content with `read` tool when task hits its description.\n\n";
@@ -34,6 +35,12 @@ impl<'a> SystemPromptBuilder<'a> {
     #[must_use]
     pub const fn with_working_dir(mut self, dir: &'a std::path::Path) -> Self {
         self.working_dir = Some(dir);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: &'a str) -> Self {
+        self.session_id = Some(session_id);
         self
     }
 
@@ -82,6 +89,9 @@ impl<'a> SystemPromptBuilder<'a> {
             std::env::consts::OS,
             std::env::consts::ARCH
         );
+        if let Some(session_id) = self.session_id {
+            let _ = write!(prompt, "\nSession: {session_id}");
+        }
         prompt
     }
 }

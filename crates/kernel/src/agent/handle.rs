@@ -185,4 +185,12 @@ impl AgentHandle {
                 mpsc::error::TrySendError::Closed(_) => AgentError::ChannelClosed,
             })
     }
+
+    /// Clear the agent's context (messages, file state, todos, persisted history).
+    pub async fn clear(&self) -> Result<(), AgentError> {
+        self.input_tx
+            .send(AgentInput::Clear)
+            .await
+            .map_err(|_| AgentError::ChannelClosed)
+    }
 }
