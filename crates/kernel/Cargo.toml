@@ -16,6 +16,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tracing-appender = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+ulid = { workspace = true }
 uuid = { workspace = true }
 rand = { workspace = true }
 

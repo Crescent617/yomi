@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+use ulid::Ulid;
 use uuid::Uuid;
 
 /// Unique identifier for agents
@@ -91,7 +92,7 @@ impl std::ops::Deref for SessionId {
 
 impl SessionId {
     pub fn new() -> Self {
-        Self(Uuid::now_v7().to_string())
+        Self(format!("sess_{}", Ulid::new()))
     }
 
     /// Create from an existing string (used for database retrieval)
