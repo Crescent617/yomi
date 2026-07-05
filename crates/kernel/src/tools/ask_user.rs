@@ -1,8 +1,8 @@
+use crate::agent::AgentInput;
 use crate::comms::EventBusHandle;
 use crate::event::{AgentEvent, Event};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
-use crate::agent::AgentInput;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,10 +59,7 @@ pub struct AskUserTool {
 }
 
 impl AskUserTool {
-    pub fn new(
-        event_bus: EventBusHandle,
-        input_bus: Arc<crate::comms::InputBus>,
-    ) -> Self {
+    pub fn new(event_bus: EventBusHandle, input_bus: Arc<crate::comms::InputBus>) -> Self {
         Self {
             event_bus,
             input_bus,
@@ -192,25 +189,22 @@ impl Tool for AskUserTool {
         tracing::info!("AskUserQuestion sent with req_id={}", req_id);
 
         // Wait for response via input bus (2-minute timeout)
-        let result = tokio::time::timeout(
-            Duration::from_mins(2),
-            async {
-                while let Some((_, input)) = subscriber.recv().await {
-                    if let AgentInput::AskUserResponse {
-                        req_id: id,
-                        response,
-                    } = input
-                    {
-                        if id == req_id {
-                            return response;
-                        }
+        let result = tokio::time::timeout(Duration::from_mins(2), async {
+            while let Some((_, input)) = subscriber.recv().await {
+                if let AgentInput::AskUserResponse {
+                    req_id: id,
+                    response,
+                } = input
+                {
+                    if id == req_id {
+                        return response;
                     }
                 }
-                AskUserResponse {
-                    answers: HashMap::new(),
-                }
-            },
-        )
+            }
+            AskUserResponse {
+                answers: HashMap::new(),
+            }
+        })
         .await;
 
         match result {

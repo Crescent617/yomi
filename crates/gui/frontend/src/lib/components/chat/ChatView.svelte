@@ -784,7 +784,9 @@
             <button
               type="button"
               bind:this={infoButtonRef}
-              class="inline-flex items-center justify-center rounded p-0.5 hover:bg-secondary/80 transition-colors {showSessionInfo ? 'bg-secondary/80' : ''}"
+              class="inline-flex items-center justify-center rounded p-0.5 hover:bg-secondary/80 transition-colors {showSessionInfo
+                ? 'bg-secondary/80'
+                : ''}"
               onclick={(e) => {
                 e.stopPropagation();
                 showSessionInfo = !showSessionInfo;
@@ -808,7 +810,9 @@
                   >
                     Session Info
                   </div>
-                  <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1 text-[11px]">
+                  <div
+                    class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1 text-[11px]"
+                  >
                     <span class="text-muted-foreground text-left">ID</span>
                     <span class="text-foreground font-mono text-left break-all">
                       {activeSession.id}
@@ -818,16 +822,26 @@
                       {activeSession.alias || "Untitled"}
                     </span>
                     <span class="text-muted-foreground text-left">Phase</span>
-                    <span class="text-foreground text-left">{activeSession.phase}</span>
+                    <span class="text-foreground text-left"
+                      >{activeSession.phase}</span
+                    >
                     {#if activeSession.parent_session_id}
-                      <span class="text-muted-foreground text-left">Parent</span>
-                      <span class="text-foreground font-mono text-left break-all">
+                      <span class="text-muted-foreground text-left">Parent</span
+                      >
+                      <span
+                        class="text-foreground font-mono text-left break-all"
+                      >
                         {activeSession.parent_session_id}
                       </span>
                     {/if}
-                    <span class="text-muted-foreground text-left">Messages</span>
-                    <span class="text-foreground text-left">{activeSession.messages.length}</span>
-                    <span class="text-muted-foreground text-left">Working Dir</span>
+                    <span class="text-muted-foreground text-left">Messages</span
+                    >
+                    <span class="text-foreground text-left"
+                      >{activeSession.messages.length}</span
+                    >
+                    <span class="text-muted-foreground text-left"
+                      >Working Dir</span
+                    >
                     <span class="text-foreground text-left break-all">
                       {activeSession.project_path || "N/A"}
                     </span>
@@ -836,8 +850,12 @@
                       {new Date(activeSession.updated_at).toLocaleString()}
                     </span>
                     {#if activeSession.permission_level}
-                      <span class="text-muted-foreground text-left">Permission</span>
-                      <span class="text-foreground text-left">{activeSession.permission_level}</span>
+                      <span class="text-muted-foreground text-left"
+                        >Permission</span
+                      >
+                      <span class="text-foreground text-left"
+                        >{activeSession.permission_level}</span
+                      >
                     {/if}
                   </div>
                 </div>

@@ -9,8 +9,7 @@ use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolE
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
-use crate::tools::factory::ToolFlags;
-use crate::tools::{ToolRegistryConfig, ToolRegistryFactory};
+use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
@@ -29,7 +28,7 @@ pub enum AgentInput {
     Cancel,
     /// Steer message injected before the next streaming turn
     Steer(Vec<ContentBlock>),
-    /// Permission response from user/TUI (handled directly by Checker via input_bus)
+    /// Permission response from user/TUI (handled directly by Checker via `input_bus`)
     PermissionResponse {
         req_id: String,
         approved: bool,
@@ -48,7 +47,7 @@ pub enum AgentInput {
     },
     /// Clear the agent's context (messages, file state, todos, persisted history)
     Clear,
-    /// Response to an `ask_user` question (handled directly by AskUserTool via input_bus)
+    /// Response to an `ask_user` question (handled directly by `AskUserTool` via `input_bus`)
     AskUserResponse {
         req_id: String,
         response: crate::tools::AskUserResponse,
@@ -126,7 +125,7 @@ impl Agent {
 
         let shared = shared.clone();
 
-        let tool_registry = ToolRegistryFactory::create(
+        let tool_registry = ToolRegistry::new().with_standard_tools(
             ToolRegistryConfig {
                 shared: &shared,
                 event_bus: &event_bus,
@@ -134,7 +133,7 @@ impl Agent {
                 input_bus: args.input_bus.as_ref(),
                 file_state_store: None,
                 tool_blocklist: args.tool_blocklist.clone(),
-                flags: ToolFlags::for_agent(enable_subagent),
+                flags: ToolFlags::new(enable_subagent),
             }
             .with_file_state_store(args.file_state_store.clone()),
         );

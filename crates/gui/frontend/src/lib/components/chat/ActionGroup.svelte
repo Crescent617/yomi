@@ -123,16 +123,18 @@
           />
         {/if}
         {#if msg.type === "tool"}
-          <ToolBlock tool={{
-            id: msg.tool_call_id,
-            tool_name: msg.tool_name,
-            status: msg.status,
-            arguments: msg.arguments,
-            output: msg.output,
-            elapsed_ms: msg.elapsed_ms,
-            subagent_session_id: msg.subagent_session_id,
-            folded: true,
-          }} />
+          <ToolBlock
+            tool={{
+              id: msg.tool_call_id,
+              tool_name: msg.tool_name,
+              status: msg.status,
+              arguments: msg.arguments,
+              output: msg.output,
+              elapsed_ms: msg.elapsed_ms,
+              subagent_session_id: msg.subagent_session_id,
+              folded: true,
+            }}
+          />
         {/if}
       {/each}
     </div>

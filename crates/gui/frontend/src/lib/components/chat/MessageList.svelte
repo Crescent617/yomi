@@ -155,8 +155,10 @@
   );
 
   const lastActionGroupIndex = $derived(
-    displayItems.reduce((lastIdx, item, idx) =>
-      item.type === "action_group" ? idx : lastIdx, -1),
+    displayItems.reduce(
+      (lastIdx, item, idx) => (item.type === "action_group" ? idx : lastIdx),
+      -1,
+    ),
   );
 </script>
 

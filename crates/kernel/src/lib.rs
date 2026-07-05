@@ -75,7 +75,7 @@ pub use storage::{
     usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType},
     StorageSet,
 };
-pub use tools::{Tool, ToolRegistryFactory};
+pub use tools::{Tool, ToolRegistry};
 pub use types::*;
 pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
