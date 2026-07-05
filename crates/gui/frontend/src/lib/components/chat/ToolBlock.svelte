@@ -117,6 +117,8 @@
   async function handleJumpToSubagent(sessionId: string) {
     await stateActivateSession(sessionId);
   }
+
+  let showSessionId = $state(false);
 </script>
 
 <div
@@ -168,17 +170,24 @@
       <div class="ml-auto flex items-center gap-1">
         <button
           type="button"
-          class="inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+          class="relative inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+          onmouseenter={() => (showSessionId = true)}
+          onmouseleave={() => (showSessionId = false)}
           onclick={(e) => {
             e.stopPropagation();
             handleJumpToSubagent(tool.subagent_session_id!);
           }}
         >
           <Bot class="w-3 h-3 opacity-60" />
-          <span class="font-mono opacity-70 truncate max-w-[12rem]"
-            >{tool.subagent_session_id}</span
-          >
           <ArrowUpRight class="w-3 h-3 opacity-50" />
+          {#if showSessionId}
+            <div class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 pointer-events-none">
+              <div class="absolute left-1/2 -translate-x-1/2 -bottom-[3px] w-2 h-2 bg-card rotate-45 border-r border-b border-border/20"></div>
+              <div class="relative px-3 py-2 bg-card rounded-lg border border-border/20 shadow-xl text-[11px] text-foreground whitespace-nowrap font-mono">
+                {tool.subagent_session_id}
+              </div>
+            </div>
+          {/if}
         </button>
         <span>
           {#if expanded}
