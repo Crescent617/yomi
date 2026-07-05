@@ -153,6 +153,11 @@
       ? buildDisplayItems(displayMessages, activeSession.phase === "streaming")
       : [],
   );
+
+  const lastActionGroupIndex = $derived(
+    displayItems.reduce((lastIdx, item, idx) =>
+      item.type === "action_group" ? idx : lastIdx, -1),
+  );
 </script>
 
 {#if activeSession}
@@ -193,6 +198,7 @@
                 <ActionGroup
                   messages={item.messages}
                   isStreaming={item.isStreaming}
+                  isLatest={index === lastActionGroupIndex}
                 />
                 {#each item.messages as m (m.id)}
                   {#if m.type !== "tool" && m.content?.trim()}

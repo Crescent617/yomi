@@ -44,6 +44,7 @@
     Command,
     Globe,
     FolderOpen,
+    Info,
   } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
@@ -476,6 +477,27 @@
 
   let editingTitle = $state(false);
   let titleValue = $state("");
+  let showSessionInfo = $state(false);
+  let infoButtonRef = $state<HTMLButtonElement | null>(null);
+  let infoTooltipRef = $state<HTMLDivElement | null>(null);
+
+  // Close session info tooltip when clicking outside
+  $effect(() => {
+    if (!showSessionInfo) return;
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        infoButtonRef &&
+        !infoButtonRef.contains(target) &&
+        infoTooltipRef &&
+        !infoTooltipRef.contains(target)
+      ) {
+        showSessionInfo = false;
+      }
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  });
 
   async function confirmRenameTitle() {
     if (!activeSession) return;
@@ -758,6 +780,70 @@
           >
             {activeSession.alias ?? activeSession.id.slice(-8)}
           </span>
+          <div class="group relative">
+            <button
+              type="button"
+              bind:this={infoButtonRef}
+              class="inline-flex items-center justify-center rounded p-0.5 hover:bg-secondary/80 transition-colors {showSessionInfo ? 'bg-secondary/80' : ''}"
+              onclick={(e) => {
+                e.stopPropagation();
+                showSessionInfo = !showSessionInfo;
+              }}
+            >
+              <Info class="w-3.5 h-3.5 text-muted-foreground opacity-60" />
+            </button>
+            {#if showSessionInfo}
+              <div
+                bind:this={infoTooltipRef}
+                class="absolute left-full top-0 ml-2 z-50"
+              >
+                <div
+                  class="absolute left-0 top-3 w-2 h-2 bg-card rotate-45 border-l border-b border-border/20 -translate-x-[3px]"
+                ></div>
+                <div
+                  class="relative p-3 w-80 bg-card rounded-xl border border-border/20 shadow-xl overflow-visible"
+                >
+                  <div
+                    class="text-[11px] font-medium text-foreground mb-2 pb-1.5 border-b border-border/20"
+                  >
+                    Session Info
+                  </div>
+                  <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1 text-[11px]">
+                    <span class="text-muted-foreground text-left">ID</span>
+                    <span class="text-foreground font-mono text-left break-all">
+                      {activeSession.id}
+                    </span>
+                    <span class="text-muted-foreground text-left">Title</span>
+                    <span class="text-foreground text-left break-words">
+                      {activeSession.alias || "Untitled"}
+                    </span>
+                    <span class="text-muted-foreground text-left">Phase</span>
+                    <span class="text-foreground text-left">{activeSession.phase}</span>
+                    {#if activeSession.parent_session_id}
+                      <span class="text-muted-foreground text-left">Parent</span>
+                      <span class="text-foreground font-mono text-left break-all">
+                        {activeSession.parent_session_id}
+                      </span>
+                    {/if}
+                    <span class="text-muted-foreground text-left">Messages</span>
+                    <span class="text-foreground text-left">{activeSession.messages.length}</span>
+                    <span class="text-muted-foreground text-left">Working Dir</span>
+                    <span class="text-foreground text-left break-all">
+                      {activeSession.project_path || "N/A"}
+                    </span>
+                    <span class="text-muted-foreground text-left">Updated</span>
+                    <span class="text-foreground text-left">
+                      {new Date(activeSession.updated_at).toLocaleString()}
+                    </span>
+                    {#if activeSession.permission_level}
+                      <span class="text-muted-foreground text-left">Permission</span>
+                      <span class="text-foreground text-left">{activeSession.permission_level}</span>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
         {/if}
         {#if activeSession.project_path}
           {@const displayPath = collapseHome(

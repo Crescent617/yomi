@@ -7,12 +7,22 @@
   let {
     messages,
     isStreaming = false,
+    isLatest = false,
   }: {
     messages: Message[];
     isStreaming?: boolean;
+    isLatest?: boolean;
   } = $props();
 
   let expanded = $state(false);
+  let userToggled = $state(false);
+
+  // Auto-expand latest action group, auto-collapse when no longer latest
+  $effect(() => {
+    if (!userToggled) {
+      expanded = isLatest;
+    }
+  });
 
   const stats = $derived.by(() => {
     let toolCount = 0;
@@ -56,7 +66,10 @@
   <button
     type="button"
     class="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/40 transition-colors whitespace-nowrap"
-    onclick={() => (expanded = !expanded)}
+    onclick={() => {
+      userToggled = true;
+      expanded = !expanded;
+    }}
   >
     <!-- 状态图标 — 呼吸灯 or 失败 -->
     {#if stats.runningCount > 0 || (isStreaming && stats.thinkingCount > 0)}
