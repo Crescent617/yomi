@@ -122,7 +122,12 @@ export interface ErrorMessage extends BaseMessage {
   content: string;
 }
 
-export type Message = UserMessage | BotMessage | ToolMessage | SystemMessage | ErrorMessage;
+export type Message =
+  | UserMessage
+  | BotMessage
+  | ToolMessage
+  | SystemMessage
+  | ErrorMessage;
 
 export interface ProjectState {
   id: string;
@@ -691,8 +696,10 @@ export function loadSessionMessages(
       }
       const tci = m.tool_call_id || "";
       const decl = toolCallDecls[tci] ||
-        toolCallDecls[tci.replace(/^functions\./, "")] ||
-        { name: "", arguments: "" };
+        toolCallDecls[tci.replace(/^functions\./, "")] || {
+          name: "",
+          arguments: "",
+        };
       parsedMessages.push({
         id: extractId(m.id),
         type: "tool",
@@ -1002,7 +1009,11 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       const text = content.text;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
-      if (lastMsg && lastMsg.type === "assistant" && lastMsg.id === chunk.message_id) {
+      if (
+        lastMsg &&
+        lastMsg.type === "assistant" &&
+        lastMsg.id === chunk.message_id
+      ) {
         lastMsg.content += text;
       } else {
         buf.push({
@@ -1018,7 +1029,11 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     } else if (content?.thinking) {
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
-      if (lastMsg && lastMsg.type === "assistant" && lastMsg.id === chunk.message_id) {
+      if (
+        lastMsg &&
+        lastMsg.type === "assistant" &&
+        lastMsg.id === chunk.message_id
+      ) {
         if (!lastMsg.thinking)
           lastMsg.thinking = { content: "", elapsed_ms: 0 };
         lastMsg.thinking.content += content.thinking.thinking ?? "";
@@ -1043,7 +1058,11 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const buf = streamingMessages[session.id] ?? [];
     const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     let botMsg: BotMessage;
-    if (!lastMsg || lastMsg.type !== "assistant" || lastMsg.id !== delta.message_id) {
+    if (
+      !lastMsg ||
+      lastMsg.type !== "assistant" ||
+      lastMsg.id !== delta.message_id
+    ) {
       botMsg = {
         id: delta.message_id,
         type: "assistant",
@@ -1190,12 +1209,13 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     if (msg && msg.type === "tool") {
       msg.status = end.is_error ? "failed" : "completed";
       msg.elapsed_ms = end.elapsed_ms;
-      msg.output = end.content_blocks
-        ?.map((b: TaggedContentBlock) => {
-          if (typeof b === "string") return b;
-          return b.type === "text" && b.text ? b.text : "";
-        })
-        .join("") ?? "";
+      msg.output =
+        end.content_blocks
+          ?.map((b: TaggedContentBlock) => {
+            if (typeof b === "string") return b;
+            return b.type === "text" && b.text ? b.text : "";
+          })
+          .join("") ?? "";
       maybeRefreshGitInfo(session);
       return true;
     }
@@ -1208,12 +1228,13 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       tool_name: end.tool_name,
       status: end.is_error ? "failed" : "completed",
       arguments: "",
-      output: end.content_blocks
-        ?.map((b: TaggedContentBlock) => {
-          if (typeof b === "string") return b;
-          return b.type === "text" && b.text ? b.text : "";
-        })
-        .join("") ?? "",
+      output:
+        end.content_blocks
+          ?.map((b: TaggedContentBlock) => {
+            if (typeof b === "string") return b;
+            return b.type === "text" && b.text ? b.text : "";
+          })
+          .join("") ?? "",
       created_at: new Date().toISOString(),
     };
     buf.push(toolMsg);

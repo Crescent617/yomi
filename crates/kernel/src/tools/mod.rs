@@ -8,7 +8,6 @@ use std::sync::Arc;
 pub mod ask_user;
 pub mod edit;
 pub mod executor;
-pub mod factory;
 pub mod glob;
 pub mod grep;
 pub mod helper;
@@ -29,13 +28,10 @@ pub mod send_message;
 // Re-export from helper module
 pub use helper::{FileStateStore, DEFAULT_MAX_TOOL_OUTPUT_LENGTH, MAX_FILE_SIZE};
 
-// Re-export from executor and factory directly
+// Re-export from executor directly
 pub use executor::{execute_tools_parallel, ToolExecutionResult};
-pub use factory::{ToolRegistryConfig, ToolRegistryFactory};
 
-pub use ask_user::{
-    AskOption, AskQuestion, AskUserResponse, AskUserTool, ASK_USER_TOOL_NAME,
-};
+pub use ask_user::{AskOption, AskQuestion, AskUserResponse, AskUserTool, ASK_USER_TOOL_NAME};
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
@@ -303,5 +299,158 @@ impl ToolRegistry {
     /// Register todo tool for task tracking
     pub fn register_todo_tool(&mut self, storage: std::sync::Arc<dyn crate::storage::TodoStore>) {
         self.register(TodoTool::new(storage));
+    }
+
+    /// Register standard tools with the given configuration.
+    pub fn with_standard_tools(mut self, config: ToolRegistryConfig) -> Self {
+        let file_state_store = config
+            .file_state_store
+            .unwrap_or_else(|| Arc::new(FileStateStore::new()));
+
+        // Register Bash tool
+        let bash_ctx = ShellToolCtx::new(config.input_bus.cloned());
+        let bash_tool = ShellTool::new().with_ctx(bash_ctx);
+        self.register(bash_tool);
+
+        // Register Read tool with file state store
+        let read_tool = ReadTool::new(Arc::clone(&file_state_store));
+        self.register(read_tool);
+
+        // Register Edit tool with file state store
+        let edit_tool = EditTool::new(Arc::clone(&file_state_store));
+        self.register(edit_tool);
+
+        // Register Write tool with file state store
+        let write_tool = WriteTool::new(Arc::clone(&file_state_store));
+        self.register(write_tool);
+
+        // Register Glob tool
+        self.register(GlobTool::new());
+
+        // Register Grep tool with file state store
+        let grep_tool = GrepTool::new(Arc::clone(&file_state_store));
+        self.register(grep_tool);
+
+        // Register WebFetch tool
+        self.register(WebFetchTool::new());
+
+        // Register WebSearch tool
+        self.register(WebSearchTool::new());
+
+        // Register SubAgent tool if enabled and this is not a sub-agent session
+        let session_id = crate::types::SessionId::from(config.session_id);
+        if config.flags.subagent && !session_id.starts_with(crate::types::SUB_PREFIX) {
+            if let Some(bus) = config.input_bus {
+                let subagent_tool =
+                    SubagentTool::new(Arc::clone(config.shared), bus.clone(), session_id);
+                self.register(subagent_tool);
+            } else {
+                tracing::warn!(
+                    "SubAgent tool enabled but input_bus not provided; skipping registration"
+                );
+            }
+        }
+
+        // Register todo tool
+        if let Some(todo_storage) = config.shared.todo_storage.clone() {
+            self.register_todo_tool(todo_storage);
+        }
+
+        // Register Reminder tool if enabled (main agent only)
+        if config.flags.reminder {
+            if let Some(bus) = config.input_bus {
+                self.register(ReminderTool::new(bus.clone()));
+            }
+        }
+
+        // Register goal tool if goal store is available
+        if config.flags.goal {
+            if let Some(ref store) = config.shared.goal_store {
+                self.register(UpdateGoalTool::new(Arc::clone(store)));
+            }
+        }
+
+        // Register Sleep tool if enabled
+        if config.flags.sleep {
+            self.register(SleepTool::new());
+        }
+
+        // Register ask_user tool if input_bus is available
+        if let Some(input_bus) = config.input_bus {
+            self.register(AskUserTool::new(
+                config.event_bus.clone(),
+                Arc::clone(input_bus),
+            ));
+        }
+
+        // Apply tool blocklist (regex patterns) — remove matching tools from the registry
+        if !config.tool_blocklist.is_empty() {
+            if let Ok(set) = regex::RegexSetBuilder::new(&config.tool_blocklist)
+                .case_insensitive(true)
+                .build()
+            {
+                let to_remove: Vec<String> = self
+                    .list()
+                    .into_iter()
+                    .filter(|name| set.is_match(name))
+                    .collect();
+                for name in &to_remove {
+                    self.remove(name);
+                    tracing::info!("Tool '{}' blocked by blocklist pattern", name);
+                }
+            } else {
+                tracing::warn!(
+                    "Invalid regex in tool_blocklist: {:?}",
+                    config.tool_blocklist
+                );
+            }
+        }
+
+        self
+    }
+}
+
+/// Feature flags for tool registration.
+#[derive(Default, Clone, Copy)]
+pub struct ToolFlags {
+    /// Enable subagent tool for spawning child agents.
+    pub subagent: bool,
+    /// Enable reminder tool for sending notifications.
+    pub reminder: bool,
+    /// Enable goal tracking tool.
+    pub goal: bool,
+    /// Enable sleep tool for testing.
+    pub sleep: bool,
+}
+
+impl ToolFlags {
+    /// Create flags for an agent, enabling subagent and reminder by default.
+    pub fn new(enable_subagent: bool) -> Self {
+        Self {
+            subagent: enable_subagent,
+            reminder: true,
+            goal: true,
+            sleep: true,
+        }
+    }
+}
+
+/// Configuration for creating a tool registry.
+pub struct ToolRegistryConfig<'a> {
+    pub shared: &'a Arc<crate::agent::AgentShared>,
+    pub event_bus: &'a crate::comms::EventBusHandle,
+    pub session_id: &'a str,
+    pub input_bus: Option<&'a Arc<crate::comms::InputBus>>,
+    pub file_state_store: Option<Arc<FileStateStore>>,
+    pub tool_blocklist: Vec<String>,
+    pub flags: ToolFlags,
+}
+
+impl ToolRegistryConfig<'_> {
+    /// Set the file state store.
+    #[must_use]
+    pub fn with_file_state_store(mut self, store: Option<Arc<FileStateStore>>) -> Self {
+        self.file_state_store = store;
+        self
     }
 }

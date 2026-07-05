@@ -246,24 +246,21 @@ impl Checker {
         );
 
         // 等待响应（2 分钟 timeout）
-        let result = tokio::time::timeout(
-            Duration::from_mins(2),
-            async {
-                while let Some((_, input)) = subscriber.recv().await {
-                    if let AgentInput::PermissionResponse {
-                        req_id: id,
-                        approved,
-                        remember,
-                    } = input
-                    {
-                        if id == req_id {
-                            return Response { approved, remember };
-                        }
+        let result = tokio::time::timeout(Duration::from_mins(2), async {
+            while let Some((_, input)) = subscriber.recv().await {
+                if let AgentInput::PermissionResponse {
+                    req_id: id,
+                    approved,
+                    remember,
+                } = input
+                {
+                    if id == req_id {
+                        return Response { approved, remember };
                     }
                 }
-                Response::deny()
-            },
-        )
+            }
+            Response::deny()
+        })
         .await;
 
         match result {
@@ -339,7 +336,12 @@ mod tests {
         let session_id = SessionId::new();
 
         let state = PermissionState::new(Level::Safe); // Safe 级别，Caution 工具需要确认
-        let checker = Checker::new(state, handle.clone(), Arc::clone(&input_bus), session_id.clone());
+        let checker = Checker::new(
+            state,
+            handle.clone(),
+            Arc::clone(&input_bus),
+            session_id.clone(),
+        );
 
         let caution_tool = ToolCall {
             id: "test1".to_string(),
@@ -348,7 +350,9 @@ mod tests {
         };
 
         let checker_task = tokio::spawn(async move {
-            checker.check_permission(&caution_tool, Level::Caution).await
+            checker
+                .check_permission(&caution_tool, Level::Caution)
+                .await
         });
 
         // 接收权限请求事件
@@ -381,7 +385,12 @@ mod tests {
         let session_id = SessionId::new();
 
         let state = PermissionState::new(Level::Safe);
-        let checker = Checker::new(state, handle.clone(), Arc::clone(&input_bus), session_id.clone());
+        let checker = Checker::new(
+            state,
+            handle.clone(),
+            Arc::clone(&input_bus),
+            session_id.clone(),
+        );
         let checker = Arc::new(checker);
 
         let edit_tool = ToolCall {
@@ -392,7 +401,9 @@ mod tests {
 
         let checker_clone = Arc::clone(&checker);
         let checker_task = tokio::spawn(async move {
-            checker_clone.check_permission(&edit_tool, Level::Caution).await
+            checker_clone
+                .check_permission(&edit_tool, Level::Caution)
+                .await
         });
 
         let mut sub = bus.subscribe_all();
