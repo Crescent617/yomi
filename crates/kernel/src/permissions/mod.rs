@@ -10,7 +10,7 @@ mod level;
 mod resolver;
 
 pub use checker::{
-    check_tool_permissions, Checker, PermissionCheckResult, PermissionState, Responder, Response,
+    check_tool_permissions, Checker, PermissionCheckResult, PermissionState, Response,
 };
 pub use level::{exceeds_threshold, Level};
 pub use resolver::ToolLevelResolver;
