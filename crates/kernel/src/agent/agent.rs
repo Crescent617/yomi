@@ -9,6 +9,8 @@ use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolE
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
+use crate::tools::factory::ToolFlags;
+use crate::tools::{ToolRegistryConfig, ToolRegistryFactory};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
@@ -27,7 +29,7 @@ pub enum AgentInput {
     Cancel,
     /// Steer message injected before the next streaming turn
     Steer(Vec<ContentBlock>),
-    /// Permission response from user/TUI
+    /// Permission response from user/TUI (handled directly by Checker via input_bus)
     PermissionResponse {
         req_id: String,
         approved: bool,
@@ -46,7 +48,7 @@ pub enum AgentInput {
     },
     /// Clear the agent's context (messages, file state, todos, persisted history)
     Clear,
-    /// Response to an `ask_user` question
+    /// Response to an `ask_user` question (handled directly by AskUserTool via input_bus)
     AskUserResponse {
         req_id: String,
         response: crate::tools::AskUserResponse,
@@ -81,10 +83,6 @@ pub struct Agent {
     skills: Vec<Arc<crate::skill::Skill>>,
     /// Maximum tool output length in bytes
     max_tool_output_length: usize,
-    /// Permission responder for routing user responses
-    permission_responder: Option<crate::permissions::Responder>,
-    /// Ask-user responder for routing user answers
-    ask_user_responder: Option<crate::tools::AskUserResponder>,
 }
 
 impl Agent {
@@ -127,26 +125,18 @@ impl Agent {
         let message_buffer = MessageBuffer::from_arc_messages(&messages);
 
         let shared = shared.clone();
-        let (ask_user_state, ask_user_responder) = crate::tools::AskUserState::new();
 
-        let permission_responder = shared
-            .permission_state
-            .as_ref()
-            .map(|s| s.create_responder());
-
-        let tool_registry = crate::tools::ToolRegistryFactory::create(
-            crate::tools::ToolRegistryConfig {
+        let tool_registry = ToolRegistryFactory::create(
+            ToolRegistryConfig {
                 shared: &shared,
                 event_bus: &event_bus,
                 session_id: &args.session_id,
                 input_bus: args.input_bus.as_ref(),
                 file_state_store: None,
-                ask_user_state: None,
                 tool_blocklist: args.tool_blocklist.clone(),
-                flags: crate::tools::factory::ToolFlags::for_agent(enable_subagent),
+                flags: ToolFlags::for_agent(enable_subagent),
             }
-            .with_file_state_store(args.file_state_store.clone())
-            .with_ask_user_state(ask_user_state.clone()),
+            .with_file_state_store(args.file_state_store.clone()),
         );
 
         let hook_registry = crate::hooks::build_hook_registry_with_skills(
@@ -160,7 +150,15 @@ impl Agent {
         let permission_checker = shared
             .permission_state
             .as_ref()
-            .map(|state| Arc::new(Checker::new(state.clone(), event_bus.clone())));
+            .zip(args.input_bus.as_ref())
+            .map(|(state, input_bus)| {
+                Arc::new(Checker::new(
+                    state.clone(),
+                    event_bus.clone(),
+                    Arc::clone(input_bus),
+                    session_id.clone(),
+                ))
+            });
 
         let checkpoint_store = shared.checkpoint_store.clone().unwrap_or_else(|| {
             Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(
@@ -188,8 +186,6 @@ impl Agent {
             current_turn: None,
             skills: args.skills,
             max_tool_output_length: args.max_tool_output_length,
-            permission_responder,
-            ask_user_responder: Some(ask_user_responder),
         }
     }
 
@@ -604,18 +600,6 @@ impl Agent {
                 }));
                 Err(AgentError::Shutdown)
             }
-            AgentInput::PermissionResponse {
-                req_id,
-                approved,
-                remember,
-            } => {
-                if let Some(ref responder) = self.permission_responder {
-                    responder.respond(&req_id, approved, remember).await;
-                } else {
-                    tracing::warn!("PermissionResponse received but no responder available");
-                }
-                Ok(())
-            }
             AgentInput::Compact => {
                 tracing::info!("received compact request");
                 let result = self.force_full_compact().await;
@@ -642,18 +626,18 @@ impl Agent {
                 self.handle_clear().await;
                 Ok(())
             }
+            AgentInput::PermissionResponse { .. } => {
+                // Handled directly by Checker via input_bus subscription
+                Ok(())
+            }
+            AgentInput::AskUserResponse { .. } => {
+                // Handled directly by AskUserTool via input_bus subscription
+                Ok(())
+            }
             AgentInput::Cancel => {
                 tracing::info!("received cancel signal");
                 self.cancel_token.cancel();
                 self.context.transition_to(AgentState::Idle);
-                Ok(())
-            }
-            AgentInput::AskUserResponse { req_id, response } => {
-                if let Some(ref responder) = self.ask_user_responder {
-                    responder.respond(&req_id, response).await;
-                } else {
-                    tracing::warn!("AskUserResponse received but no responder available");
-                }
                 Ok(())
             }
         }

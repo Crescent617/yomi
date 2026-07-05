@@ -40,7 +40,6 @@ pub struct ToolRegistryConfig<'a> {
     pub session_id: &'a str,
     pub input_bus: Option<&'a Arc<crate::comms::InputBus>>,
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
-    pub ask_user_state: Option<crate::tools::AskUserState>,
     pub tool_blocklist: Vec<String>,
     pub flags: ToolFlags,
 }
@@ -50,13 +49,6 @@ impl ToolRegistryConfig<'_> {
     #[must_use]
     pub fn with_file_state_store(mut self, store: Option<Arc<FileStateStore>>) -> Self {
         self.file_state_store = store;
-        self
-    }
-
-    /// Set the ask-user state.
-    #[must_use]
-    pub fn with_ask_user_state(mut self, state: crate::tools::AskUserState) -> Self {
-        self.ask_user_state = Some(state);
         self
     }
 }
@@ -149,9 +141,9 @@ impl ToolRegistryFactory {
         //     registry.register(SendMessageTool::new(Arc::clone(cm)));
         // }
 
-        // Register ask_user tool if state is provided
-        if let Some(ask_user_state) = config.ask_user_state {
-            registry.register(AskUserTool::new(config.event_bus.clone(), ask_user_state));
+        // Register ask_user tool if input_bus is available
+        if let Some(input_bus) = config.input_bus {
+            registry.register(AskUserTool::new(config.event_bus.clone(), Arc::clone(input_bus)));
         }
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry

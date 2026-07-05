@@ -152,6 +152,9 @@ impl Conductor {
                     mb.clear().await;
                 }
             }
+            // PermissionResponse and AskUserResponse are consumed directly by
+            // Checker / AskUserTool via input_bus subscription; do not queue them.
+            AgentInput::PermissionResponse { .. } | AgentInput::AskUserResponse { .. } => {}
             input => {
                 let mb = self
                     .mailboxes
@@ -243,7 +246,7 @@ impl Conductor {
             .and_then(|i| i.auto_approve_level.as_ref())
             .and_then(|s| s.parse::<crate::permissions::Level>().ok())
             .unwrap_or_default();
-        let permission_state = Some(crate::permissions::PermissionState::new(auto_approve_level).0);
+        let permission_state = Some(crate::permissions::PermissionState::new(auto_approve_level));
 
         // Resolve workspace skill directory
         let workspace_skill_dir = cwd

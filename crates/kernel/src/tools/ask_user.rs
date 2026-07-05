@@ -2,12 +2,13 @@ use crate::comms::EventBusHandle;
 use crate::event::{AgentEvent, Event};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::agent::AgentInput;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
+use std::time::Duration;
 
 pub const ASK_USER_TOOL_NAME: &str = "askUser";
 
@@ -51,70 +52,20 @@ pub struct AskUserResponse {
     pub answers: HashMap<String, String>,
 }
 
-/// Shared state for ask-user requests across a session.
-#[derive(Clone)]
-pub struct AskUserState {
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<AskUserResponse>>>>,
-}
-
-impl AskUserState {
-    /// Create new shared ask-user state.
-    pub fn new() -> (Self, AskUserResponder) {
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let responder = AskUserResponder {
-            pending: Arc::clone(&pending),
-        };
-        let state = Self { pending };
-        (state, responder)
-    }
-
-    /// Create a responder for this state.
-    pub fn create_responder(&self) -> AskUserResponder {
-        AskUserResponder {
-            pending: Arc::clone(&self.pending),
-        }
-    }
-}
-
-/// Responder used by the session / TUI to deliver user answers.
-#[derive(Clone, Debug)]
-pub struct AskUserResponder {
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<AskUserResponse>>>>,
-}
-
-impl AskUserResponder {
-    /// Respond to an ask-user request.
-    /// Returns `true` if the request existed and the response was delivered.
-    pub async fn respond(&self, req_id: &str, response: AskUserResponse) -> bool {
-        let mut pending = self.pending.lock().await;
-        pending.remove(req_id).map_or_else(
-            || {
-                tracing::warn!("AskUser response for unknown/timed out req_id: {}", req_id);
-                false
-            },
-            |sender| {
-                if sender.send(response).is_err() {
-                    tracing::warn!("AskUser response receiver dropped for req_id={}", req_id);
-                    return false;
-                }
-                tracing::info!("AskUser response delivered for req_id={}", req_id);
-                true
-            },
-        )
-    }
-}
-
 /// Tool that blocks until the user answers a set of multiple-choice questions.
 pub struct AskUserTool {
     event_bus: EventBusHandle,
-    ask_user_state: AskUserState,
+    input_bus: Arc<crate::comms::InputBus>,
 }
 
 impl AskUserTool {
-    pub fn new(event_bus: EventBusHandle, ask_user_state: AskUserState) -> Self {
+    pub fn new(
+        event_bus: EventBusHandle,
+        input_bus: Arc<crate::comms::InputBus>,
+    ) -> Self {
         Self {
             event_bus,
-            ask_user_state,
+            input_bus,
         }
     }
 }
@@ -224,14 +175,11 @@ impl Tool for AskUserTool {
             return Ok(ToolOutput::text(text));
         }
 
-        // Otherwise, emit an event and wait for the user to respond.
         let req_id = ulid::Ulid::new().to_string();
-        let (tx, rx) = oneshot::channel::<AskUserResponse>();
+        let session_id = crate::types::SessionId::from(_ctx.session_id.clone());
 
-        {
-            let mut pending = self.ask_user_state.pending.lock().await;
-            pending.insert(req_id.clone(), tx);
-        }
+        // Subscribe to input bus BEFORE emitting the event to avoid missing the response.
+        let mut subscriber = self.input_bus.subscribe(session_id);
 
         self.event_bus
             .send(Event::Agent(AgentEvent::AskUserQuestion {
@@ -243,23 +191,34 @@ impl Tool for AskUserTool {
 
         tracing::info!("AskUserQuestion sent with req_id={}", req_id);
 
-        // Wait for response (5-minute timeout to avoid hanging forever)
-        match tokio::time::timeout(std::time::Duration::from_mins(5), rx).await {
-            Ok(Ok(response)) => {
-                let text = format_answers(&response.answers);
-                Ok(ToolOutput::text(text))
-            }
-            Ok(Err(_)) => {
-                self.ask_user_state.pending.lock().await.remove(&req_id);
-                Ok(ToolOutput::error(
-                    "User response channel closed unexpectedly".to_string(),
-                ))
-            }
+        // Wait for response via input bus (2-minute timeout)
+        let result = tokio::time::timeout(
+            Duration::from_mins(2),
+            async {
+                while let Some((_, input)) = subscriber.recv().await {
+                    if let AgentInput::AskUserResponse {
+                        req_id: id,
+                        response,
+                    } = input
+                    {
+                        if id == req_id {
+                            return response;
+                        }
+                    }
+                }
+                AskUserResponse {
+                    answers: HashMap::new(),
+                }
+            },
+        )
+        .await;
+
+        match result {
+            Ok(response) => Ok(ToolOutput::text(format_answers(&response.answers))),
             Err(_) => {
-                self.ask_user_state.pending.lock().await.remove(&req_id);
-                tracing::warn!("AskUser request {} timed out (5 min)", req_id);
+                tracing::warn!("AskUser request {} timed out (2 min)", req_id);
                 Ok(ToolOutput::error(
-                    "Ask user request timed out (5 minutes)".to_string(),
+                    "Ask user request timed out (2 minutes)".to_string(),
                 ))
             }
         }
@@ -275,13 +234,6 @@ fn format_answers(answers: &HashMap<String, String>) -> String {
         "User declined to answer questions.".to_string()
     } else {
         format!("User answered your questions:\n\n{}\n\nYou can now continue with the user's answers in mind.", parts.join("\n\n"))
-    }
-}
-
-impl Default for AskUserState {
-    fn default() -> Self {
-        let (state, _) = Self::new();
-        state
     }
 }
 
