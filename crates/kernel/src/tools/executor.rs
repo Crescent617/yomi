@@ -1,7 +1,7 @@
 use crate::event::ToolEvent;
 use crate::tools::helper::truncate::{truncate_output, TRUNCATION_MESSAGE};
 use crate::tools::{Tool, ToolExecCtx, ToolRegistry, READ_TOOL_NAME, SHELL_TOOL_NAME};
-use crate::types::{AgentId, ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
+use crate::types::{ContentBlock, Message, MessageId, Role, ToolCall, ToolOutput};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -69,8 +69,7 @@ fn to_content_blocks(blocks: &[crate::types::ToolOutputBlock]) -> Vec<ContentBlo
 }
 
 /// Build a tool result (success or error) from tool output.
-fn build_tool_result(
-    agent_id: &AgentId,
+pub(crate) fn build_tool_result(
     call_id: &str,
     tool_name: &str,
     output: &ToolOutput,
@@ -91,7 +90,6 @@ fn build_tool_result(
     };
 
     let event = ToolEvent::End {
-        agent_id: agent_id.clone(),
         message_id: message_id.clone(),
         tool_id: call_id.to_string(),
         tool_name: tool_name.to_string(),
@@ -153,7 +151,6 @@ fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecu
 
 /// Parameters for executing multiple tools in parallel.
 pub struct ToolExecParams<'a> {
-    pub agent_id: &'a AgentId,
     pub tool_calls: &'a [ToolCall],
     pub tool_registry: &'a ToolRegistry,
     pub cancel_token: Option<&'a CancellationToken>,
@@ -187,7 +184,6 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
     let mut join_set = JoinSet::new();
 
     for call in params.tool_calls {
-        let agent_id = params.agent_id.clone();
         let call_id = call.id.clone();
         let call_name = call.name.clone();
         let arguments = call.arguments.clone();
@@ -231,7 +227,6 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
                 let elapsed = start.elapsed().as_millis() as u64;
 
                 let (event, message) = build_tool_result(
-                    &agent_id,
                     &call_id,
                     &call_name,
                     &result,

@@ -1,10 +1,10 @@
 <script lang="ts">
-  import type { ChatMessage } from "../../state.svelte";
+  import type { UserMessage } from "../../state.svelte";
   import { Marked } from "marked";
   import { resolveAssetUrl } from "../../utils";
   import OperationBar from "./OperationBar.svelte";
 
-  let { message, session_id }: { message: ChatMessage; session_id: string } =
+  let { message, session_id }: { message: UserMessage; session_id: string } =
     $props();
 
   const md = new Marked();

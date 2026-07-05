@@ -59,7 +59,7 @@ impl Tool for SendMessageTool {
             ));
         }
 
-        let session_id = SessionId(ctx.session_id.clone());
+        let session_id = SessionId::from(ctx.session_id.clone());
         let (routing, adapter) = self
             .channel_manager
             .get_routing_for_session(&session_id)

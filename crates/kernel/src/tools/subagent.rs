@@ -1,619 +1,177 @@
-use crate::agent::{is_cancelled_error, AgentShared, SimpleAgent, SubAgentMode};
-use crate::event::{Event, ModelEvent, ToolEvent};
-use crate::event_bus::EventBusHandle;
-use crate::skill::Skill;
-use crate::storage::SessionStore;
-use crate::tools::{
-    edit::EDIT_TOOL_NAME, reminder::REMINDER_TOOL_NAME, todo::TODO_TOOL_NAME,
-    write::WRITE_TOOL_NAME, Tool, ToolExecCtx, ToolRegistry,
-};
-use crate::types::{AgentId, ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
-use crate::utils::tokens::format_actual_tokens;
+use crate::agent::{AgentShared, SubAgentMode};
+use crate::comms::InputBus;
+use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
+use crate::tools::{Tool, ToolExecCtx};
+use crate::types::{ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tracing::{info, Instrument};
 
 pub const SUBAGENT_TOOL_NAME: &str = "agent";
 
 /// Tool for spawning sub-agents to handle specific tasks
+#[derive(Clone)]
 pub struct SubagentTool {
-    parent_id: AgentId,
     shared: Arc<AgentShared>,
-    /// Parent's `input_tx` for forwarding async sub-agent results
-    parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
-    /// Session store for creating sub-agent sessions
-    session_store: Option<Arc<dyn SessionStore>>,
+    /// `InputBus` for forwarding async sub-agent results
+    input_bus: Arc<InputBus>,
     /// Parent session ID for task store sharing
-    parent_session_id: String,
-    /// Parent's event bus handle for forwarding permission requests and progress
-    parent_event_bus: EventBusHandle,
-    /// Tool blocklist inherited from parent agent
-    tool_blocklist: Vec<String>,
+    parent_session_id: SessionId,
 }
 
-/// Parameters for executing a sub-agent.
-struct SubAgentExecParams<'a> {
-    simple_agent: &'a mut SimpleAgent,
-    system_prompt: String,
+/// Parameters for executing a sub-agent via `run_subagent`.
+struct RunSubagentParams {
+    session_id: SessionId,
+    prompt: String,
+    preset_text: Option<String>,
     history: Option<Vec<Arc<Message>>>,
-    task: String,
-    cancel_token: tokio_util::sync::CancellationToken,
-    parent_event_bus: &'a EventBusHandle,
-    parent_id: &'a AgentId,
-    tool_id: &'a str,
-    shared: Arc<AgentShared>,
-    parent_session_id: String,
-    message_id: crate::types::MessageId,
 }
 
 impl SubagentTool {
     pub fn new(
-        parent_id: AgentId,
         shared: Arc<AgentShared>,
-        parent_input_tx: mpsc::Sender<crate::agent::AgentInput>,
-        session_store: Option<Arc<dyn SessionStore>>,
-        parent_session_id: String,
-        parent_event_bus: EventBusHandle,
-        tool_blocklist: Vec<String>,
+        input_bus: Arc<InputBus>,
+        parent_session_id: SessionId,
     ) -> Self {
         Self {
-            parent_id,
             shared,
-            parent_input_tx,
-            session_store,
+            input_bus,
             parent_session_id,
-            parent_event_bus,
-            tool_blocklist,
         }
     }
 
-    /// Build the system prompt for the sub-agent
-    fn build_system_prompt(&self, inherit_context: bool, preset: Option<SubagentPreset>) -> String {
-        let context_note = if inherit_context {
-            "Given the conversation context provided, use the tools available to complete the task."
-        } else {
-            "Given the user's message, use the tools available to complete the task."
-        };
-
-        let mut prompt = format!(
-            r"You are a sub-agent of {parent_id}. {context_note}
-
-Complete the task fully — don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.",
-            parent_id = self.parent_id,
-            context_note = context_note,
-        );
-
-        if let Some(p) = preset {
-            if let Some(text) = p.prompt() {
-                prompt.push_str(text);
-            }
-        }
-
-        prompt
-    }
-
-    /// Create a `SimpleAgent` with the same configuration as this subagent tool
-    fn create_simple_agent(
-        &self,
-        session_id: &str,
-        working_dir: &std::path::Path,
-        skills: Vec<Arc<Skill>>,
-        preset: Option<SubagentPreset>,
-    ) -> SimpleAgent {
-        use crate::permissions::Checker;
-        let agent_id = crate::types::AgentId::new();
-        let mut tool_registry = self.create_tool_registry(session_id, &agent_id);
-
-        // Remove tools disallowed by the preset
-        if let Some(p) = preset {
-            for tool_name in p.disallowed_tools() {
-                tool_registry.remove(tool_name);
-            }
-        }
-
-        // Create permission checker if permission state is available
-        let permission_checker = self.shared.permission_state.as_ref().map(|state| {
-            std::sync::Arc::new(Checker::new(
-                state.clone(),
-                agent_id.clone(),
-                self.parent_event_bus.clone(),
-            ))
-        });
-
-        SimpleAgent::new(
-            self.shared.provider.clone(),
-            (*self.shared.model_config).clone(),
-            tool_registry,
-            working_dir,
+    /// Run a sub-agent and wait for it to finish via the event bus.
+    /// No intermediate progress is collected; the final output is read from the message store.
+    async fn run_subagent(&self, params: RunSubagentParams) -> (String, SubAgentStatus) {
+        let RunSubagentParams {
             session_id,
-        )
-        .with_data_dir(self.shared.data_dir.clone())
-        .with_agent_id(agent_id)
-        .with_event_bus(self.parent_event_bus.clone())
-        .with_permission_checker_opt(permission_checker)
-        .with_skills(skills)
-    }
+            prompt,
+            preset_text,
+            history,
+        } = params;
 
-    /// Create tool registry for the subagent
-    fn create_tool_registry(&self, session_id: &str, agent_id: &AgentId) -> ToolRegistry {
-        // Subagent doesn't need input_tx since it doesn't receive AgentInput.
-        // Subagents get a fresh file state store (not shared with parent).
-        crate::tools::ToolRegistryFactory::create(crate::tools::ToolRegistryConfig::for_subagent(
-            agent_id,
-            &self.shared,
-            &self.parent_event_bus,
-            session_id,
-            self.tool_blocklist.clone(),
-        ))
-    }
-}
+        let session_id_str = session_id.as_str();
 
-/// Sub-agent completion status
-#[derive(Debug)]
-enum SubAgentStatus {
-    Completed,
-    Failed(String),
-    Cancelled,
-}
-
-#[async_trait]
-impl Tool for SubagentTool {
-    fn name(&self) -> &'static str {
-        SUBAGENT_TOOL_NAME
-    }
-
-    fn desc(&self) -> &'static str {
-        r#"Launch a new agent to handle complex, multi-step tasks autonomously.
-
-## When to Use
-- Research requiring multiple file reads or searches
-- Implementation across multiple files
-- Complex analysis that would clutter context
-- Tasks that can be parallelized (launch multiple agents in one message)
-
-## When NOT to Use
-- Read a specific file → use read tool
-- Search code → use grep tool
-- 1-2 quick edits → do them directly
-
-## Prompt Tips
-Brief the agent like a smart colleague who just walked in — it has no context.
-- Explain what to do and why
-- State what you've already ruled out
-- Give exact commands for lookups, open-ended questions for investigations
-- Set inherit_context to true when the task needs this conversation history
-- Request short responses explicitly when needed ("report in under 200 words")"#
-    }
-
-    fn schema(&self) -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": "Short summary (3-5 words) of what the agent will do, e.g., 'Audit dependencies', 'Refactor auth module'"
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "Instructions for the agent. Brief clearly - what to do, why, and expected output. Include task ID if using task tracking."
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["async", "sync"],
-                    "description": "Execution mode. 'sync' (default) waits for completion and returns results. 'async' returns immediately and runs in background — use for independent work that doesn't block your next steps.",
-                    "default": "sync"
-                },
-                "inherit_context": {
-                    "type": "boolean",
-                    "description": "Give the agent access to this conversation history. Use when agent needs full context.",
-                    "default": false
-                },
-                "preset": {
-                    "type": "string",
-                    "enum": ["general-purpose", "explorer", "reviewer"],
-                    // Intentionally only exposing 3 presets in the schema to
-                    // keep the surface area small. planner and tester work but
-                    // are reserved for advanced/internal use.
-                    "description": "Agent preset that configures role and available tools. 'general-purpose' (default) is the standard sub-agent. 'explorer' is read-only search specialist. 'reviewer' performs code review without editing.",
-                    "default": "general-purpose"
+        // If context inheritance is enabled, copy parent history into the
+        // subagent session so the Conductor can pick it up when spawning.
+        if let Some(ref store) = self.shared.message_store {
+            if let Some(ref hist) = history {
+                let msgs: Vec<Message> = hist.iter().map(|m| (**m).clone()).collect();
+                if !msgs.is_empty() {
+                    // Only seed history if the subagent session is empty to avoid overwriting
+                    match store.get(session_id_str).await {
+                        Ok(existing) if existing.is_empty() => {
+                            if let Err(e) = store.append(session_id_str, &msgs).await {
+                                tracing::warn!("failed to copy history to subagent: {}", e);
+                            }
+                        }
+                        Ok(_) => tracing::debug!(
+                            "subagent session {} already has history, skipping seed",
+                            session_id_str
+                        ),
+                        Err(e) => tracing::warn!("failed to check subagent history: {}", e),
+                    }
                 }
-            },
-            "required": ["description", "prompt"]
-        })
-    }
+            }
+        }
 
-    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
-        // Extract and clone all values from args first to avoid lifetime issues
-        let description = args["description"]
-            .as_str()
-            .ok_or_else(|| KernelError::tool("Missing 'description' argument"))?
-            .to_string();
-        let prompt = args["prompt"]
-            .as_str()
-            .ok_or_else(|| KernelError::tool("Missing 'prompt' argument"))?
-            .to_string();
-
-        let mode_str = args["mode"].as_str().unwrap_or("sync");
-        let mode = match mode_str {
-            "async" => SubAgentMode::Async,
-            _ => SubAgentMode::Sync,
+        // Merge preset + task prompt into a single user message sent via the input bus.
+        let user_text = match preset_text {
+            Some(preset) => format!("{preset}\n\n{prompt}"),
+            None => prompt,
         };
 
-        let inherit_context = args["inherit_context"].as_bool().unwrap_or(false);
-        let preset = args["preset"]
-            .as_str()
-            .and_then(|s| s.parse::<SubagentPreset>().ok());
+        // Subscribe to the event bus and wait for the subagent to finish.
+        let event_bus = self
+            .shared
+            .event_bus
+            .as_ref()
+            .expect("event_bus must be configured");
+        let mut subscriber = event_bus.subscribe(session_id.clone());
 
-        if args["preset"].as_str().is_some() && preset.is_none() {
-            tracing::warn!(
-                "Unknown subagent preset '{}', falling back to general-purpose",
-                args["preset"].as_str().unwrap_or(""),
+        // Send the task to the subagent session via the input bus.
+        // The Conductor will create the agent if it doesn't exist yet.
+        if let Err(e) = self.input_bus.publish(
+            session_id.clone(),
+            crate::agent::AgentInput::User {
+                content: vec![ContentBlock::Text { text: user_text }],
+            },
+        ) {
+            tracing::warn!("Failed to publish subagent input: {}", e);
+            return (
+                format!("Failed to queue subagent task: {e}"),
+                SubAgentStatus::Failed(format!("InputBus full: {e}")),
             );
         }
 
-        tracing::info!(
-            "spawning sub-agent {} for parent {} (inherit_context: {}, preset: {:?})",
-            ctx.tool_call_id,
-            self.parent_id,
-            inherit_context,
-            preset
-        );
+        let mut status = SubAgentStatus::Completed;
 
-        // Build system prompt (role definition only, no task specifics)
-        let system_prompt = self.build_system_prompt(inherit_context, preset);
-
-        // Create session for transcript recording if storage is available.
-        // Reuse the pre-generated tool-call message_id as the session id so
-        // that the sub-agent transcript is directly traceable from the tool
-        // event stream.
-        let subagent_session_id = if let Some(session_store) = &self.session_store {
-            let working_dir = ctx.working_dir.to_string_lossy().to_string();
-            let sid = SessionId(ctx.message_id.as_str().to_string());
-            match session_store
-                .create(&sid, None, Some(&working_dir), None)
-                .await
-            {
-                Ok(()) => {
-                    tracing::debug!("created sub-agent session for parent {}", self.parent_id);
-                    sid.0
-                }
-                Err(e) => {
-                    tracing::warn!("failed to create sub-agent session: {}", e);
-                    return Ok(ToolOutput::error(
-                        "Failed to create storage session for sub-agent",
-                    ));
-                }
+        while let Some((sid, event)) = subscriber.recv().await {
+            if sid.0 != session_id.0 {
+                continue;
             }
-        } else {
-            return Ok(ToolOutput::error(
-                "Storage is required to spawn sub-agents for transcript recording",
-            ));
-        };
 
-        // Create SimpleAgent for execution
-        let mut simple_agent = self.create_simple_agent(
-            &subagent_session_id,
-            &ctx.working_dir,
-            ctx.skills.clone(),
-            preset,
-        );
-        let sub_agent_id = AgentId::new();
-
-        // Prepare history if inherit_context is enabled
-        let history: Option<Vec<Arc<Message>>> = if inherit_context {
-            ctx.parent_messages.map(|msgs| msgs.to_vec())
-        } else {
-            None
-        };
-
-        // Get cancel token from context
-        let cancel_token = ctx.cancel_token.clone().unwrap_or_default();
-
-        // Execute based on mode
-        match mode {
-            SubAgentMode::Async => {
-                // Clone values for the async block
-                let parent_tx = self.parent_input_tx.clone();
-                let parent_event_bus = self.parent_event_bus.clone();
-                let parent_id = self.parent_id.clone();
-                let desc = description.clone();
-                let sub_id = sub_agent_id.clone();
-                let tool_id = ctx.tool_call_id.to_string();
-
-                // Spawn background task to execute subagent
-                // Clone shared resources for the async block
-                let shared = self.shared.clone();
-                let parent_session_id = self.parent_session_id.clone();
-                let message_id = ctx.message_id.clone();
-                tokio::spawn(
-                    async move {
-                        let (output, status) =
-                            Self::execute_simple_agent_with_shared(SubAgentExecParams {
-                                simple_agent: &mut simple_agent,
-                                system_prompt,
-                                history,
-                                task: prompt,
-                                cancel_token,
-                                parent_event_bus: &parent_event_bus,
-                                parent_id: &parent_id,
-                                tool_id: &tool_id,
-                                shared,
-                                parent_session_id,
-                                message_id,
-                            })
-                            .await;
-
-                        // Format and send result back to parent
-                        let result_text =
-                            Self::format_result_text(&desc, &sub_id, &output, &status);
-                        let _ = parent_tx
-                            .send(crate::agent::AgentInput::TaskResult {
-                                task_id: sub_id.to_string(),
-                                content: vec![ContentBlock::Text { text: result_text }],
-                            })
-                            .await;
-                    }
-                    .instrument(tracing::Span::current()),
-                );
-
-                let result = format!(
-                    "Sub-agent({sub_agent_id}) with task '{description}' spawned in async mode. Results will be sent automatically when complete."
-                );
-                Ok(ToolOutput::text(result))
-            }
-            SubAgentMode::Sync => {
-                let (output, status) = Self::execute_simple_agent_with_shared(SubAgentExecParams {
-                    simple_agent: &mut simple_agent,
-                    system_prompt,
-                    history,
-                    task: prompt,
-                    cancel_token,
-                    parent_event_bus: &self.parent_event_bus,
-                    parent_id: &self.parent_id,
-                    tool_id: ctx.tool_call_id,
-                    shared: self.shared.clone(),
-                    parent_session_id: self.parent_session_id.clone(),
-                    message_id: ctx.message_id.clone(),
-                })
-                .await;
-
-                info!(
-                    "Sub-agent {} completed with status: {:?}",
-                    sub_agent_id, status
-                );
-
-                Ok(Self::build_tool_output(output, status))
-            }
-        }
-    }
-}
-
-impl SubagentTool {
-    /// Format the result text for subagent output
-    fn format_result_text(
-        description: &str,
-        sub_agent_id: &AgentId,
-        output: &str,
-        status: &SubAgentStatus,
-    ) -> String {
-        let final_output = match status {
-            SubAgentStatus::Failed(error) => format!("{output}\n\n[Sub-agent failed: {error}]"),
-            SubAgentStatus::Cancelled => format!("{output}\n\n[Sub-agent was cancelled]"),
-            SubAgentStatus::Completed => output.to_string(),
-        };
-
-        let (header, section) = if matches!(status, SubAgentStatus::Completed) {
-            ("Sub-agent Task Completed", "Result")
-        } else {
-            ("Sub-agent Task Ended (Incomplete)", "Partial Result")
-        };
-
-        format!(
-            "## {header}\n\n**Task**: {description}\n**ID**: {sub_agent_id}\n\n### {section}\n{final_output}",
-        )
-    }
-
-    /// Build `ToolOutput` from execution status
-    fn build_tool_output(output: String, status: SubAgentStatus) -> ToolOutput {
-        match status {
-            SubAgentStatus::Completed => ToolOutput::text(output),
-            SubAgentStatus::Failed(error) => {
-                ToolOutput::error(format!("{output}\nSub-agent failed: {error}"))
-            }
-            SubAgentStatus::Cancelled => {
-                ToolOutput::error(format!("{output}\nSub-agent was cancelled"))
-            }
-        }
-    }
-
-    /// Send a progress event, logging any errors
-    fn send_progress(
-        event_bus: &EventBusHandle,
-        agent_id: AgentId,
-        tool_id: &str,
-        message: String,
-        tokens: Option<u32>,
-        message_id: crate::types::MessageId,
-    ) {
-        if let Err(e) = event_bus.try_send(Event::Tool(ToolEvent::Progress {
-            agent_id,
-            message_id,
-            tool_id: tool_id.to_string(),
-            message,
-            tokens,
-        })) {
-            tracing::warn!("failed to send progress event: {}", e);
-        }
-    }
-
-    /// Handle model events during execution, returning the final iteration count
-    fn handle_model_event(
-        event: &Event,
-        iteration_count: &mut usize,
-        event_bus: &EventBusHandle,
-        agent_id: AgentId,
-        tool_id: &str,
-        message_id: &crate::types::MessageId,
-    ) {
-        match event {
-            Event::Model(ModelEvent::TokenUsage {
-                prompt_tokens,
-                completion_tokens,
+            if let Event::Agent(AgentEvent::Lifecycle {
+                state: AgentStatus::Stopped { reason },
                 ..
-            }) => {
-                let total = prompt_tokens + completion_tokens;
-                Self::send_progress(
-                    event_bus,
-                    agent_id,
-                    tool_id,
-                    format!(
-                        "iter {iteration_count} · {} tokens",
-                        format_actual_tokens(total)
-                    ),
-                    Some(total),
-                    message_id.clone(),
-                );
-            }
-            Event::Model(ModelEvent::Request { .. }) => {
-                *iteration_count += 1;
-                Self::send_progress(
-                    event_bus,
-                    agent_id,
-                    tool_id,
-                    format!("iteration {iteration_count} · running..."),
-                    None,
-                    message_id.clone(),
-                );
-            }
-            // Show tool calls in progress for BROWSE mode
-            Event::Tool(ToolEvent::Start { tool_name, .. }) => {
-                Self::send_progress(
-                    event_bus,
-                    agent_id,
-                    tool_id,
-                    format!("iteration {iteration_count} · {tool_name}"),
-                    None,
-                    message_id.clone(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    /// Static helper to record token usage
-    #[allow(dead_code)]
-    async fn do_record_token_usage(
-        _shared: Arc<AgentShared>,
-        _parent_session_id: &str,
-        _parent_id: &AgentId,
-        _metrics: &crate::agent::ExecuteMetrics,
-    ) {
-        // TODO: Inject UsageStore to record subagent token usage
-        // This requires architectural changes to pass UsageStore through AgentShared
-    }
-
-    /// Execute a `SimpleAgent` with shared resources (for async mode)
-    async fn execute_simple_agent_with_shared(
-        params: SubAgentExecParams<'_>,
-    ) -> (String, SubAgentStatus) {
-        let event_bus = params.parent_event_bus.clone();
-        let agent_id = params.parent_id.clone();
-        let tool_id_owned = params.tool_id.to_string();
-        let mut iteration_count = 0usize;
-
-        let result = params
-            .simple_agent
-            .execute(
-                params.system_prompt,
-                params.history,
-                params.task,
-                params.cancel_token,
-                |event| {
-                    Self::handle_model_event(
-                        &event,
-                        &mut iteration_count,
-                        &event_bus,
-                        agent_id.clone(),
-                        &tool_id_owned,
-                        &params.message_id,
-                    );
-                },
-            )
-            .await;
-
-        // Handle result and send final progress
-        match result {
-            Ok((_, metrics)) => {
-                let total = metrics.token_usage.total_tokens();
-
-                // Record token usage for subagent
-                Self::do_record_token_usage(
-                    params.shared,
-                    &params.parent_session_id,
-                    params.parent_id,
-                    &metrics,
-                )
-                .await;
-
-                let status = if metrics.completed {
-                    Self::send_progress(
-                        params.parent_event_bus,
-                        params.parent_id.clone(),
-                        params.tool_id,
-                        format!("completed · {} tokens", format_actual_tokens(total)),
-                        Some(total),
-                        params.message_id.clone(),
-                    );
-                    SubAgentStatus::Completed
-                } else {
-                    // Max iterations reached without completing
-                    Self::send_progress(
-                        params.parent_event_bus,
-                        params.parent_id.clone(),
-                        params.tool_id,
-                        format!(
-                            "partial (max iter) · {} tokens",
-                            format_actual_tokens(total)
-                        ),
-                        Some(total),
-                        params.message_id.clone(),
-                    );
-                    SubAgentStatus::Failed(format!(
-                        "Task did not complete within {} iterations. \
-                        Consider: 1) Breaking the task into smaller sub-tasks, \
-                        or 2) Adjusting the iteration limit if needed.",
-                        metrics.iteration_count
-                    ))
-                };
-                (metrics.output_text, status)
-            }
-            Err(e) => {
-                let error_str = e.to_string();
-                let (msg, status) = if is_cancelled_error(&e) {
-                    ("cancelled".to_string(), SubAgentStatus::Cancelled)
-                } else {
-                    (
-                        format!("failed · {error_str}"),
-                        SubAgentStatus::Failed(error_str),
-                    )
-                };
-                Self::send_progress(
-                    params.parent_event_bus,
-                    params.parent_id.clone(),
-                    params.tool_id,
-                    msg,
-                    None,
-                    params.message_id.clone(),
-                );
-                (String::new(), status)
+            }) = event
+            {
+                match &reason {
+                    StopReason::Completed { .. } => {
+                        status = SubAgentStatus::Completed;
+                        break;
+                    }
+                    StopReason::Cancelled { .. } => {
+                        status = SubAgentStatus::Cancelled;
+                        break;
+                    }
+                    StopReason::Failed { error } => {
+                        status = SubAgentStatus::Failed(error.clone());
+                        break;
+                    }
+                    StopReason::MaxIterations { .. } => {
+                        status = SubAgentStatus::Failed(
+                            "Task did not complete within the allowed iterations. \
+                             Consider: 1) Breaking the task into smaller sub-tasks, \
+                             or 2) Adjusting the iteration limit if needed."
+                                .to_string(),
+                        );
+                        break;
+                    }
+                }
             }
         }
+
+        // Fetch final output from the subagent's message store
+        let output_text = if let Some(ref store) = self.shared.message_store {
+            match store.get(session_id_str).await {
+                Ok(msgs) => msgs
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == crate::types::Role::Assistant)
+                    .map(|m| {
+                        m.content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("failed to get subagent final output: {}", e);
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        (output_text, status)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Preset roles for sub-agents.
+#[derive(Debug)]
 pub enum SubagentPreset {
     /// Default sub-agent — full toolkit, generic instructions.
     GeneralPurpose,
@@ -634,7 +192,6 @@ impl std::str::FromStr for SubagentPreset {
     type Err = ();
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        // Avoid allocating via to_lowercase() by matching case-insensitively.
         match s {
             s if s.eq_ignore_ascii_case("general-purpose")
                 || s.eq_ignore_ascii_case("general_purpose")
@@ -672,21 +229,6 @@ impl SubagentPreset {
             Self::Reviewer => Some(REVIEWER_PROMPT),
             Self::Planner => Some(PLANNER_PROMPT),
             Self::Tester => Some(TESTER_PROMPT),
-        }
-    }
-
-    /// Tool names that should be removed from the sub-agent's registry for
-    /// this preset.
-    pub fn disallowed_tools(&self) -> &'static [&'static str] {
-        match self {
-            Self::GeneralPurpose => &[],
-            Self::Explorer | Self::Reviewer | Self::Planner | Self::Tester => &[
-                WRITE_TOOL_NAME,
-                EDIT_TOOL_NAME,
-                SUBAGENT_TOOL_NAME,
-                TODO_TOOL_NAME,
-                REMINDER_TOOL_NAME,
-            ],
         }
     }
 }
@@ -772,3 +314,247 @@ VERDICT: PARTIAL
 
 For each check, show the exact command run and the actual output observed.
 ";
+
+/// Sub-agent completion status
+#[derive(Debug)]
+enum SubAgentStatus {
+    Completed,
+    Failed(String),
+    Cancelled,
+}
+
+#[async_trait]
+impl Tool for SubagentTool {
+    fn name(&self) -> &'static str {
+        SUBAGENT_TOOL_NAME
+    }
+
+    fn desc(&self) -> &'static str {
+        r#"Launch a new agent to handle complex, multi-step tasks autonomously.
+
+## When to Use
+- Research requiring multiple file reads or searches
+- Implementation across multiple files
+- Complex analysis that would clutter context
+- Tasks that can be parallelized — call this tool multiple times in one response to launch independent subagents concurrently
+
+## When NOT to Use
+- Read a specific file → use read tool
+- Search code → use grep tool
+- 1-2 quick edits → do them directly
+
+## Prompt Tips
+Brief the agent like a smart colleague who just walked in — it has no context.
+- Explain what to do and why
+- State what you've already ruled out
+- Give exact commands for lookups, open-ended questions for investigations
+- Set inherit_context to true when the task needs this conversation history
+- Request short responses explicitly when needed ("report in under 200 words")"#
+    }
+
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Short summary (3-5 words) of what the agent will do, e.g., 'Audit dependencies', 'Refactor auth module'"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Instructions for the agent. Brief clearly - what to do, why, and expected output. Include task ID if using task tracking."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["async", "sync"],
+                    "description": format!("Execution mode. 'sync' (default) waits for completion and returns results. 'async' returns immediately and runs in background. {} The subagent result will be delivered as a new message automatically.", crate::tools::ASYNC_LAUNCH_GUIDE),
+                    "default": "sync"
+                },
+                "inherit_context": {
+                    "type": "boolean",
+                    "description": "Give the agent access to this conversation history. Use when agent needs full context.",
+                    "default": false
+                },
+                "preset": {
+                    "type": "string",
+                    "enum": ["general-purpose", "explorer", "reviewer"],
+                    // Intentionally only exposing 3 presets in the schema to
+                    // keep the surface area small. planner and tester work but
+                    // are reserved for advanced/internal use.
+                    "description": "Agent preset that configures role and available tools. 'general-purpose' (default) is the standard sub-agent. 'explorer' is read-only search specialist. 'reviewer' performs code review without editing.",
+                    "default": "general-purpose"
+                }
+            },
+            "required": ["description", "prompt"]
+        })
+    }
+
+    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+        // Extract and clone all values from args first to avoid lifetime issues
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| KernelError::tool("Missing 'description' argument"))?
+            .to_string();
+        let prompt = args["prompt"]
+            .as_str()
+            .ok_or_else(|| KernelError::tool("Missing 'prompt' argument"))?
+            .to_string();
+
+        let mode_str = args["mode"].as_str().unwrap_or("sync");
+        let mode = match mode_str {
+            "async" => SubAgentMode::Async,
+            _ => SubAgentMode::Sync,
+        };
+
+        let inherit_context = args["inherit_context"].as_bool().unwrap_or(false);
+        let preset = args["preset"]
+            .as_str()
+            .and_then(|s| s.parse::<SubagentPreset>().ok());
+
+        if args["preset"].as_str().is_some() && preset.is_none() {
+            tracing::warn!(
+                "Unknown subagent preset '{}', falling back to general-purpose",
+                args["preset"].as_str().unwrap_or(""),
+            );
+        }
+
+        tracing::info!(
+            "spawning sub-agent (inherit_context: {}, preset: {:?})",
+            inherit_context,
+            preset
+        );
+
+        // Prevent recursive spawning
+        if self.parent_session_id.starts_with(crate::types::SUB_PREFIX) {
+            return Ok(ToolOutput::error(
+                "Sub-agents cannot spawn other sub-agents. Use the parent agent to coordinate multiple tasks.",
+            ));
+        }
+
+        // Create subagent session ID (child of parent session)
+        let session_id = SessionId::new_subagent();
+        let prompt_clone = prompt.clone();
+
+        // Emit metadata event immediately so UI can show jump link before subagent finishes
+        if let Some(ref bus) = self.shared.event_bus {
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert("subagent_session_id".to_string(), session_id.to_string());
+            metadata.insert("subagent_description".to_string(), description.clone());
+            metadata.insert(
+                "parent_session_id".to_string(),
+                self.parent_session_id.to_string(),
+            );
+            if let Err(e) = bus.publish(
+                self.parent_session_id.clone(),
+                crate::event::Event::Tool(crate::event::ToolEvent::Metadata {
+                    message_id: _ctx.message_id.clone(),
+                    tool_id: _ctx.tool_call_id.to_string(),
+                    metadata,
+                }),
+            ) {
+                tracing::warn!("Failed to publish subagent metadata: {}", e);
+            }
+        }
+
+        // Persist subagent session to database with parent_id and default title
+        if let Some(ref store) = self.shared.session_store {
+            if let Err(e) = store
+                .create(
+                    &session_id,
+                    None, // project_id
+                    None, // working_dir
+                    None, // auto_approve_level
+                    Some(&self.parent_session_id),
+                )
+                .await
+            {
+                tracing::warn!("failed to create subagent session record: {}", e);
+            } else if let Err(e) = store.update_title(&session_id, &description).await {
+                tracing::warn!("failed to set subagent session title: {}", e);
+            }
+        }
+
+        // Get conversation history for subagent if context inheritance is enabled
+        let history = if inherit_context {
+            if let Some(ref store) = self.shared.message_store {
+                match store.get(&self.parent_session_id).await {
+                    Ok(msgs) => Some(msgs.into_iter().map(Arc::new).collect()),
+                    Err(e) => {
+                        tracing::warn!("failed to get history for subagent: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Extract preset instructions as text to be merged into the user message
+        let preset_text = preset
+            .as_ref()
+            .and_then(|p| p.prompt().map(|s| s.to_string()));
+
+        let params = RunSubagentParams {
+            session_id: session_id.clone(),
+            prompt: prompt_clone,
+            preset_text,
+            history,
+        };
+
+        let result = match mode {
+            SubAgentMode::Async => {
+                let result_text = format!(
+                    "Subagent with task '{description}' spawned in async mode. {} Results will be sent automatically when complete.",
+                    crate::tools::ASYNC_LAUNCH_GUIDE
+                );
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    let (output, status) = self_clone.run_subagent(params).await;
+                    let steer = match &status {
+                        SubAgentStatus::Completed => {
+                            format!("Task '{description}' completed:\n\n{output}")
+                        }
+                        SubAgentStatus::Failed(e) => {
+                            format!("Task '{description}' failed:\n\n{output}\n\n[error: {e}]")
+                        }
+                        SubAgentStatus::Cancelled => {
+                            format!("Task '{description}' cancelled:\n\n{output}\n\n[cancelled]")
+                        }
+                    };
+                    if let Err(e) = self_clone.input_bus.publish(
+                        self_clone.parent_session_id.clone(),
+                        crate::agent::AgentInput::Steer(vec![ContentBlock::Text { text: steer }]),
+                    ) {
+                        tracing::warn!("Failed to publish subagent async result: {}", e);
+                    }
+                });
+
+                ToolOutput::text(result_text)
+            }
+            SubAgentMode::Sync => {
+                let (output, status) = self.run_subagent(params).await;
+                match &status {
+                    SubAgentStatus::Completed => ToolOutput::text(output),
+                    SubAgentStatus::Failed(e) => {
+                        if output.is_empty() {
+                            ToolOutput::error(e.clone())
+                        } else {
+                            ToolOutput::text(format!("{output}\n\n[error: {e}]"))
+                        }
+                    }
+                    SubAgentStatus::Cancelled => {
+                        if output.is_empty() {
+                            ToolOutput::text("cancelled".to_string())
+                        } else {
+                            ToolOutput::text(format!("{output}\n\n[cancelled]"))
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok(result)
+    }
+}

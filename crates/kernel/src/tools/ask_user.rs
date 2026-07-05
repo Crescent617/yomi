@@ -1,14 +1,13 @@
+use crate::comms::EventBusHandle;
 use crate::event::{AgentEvent, Event};
-use crate::event_bus::EventBusHandle;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{AgentId, KernelError, Result, ToolOutput};
+use crate::types::{KernelError, Result, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
-use uuid::Uuid;
 
 pub const ASK_USER_TOOL_NAME: &str = "askUser";
 
@@ -107,15 +106,13 @@ impl AskUserResponder {
 
 /// Tool that blocks until the user answers a set of multiple-choice questions.
 pub struct AskUserTool {
-    agent_id: AgentId,
     event_bus: EventBusHandle,
     ask_user_state: AskUserState,
 }
 
 impl AskUserTool {
-    pub fn new(agent_id: AgentId, event_bus: EventBusHandle, ask_user_state: AskUserState) -> Self {
+    pub fn new(event_bus: EventBusHandle, ask_user_state: AskUserState) -> Self {
         Self {
-            agent_id,
             event_bus,
             ask_user_state,
         }
@@ -228,7 +225,7 @@ impl Tool for AskUserTool {
         }
 
         // Otherwise, emit an event and wait for the user to respond.
-        let req_id = Uuid::now_v7().to_string();
+        let req_id = ulid::Ulid::new().to_string();
         let (tx, rx) = oneshot::channel::<AskUserResponse>();
 
         {
@@ -238,18 +235,13 @@ impl Tool for AskUserTool {
 
         self.event_bus
             .send(Event::Agent(AgentEvent::AskUserQuestion {
-                agent_id: self.agent_id.clone(),
                 req_id: req_id.clone(),
                 questions: input.questions,
             }))
             .await
             .map_err(|e| KernelError::io(format!("Failed to send AskUserQuestion event: {e}")))?;
 
-        tracing::info!(
-            "AskUserQuestion sent with req_id={} for agent {}",
-            req_id,
-            self.agent_id
-        );
+        tracing::info!("AskUserQuestion sent with req_id={}", req_id);
 
         // Wait for response (5-minute timeout to avoid hanging forever)
         match tokio::time::timeout(std::time::Duration::from_mins(5), rx).await {

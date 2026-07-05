@@ -12,7 +12,7 @@ pub async fn run(global: &GlobalArgs, session: Option<String>) -> Result<()> {
         .context("Failed to connect to daemon. Is it running?")?;
 
     coordinator
-        .cancel(&SessionId(session_id.clone()))
+        .cancel(&SessionId::from(session_id.clone()))
         .await
         .with_context(|| format!("Failed to cancel session {session_id}"))?;
 

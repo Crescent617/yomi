@@ -1,12 +1,11 @@
 use super::level::{exceeds_threshold, Level};
+use crate::comms::EventBusHandle;
 use crate::event::{AgentEvent, Event};
-use crate::event_bus::EventBusHandle;
 use crate::tools::{EDIT_TOOL_NAME, READ_TOOL_NAME, SHELL_TOOL_NAME};
-use crate::types::{AgentId, KernelError, Result, ToolCall};
+use crate::types::{KernelError, Result, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
-use uuid::Uuid;
 
 /// Result of checking permissions for a batch of tool calls
 pub struct PermissionCheckResult {
@@ -31,7 +30,6 @@ pub struct PermissionCheckResult {
 pub async fn check_tool_permissions(
     tool_calls: &[ToolCall],
     permission_checker: Option<&Checker>,
-    agent_id: &AgentId,
 ) -> PermissionCheckResult {
     use super::resolver::ToolLevelResolver;
 
@@ -49,8 +47,7 @@ pub async fn check_tool_permissions(
                 }
                 Ok(false) => {
                     tracing::warn!(
-                        "Agent {} tool call {} denied: {} exceeds threshold",
-                        agent_id,
+                        "Tool call {} denied: {} exceeds threshold",
                         call.id,
                         call.name
                     );
@@ -61,12 +58,7 @@ pub async fn check_tool_permissions(
                     denied.push((call.id.clone(), error_msg));
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Agent {} permission check failed for {}: {}",
-                        agent_id,
-                        call.name,
-                        e
-                    );
+                    tracing::error!("Permission check failed for {}: {}", call.name, e);
                     let error_msg = format!("Permission check failed: {e}");
                     denied.push((call.id.clone(), error_msg));
                 }
@@ -176,7 +168,6 @@ impl PermissionState {
 /// 不需要在 kernel 层区分 `SubAgent` 和主 Agent
 pub struct Checker {
     state: PermissionState,
-    agent_id: AgentId,
     event_tx: EventBusHandle,
 }
 
@@ -185,12 +176,8 @@ impl Checker {
     ///
     /// Uses shared `PermissionState` so all agents in a session share
     /// the same permission configuration and pending requests.
-    pub fn new(state: PermissionState, agent_id: AgentId, event_tx: EventBusHandle) -> Self {
-        Self {
-            state,
-            agent_id,
-            event_tx,
-        }
+    pub fn new(state: PermissionState, event_tx: EventBusHandle) -> Self {
+        Self { state, event_tx }
     }
 
     /// 获取当前自动批准级别
@@ -226,7 +213,7 @@ impl Checker {
         drop(tool_approvals);
 
         // 超过阈值，需要用户确认
-        let req_id = Uuid::now_v7().to_string();
+        let req_id = ulid::Ulid::new().to_string();
         let (tx, rx) = oneshot::channel::<Response>();
 
         // 存储 oneshot sender 到 pending_permissions map
@@ -255,7 +242,6 @@ impl Checker {
         // 发送权限请求事件
         self.event_tx
             .send(Event::Agent(AgentEvent::PermissionRequest {
-                agent_id: self.agent_id.clone(),
                 req_id: req_id.clone(),
                 tool_id: tool_call.id.clone(),
                 tool_name: tool_call.name.clone(),
@@ -364,12 +350,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_checker_auto_approve() {
-        let bus = crate::event_bus::EventBus::new();
+        let bus = crate::comms::EventBus::new();
         let handle = bus.handle(SessionId::new());
 
         // Caution 阈值 - Safe 工具应该自动通过
         let (state, _responder) = PermissionState::new(Level::Caution);
-        let checker = Checker::new(state, AgentId::new(), handle);
+        let checker = Checker::new(state, handle);
 
         let safe_tool = ToolCall {
             id: "test1".to_string(),
@@ -386,11 +372,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_responder() {
-        let bus = crate::event_bus::EventBus::new();
+        let bus = crate::comms::EventBus::new();
         let handle = bus.handle(SessionId::new());
 
         let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 工具需要确认
-        let checker = Checker::new(state, AgentId::new(), handle.clone());
+        let checker = Checker::new(state, handle.clone());
 
         // 创建一个 Caution 级别的工具调用
         let caution_tool = ToolCall {
@@ -425,11 +411,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_remember_per_tool() {
-        let bus = crate::event_bus::EventBus::new();
+        let bus = crate::comms::EventBus::new();
         let handle = bus.handle(SessionId::new());
 
         let (state, responder) = PermissionState::new(Level::Safe); // Safe 级别，Caution 和 Dangerous 需要确认
-        let checker = Checker::new(state, AgentId::new(), handle.clone());
+        let checker = Checker::new(state, handle.clone());
 
         // Wrap checker in Arc so we can use it after spawning
         let checker = Arc::new(checker);

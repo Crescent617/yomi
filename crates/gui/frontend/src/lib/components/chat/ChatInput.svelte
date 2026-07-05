@@ -165,7 +165,7 @@
     const session = activeSession;
     if (!session) return [];
     const userMsgs = session.messages
-      .filter((m) => m.role === "user")
+      .filter((m) => m.type === "user")
       .map((m) => m.content)
       .filter((c) => c.trim());
     // Deduplicate and reverse (newest first)
@@ -198,6 +198,7 @@
   }
 
   function queueInput() {
+    if (submitting) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
     session.queued_input = {
@@ -436,59 +437,63 @@
   }
 
   async function handleSubmit() {
-    if (!content.trim() || !sessionState.activeSessionId) return;
+    if (submitting || !content.trim() || !sessionState.activeSessionId) return;
+    submitting = true;
+    try {
+      const session_id = sessionState.activeSessionId;
+      const baseText = content.trim();
 
-    const session_id = sessionState.activeSessionId;
-    const baseText = content.trim();
-
-    if (baseText.startsWith("/")) {
-      const ok = await handleCommand(baseText);
-      if (!ok) {
-        content = baseText;
+      if (baseText.startsWith("/")) {
+        const ok = await handleCommand(baseText);
+        if (!ok) {
+          content = baseText;
+          autoResize();
+          return;
+        }
+        content = "";
         autoResize();
+        fileAttachments = [];
+        clearInlineImages();
         return;
       }
+
       content = "";
       autoResize();
+
+      // Append file attachments as suffix text
+      const fileSuffix =
+        fileAttachments.length > 0
+          ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
+          : "";
+      const text = baseText + fileSuffix;
+
       fileAttachments = [];
-      clearInlineImages();
-      return;
-    }
 
-    content = "";
-    autoResize();
-
-    // Append file attachments as suffix text
-    const fileSuffix =
-      fileAttachments.length > 0
-        ? "\n" + fileAttachments.map((p) => `[File: ${p}]`).join("\n")
-        : "";
-    const text = baseText + fileSuffix;
-
-    fileAttachments = [];
-
-    if (inlineImages.length > 0) {
-      // Message with inline images: build content blocks
-      try {
-        const blocks = buildContentBlocks(text);
-        await api.sendMessageBlocks(session_id, blocks);
-        clearInlineImages();
-      } catch (e: unknown) {
-        console.error(
-          "Failed to send message with images:",
-          e instanceof Error ? e.message : e,
-        );
-        showNotification("Failed to send message", "error", 3000);
+      if (inlineImages.length > 0) {
+        // Message with inline images: build content blocks
+        try {
+          const blocks = buildContentBlocks(text);
+          await api.sendMessageBlocks(session_id, blocks);
+          clearInlineImages();
+        } catch (e: unknown) {
+          console.error(
+            "Failed to send message with images:",
+            e instanceof Error ? e.message : e,
+          );
+          showNotification("Failed to send message", "error", 3000);
+        }
+      } else {
+        try {
+          await api.sendMessage(session_id, text);
+        } catch (e: unknown) {
+          console.error(
+            "Failed to send message:",
+            e instanceof Error ? e.message : e,
+          );
+        }
       }
-    } else {
-      try {
-        await api.sendMessage(session_id, text);
-      } catch (e: unknown) {
-        console.error(
-          "Failed to send message:",
-          e instanceof Error ? e.message : e,
-        );
-      }
+    } finally {
+      submitting = false;
     }
   }
 
@@ -567,6 +572,7 @@
 
   // ── file attachments (any type, paths appended to prompt) ──
   let fileAttachments = $state<string[]>([]);
+  let submitting = $state(false);
 
   async function attachFiles() {
     try {
@@ -988,7 +994,9 @@
         <button
           type="button"
           onclick={handleSubmit}
-          disabled={!content.trim() || !sessionState.activeSessionId}
+          disabled={!content.trim() ||
+            !sessionState.activeSessionId ||
+            submitting}
           class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
         >
           <Send size={16} />

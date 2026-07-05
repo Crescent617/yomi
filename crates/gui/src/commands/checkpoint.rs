@@ -12,7 +12,7 @@ pub async fn get_checkpoints(
     session_id: String,
 ) -> Result<Vec<Checkpoint>, GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     let checkpoints = coord
         .get_checkpoints(&sid)
         .await
@@ -27,8 +27,8 @@ pub async fn rewind(
     message_id: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
-    let mid = MessageId::from_string(message_id);
+    let sid = SessionId::from(session_id);
+    let mid = MessageId::from(message_id);
     coord
         .rewind_session(&sid, mid, RewindTarget::Both)
         .await

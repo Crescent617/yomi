@@ -1,0 +1,357 @@
+use std::sync::{Arc, Mutex};
+
+use dashmap::DashMap;
+use tokio::task::JoinHandle;
+use tracing::Instrument;
+
+use crate::agent::AgentShared;
+use crate::agent::{Agent, AgentConfig, AgentInput, AgentSpawnArgs, AgentState};
+use crate::comms::{EventBus, InputBus, InputBusSubscriber, Mailbox};
+use crate::event::{AgentEvent, Event, InternalEvent};
+use crate::types::SessionId;
+
+/// 唯一管理 Agent 生命周期的地方。
+/// `InputBus` 的唯一消费者，负责 Mailbox 管理、Agent lazy spawn、Cancel 分发。
+pub struct Conductor {
+    agent_shared: Arc<AgentShared>,
+    agent_config: AgentConfig,
+    active: DashMap<SessionId, ActiveAgent>,
+    mailboxes: DashMap<SessionId, Arc<Mailbox>>,
+    rx: std::sync::Mutex<Option<InputBusSubscriber>>,
+    event_bus: Arc<EventBus>,
+    input_bus: Arc<InputBus>,
+    base_prompt: String,
+    data_dir: std::path::PathBuf,
+    /// Per-session spawn lock to prevent duplicate agent creation races.
+    spawn_locks: DashMap<SessionId, Arc<tokio::sync::Mutex<()>>>,
+}
+
+struct ActiveAgent {
+    handle: JoinHandle<()>,
+    cancel_token: crate::agent::CancelToken,
+    state: Mutex<AgentState>,
+}
+
+impl Conductor {
+    pub fn new(
+        agent_shared: Arc<AgentShared>,
+        agent_config: AgentConfig,
+        rx: InputBusSubscriber,
+        event_bus: Arc<EventBus>,
+        input_bus: Arc<InputBus>,
+        base_prompt: String,
+        data_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            agent_shared,
+            agent_config,
+            active: DashMap::new(),
+            mailboxes: DashMap::new(),
+            rx: std::sync::Mutex::new(Some(rx)),
+            event_bus,
+            input_bus,
+            base_prompt,
+            data_dir,
+            spawn_locks: DashMap::new(),
+        }
+    }
+
+    pub async fn run(self: Arc<Self>) {
+        let mut rx = self
+            .rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .expect("Conductor::run already called");
+        let mut subscriber = self.event_bus.subscribe_all();
+        let mut cleanup_interval = tokio::time::interval(std::time::Duration::from_mins(10));
+
+        loop {
+            tokio::select! {
+                biased;
+                Some((sid, input)) = rx.recv() => {
+                    let this = Arc::clone(&self);
+                    tokio::spawn(async move {
+                        this.handle_input(sid, input).await;
+                    });
+                }
+                Some((sid, event)) = subscriber.recv() => {
+                    match event {
+                        Event::Agent(AgentEvent::StateChanged { state }) => {
+                            if let Some(agent) = self.active.get(&sid) {
+                                *agent.state.lock().unwrap_or_else(|e| e.into_inner()) = state;
+                            }
+                        }
+                        Event::Internal(InternalEvent::MessageAdded { message }) => {
+                            if let Some(ref store) = self.agent_shared.message_store {
+                                if let Err(e) = store.append(&sid.0, &[(*message).clone()]).await {
+                                    tracing::warn!("Failed to persist message for session={sid}: {e}");
+                                }
+                            }
+                        }
+                        Event::Internal(InternalEvent::MessageReplaced { messages }) => {
+                            if let Some(ref store) = self.agent_shared.message_store {
+                                let to_persist: Vec<crate::types::Message> = messages.iter().map(|m| (**m).clone()).collect();
+                                if let Err(e) = store.replace(&sid.0, &to_persist).await {
+                                    tracing::warn!("Failed to replace messages for session={sid}: {e}");
+                                }
+                            }
+                        }
+                        Event::Tool(crate::event::ToolEvent::Metadata { message_id, tool_id, metadata }) => {
+                            if let Some(ref store) = self.agent_shared.message_store {
+                                let placeholder = crate::types::Message {
+                                    id: message_id,
+                                    role: crate::types::Role::Internal,
+                                    content: vec![],
+                                    tool_call_id: Some(tool_id),
+                                    metadata: Some(metadata),
+                                    ..Default::default()
+                                };
+                                if let Err(e) = store.append(&sid.0, &[placeholder]).await {
+                                    tracing::warn!("Failed to persist tool metadata for session={sid}: {e}");
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ = cleanup_interval.tick() => {
+                    self.active.retain(|_sid, agent| !agent.handle.is_finished());
+                    // 清理没有活跃 agent 且 mailbox 为空的 session，防止内存泄漏
+                    self.mailboxes.retain(|sid, mb| {
+                        self.active.contains_key(sid) || !mb.is_empty()
+                    });
+                    // 清理已完成 spawn 或不会再被唤醒的 session 的锁。
+                    // 保留既没有活跃 agent 但 mailbox 仍在的 session（未来还会 spawn）。
+                    self.spawn_locks.retain(|sid, _| {
+                        !self.active.contains_key(sid) && self.mailboxes.contains_key(sid)
+                    });
+                }
+                else => break,
+            }
+        }
+    }
+
+    pub fn get_state(&self, sid: &SessionId) -> Option<AgentState> {
+        self.active
+            .get(sid)
+            .map(|a| *a.state.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.active.len()
+    }
+
+    async fn handle_input(&self, sid: SessionId, input: AgentInput) {
+        match input {
+            AgentInput::Cancel => {
+                if let Some(agent) = self.active.get(&sid) {
+                    agent.cancel_token.cancel();
+                }
+                if let Some(mb) = self.mailboxes.get(&sid) {
+                    mb.clear().await;
+                }
+            }
+            input => {
+                let mb = self
+                    .mailboxes
+                    .entry(sid.clone())
+                    .or_insert_with(|| Arc::new(Mailbox::new()))
+                    .clone();
+
+                Self::push_to_mailbox(&mb, input).await;
+                self.wake_agent(&sid, mb).await;
+            }
+        }
+    }
+
+    async fn push_to_mailbox(mailbox: &Mailbox, input: AgentInput) {
+        match input {
+            AgentInput::Steer(content) => mailbox.push_steer(content).await,
+            other => mailbox.push(other).await,
+        }
+    }
+
+    async fn wake_agent(&self, sid: &SessionId, mailbox: Arc<Mailbox>) {
+        let lock = self
+            .spawn_locks
+            .entry(sid.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .downgrade()
+            .clone();
+        let _guard = match lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                // Another task is already spawning for this session.
+                // Messages have already been pushed to the mailbox; once that
+                // spawn completes and the agent starts, it will consume them.
+                return;
+            }
+        };
+
+        if self
+            .active
+            .get(sid)
+            .is_some_and(|v| !v.handle.is_finished())
+        {
+            return;
+        }
+
+        let history = match &self.agent_shared.message_store {
+            Some(store) => match store.get(&sid.0).await {
+                Ok(msgs) => msgs.into_iter().map(Arc::new).collect(),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+
+        let session_info = match self.agent_shared.session_store.as_ref() {
+            Some(s) => s.get(sid).await.ok().flatten(),
+            None => None,
+        };
+
+        let cancel_token = session_info
+            .as_ref()
+            .and_then(|i| {
+                i.parent_id
+                    .clone()
+                    .and_then(|p| self.active.get(&p))
+                    .map(|a| a.cancel_token.child_token())
+            })
+            .unwrap_or_else(crate::agent::CancelToken::new);
+
+        // Resolve working directory from session info or fallback to data_dir/workspace
+        let working_dir = session_info
+            .as_ref()
+            .and_then(|i| i.working_dir.clone())
+            .map(std::path::PathBuf::from);
+
+        let cwd = working_dir.or_else(|| Some(self.data_dir.join("workspace")));
+
+        // Create file state store
+        let file_state_store = match Self::create_file_state_store(&sid.0, &self.data_dir).await {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::error!("Failed to create file state store: {}", e);
+                Arc::new(crate::tools::helper::FileStateStore::new())
+            }
+        };
+
+        // Create permission state from session's auto_approve_level
+        let auto_approve_level = session_info
+            .as_ref()
+            .and_then(|i| i.auto_approve_level.as_ref())
+            .and_then(|s| s.parse::<crate::permissions::Level>().ok())
+            .unwrap_or_default();
+        let permission_state = Some(crate::permissions::PermissionState::new(auto_approve_level).0);
+
+        // Resolve workspace skill directory
+        let workspace_skill_dir = cwd
+            .as_ref()
+            .map(|d| d.join(".agents/skills"))
+            .filter(|d| d.exists());
+
+        // Merge global skills with workspace skills
+        let mut skills = self.agent_config.skills.clone();
+        if let Some(dir) = workspace_skill_dir.as_ref() {
+            match crate::skill::SkillLoader::new(vec![dir.clone()]).load_all() {
+                Ok(mut ws_skills) => {
+                    let mut merged = std::collections::HashMap::new();
+                    for skill in &skills {
+                        merged.insert(skill.name.clone(), skill.clone());
+                    }
+                    for skill in ws_skills.drain(..) {
+                        merged.insert(skill.name.clone(), skill);
+                    }
+                    skills = merged.into_values().collect();
+                    tracing::info!(
+                        "loaded {} skill(s) from workspace {}",
+                        skills.len(),
+                        dir.display()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to load workspace skills from {}: {}",
+                        dir.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // Clone AgentShared so we can mutate skill_folders per-session
+        let mut base_clone: AgentShared = (*self.agent_shared).clone();
+        if let Some(dir) = workspace_skill_dir.as_ref() {
+            if !base_clone.skill_folders.contains(dir) {
+                base_clone.skill_folders.push(dir.clone());
+            }
+        }
+        let checkpoint_store = base_clone.checkpoint_store.clone();
+        let shared = Arc::new(base_clone.with_per_session(
+            permission_state,
+            Some(Arc::clone(&file_state_store)),
+            checkpoint_store,
+        ));
+
+        let working_dir = cwd.unwrap_or_default();
+
+        let args = AgentSpawnArgs::new(
+            self.base_prompt.clone(),
+            sid.0.clone(),
+            mailbox,
+            working_dir,
+        )
+        .with_skills(skills)
+        .with_arc_history(history)
+        .with_max_iterations(self.agent_config.max_iterations)
+        .with_subagent(self.agent_config.enable_subagent)
+        .with_file_state_store(Arc::clone(&file_state_store))
+        .with_tool_blocklist(self.agent_config.tool_blocklist.clone())
+        .with_allow_command_hooks(self.agent_config.allow_command_hooks)
+        .with_max_tool_output_length(self.agent_config.max_tool_output_length)
+        .with_cancel_token(cancel_token.clone())
+        .with_input_bus(self.input_bus.clone());
+
+        let agent = Agent::new(&shared, args).await;
+
+        let session_id = sid.0.clone();
+        let loop_span = tracing::info_span!("agent_loop", session_id = %session_id);
+        let handle = tokio::spawn(
+            async move {
+                tracing::info!("agent loop started");
+                let _ = agent.start_loop().await;
+                tracing::info!("agent loop ended");
+            }
+            .instrument(loop_span),
+        );
+
+        self.active.insert(
+            sid.to_owned(),
+            ActiveAgent {
+                handle,
+                cancel_token,
+                state: Mutex::new(AgentState::Idle),
+            },
+        );
+    }
+
+    /// Create and populate the file state store for this session
+    async fn create_file_state_store(
+        session_id: &str,
+        data_dir: &std::path::Path,
+    ) -> crate::types::Result<Arc<crate::tools::helper::FileStateStore>> {
+        let jsonl_store =
+            crate::storage::file_state::JsonlFileStateStore::new(session_id, data_dir);
+        jsonl_store.maybe_vacuum().await?;
+        let persistent_store: Arc<dyn crate::storage::FileStateStore> = Arc::new(jsonl_store);
+
+        let states = persistent_store.read_all().await?;
+
+        let file_state_store = crate::tools::helper::FileStateStore::new()
+            .with_persistent(persistent_store)
+            .with_states(states.into_iter().map(|fs| (fs.path, fs.mtime)));
+
+        Ok(Arc::new(file_state_store))
+    }
+}

@@ -37,6 +37,7 @@ impl OpenAIProvider {
     fn convert_messages(messages: &[Arc<Message>]) -> Vec<OpenAIMessage> {
         messages
             .iter()
+            .filter(|m| !matches!(m.as_ref().role, Role::Internal))
             .map(|m| {
                 let m = m.as_ref();
 
@@ -81,6 +82,7 @@ impl OpenAIProvider {
                     Role::User => "user",
                     Role::Assistant => "assistant",
                     Role::Tool => "tool",
+                    Role::Internal => unreachable!("Internal messages should be filtered out"),
                 };
 
                 let tool_calls = m.tool_calls.as_ref().map(|calls| {

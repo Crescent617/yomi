@@ -24,12 +24,11 @@ impl UsageStore for SqliteUsageStore {
     async fn record(&self, record: &UsageRecord) -> Result<()> {
         sqlx::query(
             "INSERT INTO token_usage 
-             (id, session_id, agent_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens, model, provider, usage_type, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             (id, session_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens, model, provider, usage_type, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&record.id)
-        .bind(&record.session_id.0)
-        .bind(record.agent_id.as_str())
+        .bind(&*record.session_id.0)
         .bind(record.prompt_tokens as i64)
         .bind(record.completion_tokens as i64)
         .bind(record.total_tokens() as i64)
@@ -187,7 +186,7 @@ mod tests {
     use crate::providers::TokenUsage;
     use crate::storage::migrations::run_migrations;
     use crate::storage::usage::UsageType;
-    use crate::types::{AgentId, SessionId};
+    use crate::types::SessionId;
 
     async fn create_test_store() -> SqliteUsageStore {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -203,11 +202,9 @@ mod tests {
     async fn test_record_and_summarize() {
         let store = create_test_store().await;
         let session_id = SessionId::new();
-        let agent_id = AgentId::new();
 
         let record = UsageRecord::new(
             session_id.clone(),
-            agent_id.clone(),
             TokenUsage::new(100, 50, Some(10)),
             "claude-3-5-sonnet",
             "anthropic",

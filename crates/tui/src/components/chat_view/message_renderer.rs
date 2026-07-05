@@ -52,8 +52,6 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             arguments,
             parsed_args,
             elapsed_ms,
-            tokens,
-            progress,
             content_blocks,
         } => render_tool(
             tool_name,
@@ -64,8 +62,6 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             arguments.as_deref(),
             parsed_args.as_ref(),
             *elapsed_ms,
-            *tokens,
-            progress.as_deref(),
             content_blocks,
             width,
         ),
@@ -166,7 +162,8 @@ fn render_assistant(
     lines
 }
 
-#[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::too_many_arguments)]
 fn render_tool(
     tool_name: &str,
     status: &ToolStatus,
@@ -176,8 +173,6 @@ fn render_tool(
     arguments: Option<&str>,
     parsed_args: Option<&serde_json::Value>,
     elapsed_ms: Option<u64>,
-    tokens: Option<u32>,
-    progress: Option<&str>,
     content_blocks: &[ToolOutputBlock],
     width: usize,
 ) -> Vec<Arc<Line<'static>>> {
@@ -289,26 +284,6 @@ fn render_tool(
 
     // Output peek in folded mode (max 50 chars, indented)
     if folded {
-        // Show progress for running tools
-        if *status == ToolStatus::Running {
-            if let Some(prog) = progress {
-                let prog_text = sanitize_single_line(prog);
-                lines.push(Arc::new(Line::from(vec![
-                    Span::styled(" ⎿ ", Style::default().fg(colors::text_secondary())),
-                    Span::styled(prog_text, Style::default().fg(colors::text_secondary())),
-                ])));
-            }
-        }
-
-        // Show tokens if available
-        if let Some(total) = tokens {
-            let token_text = format!(" ⎿ {} tokens", tokens::format_actual_tokens(total));
-            lines.push(Arc::new(Line::from(vec![Span::styled(
-                token_text,
-                Style::default().fg(colors::text_secondary()),
-            )])));
-        }
-
         // Show output peek in folded mode (max 2 lines based on width)
         if let Some(out) = error.or(output) {
             let trimmed = out.trim();
@@ -394,17 +369,13 @@ fn render_tool(
                 ])));
             }
         } else if *status == ToolStatus::Running {
-            let running_text = progress.map_or_else(
-                || "Running...".to_string(),
-                |p| format!("Running: {}", sanitize_single_line(p)),
-            );
             lines.push(Arc::new(Line::from(vec![
                 Span::styled(
                     chars::MSG_INDENT_GUIDE,
                     Style::default().fg(colors::text_secondary()),
                 ),
                 Span::styled(
-                    running_text,
+                    "Running...",
                     Style::default()
                         .fg(colors::text_secondary())
                         .add_modifier(Modifier::ITALIC),
@@ -704,7 +675,7 @@ pub fn to_camel_case(s: &str) -> String {
     }
 
     // If already starts with uppercase, assume it's already CamelCase
-    if s.chars().next().unwrap().is_uppercase() {
+    if s.starts_with(|c: char| c.is_uppercase()) {
         return s.to_string();
     }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { XCircle, Wrench, Lightbulb } from "lucide-svelte";
-  import type { ChatMessage } from "../../state.svelte";
+  import type { Message } from "../../state.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
 
@@ -8,7 +8,7 @@
     messages,
     isStreaming = false,
   }: {
-    messages: ChatMessage[];
+    messages: Message[];
     isStreaming?: boolean;
   } = $props();
 
@@ -19,33 +19,30 @@
     let thinkingCount = 0;
     let runningCount = 0;
     let failedCount = 0;
-    const seenNames = new Set<string>();
-    const runningNames: string[] = [];
+    let activeLabel = "";
+
+    let latestRunningTool: { tool_name: string } | null = null;
 
     for (const m of messages) {
-      if (m.thinking) thinkingCount++;
-      if (m.tools) {
-        for (const t of m.tools) {
-          toolCount++;
-          if (t.status === "running") {
-            runningCount++;
-            if (!seenNames.has(t.tool_name)) {
-              seenNames.add(t.tool_name);
-              runningNames.push(t.tool_name);
-            }
-          } else if (t.status === "failed") {
-            failedCount++;
-          }
+      if (m.type === "assistant" && m.thinking) {
+        thinkingCount++;
+      }
+      if (m.type === "tool") {
+        toolCount++;
+        if (m.status === "running") {
+          runningCount++;
+          latestRunningTool = m;
+        } else if (m.status === "failed") {
+          failedCount++;
         }
       }
     }
 
-    const activeLabel =
-      runningNames.length > 0
-        ? `calling ${runningNames.join(", ")}`
-        : isStreaming && thinkingCount > 0
-          ? "thinking"
-          : "";
+    if (latestRunningTool) {
+      activeLabel = `calling ${latestRunningTool.tool_name}`;
+    } else if (isStreaming && thinkingCount > 0) {
+      activeLabel = "thinking";
+    }
 
     return { toolCount, thinkingCount, runningCount, failedCount, activeLabel };
   });
@@ -62,7 +59,7 @@
     onclick={() => (expanded = !expanded)}
   >
     <!-- 状态图标 — 呼吸灯 or 失败 -->
-    {#if isStreaming || stats.runningCount > 0}
+    {#if stats.runningCount > 0 || (isStreaming && stats.thinkingCount > 0)}
       <span class="relative flex size-2 shrink-0">
         <span
           class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"
@@ -105,17 +102,24 @@
 
   {#if expanded}
     <div class="p-2 space-y-2 border-t border-border/30 bg-muted/20 w-full">
-      {#each messages as msg (`msg-${msg.id}`)}
-        {#if msg.thinking}
+      {#each messages as msg (msg.id)}
+        {#if msg.type === "assistant" && msg.thinking}
           <ThinkingBlock
             content={msg.thinking.content}
             elapsed_ms={msg.thinking.elapsed_ms}
           />
         {/if}
-        {#if msg.tools && msg.tools.length > 0}
-          {#each msg.tools as tool (`${msg.id}-${tool.id}`)}
-            <ToolBlock {tool} />
-          {/each}
+        {#if msg.type === "tool"}
+          <ToolBlock tool={{
+            id: msg.tool_call_id,
+            tool_name: msg.tool_name,
+            status: msg.status,
+            arguments: msg.arguments,
+            output: msg.output,
+            elapsed_ms: msg.elapsed_ms,
+            subagent_session_id: msg.subagent_session_id,
+            folded: true,
+          }} />
         {/if}
       {/each}
     </div>

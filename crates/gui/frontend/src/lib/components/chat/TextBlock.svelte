@@ -139,4 +139,21 @@
   .text-block :global(em) {
     font-style: italic;
   }
+  /* streaming-markdown renders $$...$$ as <equation-block> and $...$ as <equation-inline> */
+  .text-block :global(equation-block) {
+    display: block;
+    font-family: ui-monospace, monospace;
+    background: hsl(var(--muted));
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin: 0.25rem 0;
+    white-space: pre-wrap;
+  }
+  .text-block :global(equation-inline) {
+    font-family: ui-monospace, monospace;
+    background: hsl(var(--muted));
+    padding: 0.125rem 0.25rem;
+    border-radius: 0.25rem;
+  }
 </style>

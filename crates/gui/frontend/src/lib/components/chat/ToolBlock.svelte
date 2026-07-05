@@ -7,9 +7,12 @@
     XCircle,
     MinusCircle,
     AlertCircle,
+    ArrowUpRight,
+    Bot,
   } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
   import { formatElapsed } from "../../utils";
+  import { activateSession as stateActivateSession } from "../../state.svelte";
 
   let {
     tool,
@@ -110,6 +113,10 @@
 
   const target = $derived(extractTarget(tool.tool_name, tool.arguments ?? ""));
   const meta = $derived(extraMeta(tool.tool_name, tool.arguments ?? ""));
+
+  async function handleJumpToSubagent(sessionId: string) {
+    await stateActivateSession(sessionId);
+  }
 </script>
 
 <div
@@ -157,13 +164,39 @@
     {#if tool.tokens}
       <span class="text-xs opacity-60 shrink-0">· {tool.tokens} tokens</span>
     {/if}
-    <span class="ml-auto">
-      {#if expanded}
-        <ChevronUp class="w-3.5 h-3.5 opacity-50" />
-      {:else}
-        <ChevronDown class="w-3.5 h-3.5 opacity-50" />
-      {/if}
-    </span>
+    {#if tool.subagent_session_id}
+      <div class="ml-auto flex items-center gap-1">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+          onclick={(e) => {
+            e.stopPropagation();
+            handleJumpToSubagent(tool.subagent_session_id!);
+          }}
+        >
+          <Bot class="w-3 h-3 opacity-60" />
+          <span class="font-mono opacity-70 truncate max-w-[12rem]"
+            >{tool.subagent_session_id}</span
+          >
+          <ArrowUpRight class="w-3 h-3 opacity-50" />
+        </button>
+        <span>
+          {#if expanded}
+            <ChevronUp class="w-3.5 h-3.5 opacity-50" />
+          {:else}
+            <ChevronDown class="w-3.5 h-3.5 opacity-50" />
+          {/if}
+        </span>
+      </div>
+    {:else}
+      <span class="ml-auto">
+        {#if expanded}
+          <ChevronUp class="w-3.5 h-3.5 opacity-50" />
+        {:else}
+          <ChevronDown class="w-3.5 h-3.5 opacity-50" />
+        {/if}
+      </span>
+    {/if}
   </button>
 
   <!-- Body — expanded only -->

@@ -44,3 +44,9 @@ impl From<std::io::Error> for GuiError {
         Self::unknown(e)
     }
 }
+
+impl From<serde_json::Error> for GuiError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::unknown(e)
+    }
+}

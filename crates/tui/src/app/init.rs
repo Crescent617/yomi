@@ -46,7 +46,7 @@ impl Model {
     /// so that `/skill:` completion can suggest session-relevant skills.
     pub async fn init_skills(&mut self) -> Result<()> {
         use kernel::types::SessionId;
-        let session_id = SessionId(self.session_id.clone());
+        let session_id = SessionId::from(self.session_id.clone());
 
         let skills: Vec<(String, String)> =
             match self.coordinator.list_session_skills(&session_id).await {
@@ -77,7 +77,7 @@ impl Model {
         use kernel::types::SessionId;
         let context_window = crate::config().agent.compactor.context_window;
 
-        let session_id = SessionId(self.session_id.clone());
+        let session_id = SessionId::from(self.session_id.clone());
 
         let messages = match self.coordinator.get_session_messages(&session_id).await {
             Ok(msgs) => msgs,
@@ -118,7 +118,7 @@ impl Model {
 
         // Sync runtime status (streaming / compacting) so the InfoBar is accurate
         // even when we switch to a session that is already in the middle of work.
-        match self.coordinator.get_session_status(&session_id).await {
+        match self.coordinator.get_session(&session_id).await {
             Ok(status) => match status.phase.as_str() {
                 "streaming" | "executing_tool" => {
                     self.state.is_streaming = true;
@@ -187,7 +187,7 @@ impl Model {
         use kernel::types::SessionId;
         match self
             .coordinator
-            .get_todos(&SessionId(self.session_id.clone()))
+            .get_todos(&SessionId::from(self.session_id.clone()))
             .await
         {
             Ok(Some(todo_json)) => {

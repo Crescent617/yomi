@@ -105,14 +105,11 @@ pub trait CoordinatorApi: Send + Sync {
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
-    async fn get_session_status(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::types::SessionStatus>;
+    async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse>;
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<crate::event_bus::EventBusSubscriber>;
+    ) -> Result<crate::comms::EventBusSubscriber>;
     async fn list_sessions(
         &self,
         project_id: Option<&ProjectId>,
@@ -130,7 +127,6 @@ pub trait CoordinatorApi: Send + Sync {
         response: crate::tools::AskUserResponse,
     ) -> Result<()>;
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>>;
-    async fn shutdown_session(&self, session_id: &SessionId) -> Result<()>;
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()>;
     async fn send_continue(&self, session_id: &SessionId) -> Result<()>;
     async fn list_session_skills(
@@ -226,7 +222,8 @@ impl CoordinatorApi for Coordinator {
     }
 
     async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        Self::cancel(self, session_id).await
+        Self::cancel(self, session_id);
+        Ok(())
     }
 
     async fn send_permission_response(
@@ -234,9 +231,10 @@ impl CoordinatorApi for Coordinator {
         session_id: &SessionId,
         req_id: &str,
         approved: bool,
-        remember: bool,
+        _remember: bool,
     ) -> Result<()> {
-        Self::send_permission_response(self, session_id, req_id, approved, remember).await
+        Self::send_permission_response(self, session_id, req_id, approved, _remember);
+        Ok(())
     }
 
     async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
@@ -244,7 +242,8 @@ impl CoordinatorApi for Coordinator {
     }
 
     async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        Self::compact_session(self, session_id).await
+        Self::compact_session(self, session_id);
+        Ok(())
     }
 
     async fn rewind_session(
@@ -314,17 +313,14 @@ impl CoordinatorApi for Coordinator {
         Self::get_session_messages(self, session_id).await
     }
 
-    async fn get_session_status(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::types::SessionStatus> {
-        Self::get_session_status(self, session_id).await
+    async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse> {
+        Ok(Self::get_session(self, session_id).await?)
     }
 
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<crate::event_bus::EventBusSubscriber> {
+    ) -> Result<crate::comms::EventBusSubscriber> {
         Ok(Self::subscribe_session_events(self, session_id))
     }
 
@@ -354,19 +350,18 @@ impl CoordinatorApi for Coordinator {
         req_id: &str,
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
-        Self::send_ask_user_response(self, session_id, req_id, response).await
-    }
-
-    async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
-        Self::shutdown_session(self, session_id).await
+        Self::send_ask_user_response(self, session_id, req_id, response);
+        Ok(())
     }
 
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
-        Self::send_steer(self, session_id, content).await
+        Self::send_steer(self, session_id, content);
+        Ok(())
     }
 
     async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
-        Self::send_continue(self, session_id).await
+        Self::send_continue(self, session_id);
+        Ok(())
     }
 
     async fn list_session_skills(
@@ -577,7 +572,7 @@ impl RemoteCoordinator {
             for key in &keys {
                 if let Some((_, tx)) = event_routers.remove(key) {
                     let _ = tx.send(Event::System(crate::event::SystemEvent::ConnectionLost {
-                        session_id: SessionId(key.clone()),
+                        session_id: SessionId::from(key.clone()),
                     }));
                 }
             }
@@ -823,10 +818,10 @@ impl RemoteCoordinator {
     async fn subscribe_events_internal(
         &self,
         session_id: &SessionId,
-    ) -> Result<crate::event_bus::EventBusSubscriber> {
+    ) -> Result<crate::comms::EventBusSubscriber> {
         use dashmap::mapref::entry::Entry;
 
-        let tx = match self.event_routers.entry(session_id.0.clone()) {
+        let tx = match self.event_routers.entry(session_id.0.to_string()) {
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
                 let (tx, _rx) = broadcast::channel(256);
@@ -837,7 +832,7 @@ impl RemoteCoordinator {
 
         let result = self
             .call(RequestMethod::Subscribe {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
             })
             .await;
         if let Err(ref e) = result {
@@ -846,7 +841,7 @@ impl RemoteCoordinator {
             // failure) should leave the router in place so that a later
             // re-subscribe can reuse the same sender.
             if e.is_session_not_found() {
-                self.event_routers.remove(&session_id.0);
+                self.event_routers.remove(session_id.0.as_str());
             }
             return Err(result.unwrap_err());
         }
@@ -862,7 +857,7 @@ impl RemoteCoordinator {
             }
         });
 
-        Ok(crate::event_bus::EventBusSubscriber::from_receiver(mpsc_rx))
+        Ok(crate::comms::EventBusSubscriber::from_receiver(mpsc_rx))
     }
 }
 
@@ -892,7 +887,7 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>> {
         let result = self
             .call(RequestMethod::GetProject {
-                project_id: id.0.clone(),
+                project_id: id.0.to_string(),
             })
             .await?;
         let project: Option<Project> = serde_json::from_value(result)?;
@@ -901,7 +896,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()> {
         self.call(RequestMethod::RenameProject {
-            project_id: id.0.clone(),
+            project_id: id.0.to_string(),
             name,
         })
         .await?;
@@ -910,7 +905,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn delete_project(&self, id: &ProjectId) -> Result<()> {
         self.call(RequestMethod::DeleteProject {
-            project_id: id.0.clone(),
+            project_id: id.0.to_string(),
         })
         .await?;
         Ok(())
@@ -919,13 +914,13 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::CreateSession {
-                project_id: input.project_id.map(|p| p.0),
+                project_id: input.project_id.map(|p| p.0.to_string()),
                 working_dir: input.working_dir.map(|p| p.to_string_lossy().to_string()),
                 auto_approve_level: input.auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
-        Ok(SessionId(sid))
+        Ok(SessionId::from(sid))
     }
 
     async fn restore_session(
@@ -935,12 +930,12 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::RestoreSession {
-                session_id: id.0.clone(),
+                session_id: id.0.to_string(),
                 tool_blocklist,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
-        Ok(SessionId(sid))
+        Ok(SessionId::from(sid))
     }
 
     async fn fork_session(
@@ -950,17 +945,17 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<SessionId> {
         let result = self
             .call(RequestMethod::ForkSession {
-                parent_id: parent.0.clone(),
+                parent_id: parent.0.to_string(),
                 auto_approve_level,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
-        Ok(SessionId(sid))
+        Ok(SessionId::from(sid))
     }
 
     async fn send_message(&self, session_id: &SessionId, blocks: Vec<ContentBlock>) -> Result<()> {
         self.call(RequestMethod::SendMessage {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             blocks,
         })
         .await?;
@@ -969,7 +964,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn cancel(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Cancel,
         })
         .await?;
@@ -984,7 +979,7 @@ impl CoordinatorApi for RemoteCoordinator {
         remember: bool,
     ) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Response {
                 req_id: req_id.to_string(),
                 approved,
@@ -997,7 +992,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::SetLevel(level),
         })
         .await?;
@@ -1006,7 +1001,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Compact,
         })
         .await?;
@@ -1020,7 +1015,7 @@ impl CoordinatorApi for RemoteCoordinator {
         target: RewindTarget,
     ) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Rewind { message_id, target },
         })
         .await?;
@@ -1029,7 +1024,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn rename_session(&self, session_id: &SessionId, title: String) -> Result<()> {
         self.call(RequestMethod::RenameSession {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             title,
         })
         .await?;
@@ -1038,7 +1033,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn pin_session(&self, session_id: &SessionId, emoji: Option<String>) -> Result<()> {
         self.call(RequestMethod::PinSession {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             icon_emoji: emoji,
         })
         .await?;
@@ -1047,7 +1042,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn unpin_session(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::UnpinSession {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
         })
         .await?;
         Ok(())
@@ -1059,7 +1054,7 @@ impl CoordinatorApi for RemoteCoordinator {
         emoji: Option<String>,
     ) -> Result<()> {
         self.call(RequestMethod::SetPinnedSessionEmoji {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             icon_emoji: emoji,
         })
         .await?;
@@ -1076,7 +1071,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn start_goal(&self, session_id: &SessionId, state: GoalState) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::StartGoal(state),
         })
         .await?;
@@ -1085,7 +1080,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn pause_goal(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::PauseGoal,
         })
         .await?;
@@ -1094,7 +1089,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn resume_goal(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::ResumeGoal,
         })
         .await?;
@@ -1104,7 +1099,7 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn get_goal(&self, session_id: &SessionId) -> Result<Option<crate::goal::GoalState>> {
         let result = self
             .call(RequestMethod::Command {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
                 cmd: ControlCommand::GetGoal,
             })
             .await?;
@@ -1114,7 +1109,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::EditGoal { description },
         })
         .await?;
@@ -1123,7 +1118,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::StopGoal,
         })
         .await?;
@@ -1132,7 +1127,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn delete_session(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::DeleteSession {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
         })
         .await?;
         Ok(())
@@ -1141,30 +1136,27 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
         let result = self
             .call(RequestMethod::GetSessionMessages {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
             })
             .await?;
         let msgs: Vec<Message> = serde_json::from_value(result)?;
         Ok(msgs)
     }
 
-    async fn get_session_status(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<crate::types::SessionStatus> {
+    async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse> {
         let result = self
-            .call(RequestMethod::GetSessionStatus {
-                session_id: session_id.0.clone(),
+            .call(RequestMethod::GetSession {
+                session_id: session_id.0.to_string(),
             })
             .await?;
-        let status: crate::types::SessionStatus = serde_json::from_value(result)?;
-        Ok(status)
+        let session: crate::types::SessionResponse = serde_json::from_value(result)?;
+        Ok(session)
     }
 
     async fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> Result<crate::event_bus::EventBusSubscriber> {
+    ) -> Result<crate::comms::EventBusSubscriber> {
         self.subscribe_events_internal(session_id).await
     }
 
@@ -1176,7 +1168,7 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<PaginatedSessions> {
         let result = self
             .call(RequestMethod::ListSessions {
-                project_id: project_id.map(|p| p.0.clone()),
+                project_id: project_id.map(|p| p.0.to_string()),
                 before,
                 limit,
             })
@@ -1191,7 +1183,7 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<Vec<crate::checkpoint::Checkpoint>> {
         let result = self
             .call(RequestMethod::GetCheckpoints {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
             })
             .await?;
         let checkpoints = serde_json::from_value(result)?;
@@ -1205,7 +1197,7 @@ impl CoordinatorApi for RemoteCoordinator {
         response: crate::tools::AskUserResponse,
     ) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::AskUserResponse {
                 req_id: req_id.to_string(),
                 answers: response.answers.into_iter().collect(),
@@ -1218,24 +1210,16 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn get_todos(&self, session_id: &SessionId) -> Result<Option<String>> {
         let result = self
             .call(RequestMethod::GetTodos {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
             })
             .await?;
         let todos = serde_json::from_value(result)?;
         Ok(todos)
     }
 
-    async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
-        self.call(RequestMethod::ShutdownSession {
-            session_id: session_id.0.clone(),
-        })
-        .await?;
-        Ok(())
-    }
-
     async fn send_steer(&self, session_id: &SessionId, content: Vec<ContentBlock>) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Steer { content },
         })
         .await?;
@@ -1244,7 +1228,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
         self.call(RequestMethod::Command {
-            session_id: session_id.0.clone(),
+            session_id: session_id.0.to_string(),
             cmd: ControlCommand::Continue,
         })
         .await?;
@@ -1257,7 +1241,7 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<Vec<Arc<crate::skill::Skill>>> {
         let result = self
             .call(RequestMethod::ListSessionSkills {
-                session_id: session_id.0.clone(),
+                session_id: session_id.0.to_string(),
             })
             .await?;
         let skills = serde_json::from_value(result)?;
@@ -1294,7 +1278,7 @@ impl CoordinatorApi for RemoteCoordinator {
         let job_id = result
             .get("job_id")
             .and_then(|v| v.as_str())
-            .map(|s| crate::cron::CronJobId(s.to_string()))
+            .map(|s| crate::cron::CronJobId::from(s.to_string()))
             .ok_or_else(|| SessionError::Other("Missing job_id in response".to_string()))?;
         Ok(job_id)
     }
@@ -1320,7 +1304,7 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<Option<crate::cron::CronJob>> {
         let result = self
             .call(RequestMethod::GetCronJob {
-                job_id: id.0.clone(),
+                job_id: id.0.to_string(),
             })
             .await?;
         if result.is_null() {
@@ -1337,7 +1321,7 @@ impl CoordinatorApi for RemoteCoordinator {
     ) -> Result<bool> {
         let result = self
             .call(RequestMethod::UpdateCronJob {
-                job_id: id.0.clone(),
+                job_id: id.0.to_string(),
                 name: input.name,
                 schedule: input.schedule,
                 action: input.action,
@@ -1353,7 +1337,7 @@ impl CoordinatorApi for RemoteCoordinator {
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool> {
         let result = self
             .call(RequestMethod::DeleteCronJob {
-                job_id: id.0.clone(),
+                job_id: id.0.to_string(),
             })
             .await?;
         let deleted: bool = serde_json::from_value(result)?;
@@ -1362,7 +1346,7 @@ impl CoordinatorApi for RemoteCoordinator {
 
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
         self.call(RequestMethod::TriggerCronJob {
-            job_id: id.0.clone(),
+            job_id: id.0.to_string(),
         })
         .await?;
         Ok(())

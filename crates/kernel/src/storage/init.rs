@@ -286,7 +286,7 @@ mod tests {
         let session_id = SessionId::new();
         storage
             .session_store()
-            .create(&session_id, None, None, None)
+            .create(&session_id, None, None, None, None)
             .await
             .unwrap();
         storage

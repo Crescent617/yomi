@@ -207,7 +207,7 @@ impl ChannelHub {
     /// and forwards model/system events for all channel-backed sessions.
     async fn start_event_forwarder(
         &self,
-        event_bus: Arc<crate::event_bus::EventBus>,
+        event_bus: Arc<crate::comms::EventBus>,
         token: CancellationToken,
     ) {
         let store = Arc::clone(&self.store);
@@ -330,13 +330,13 @@ async fn handle_incoming_message(
     match cmd {
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                coordinator.clear_session(&sid).await?;
+                coordinator.clear_session(&sid);
             }
             Ok(Some("Context cleared.".to_string()))
         }
         ChannelCommand::Stop => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                coordinator.cancel(&sid).await?;
+                coordinator.cancel(&sid);
                 return Ok(Some("Stopped.".to_string()));
             }
             Ok(Some("No active session to stop.".to_string()))
@@ -351,9 +351,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            coordinator
-                .send_steer(&sid, vec![ContentBlock::Text { text }])
-                .await?;
+            coordinator.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
         ChannelCommand::None => {

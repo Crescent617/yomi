@@ -236,7 +236,7 @@ impl Model {
                             self.pending_ask_user
                                 .as_ref()
                                 .and_then(|(_, questions, _)| {
-                                    questions.first().and_then(|q| {
+                                    questions.front().and_then(|q| {
                                         q.options.get(idx).map(|opt| opt.label.clone())
                                     })
                                 });
@@ -309,11 +309,11 @@ impl Model {
                     // Fork current session and switch to the new one
                     let coord = Arc::clone(&self.coordinator);
                     let tx = self.cmd_tx.clone();
-                    let sid = kernel::types::SessionId(self.session_id.clone());
+                    let sid = kernel::types::SessionId::from(self.session_id.clone());
                     let level = self.permission_level;
                     tokio::spawn(async move {
                         let msg = match coord.fork_session(&sid, level).await {
-                            Ok(new_id) => Msg::SessionSelected(new_id.0),
+                            Ok(new_id) => Msg::SessionSelected(new_id.0.to_string()),
                             Err(e) => Msg::Notification(Notification::error(
                                 format!("Fork failed: {e}"),
                                 5000,
@@ -592,7 +592,7 @@ impl Model {
                     let session_id = self.session_id.clone();
                     tokio::spawn(async move {
                         let checkpoints = coord
-                            .get_checkpoints(&kernel::types::SessionId(session_id))
+                            .get_checkpoints(&kernel::types::SessionId::from(session_id))
                             .await
                             .unwrap_or_default();
                         if let Err(e) = tx.send(Msg::CheckpointList(checkpoints)) {
@@ -648,7 +648,7 @@ impl Model {
                     let session_id = self.session_id.clone();
                     tokio::spawn(async move {
                         let checkpoints = coord
-                            .get_checkpoints(&kernel::types::SessionId(session_id))
+                            .get_checkpoints(&kernel::types::SessionId::from(session_id))
                             .await
                             .unwrap_or_default();
 
@@ -665,9 +665,7 @@ impl Model {
                         let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
                         if let Some(cp) = latest {
                             let _ = ctrl_tx.try_send(ControlCommand::Rewind {
-                                message_id: kernel::types::MessageId::from_string(
-                                    cp.message_id.clone(),
-                                ),
+                                message_id: kernel::types::MessageId::from(cp.message_id.clone()),
                                 target: kernel::checkpoint::RewindTarget::Both,
                             });
                             if let Err(e) = tx.send(Msg::Notification(Notification::info(
@@ -700,7 +698,7 @@ impl Model {
 
                     // Send rewind command to coordinator
                     let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
-                        message_id: kernel::types::MessageId::from_string(message_id),
+                        message_id: kernel::types::MessageId::from(message_id),
                         target: kernel_target,
                     });
 

@@ -10,7 +10,7 @@ pub async fn list_session_skills(
 ) -> Result<Vec<serde_json::Value>, GuiError> {
     let coord = state.coordinator.clone();
     let skills = coord
-        .list_session_skills(&kernel::types::SessionId(session_id))
+        .list_session_skills(&kernel::types::SessionId::from(session_id))
         .await
         .map_err(GuiError::kernel)?;
     let values = skills

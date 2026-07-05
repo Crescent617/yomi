@@ -86,7 +86,12 @@ pub async fn list(global: &GlobalArgs, all: bool) -> Result<()> {
             .clone()
             .unwrap_or_else(|| "(unknown)".to_string());
 
-        table.add_row(vec![&session.id.0, &age_str, &working_dir, &preview]);
+        table.add_row(vec![
+            &session.id.0.to_string(),
+            &age_str,
+            &working_dir,
+            &preview,
+        ]);
     }
 
     println!("{table}");

@@ -244,6 +244,7 @@ async fn create_local_coordinator(config: &Config) -> Result<Arc<kernel::Coordin
     let coordinator = kernel::build_coordinator(config, false)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build coordinator: {e}"))?;
+    coordinator.start(tokio_util::sync::CancellationToken::new());
     Ok(coordinator)
 }
 

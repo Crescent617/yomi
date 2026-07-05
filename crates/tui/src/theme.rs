@@ -126,7 +126,7 @@ static THEME_CONFIG: LazyLock<RwLock<ThemeConfig>> = LazyLock::new(|| {
 
 /// Get the current theme configuration
 pub fn current_theme() -> ThemeConfig {
-    THEME_CONFIG.read().map(|t| *t).unwrap()
+    *THEME_CONFIG.read().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Set the global theme configuration

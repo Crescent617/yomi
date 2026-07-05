@@ -1,28 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// 定时任务唯一 ID
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CronJobId(pub String);
-
-impl Default for CronJobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CronJobId {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4().to_string())
-    }
-}
-
-impl std::fmt::Display for CronJobId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+pub use crate::types::CronJobId;
 
 /// 任务触发时要执行的动作
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

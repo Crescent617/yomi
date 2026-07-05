@@ -7,15 +7,13 @@ use crate::compactor::{CompactionError, Compactor};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::providers::{ModelConfig, Provider};
 use crate::storage::UsageStore;
-use crate::types::{AgentId, Message, Role, SessionId};
+use crate::types::{Message, Role, SessionId};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Compaction manager for an agent
 pub struct CompactionManager {
-    /// Agent ID
-    pub agent_id: AgentId,
     /// Session ID
     pub session_id: String,
     /// Event sender
@@ -49,7 +47,7 @@ impl CompactionManager {
         let compactor = self.compactor.as_ref().ok_or("No compactor configured")?;
         let old_count = message_buffer.len();
 
-        self.emit_compaction_event(true).await;
+        self.emit_compaction_event(true);
 
         let result = compactor
             .auto_compact(
@@ -73,7 +71,7 @@ impl CompactionManager {
         let compactor = self.compactor.as_ref().ok_or("No compactor configured")?;
         let old_count = message_buffer.len();
 
-        self.emit_compaction_event(true).await;
+        self.emit_compaction_event(true);
 
         let result = compactor
             .full_compact(
@@ -91,7 +89,7 @@ impl CompactionManager {
 
     /// Check and run compaction if needed
     /// Returns true if compaction occurred
-    #[tracing::instrument(skip(self, message_buffer, cancel_token), fields(agent_id = %self.agent_id))]
+    #[tracing::instrument(skip(self, message_buffer, cancel_token))]
     pub async fn maybe_compact(
         &self,
         message_buffer: &mut MessageBuffer,
@@ -115,7 +113,7 @@ impl CompactionManager {
     }
 
     /// Handle compaction result, update state, and return user message
-    #[tracing::instrument(skip(self, result, message_buffer), fields(agent_id = %self.agent_id))]
+    #[tracing::instrument(skip(self, result, message_buffer))]
     async fn handle_compaction_result(
         &self,
         result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
@@ -159,18 +157,17 @@ impl CompactionManager {
             }
             Err(CompactionError::Cancelled) => {
                 tracing::info!("compaction cancelled");
-                self.emit_operation_cancelled("compaction").await;
+                self.emit_operation_cancelled("compaction");
                 Err("Compaction was cancelled".to_string())
             }
             Err(CompactionError::Api(e)) => {
                 tracing::warn!("compaction failed: {}", e);
-                self.emit_error(crate::event::ErrorPhase::Compaction, &e, false)
-                    .await;
+                self.emit_error(crate::event::ErrorPhase::Compaction, &e, false);
                 Err(format!("Compaction failed: {e}"))
             }
         };
 
-        self.emit_compaction_event(false).await;
+        self.emit_compaction_event(false);
         compact_result
     }
 
@@ -206,19 +203,18 @@ impl CompactionManager {
     }
 
     /// Emit compaction start/end event
-    async fn emit_compaction_event(&self, active: bool) {
-        if let Err(e) = self.event_tx.try_send(Event::Model(ModelEvent::Compacting {
-            agent_id: self.agent_id.clone(),
-            active,
-        })) {
+    fn emit_compaction_event(&self, active: bool) {
+        if let Err(e) = self
+            .event_tx
+            .try_send(Event::Model(ModelEvent::Compacting { active }))
+        {
             tracing::warn!("Failed to send compacting event (active={}): {}", active, e);
         }
     }
 
     /// Emit operation cancelled event
-    async fn emit_operation_cancelled(&self, operation: &str) {
+    fn emit_operation_cancelled(&self, operation: &str) {
         if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Lifecycle {
-            agent_id: self.agent_id.clone(),
             state: AgentStatus::Stopped {
                 reason: StopReason::Cancelled {
                     operation: Some(operation.to_string()),
@@ -230,9 +226,8 @@ impl CompactionManager {
     }
 
     /// Emit error event
-    async fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
+    fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
         if let Err(e) = self.event_tx.try_send(Event::Agent(AgentEvent::Error {
-            agent_id: self.agent_id.clone(),
             phase,
             error: error.to_string(),
             is_recoverable,
@@ -248,8 +243,7 @@ impl CompactionManager {
         }
         if let Some(store) = &self.usage_store {
             let record = crate::storage::UsageRecord::new(
-                SessionId(self.session_id.clone()),
-                self.agent_id.clone(),
+                SessionId::from(self.session_id.clone()),
                 usage,
                 self.model_config.model_id.clone(),
                 self.model_config.provider.to_string(),

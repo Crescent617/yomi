@@ -32,7 +32,7 @@ pub async fn get_project(
 ) -> Result<Option<Project>, GuiError> {
     let coord = state.coordinator.clone();
     let project = coord
-        .get_project(&ProjectId(project_id))
+        .get_project(&ProjectId::from(project_id))
         .await
         .map_err(GuiError::kernel)?;
     Ok(project)
@@ -46,7 +46,7 @@ pub async fn rename_project(
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     coord
-        .rename_project(&ProjectId(project_id), name)
+        .rename_project(&ProjectId::from(project_id), name)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())
@@ -59,7 +59,7 @@ pub async fn delete_project(
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
     coord
-        .delete_project(&ProjectId(project_id))
+        .delete_project(&ProjectId::from(project_id))
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

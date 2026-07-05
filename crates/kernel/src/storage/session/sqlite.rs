@@ -27,12 +27,14 @@ impl SessionStore for SqliteSessionStore {
         project_id: Option<&crate::types::ProjectId>,
         working_dir: Option<&str>,
         auto_approve_level: Option<&str>,
+        parent_id: Option<&SessionId>,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level) VALUES (?, ?, ?, ?)")
-            .bind(&id.0)
-            .bind(project_id.map(|p| &p.0))
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id) VALUES (?, ?, ?, ?, ?)")
+            .bind(&*id.0)
+            .bind(project_id.map(|p| &*p.0))
             .bind(working_dir)
             .bind(auto_approve_level)
+            .bind(parent_id.map(|p| &*p.0))
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
@@ -45,9 +47,9 @@ impl SessionStore for SqliteSessionStore {
             "INSERT INTO sessions (id, parent_id, project_id, working_dir, auto_approve_level)
              SELECT ?, ?, project_id, working_dir, auto_approve_level FROM sessions WHERE id = ?",
         )
-        .bind(&new_id.0)
-        .bind(&parent_id.0)
-        .bind(&parent_id.0)
+        .bind(&*new_id.0)
+        .bind(&*parent_id.0)
+        .bind(&*parent_id.0)
         .execute(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to fork session: {e}")))?;
@@ -60,7 +62,7 @@ impl SessionStore for SqliteSessionStore {
             "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level
              FROM sessions WHERE id = ?",
         )
-        .bind(&id.0)
+        .bind(&*id.0)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to get session: {e}")))?;
@@ -70,7 +72,7 @@ impl SessionStore for SqliteSessionStore {
 
     async fn delete(&self, id: &SessionId) -> Result<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(&id.0)
+            .bind(&*id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to delete session: {e}")))?;
@@ -90,7 +92,7 @@ impl SessionStore for SqliteSessionStore {
 
         if let Some(pid) = project_id {
             builder.push(" AND project_id = ");
-            builder.push_bind(&pid.0);
+            builder.push_bind(&*pid.0);
         }
         if let Some(before) = before {
             builder.push(" AND updated_at < ");
@@ -122,7 +124,7 @@ impl SessionStore for SqliteSessionStore {
             "UPDATE sessions SET message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         )
         .bind(count)
-        .bind(&id.0)
+        .bind(&*id.0)
         .execute(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to update message count: {e}")))?;
@@ -134,7 +136,7 @@ impl SessionStore for SqliteSessionStore {
             "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         )
         .bind(title)
-        .bind(&id.0)
+        .bind(&*id.0)
         .execute(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to update session title: {e}")))?;
@@ -153,7 +155,7 @@ impl SessionStore for SqliteSessionStore {
             "UPDATE sessions SET auto_approve_level = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         )
         .bind(level)
-        .bind(&id.0)
+        .bind(&*id.0)
         .execute(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to update session level: {e}")))?;
@@ -179,7 +181,7 @@ impl SessionStore for SqliteSessionStore {
             return Ok(Vec::new());
         }
 
-        let ids: Vec<String> = sessions.into_iter().map(|s| s.id.0).collect();
+        let ids: Vec<String> = sessions.into_iter().map(|s| s.id.0.to_string()).collect();
 
         // Delete in chunks to avoid too many parameters
         for chunk in ids.chunks(CHUNK_SIZE) {
@@ -197,7 +199,7 @@ impl SessionStore for SqliteSessionStore {
                 .map_err(|e| storage_err(format!("failed to delete old sessions: {e}")))?;
         }
 
-        Ok(ids.into_iter().map(SessionId).collect())
+        Ok(ids.into_iter().map(SessionId::from).collect())
     }
 }
 
@@ -218,14 +220,14 @@ struct SessionRow {
 impl From<SessionRow> for SessionInfo {
     fn from(row: SessionRow) -> Self {
         Self {
-            id: SessionId(row.id),
+            id: SessionId::from(row.id),
             created_at: row.created_at,
             updated_at: row.updated_at,
-            parent_id: row.parent_id.map(SessionId),
+            parent_id: row.parent_id.map(SessionId::from),
             title: row.title,
             message_count: row.message_count,
             working_dir: row.working_dir,
-            project_id: row.project_id.map(crate::types::ProjectId),
+            project_id: row.project_id.map(crate::types::ProjectId::from),
             auto_approve_level: row.auto_approve_level,
         }
     }
@@ -251,7 +253,7 @@ mod tests {
         let store = create_test_store().await;
 
         let id = SessionId::new();
-        store.create(&id, None, None, None).await.unwrap();
+        store.create(&id, None, None, None, None).await.unwrap();
         let info = store.get(&id).await.unwrap().unwrap();
 
         assert_eq!(info.id.0, id.0);
@@ -264,7 +266,7 @@ mod tests {
 
         let id = SessionId::new();
         store
-            .create(&id, None, Some("/test/dir"), None)
+            .create(&id, None, Some("/test/dir"), None, None)
             .await
             .unwrap();
         let info = store.get(&id).await.unwrap().unwrap();
@@ -278,7 +280,7 @@ mod tests {
 
         let parent = SessionId::new();
         store
-            .create(&parent, None, Some("/parent/dir"), None)
+            .create(&parent, None, Some("/parent/dir"), None, None)
             .await
             .unwrap();
         let child = store.fork(&parent).await.unwrap();
@@ -289,13 +291,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_with_parent_id() {
+        let store = create_test_store().await;
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        store.create(&parent, None, None, None, None).await.unwrap();
+        store
+            .create(&child, None, None, None, Some(&parent))
+            .await
+            .unwrap();
+
+        let info = store.get(&child).await.unwrap().unwrap();
+        assert_eq!(info.parent_id.unwrap().0, parent.0);
+    }
+
+    #[tokio::test]
     async fn test_list_ordering() {
         let store = create_test_store().await;
 
         let id1 = SessionId::new();
-        store.create(&id1, None, None, None).await.unwrap();
+        store.create(&id1, None, None, None, None).await.unwrap();
         let id2 = SessionId::new();
-        store.create(&id2, None, None, None).await.unwrap();
+        store.create(&id2, None, None, None, None).await.unwrap();
 
         // Update id1 to make it more recent
         store.update_message_count(&id1, 1).await.unwrap();
@@ -312,17 +329,17 @@ mod tests {
         let pid = crate::types::ProjectId::new();
         let id1 = SessionId::new();
         store
-            .create(&id1, Some(&pid), Some("/foo/bar"), None)
+            .create(&id1, Some(&pid), Some("/foo/bar"), None, None)
             .await
             .unwrap();
         let id2 = SessionId::new();
         store
-            .create(&id2, None, Some("/baz/qux"), None)
+            .create(&id2, None, Some("/baz/qux"), None, None)
             .await
             .unwrap();
         let id3 = SessionId::new();
         store
-            .create(&id3, Some(&pid), Some("/foo/bar"), None)
+            .create(&id3, Some(&pid), Some("/foo/bar"), None, None)
             .await
             .unwrap();
 
@@ -341,7 +358,7 @@ mod tests {
         let mut ids = Vec::new();
         for i in 0..5 {
             let id = SessionId::new();
-            store.create(&id, None, None, None).await.unwrap();
+            store.create(&id, None, None, None, None).await.unwrap();
             ids.push(id.clone());
             store
                 .update_message_count(&ids[i], i as i64 + 1)
@@ -351,7 +368,7 @@ mod tests {
             let offset = format!("-{i} seconds");
             sqlx::query("UPDATE sessions SET updated_at = datetime('now', ?) WHERE id = ?")
                 .bind(&offset)
-                .bind(&ids[i].0)
+                .bind(&*ids[i].0)
                 .execute(&store.pool)
                 .await
                 .unwrap();
@@ -384,11 +401,11 @@ mod tests {
         // Create a session and manually set its updated_at to 10 days ago
         let old_id = SessionId::new();
         store
-            .create(&old_id, None, Some("/test"), None)
+            .create(&old_id, None, Some("/test"), None, None)
             .await
             .unwrap();
         sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
-            .bind(&old_id.0)
+            .bind(&*old_id.0)
             .execute(&store.pool)
             .await
             .unwrap();
@@ -396,7 +413,7 @@ mod tests {
         // Create a recent session
         let recent_id = SessionId::new();
         store
-            .create(&recent_id, None, Some("/test"), None)
+            .create(&recent_id, None, Some("/test"), None, None)
             .await
             .unwrap();
 
@@ -420,9 +437,9 @@ mod tests {
 
         // Create only recent sessions
         let id1 = SessionId::new();
-        store.create(&id1, None, None, None).await.unwrap();
+        store.create(&id1, None, None, None, None).await.unwrap();
         let id2 = SessionId::new();
-        store.create(&id2, None, None, None).await.unwrap();
+        store.create(&id2, None, None, None, None).await.unwrap();
 
         // Cleanup sessions older than 30 days
         let deleted = store.cleanup(30).await.unwrap();

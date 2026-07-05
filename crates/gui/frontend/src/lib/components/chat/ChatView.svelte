@@ -22,6 +22,7 @@
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import InfoBar from "./InfoBar.svelte";
+  import BreadcrumbBar from "./BreadcrumbBar.svelte";
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
@@ -359,6 +360,7 @@
             alias: s.title ?? "Untitled",
             messages: [],
             phase: "idle",
+            is_running: false,
             unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
@@ -374,11 +376,11 @@
       }
       setActiveSession(id);
       await api.subscribe(id);
-      const status = await api.getSessionStatus(id);
+      const sessionInfo = await api.getSession(id);
       const msgs = await api.getMessages(id);
       const session = sessionState.sessions.find((s) => s.id === id);
       if (session) {
-        syncSessionStatus(id, status);
+        syncSessionStatus(id, sessionInfo);
         loadSessionMessages(id, msgs);
         refreshCheckpoints(id);
         api
@@ -1184,6 +1186,9 @@
             </div>
           {/if}
           <div class="flex-1 relative min-h-0" onclick={handleChatClick}>
+            {#if activeSession}
+              <BreadcrumbBar session={activeSession} />
+            {/if}
             <MessageList />
           </div>
           <div class="shrink-0 w-full">

@@ -106,7 +106,7 @@ pub struct Model {
     /// Pending ask-user request: (`req_id`, remaining questions, collected answers)
     pub(crate) pending_ask_user: Option<(
         String,
-        Vec<kernel::tools::AskQuestion>,
+        std::collections::VecDeque<kernel::tools::AskQuestion>,
         std::collections::HashMap<String, String>,
     )>,
     /// Input history for the current working directory (loaded + new)

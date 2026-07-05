@@ -191,25 +191,6 @@ impl Model {
                         let _ = self.terminal.enable_mouse_capture();
                     }
                 }
-                Event::Tool(kernel::event::ToolEvent::Progress {
-                    tool_id,
-                    message,
-                    tokens,
-                    ..
-                }) => {
-                    // Update tool progress in chat view
-                    // Format: tool_id\x00message\x00tokens (tokens is optional)
-                    let tokens_str = tokens.map(|t| t.to_string()).unwrap_or_default();
-                    let combined = format!("{tool_id}\x00{message}\x00{tokens_str}");
-                    if let Err(e) = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::UPDATE_TOOL_PROGRESS),
-                        AttrValue::String(combined),
-                    ) {
-                        tracing::warn!("Failed to update tool progress: {e}");
-                    }
-                    self.state.should_redraw = true;
-                }
                 // Agent lifecycle state changes
                 Event::Agent(kernel::event::AgentEvent::Lifecycle { state, .. }) => {
                     match state {
@@ -319,15 +300,6 @@ impl Model {
                         "Connection lost, reconnecting…",
                         0,
                     ));
-                    self.state.should_redraw = true;
-                }
-                Event::System(kernel::event::SystemEvent::Shutdown {
-                    error: Some(err), ..
-                }) => {
-                    self.handle_streaming_error(
-                        StreamingStatus::Failed,
-                        format!("Session closed with error: {err}"),
-                    );
                     self.state.should_redraw = true;
                 }
                 Event::System(kernel::event::SystemEvent::Connected { .. }) => {
@@ -450,8 +422,11 @@ impl Model {
 
                     // Store the request and show the first question
                     let first = questions.first().cloned();
-                    self.pending_ask_user =
-                        Some((req_id, questions, std::collections::HashMap::new()));
+                    self.pending_ask_user = Some((
+                        req_id,
+                        std::collections::VecDeque::from(questions),
+                        std::collections::HashMap::new(),
+                    ));
 
                     if let Some(q) = first {
                         self.show_ask_user_question(&q);

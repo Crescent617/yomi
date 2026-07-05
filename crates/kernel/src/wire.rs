@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 5;
+pub const WIRE_PROTOCOL_VERSION: u32 = 6;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub enum RequestMethod {
     GetSessionMessages {
         session_id: String,
     },
-    GetSessionStatus {
+    GetSession {
         session_id: String,
     },
     GetCheckpoints {

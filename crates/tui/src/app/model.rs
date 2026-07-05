@@ -10,8 +10,8 @@ use tuirealm::{
 
 use crate::{attr, components::info_bar::Notification, id::Id};
 use kernel::client::CoordinatorApi;
+use kernel::comms::EventBusSubscriber;
 use kernel::event::ControlCommand;
-use kernel::event_bus::EventBusSubscriber;
 use kernel::types::ContentBlock;
 
 use super::types::{AppMode, AppState, Model, StreamingStatus};
@@ -129,15 +129,13 @@ impl Model {
             return;
         };
 
-        // Store answer for the current (first) question
-        if let Some(current) = questions.first() {
-            if let Some(ans) = answer {
-                answers.insert(current.question.clone(), ans);
-            }
+        let Some(current) = questions.pop_front() else {
+            self.pending_ask_user = Some((req_id, questions, answers));
+            return;
+        };
+        if let Some(ans) = answer {
+            answers.insert(current.question.clone(), ans);
         }
-
-        // Remove the answered question
-        questions.remove(0);
 
         if questions.is_empty() {
             // All questions answered – send response to kernel
@@ -152,7 +150,7 @@ impl Model {
             self.set_focus(&Id::InputBox);
         } else {
             // More questions remain – show the next one
-            let next = questions.first().cloned().unwrap();
+            let next = questions.front().cloned().unwrap_or(current);
             self.pending_ask_user = Some((req_id, questions, answers));
             self.show_ask_user_question(&next);
         }

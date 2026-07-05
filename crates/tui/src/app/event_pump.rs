@@ -3,8 +3,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use kernel::client::CoordinatorApi;
+use kernel::comms::EventBusSubscriber;
 use kernel::event::{Event, SystemEvent};
-use kernel::event_bus::EventBusSubscriber;
 use kernel::permissions::Level;
 use kernel::types::SessionId;
 
@@ -38,7 +38,7 @@ impl EventPump {
         let (tx, rx) = mpsc::channel(256);
 
         tokio::spawn(async move {
-            let sid = SessionId(session_id);
+            let sid = SessionId::from(session_id);
             let mut current_rx = Some(initial_rx);
 
             // Notify TUI that the initial connection is ready (only in daemon mode).

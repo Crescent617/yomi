@@ -1,21 +1,20 @@
 use crate::event::ToolEvent;
 use crate::hooks::{HookContext, HookRegistry, HookResult};
 use crate::tools::executor::ToolExecutionResult;
-use crate::types::{AgentId, Message, MessageId, ToolCall};
+use crate::types::{Message, MessageId, ToolCall};
 use std::path::PathBuf;
 
 /// Run `PreToolUse` hooks over approved calls.
 ///
-/// Returns the still-approved calls. Any call that is blocked by a hook is
-/// converted into a denied result (added to `denied_results`) with the hook's
-/// `context` merged into the error text so that the user/LLM can see it.
-/// When a hook allows the call, its `context` is ignored.
+/// `tool_message_ids` maps each `tool_call_id` to a pre-generated `MessageId`.
+/// `denied_results` receives blocked tool results, reusing the same `MessageId`
+/// so that `Start` and `End` events share a consistent identifier.
 pub async fn run_pre_tool_hooks(
-    agent_id: &AgentId,
     session_id: &str,
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
     toolcalls: Vec<ToolCall>,
+    tool_message_ids: &std::collections::BTreeMap<String, MessageId>,
     denied_results: &mut Vec<ToolExecutionResult>,
 ) -> Vec<ToolCall> {
     if hook_registry.is_empty() {
@@ -44,7 +43,10 @@ pub async fn run_pre_tool_hooks(
                         parts.push(reason);
                         parts.join("\n\n")
                     };
-                    let message_id = MessageId::new();
+                    let message_id = tool_message_ids
+                        .get(&call.id)
+                        .cloned()
+                        .unwrap_or_else(MessageId::new);
                     let message = Message::tool_result(
                         message_id.clone(),
                         call.id.clone(),
@@ -54,7 +56,6 @@ pub async fn run_pre_tool_hooks(
                         tool_call_id: call.id.clone(),
                         message_id: message_id.clone(),
                         event: ToolEvent::End {
-                            agent_id: agent_id.clone(),
                             message_id,
                             tool_id: call.id.clone(),
                             tool_name: call.name.clone(),
@@ -91,7 +92,6 @@ pub async fn run_pre_tool_hooks(
 /// `additionalContext` behaviour).
 /// If any hook sets `continue_session: false`, the overall result is `false`.
 pub async fn run_post_tool_hooks(
-    agent_id: &AgentId,
     session_id: &str,
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
@@ -164,7 +164,6 @@ pub async fn run_post_tool_hooks(
                             });
                         }
                         ToolEvent::End {
-                            agent_id: agent_id.clone(),
                             message_id,
                             tool_id,
                             tool_name: tool_name.clone(),
@@ -173,7 +172,7 @@ pub async fn run_post_tool_hooks(
                             is_error,
                         }
                     }
-                    other => other,
+                    other @ (ToolEvent::Start { .. } | ToolEvent::Metadata { .. }) => other,
                 };
             }
         }

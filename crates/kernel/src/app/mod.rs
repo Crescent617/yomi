@@ -1,7 +1,7 @@
-//! Application layer - session and coordinator management
+//! Application layer - coordinator and conductor management
 
+pub mod conductor;
 pub mod coordinator;
-pub mod session;
 
+pub use conductor::Conductor;
 pub use coordinator::Coordinator;
-pub use session::{Session, SessionConfig};

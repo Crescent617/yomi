@@ -8,7 +8,7 @@
   import ActionGroup from "./ActionGroup.svelte";
   import TextBlock from "./TextBlock.svelte";
   import GoalBar from "./GoalBar.svelte";
-  import type { ChatMessage } from "../../state.svelte";
+  import type { Message } from "../../state.svelte";
   import { formatMessageTime } from "../../utils";
 
   const activeSession = $derived(getActiveSession());
@@ -33,15 +33,24 @@
   // Track last message fingerprint for detecting changes during streaming
   let lastFp = "";
 
-  function getFingerprint(msgs: ChatMessage[]): string {
+  function getFingerprint(msgs: Message[]): string {
     if (!msgs.length) return "";
     const last = msgs[msgs.length - 1];
-    const parts: string[] = [last.id, last.content.length.toString()];
-    if (last.thinking) parts.push(last.thinking.content.length.toString());
-    if (last.tools) {
-      for (const t of last.tools) {
-        parts.push(t.id, t.status, (t.output ?? "").length.toString());
+    const parts: string[] = [last.id];
+    if (last.type !== "tool") {
+      parts.push(last.content.length.toString());
+    }
+    if (last.type === "assistant" && last.thinking) {
+      parts.push(last.thinking.content.length.toString());
+    }
+    if (last.type === "assistant" && last.tool_calls) {
+      for (const t of last.tool_calls) {
+        parts.push(t.id, t.arguments.length.toString());
       }
+    }
+    if (last.type === "tool") {
+      parts.push((last.output ?? "").length.toString());
+      parts.push(last.status);
     }
     return parts.join("|");
   }
@@ -77,24 +86,16 @@
   }
 
   // ── action group logic ──
-  function hasTextContent(msg: ChatMessage): boolean {
-    return !!msg.content?.trim();
-  }
-
-  function hasActions(msg: ChatMessage): boolean {
-    return !!msg.thinking || !!(msg.tools && msg.tools.length > 0);
-  }
-
   type DisplayItem =
-    | { type: "message"; message: ChatMessage; isStreaming: boolean }
-    | { type: "action_group"; messages: ChatMessage[]; isStreaming: boolean };
+    | { type: "message"; message: Message; isStreaming: boolean }
+    | { type: "action_group"; messages: Message[]; isStreaming: boolean };
 
   function buildDisplayItems(
-    messages: ChatMessage[],
+    messages: Message[],
     streaming: boolean,
   ): DisplayItem[] {
     const items: DisplayItem[] = [];
-    let group: ChatMessage[] = [];
+    let group: Message[] = [];
 
     const flush = () => {
       if (group.length > 0) {
@@ -114,14 +115,23 @@
       const msg = messages[i];
       const isLast = i === messages.length - 1;
 
-      if (msg.role !== "assistant") {
+      if (msg.type !== "assistant" && msg.type !== "tool") {
         flush();
         items.push({ type: "message", message: msg, isStreaming: false });
         continue;
       }
 
-      const hasText = hasTextContent(msg);
-      if (hasActions(msg)) {
+      if (msg.type === "tool") {
+        group.push(msg);
+        continue;
+      }
+
+      // BotMessage
+      const hasText = msg.content?.trim();
+      const hasThinking = msg.thinking;
+      const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+
+      if (hasThinking || hasToolCalls) {
         group.push(msg);
         if (hasText) flush();
       } else {
@@ -158,13 +168,13 @@
             {#if item.type === "message"}
               {@const msg = item.message}
               <div class="group relative">
-                {#if msg.role === "user"}
+                {#if msg.type === "user"}
                   <UserBubble message={msg} session_id={activeSession.id} />
-                {:else if msg.error || msg.role === "error"}
+                {:else if msg.type === "error"}
                   <ErrorBubble message={msg} />
-                {:else if msg.role === "system"}
+                {:else if msg.type === "system"}
                   <SystemBubble message={msg} />
-                {:else}
+                {:else if msg.type === "assistant"}
                   <AssistantBubble
                     message={msg}
                     isStreaming={item.isStreaming}
@@ -185,7 +195,7 @@
                   isStreaming={item.isStreaming}
                 />
                 {#each item.messages as m (m.id)}
-                  {#if m.content?.trim()}
+                  {#if m.type !== "tool" && m.content?.trim()}
                     <div class="w-full space-y-1 mt-3">
                       <TextBlock
                         content={m.content}

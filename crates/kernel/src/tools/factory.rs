@@ -3,16 +3,13 @@
 //! This module provides a factory for creating tool registries without depending
 //! on the Agent type, avoiding circular dependencies.
 
-use crate::agent::AgentInput;
-use crate::event_bus::EventBusHandle;
+use crate::comms::EventBusHandle;
 use crate::tools::helper::file_state::FileStateStore;
 use crate::tools::{
     AskUserTool, EditTool, GlobTool, GrepTool, ReadTool, ReminderTool, ShellTool, ShellToolCtx,
     SleepTool, SubagentTool, ToolRegistry, UpdateGoalTool, WebFetchTool, WebSearchTool, WriteTool,
 };
-use crate::types::AgentId;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 /// Feature flags for tool registry configuration.
 /// These are independent on/off switches, so a simple struct is intentional.
@@ -26,20 +23,11 @@ pub struct ToolFlags {
 }
 
 impl ToolFlags {
-    fn for_agent() -> Self {
+    pub fn for_agent(enable_subagent: bool) -> Self {
         Self {
-            subagent: true,
+            subagent: enable_subagent,
             sleep: true,
             goal: true,
-            reminder: false,
-        }
-    }
-
-    fn for_subagent() -> Self {
-        Self {
-            sleep: true,
-            subagent: false,
-            goal: false,
             reminder: false,
         }
     }
@@ -47,68 +35,17 @@ impl ToolFlags {
 
 /// Configuration for creating a tool registry.
 pub struct ToolRegistryConfig<'a> {
-    pub agent_id: &'a AgentId,
     pub shared: &'a Arc<crate::agent::AgentShared>,
     pub event_bus: &'a EventBusHandle,
     pub session_id: &'a str,
-    pub input_tx: Option<&'a mpsc::Sender<AgentInput>>,
+    pub input_bus: Option<&'a Arc<crate::comms::InputBus>>,
     pub file_state_store: Option<Arc<crate::tools::helper::file_state::FileStateStore>>,
     pub ask_user_state: Option<crate::tools::AskUserState>,
     pub tool_blocklist: Vec<String>,
     pub flags: ToolFlags,
 }
 
-impl<'a> ToolRegistryConfig<'a> {
-    /// Create config for a main agent.
-    pub fn for_main_agent(
-        agent_id: &'a AgentId,
-        shared: &'a Arc<crate::agent::AgentShared>,
-        input_tx: &'a mpsc::Sender<AgentInput>,
-        event_bus: &'a EventBusHandle,
-        session_id: &'a str,
-        tool_blocklist: Vec<String>,
-    ) -> Self {
-        Self {
-            agent_id,
-            shared,
-            event_bus,
-            session_id,
-            input_tx: Some(input_tx),
-            file_state_store: None,
-            ask_user_state: None,
-            tool_blocklist,
-            flags: ToolFlags::for_agent(),
-        }
-    }
-
-    /// Create config for a subagent.
-    pub fn for_subagent(
-        agent_id: &'a AgentId,
-        shared: &'a Arc<crate::agent::AgentShared>,
-        event_bus: &'a EventBusHandle,
-        session_id: &'a str,
-        tool_blocklist: Vec<String>,
-    ) -> Self {
-        Self {
-            agent_id,
-            shared,
-            event_bus,
-            session_id,
-            input_tx: None,
-            file_state_store: None,
-            ask_user_state: None,
-            tool_blocklist,
-            flags: ToolFlags::for_subagent(),
-        }
-    }
-
-    /// Set whether to enable subagents.
-    #[must_use]
-    pub fn with_enable_subagent(mut self, enable: bool) -> Self {
-        self.flags.subagent = enable;
-        self
-    }
-
+impl ToolRegistryConfig<'_> {
     /// Set the file state store.
     #[must_use]
     pub fn with_file_state_store(mut self, store: Option<Arc<FileStateStore>>) -> Self {
@@ -140,7 +77,7 @@ impl ToolRegistryFactory {
             .unwrap_or_else(|| Arc::new(FileStateStore::new()));
 
         // Register Bash tool
-        let bash_ctx = ShellToolCtx::new(config.input_tx.cloned());
+        let bash_ctx = ShellToolCtx::new(config.input_bus.cloned());
         let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         registry.register(bash_tool);
 
@@ -169,22 +106,16 @@ impl ToolRegistryFactory {
         // Register WebSearch tool
         registry.register(WebSearchTool::new());
 
-        // Register SubAgent tool if enabled
-        if config.flags.subagent {
-            if let Some(tx) = config.input_tx {
-                let subagent_tool = SubagentTool::new(
-                    config.agent_id.clone(),
-                    Arc::clone(config.shared),
-                    tx.clone(),
-                    config.shared.session_store.clone(),
-                    config.session_id.to_owned(),
-                    config.event_bus.clone(),
-                    config.tool_blocklist.clone(),
-                );
+        // Register SubAgent tool if enabled and this is not a sub-agent session
+        let session_id = crate::types::SessionId::from(config.session_id);
+        if config.flags.subagent && !session_id.starts_with(crate::types::SUB_PREFIX) {
+            if let Some(bus) = config.input_bus {
+                let subagent_tool =
+                    SubagentTool::new(Arc::clone(config.shared), bus.clone(), session_id);
                 registry.register(subagent_tool);
             } else {
                 tracing::warn!(
-                    "SubAgent tool enabled but input_tx not provided; skipping registration"
+                    "SubAgent tool enabled but input_bus not provided; skipping registration"
                 );
             }
         }
@@ -196,8 +127,8 @@ impl ToolRegistryFactory {
 
         // Register Reminder tool if enabled (main agent only)
         if config.flags.reminder {
-            if let Some(tx) = config.input_tx {
-                registry.register(ReminderTool::new(tx.clone()));
+            if let Some(bus) = config.input_bus {
+                registry.register(ReminderTool::new(bus.clone()));
             }
         }
 
@@ -220,11 +151,7 @@ impl ToolRegistryFactory {
 
         // Register ask_user tool if state is provided
         if let Some(ask_user_state) = config.ask_user_state {
-            registry.register(AskUserTool::new(
-                config.agent_id.clone(),
-                config.event_bus.clone(),
-                ask_user_state,
-            ));
+            registry.register(AskUserTool::new(config.event_bus.clone(), ask_user_state));
         }
 
         // Apply tool blocklist (regex patterns) — remove matching tools from the registry
