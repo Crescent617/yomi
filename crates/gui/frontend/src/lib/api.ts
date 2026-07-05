@@ -231,10 +231,19 @@ export async function getMessages(session_id: string): Promise<unknown[]> {
   return invokeCmd("get_messages", { session_id: session_id });
 }
 
-export async function getSessionStatus(
-  session_id: string,
-): Promise<{ phase: string }> {
-  return invokeCmd("get_session_status", { session_id: session_id });
+export async function getSession(session_id: string): Promise<{
+  id: string;
+  phase: string;
+  title: string | null;
+  parent_id: string | null;
+  project_id: string | null;
+  working_dir: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+  auto_approve_level: string | null;
+}> {
+  return invokeCmd("get_session", { session_id: session_id });
 }
 
 export async function getCheckpoints(session_id: string): Promise<unknown[]> {

@@ -11,11 +11,10 @@ pub async fn run(global: &GlobalArgs, session: Option<String>) -> Result<()> {
         .await
         .context("Failed to connect to daemon. Is it running?")?;
 
-    coordinator
-        .shutdown_session(&SessionId(session_id.clone()))
-        .await
-        .with_context(|| format!("Failed to shutdown session {session_id}"))?;
+    let _ = coordinator
+        .cancel(&SessionId::from(session_id.clone()))
+        .await;
 
-    println!("Session {session_id} shutdown.");
+    println!("Session {session_id} cancelled.");
     Ok(())
 }

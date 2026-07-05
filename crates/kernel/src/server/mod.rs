@@ -277,19 +277,21 @@ impl KernelServer {
             ),
             RequestMethod::GetProject { project_id } => rpc_body(
                 "get_project_failed",
-                self.coordinator.get_project(&ProjectId(project_id)).await,
+                self.coordinator
+                    .get_project(&ProjectId::from(project_id))
+                    .await,
             ),
             RequestMethod::RenameProject { project_id, name } => rpc_body(
                 "rename_project_failed",
                 self.coordinator
-                    .rename_project(&ProjectId(project_id), name)
+                    .rename_project(&ProjectId::from(project_id), name)
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
             RequestMethod::DeleteProject { project_id } => rpc_body(
                 "delete_project_failed",
                 self.coordinator
-                    .delete_project(&ProjectId(project_id))
+                    .delete_project(&ProjectId::from(project_id))
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
@@ -301,7 +303,7 @@ impl KernelServer {
                 auto_approve_level,
             } => {
                 let input = CreateSessionInput {
-                    project_id: project_id.map(ProjectId),
+                    project_id: project_id.map(ProjectId::from),
                     working_dir: working_dir.map(std::path::PathBuf::from),
                     auto_approve_level,
                     tool_blocklist: Vec::new(),
@@ -318,7 +320,7 @@ impl KernelServer {
                 session_id,
                 tool_blocklist,
             } => {
-                let sid = SessionId(session_id);
+                let sid = SessionId::from(session_id);
                 rpc_body(
                     "restore_session_failed",
                     self.coordinator
@@ -331,7 +333,7 @@ impl KernelServer {
                 parent_id,
                 auto_approve_level,
             } => {
-                let parent = SessionId(parent_id);
+                let parent = SessionId::from(parent_id);
                 rpc_body(
                     "fork_session_failed",
                     self.coordinator
@@ -343,25 +345,25 @@ impl KernelServer {
             RequestMethod::SendMessage { session_id, blocks } => rpc_body(
                 "send_message_failed",
                 self.coordinator
-                    .send_message(&SessionId(session_id), blocks)
+                    .send_message(&SessionId::from(session_id), blocks)
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
             RequestMethod::ListSessionSkills { session_id } => rpc_body(
                 "list_session_skills_failed",
                 self.coordinator
-                    .list_session_skills(&SessionId(session_id))
+                    .list_session_skills(&SessionId::from(session_id))
                     .await,
             ),
             RequestMethod::Command { session_id, cmd } => {
-                let sid = SessionId(session_id);
+                let sid = SessionId::from(session_id);
                 rpc_body(
                     "command_failed",
                     dispatch_command(&self.coordinator, &sid, cmd).await,
                 )
             }
             RequestMethod::Subscribe { session_id } => {
-                let sid = SessionId(session_id.clone());
+                let sid = SessionId::from(session_id.clone());
 
                 let rx = self.coordinator.subscribe_session_events(&sid);
 
@@ -419,19 +421,19 @@ impl KernelServer {
             RequestMethod::GetSessionMessages { session_id } => rpc_body(
                 "get_messages_failed",
                 self.coordinator
-                    .get_session_messages(&SessionId(session_id))
+                    .get_session_messages(&SessionId::from(session_id))
                     .await,
             ),
-            RequestMethod::GetSessionStatus { session_id } => rpc_body(
-                "get_session_status_failed",
+            RequestMethod::GetSession { session_id } => rpc_body(
+                "get_session_failed",
                 self.coordinator
-                    .get_session_status(&SessionId(session_id))
+                    .get_session(&SessionId::from(session_id))
                     .await,
             ),
             RequestMethod::DeleteSession { session_id } => rpc_body(
                 "delete_failed",
                 self.coordinator
-                    .delete_session(&SessionId(session_id))
+                    .delete_session(&SessionId::from(session_id))
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
@@ -440,7 +442,7 @@ impl KernelServer {
                 before,
                 limit,
             } => {
-                let pid = project_id.as_ref().map(|p| ProjectId(p.clone()));
+                let pid = project_id.as_ref().map(|p| ProjectId::from(p.clone()));
                 let result = self
                     .coordinator
                     .list_sessions(pid.as_ref(), before, limit)
@@ -450,17 +452,19 @@ impl KernelServer {
             RequestMethod::GetCheckpoints { session_id } => rpc_body(
                 "get_checkpoints_failed",
                 self.coordinator
-                    .get_checkpoints(&SessionId(session_id))
+                    .get_checkpoints(&SessionId::from(session_id))
                     .await,
             ),
             RequestMethod::GetTodos { session_id } => rpc_body(
                 "get_todos_failed",
-                self.coordinator.get_todos(&SessionId(session_id)).await,
+                self.coordinator
+                    .get_todos(&SessionId::from(session_id))
+                    .await,
             ),
             RequestMethod::RenameSession { session_id, title } => rpc_body(
                 "rename_session_failed",
                 self.coordinator
-                    .rename_session(&SessionId(session_id), title)
+                    .rename_session(&SessionId::from(session_id), title)
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
@@ -470,14 +474,14 @@ impl KernelServer {
             } => rpc_body(
                 "pin_session_failed",
                 self.coordinator
-                    .pin_session(&SessionId(session_id), icon_emoji)
+                    .pin_session(&SessionId::from(session_id), icon_emoji)
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
             RequestMethod::UnpinSession { session_id } => rpc_body(
                 "unpin_session_failed",
                 self.coordinator
-                    .unpin_session(&SessionId(session_id))
+                    .unpin_session(&SessionId::from(session_id))
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
@@ -487,7 +491,7 @@ impl KernelServer {
             } => rpc_body(
                 "set_pinned_session_emoji_failed",
                 self.coordinator
-                    .set_pinned_session_emoji(&SessionId(session_id), icon_emoji)
+                    .set_pinned_session_emoji(&SessionId::from(session_id), icon_emoji)
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
@@ -495,13 +499,9 @@ impl KernelServer {
                 "list_pinned_sessions_failed",
                 self.coordinator.list_pinned_sessions().await,
             ),
-            RequestMethod::ShutdownSession { session_id } => rpc_body(
-                "shutdown_failed",
-                self.coordinator
-                    .shutdown_session(&SessionId(session_id))
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
+            RequestMethod::ShutdownSession { session_id: _ } => ResponseBody::Ok {
+                result: serde_json::Value::Null,
+            },
 
             // ── Cron Job ──────────────────────────────────────────────────
             RequestMethod::CreateCronJob {
@@ -523,7 +523,9 @@ impl KernelServer {
                         if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
                             scheduler.reload();
                         }
-                        ok_body(JobIdResponse { job_id: job_id.0 })
+                        ok_body(JobIdResponse {
+                            job_id: job_id.0.to_string(),
+                        })
                     }
                     Err(e) => ResponseBody::Err {
                         error: RpcError {
@@ -561,7 +563,11 @@ impl KernelServer {
                 }
             }
             RequestMethod::GetCronJob { job_id } => {
-                match self.coordinator.get_cron_job(&CronJobId(job_id)).await {
+                match self
+                    .coordinator
+                    .get_cron_job(&CronJobId::from(job_id))
+                    .await
+                {
                     Ok(Some(job)) => ResponseBody::Ok {
                         result: match serde_json::to_value(job) {
                             Ok(v) => v,
@@ -610,7 +616,7 @@ impl KernelServer {
                 };
                 match self
                     .coordinator
-                    .update_cron_job(&CronJobId(job_id), input)
+                    .update_cron_job(&CronJobId::from(job_id), input)
                     .await
                 {
                     // Return true/false so the client can distinguish "updated" from "not found".
@@ -634,7 +640,11 @@ impl KernelServer {
                 }
             }
             RequestMethod::DeleteCronJob { job_id } => {
-                match self.coordinator.delete_cron_job(&CronJobId(job_id)).await {
+                match self
+                    .coordinator
+                    .delete_cron_job(&CronJobId::from(job_id))
+                    .await
+                {
                     // Return true/false so the client can distinguish "deleted" from "not found".
                     Ok(deleted) => {
                         if deleted {
@@ -657,7 +667,11 @@ impl KernelServer {
             }
 
             RequestMethod::TriggerCronJob { job_id } => {
-                match self.coordinator.trigger_cron_job(&CronJobId(job_id)).await {
+                match self
+                    .coordinator
+                    .trigger_cron_job(&CronJobId::from(job_id))
+                    .await
+                {
                     Ok(()) => ResponseBody::Ok {
                         result: serde_json::Value::Null,
                     },
@@ -719,7 +733,7 @@ async fn dispatch_command(
     use crate::event::ControlCommand;
     match cmd {
         ControlCommand::Cancel => {
-            coordinator.cancel(sid).await?;
+            coordinator.cancel(sid);
             Ok(serde_json::Value::Null)
         }
         ControlCommand::Response {
@@ -727,18 +741,14 @@ async fn dispatch_command(
             approved,
             remember,
         } => {
-            coordinator
-                .send_permission_response(sid, &req_id, approved, remember)
-                .await?;
+            coordinator.send_permission_response(sid, &req_id, approved, remember);
             Ok(serde_json::Value::Null)
         }
         ControlCommand::AskUserResponse { req_id, answers } => {
             let response = crate::tools::AskUserResponse {
                 answers: answers.into_iter().collect(),
             };
-            coordinator
-                .send_ask_user_response(sid, &req_id, response)
-                .await?;
+            coordinator.send_ask_user_response(sid, &req_id, response);
             Ok(serde_json::Value::Null)
         }
         ControlCommand::SetLevel(level) => {
@@ -746,7 +756,7 @@ async fn dispatch_command(
             Ok(serde_json::Value::Null)
         }
         ControlCommand::Compact => {
-            coordinator.compact_session(sid).await?;
+            coordinator.compact_session(sid);
             Ok(serde_json::Value::Null)
         }
         ControlCommand::StartGoal(state) => {
@@ -778,11 +788,11 @@ async fn dispatch_command(
             Ok(serde_json::Value::Null)
         }
         ControlCommand::Steer { content } => {
-            coordinator.send_steer(sid, content).await?;
+            coordinator.send_steer(sid, content);
             Ok(serde_json::Value::Null)
         }
         ControlCommand::Continue => {
-            coordinator.send_continue(sid).await?;
+            coordinator.send_continue(sid);
             Ok(serde_json::Value::Null)
         }
     }

@@ -119,7 +119,7 @@ pub async fn resolve_session(
     match session_arg {
         // --session <id>: restore specific session
         SessionArg::Specific(id) => {
-            let session_id = SessionId(id.clone());
+            let session_id = SessionId::from(id.clone());
             println!("Restoring session: {}", session_id.0);
 
             match coordinator.restore_session(&session_id, Vec::new()).await {
@@ -141,7 +141,7 @@ pub async fn resolve_session(
         // --session (no value): resume last session for this directory
         SessionArg::Last => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
-                let session_id = SessionId(entry.session_id);
+                let session_id = SessionId::from(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
                 match coordinator.restore_session(&session_id, Vec::new()).await {
@@ -185,7 +185,7 @@ pub async fn resolve_session(
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
-                let source_id = SessionId(entry.session_id);
+                let source_id = SessionId::from(entry.session_id);
                 println!("Forking last session: {}", source_id.0);
                 Ok(coordinator
                     .fork_session(&source_id, auto_approve_level)
@@ -205,7 +205,7 @@ pub async fn resolve_session(
         },
         // --fork <id>: fork specific session
         SessionArg::ForkSpecific(id) => {
-            let source_id = SessionId(id.clone());
+            let source_id = SessionId::from(id.clone());
             println!("Forking session: {}", source_id.0);
             Ok(coordinator
                 .fork_session(&source_id, auto_approve_level)
@@ -399,7 +399,7 @@ pub async fn run_session_loop(
         ctx.working_dir.to_string_lossy().to_string(),
         input_history,
         initial_message,
-        session_id.0.clone(),
+        session_id.0.to_string(),
     )
     .await?;
 

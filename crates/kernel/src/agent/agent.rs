@@ -1,42 +1,38 @@
 use super::message_buffer::MessageBuffer;
 use super::{
-    AgentError, AgentExecutionContext, AgentHandle, AgentShared, AgentSpawnArgs, AgentState,
-    CancelToken, InterceptCtx,
+    AgentError, AgentExecutionContext, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
+    InterceptCtx,
 };
+use crate::comms::{EventSink, Mailbox};
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
-use crate::event::{
-    AgentEvent, AgentStatus, Event, ModelEvent, StopReason, SystemEvent, ToolEvent,
-};
-use crate::event_bus::EventBusHandle;
+use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
 use crate::permissions::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
-use crate::types::{AgentId, ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
+use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tracing::{info, info_span, warn, Instrument};
+use tracing::{info, warn, Instrument};
 
 /// Input messages that can be sent to an Agent
+#[derive(Clone)]
 pub enum AgentInput {
     /// User message with multi-modal content blocks
-    User {
-        content: Vec<ContentBlock>,
-        /// Generation counter at send time; lower values are stale (cancelled before send)
-        generation: u64,
-    },
+    User { content: Vec<ContentBlock> },
     /// Continue the agent from Idle to Streaming (used by goal auto-start)
     Continue,
-    /// Background task completion
-    TaskResult {
-        task_id: String,
-        content: Vec<ContentBlock>,
-    },
+    /// Cancel current operation
+    Cancel,
+    /// Steer message injected before the next streaming turn
+    Steer(Vec<ContentBlock>),
     /// Permission response from user/TUI
-    PermissionResponse { req_id: String, approved: bool },
+    PermissionResponse {
+        req_id: String,
+        approved: bool,
+        remember: bool,
+    },
     /// Shutdown the agent gracefully (for subagent/resource management)
     Shutdown,
     /// Force compaction of message buffer
@@ -46,18 +42,21 @@ pub enum AgentInput {
         message_id: MessageId,
         target: crate::checkpoint::RewindTarget,
         /// Channel to send the result back
-        result_tx: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
+        result_tx: tokio::sync::mpsc::Sender<Result<(), AgentError>>,
     },
     /// Clear the agent's context (messages, file state, todos, persisted history)
     Clear,
+    /// Response to an `ask_user` question
+    AskUserResponse {
+        req_id: String,
+        response: crate::tools::AskUserResponse,
+    },
 }
 
 pub struct Agent {
-    id: AgentId,
     shared: Arc<AgentShared>,
     message_buffer: MessageBuffer,
-    event_bus: EventBusHandle,
-    input_rx: mpsc::Receiver<AgentInput>,
+    event_sink: Arc<dyn EventSink>,
     context: AgentExecutionContext,
     cancel_token: CancelToken,
     session_id: SessionId,
@@ -68,8 +67,8 @@ pub struct Agent {
     permission_checker: Option<Arc<Checker>>,
     // Working directory for tool execution
     working_dir: std::path::PathBuf,
-    /// Generation counter: inputs with lower generation are stale (cancelled before send)
-    input_stale_since: Arc<AtomicU64>,
+    /// Mailbox for receiving input messages
+    mailbox: Arc<Mailbox>,
     /// Hook registry for `PreToolUse` / `PostToolUse` / `PreStop` lifecycle hooks
     hook_registry: crate::hooks::HookRegistry,
     /// Checkpoint store for persistence
@@ -80,32 +79,40 @@ pub struct Agent {
     current_turn: Option<Arc<super::turn::Turn>>,
     /// Current skills list (available to tools)
     skills: Vec<Arc<crate::skill::Skill>>,
-    /// Channel for receiving steer messages injected before each streaming turn
-    steer_rx: mpsc::Receiver<Vec<ContentBlock>>,
     /// Maximum tool output length in bytes
     max_tool_output_length: usize,
+    /// Permission responder for routing user responses
+    permission_responder: Option<crate::permissions::Responder>,
+    /// Ask-user responder for routing user answers
+    ask_user_responder: Option<crate::tools::AskUserResponder>,
 }
 
 impl Agent {
-    pub async fn spawn(
-        id: AgentId,
-        shared: &Arc<AgentShared>,
-        args: AgentSpawnArgs,
-    ) -> AgentHandle {
-        let (input_tx, input_rx) = mpsc::channel::<AgentInput>(20);
-        let (steer_tx, steer_rx) = mpsc::channel::<Vec<ContentBlock>>(20);
+    pub async fn new(shared: &Arc<AgentShared>, args: AgentSpawnArgs) -> Self {
+        let mailbox = args.mailbox;
         let cancel_token = args.cancel_token.clone().unwrap_or_default();
-        let (context, state_rx) = AgentExecutionContext::new(AgentState::Idle);
 
-        // Get event bus handle from shared
-        let session_id = SessionId(args.session_id.clone());
+        let session_id = SessionId::from(args.session_id.clone());
+        let enable_subagent =
+            args.enable_subagent && !session_id.starts_with(crate::types::SUB_PREFIX);
         let event_bus = shared
             .event_bus
             .as_ref()
             .expect("event_bus must be configured")
             .handle(session_id.clone());
 
-        // Build system prompt with project memory and skills
+        let event_bus_for_hook = event_bus.clone();
+        let context = AgentExecutionContext::new(
+            AgentState::Idle,
+            Some(Box::new(move |state: AgentState| {
+                if let Err(e) =
+                    event_bus_for_hook.try_send(Event::Agent(AgentEvent::StateChanged { state }))
+                {
+                    tracing::warn!("Failed to send StateChanged event for {:?}: {}", state, e);
+                }
+            })),
+        );
+
         let system_prompt = SystemPromptBuilder::new()
             .base_prompt(&args.base_prompt)
             .with_skills(&args.skills)
@@ -120,28 +127,28 @@ impl Agent {
         let message_buffer = MessageBuffer::from_arc_messages(&messages);
 
         let shared = shared.clone();
-
-        // Create ask-user state (session-level, independent of permission state)
         let (ask_user_state, ask_user_responder) = crate::tools::AskUserState::new();
 
-        // Create agent-specific tool registry with standard tools
+        let permission_responder = shared
+            .permission_state
+            .as_ref()
+            .map(|s| s.create_responder());
+
         let tool_registry = crate::tools::ToolRegistryFactory::create(
-            crate::tools::ToolRegistryConfig::for_main_agent(
-                &id,
-                &shared,
-                &input_tx,
-                &event_bus,
-                &args.session_id,
-                args.tool_blocklist.clone(),
-            )
-            .with_enable_subagent(args.enable_subagent)
+            crate::tools::ToolRegistryConfig {
+                shared: &shared,
+                event_bus: &event_bus,
+                session_id: &args.session_id,
+                input_bus: args.input_bus.as_ref(),
+                file_state_store: None,
+                ask_user_state: None,
+                tool_blocklist: args.tool_blocklist.clone(),
+                flags: crate::tools::factory::ToolFlags::for_agent(enable_subagent),
+            }
             .with_file_state_store(args.file_state_store.clone())
             .with_ask_user_state(ask_user_state.clone()),
         );
 
-        // Build hook registry: if user-level hooks are enabled (Some), also load
-        // skill-level hooks. When hooks are disabled (None) the registry stays
-        // empty and `run_*_tool_hooks` will short-circuit without spawning.
         let hook_registry = crate::hooks::build_hook_registry_with_skills(
             shared.hook_registry.as_deref(),
             &args.skills,
@@ -150,21 +157,11 @@ impl Agent {
         )
         .await;
 
-        // Create permission checker and responder from shared state
-        // If no permission_state in shared (YOLO mode), all tools auto-approve
-        let (permission_checker, permission_responder) = match shared.permission_state.as_ref() {
-            Some(state) => {
-                let checker = Checker::new(state.clone(), id.clone(), event_bus.clone());
-                let responder = state.create_responder();
-                (Some(Arc::new(checker)), Some(responder))
-            }
-            None => (None, None),
-        };
+        let permission_checker = shared
+            .permission_state
+            .as_ref()
+            .map(|state| Arc::new(Checker::new(state.clone(), event_bus.clone())));
 
-        // Shared generation counter for tracking stale inputs (incremented on cancel)
-        let input_stale_since: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-
-        // Get checkpoint store
         let checkpoint_store = shared.checkpoint_store.clone().unwrap_or_else(|| {
             Arc::new(crate::checkpoint::FilesystemCheckpointStore::new(
                 &shared.data_dir,
@@ -173,57 +170,32 @@ impl Agent {
 
         let data_dir = shared.data_dir.clone();
 
-        let agent = Self {
-            id: id.clone(),
+        Self {
             shared,
             message_buffer,
-            event_bus: event_bus.clone(),
-            input_rx,
+            event_sink: Arc::new(event_bus.clone()) as Arc<dyn EventSink>,
             context,
-            cancel_token: cancel_token.clone(),
-            session_id: session_id.clone(),
+            cancel_token,
+            session_id,
             max_iterations: args.max_iterations,
             tool_registry,
             permission_checker,
             working_dir: args.working_dir,
-            input_stale_since: Arc::clone(&input_stale_since),
+            mailbox,
             hook_registry,
             checkpoint_store,
             data_dir,
             current_turn: None,
-            skills: args.skills.clone(),
-            steer_rx,
+            skills: args.skills,
             max_tool_output_length: args.max_tool_output_length,
-        };
-
-        let span = info_span!("agent", session_id = %session_id.0);
-
-        tokio::spawn(
-            async move {
-                let result = agent.start_loop().await;
-                if let Err(ref e) = result {
-                    tracing::error!("Agent failed: {}", e);
-                }
-                // Explicitly send shutdown event
-                let _ = event_bus.try_send(Event::System(SystemEvent::Shutdown {
-                    session_id: session_id.clone(),
-                    error: None,
-                }));
-                info!("agent closed");
-            }
-            .instrument(span),
-        );
-
-        AgentHandle::new(
-            id,
-            input_tx,
-            state_rx,
-            cancel_token,
             permission_responder,
-            Some(ask_user_responder),
-            Arc::clone(&input_stale_since),
-            steer_tx,
-        )
+            ask_user_responder: Some(ask_user_responder),
+        }
+    }
+
+    /// Emit an event through the event sink.
+    fn emit(&self, event: Event) {
+        self.event_sink.emit(event);
     }
 
     /// Create a runtime `CancellationToken` linked to the Agent's custom `CancelToken`.
@@ -268,143 +240,151 @@ impl Agent {
         }
 
         // 5. Replace persisted messages with just system prompt
-        if let Some(ref store) = self.shared.message_store {
-            let to_persist: Vec<Message> = self
-                .message_buffer
-                .messages()
-                .iter()
-                .map(|m| (**m).clone())
-                .collect();
-            if let Err(e) = store.replace(&self.session_id.0, &to_persist).await {
-                tracing::warn!("failed to clear persisted messages: {}", e);
-            }
-        }
+        self.emit(Event::Internal(
+            crate::event::InternalEvent::MessageReplaced {
+                messages: self.message_buffer.messages().to_vec(),
+            },
+        ));
     }
 
-    /// Persist a single message to storage
-    async fn persist_message(&self, message: &Message) {
-        if let Some(store) = &self.shared.message_store {
-            if let Err(e) = store
-                .append(&self.session_id, std::slice::from_ref(message))
-                .await
-            {
-                tracing::warn!("Failed to persist message: {}", e);
-            }
-        }
-    }
+    pub async fn start_loop(mut self) -> Result<(), AgentError> {
+        let result = async move {
 
-    #[tracing::instrument(skip(self))]
-    async fn start_loop(mut self) -> Result<(), AgentError> {
-        tracing::info!(
-            "started with {} initial message(s), max_iterations={}",
-            self.message_buffer.len(),
-            self.max_iterations
-        );
+            loop {
+                let state = self.context.current_state();
 
-        loop {
-            let state = self.context.current_state();
-
-            if state.is_terminal() {
-                break;
-            }
-
-            if self.max_iterations > 0
-                && self.context.iteration_count() >= self.max_iterations
-                && self.context.current_state() == AgentState::Streaming
-            {
-                let skip_max_iterations = match &self.shared.goal_store {
-                    Some(store) => match store.load(&self.session_id).await {
-                        Ok(Some(goal)) => matches!(goal.status, crate::goal::GoalStatus::Active),
-                        _ => false,
-                    },
-                    None => false,
-                };
-                if !skip_max_iterations {
-                    tracing::warn!(
-                        "reached max iterations during streaming, cancelling and returning to waiting for input"
-                    );
-                    // Notify TUI that max iterations reached
-                    if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
-                        agent_id: self.id.clone(),
-                        state: AgentStatus::Stopped {
-                            reason: StopReason::MaxIterations {
-                                reached: self.max_iterations,
-                            },
+                if self.max_iterations > 0
+                    && self.context.iteration_count() >= self.max_iterations
+                    && self.context.current_state() == AgentState::Streaming
+                {
+                    let skip_max_iterations = match &self.shared.goal_store {
+                        Some(store) => match store.load(&self.session_id).await {
+                            Ok(Some(goal)) => matches!(goal.status, crate::goal::GoalStatus::Active),
+                            _ => false,
                         },
-                    })) {
-                        tracing::warn!("Failed to send max iterations event: {}", e);
-                    }
-                    self.context.transition_to(AgentState::Idle);
-                    continue;
-                }
-            }
-
-            // Note: cancel is handled during streaming via select!, not here
-            let result = match state {
-                AgentState::Idle => {
-                    self.context.reset_iteration();
-                    self.handle_idle().await
-                }
-                AgentState::Streaming => {
-                    // Start new turn when entering Streaming
-                    self.start_turn_if_needed().await;
-                    tracing::debug!("starting streaming");
-                    // Notify UI that streaming has started
-                    if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
-                        agent_id: self.id.clone(),
-                        state: AgentStatus::Running,
-                    })) {
-                        tracing::warn!("Failed to send streaming start event: {}", e);
-                    }
-                    self.handle_streaming_with_retry().await
-                }
-                AgentState::ExecutingTool => {
-                    tracing::debug!("executing tools");
-                    self.handle_execute_tool().await
-                }
-                AgentState::Compacting => {
-                    tracing::warn!("Unexpected Compacting state in main loop; returning to Idle");
-                    self.context.transition_to(AgentState::Idle);
-                    continue;
-                }
-                AgentState::Closed => break,
-            };
-
-            // Handle state transition after execution
-            if let Err(e) = result {
-                if let AgentError::Cancelled(ctx) = &e {
-                    if let Err(e) = self.handle_cancel(ctx).await {
-                        tracing::warn!("Failed to handle cancel: {}", e);
-                    }
-                } else {
-                    let phase = match state {
-                        AgentState::Idle => crate::event::ErrorPhase::Idle,
-                        AgentState::Streaming => crate::event::ErrorPhase::Streaming,
-                        AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
-                        AgentState::Compacting => crate::event::ErrorPhase::Compaction,
-                        AgentState::Closed => unreachable!(),
+                        None => false,
                     };
-                    self.emit_error(phase, &e.to_string(), false).await;
-
-                    // Recover to Idle for non-Idle states
-                    if self.context.current_state() != AgentState::Idle {
+                    if !skip_max_iterations {
+                        tracing::warn!(
+                            "reached max iterations during streaming, cancelling and returning to waiting for input"
+                        );
+                        // Notify TUI that max iterations reached
+                        self.emit(Event::Agent(AgentEvent::Lifecycle {
+                            state: AgentStatus::Stopped {
+                                reason: StopReason::MaxIterations {
+                                    reached: self.max_iterations,
+                                },
+                            },
+                        }));
                         self.context.transition_to(AgentState::Idle);
+                        continue;
                     }
                 }
+
+                // Note: cancel is handled during streaming via select!, not here
+                let result = match state {
+                    AgentState::Idle => {
+                        if self.cancel_token.is_cancelled() {
+                            self.cancel_token.reset_if_cancelled();
+                            continue;
+                        }
+                        self.context.reset_iteration();
+                        // steer 插队
+                        let steers = self.mailbox.try_pull_steer(20).await;
+                        if !steers.is_empty() {
+                            self.inject_user_message(steers).await?;
+                            continue; // inject_user_message 已经 transition_to(Streaming)
+                        }
+                        // 取一条普通消息
+                        match self.mailbox.try_pull(1).await.into_iter().next() {
+                            Some(input) => self.handle_input(input).await,
+                            None => {
+                                tokio::select! {
+                                    biased;
+                                    () = self.cancel_token.cancelled() => {
+                                        self.cancel_token.reset_if_cancelled();
+                                        continue;
+                                    }
+                                    () = self.mailbox.wait_for_mail() => {
+                                        continue;
+                                    }
+                                    () = tokio::time::sleep(std::time::Duration::from_mins(5)) => {
+                                        if !self.mailbox.is_empty() {
+                                            continue;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    AgentState::Streaming => {
+                        // Start new turn when entering Streaming
+                        self.start_turn_if_needed().await;
+                        tracing::debug!("starting streaming");
+                        // Notify UI that streaming has started
+                        self.emit(Event::Agent(AgentEvent::Lifecycle {
+                            state: AgentStatus::Running,
+                        }));
+                        // steer 插队
+                        let steers = self.mailbox.try_pull_steer(20).await;
+                        if !steers.is_empty() {
+                            self.inject_user_message(steers).await?;
+                        }
+                        self.handle_streaming_with_retry().await
+                    }
+                    AgentState::ExecutingTool => {
+                        tracing::debug!("executing tools");
+                        self.handle_execute_tool().await
+                    }
+                    AgentState::Compacting => {
+                        tracing::warn!("Unexpected Compacting state in main loop; returning to Idle");
+                        self.context.transition_to(AgentState::Idle);
+                        continue;
+                    }
+                };
+
+                // Handle state transition after execution
+                if let Err(e) = result {
+                    if e.is_shutdown() {
+                        break;
+                    }
+                    tracing::warn!("error in main loop: {}", e);
+                    if let AgentError::Cancelled(ctx) = &e {
+                        if let Err(e) = self.handle_cancel(ctx).await {
+                            tracing::warn!("Failed to handle cancel: {}", e);
+                        }
+                    } else {
+                        let phase = match state {
+                            AgentState::Idle => crate::event::ErrorPhase::Idle,
+                            AgentState::Streaming => crate::event::ErrorPhase::Streaming,
+                            AgentState::ExecutingTool => crate::event::ErrorPhase::ToolExecution,
+                            AgentState::Compacting => crate::event::ErrorPhase::Compaction,
+                        };
+                        self.emit_error(phase, &e.to_string(), false);
+
+                        // Recover to Idle for non-Idle states
+                        if self.context.current_state() != AgentState::Idle {
+                            self.context.transition_to(AgentState::Idle);
+                        }
+                    }
+                }
+
+                self.complete_turn_if_needed(state).await;
+                self.context.increment_iteration();
             }
 
-            self.complete_turn_if_needed(state).await;
-            self.context.increment_iteration();
-        }
+            Ok(())
+        }.await;
 
-        Ok(())
+        result
     }
 
     /// Handle cancellation - sends Cancelled event, transitions state, returns Ok(())
     async fn handle_cancel(&self, context: &str) -> Result<(), AgentError> {
         tracing::info!("{} cancelled", context);
         // Emit cancellation event with operation name
-        self.emit_operation_cancelled(context).await;
+        self.emit_operation_cancelled(context);
         self.context.transition_to(AgentState::Idle);
         Ok(())
     }
@@ -424,76 +404,61 @@ impl Agent {
         }
     }
 
-    /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return error
+    /// Helper to emit `AgentEvent::Lifecycle(Stopped(Failed))` and return Ok.
+    /// This stops the agent gracefully without entering the outer error recovery loop.
     async fn fail_agent(&self, context: &str, error: AgentError) -> Result<(), AgentError> {
         let error_msg = format!("{context}: {error}");
         tracing::error!("failed: {}", error_msg);
-        let _n = self
-            .event_bus
-            .send(Event::Agent(AgentEvent::Lifecycle {
-                agent_id: self.id.clone(),
-                state: AgentStatus::Stopped {
-                    reason: StopReason::Failed { error: error_msg },
-                },
-            }))
-            .await;
+        self.emit(Event::Agent(AgentEvent::Lifecycle {
+            state: AgentStatus::Stopped {
+                reason: StopReason::Failed { error: error_msg },
+            },
+        }));
         Err(error)
     }
 
     /// Emit error event (recoverable or not) and log it
-    async fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
+    fn emit_error(&self, phase: crate::event::ErrorPhase, error: &str, is_recoverable: bool) {
         if is_recoverable {
             tracing::warn!("{:?} error (recoverable): {}", phase, error);
         } else {
             tracing::error!("{:?} error: {}", phase, error);
         }
 
-        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Error {
-            agent_id: self.id.clone(),
+        self.emit(Event::Agent(AgentEvent::Error {
             phase,
             error: error.to_string(),
             is_recoverable,
-        })) {
-            tracing::warn!("Failed to emit error event: {}", e);
-        }
+        }));
     }
 
     /// Emit retrying event
-    async fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str) {
-        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Retrying {
-            agent_id: self.id.clone(),
+    fn emit_retrying(&self, attempt: u32, max_attempts: u32, reason: &str) {
+        self.emit(Event::Agent(AgentEvent::Retrying {
             attempt,
             max_attempts,
             reason: reason.to_string(),
-        })) {
-            tracing::warn!("Failed to emit retrying event: {}", e);
-        }
+        }));
     }
 
     /// Emit operation cancelled event
-    async fn emit_operation_cancelled(&self, operation: &str) {
-        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
-            agent_id: self.id.clone(),
+    fn emit_operation_cancelled(&self, operation: &str) {
+        self.emit(Event::Agent(AgentEvent::Lifecycle {
             state: AgentStatus::Stopped {
                 reason: StopReason::Cancelled {
                     operation: Some(operation.to_string()),
                 },
             },
-        })) {
-            tracing::warn!("Failed to emit operation cancelled event: {}", e);
-        }
+        }));
     }
 
     /// Emit `Stopped` lifecycle event with completed reason.
     fn emit_stopped_completed(&self, finish_reason: Option<crate::types::FinishReason>) {
-        if let Err(e) = self.event_bus.try_send(Event::Agent(AgentEvent::Lifecycle {
-            agent_id: self.id.clone(),
+        self.emit(Event::Agent(AgentEvent::Lifecycle {
             state: AgentStatus::Stopped {
                 reason: StopReason::Completed { finish_reason },
             },
-        })) {
-            tracing::warn!("Failed to send Stopped::Completed event: {}", e);
-        }
+        }));
     }
 
     /// Emit user message event to frontend.
@@ -502,15 +467,25 @@ impl Agent {
         message_id: &crate::types::MessageId,
         content: &[crate::types::ContentBlock],
     ) {
-        if let Err(e) = self
-            .event_bus
-            .try_send(Event::User(crate::event::UserEvent::Message {
-                message_id: message_id.clone(),
-                content: content.to_vec(),
-            }))
-        {
-            tracing::warn!("Failed to send user message event: {}", e);
-        }
+        self.emit(Event::User(crate::event::UserEvent::Message {
+            message_id: message_id.clone(),
+            content: content.to_vec(),
+        }));
+    }
+
+    /// Push a message to buffer and emit the storage event (assistant/tool messages).
+    fn push_message(&mut self, msg: Message) {
+        let msg = Arc::new(msg);
+        self.emit(Event::Internal(crate::event::InternalEvent::MessageAdded {
+            message: msg.clone(),
+        }));
+        self.message_buffer.push_arc(msg);
+    }
+
+    /// Push a user message: emit frontend event, then push to buffer.
+    fn push_user_message(&mut self, msg: Message) {
+        self.emit_user_message_event(&msg.id, &msg.content);
+        self.push_message(msg);
     }
 
     /// Extract text summary from content blocks for checkpoint display.
@@ -525,8 +500,8 @@ impl Agent {
             })
             .unwrap_or("(no text)");
 
-        // Replace newlines with spaces to ensure single-line summary
-        let text = text.replace('\n', " ");
+        // Replace all line endings with spaces to ensure single-line summary
+        let text = text.replace(['\n', '\r'], " ");
 
         // Truncate to 50 chars
         crate::utils::strs::truncate_by_chars(&text, 50, "...")
@@ -561,7 +536,7 @@ impl Agent {
         &mut self,
         message_id: MessageId,
         target: crate::checkpoint::RewindTarget,
-        result_tx: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
+        result_tx: tokio::sync::mpsc::Sender<Result<(), AgentError>>,
     ) -> Result<(), AgentError> {
         if let Some(turn) = self.current_turn.take() {
             if let Err(e) = turn.cancel().await {
@@ -573,7 +548,7 @@ impl Agent {
         if !truncated {
             let err =
                 AgentError::Serialization(format!("Message {} not found", message_id.as_str()));
-            let _ = result_tx.send(Err(err.clone()));
+            let _ = result_tx.try_send(Err(err.clone()));
             return Err(err);
         }
 
@@ -587,108 +562,61 @@ impl Agent {
 
         if let Err(e) = &result {
             let err = AgentError::Serialization(e.to_string());
-            let _ = result_tx.send(Err(err.clone()));
+            let _ = result_tx.try_send(Err(err.clone()));
             return Err(err);
         }
 
-        let remaining_messages: Vec<Message> = self
-            .message_buffer
-            .messages()
-            .iter()
-            .map(|m| (**m).clone())
-            .collect();
-        if let Some(msg_store) = &self.shared.message_store {
-            if let Err(e) = msg_store
-                .replace(&self.session_id, &remaining_messages)
-                .await
-            {
-                tracing::warn!("Failed to update message store after rewind: {}", e);
-            }
-        }
-
         let updated_messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
-        if let Err(e) = self
-            .event_bus
-            .try_send(Event::System(crate::event::SystemEvent::Rewound {
-                session_id: self.session_id.clone(),
-                messages: updated_messages,
-            }))
-        {
-            tracing::warn!("Failed to send rewound event: {}", e);
-        }
+        self.emit(Event::Internal(
+            crate::event::InternalEvent::MessageReplaced {
+                messages: updated_messages.clone(),
+            },
+        ));
 
-        if let Err(e) = result_tx.send(Ok(())) {
+        self.emit(Event::System(crate::event::SystemEvent::Rewound {
+            session_id: self.session_id.clone(),
+            messages: updated_messages,
+        }));
+
+        if let Err(e) = result_tx.try_send(Ok(())) {
             tracing::warn!("Failed to send rewind success result: {:?}", e);
         }
         Ok(())
     }
 
-    /// Unified idle handler.
-    ///
-    /// Drains pending external inputs. If an active goal exists and no user input
-    /// is pending, auto-continue by injecting the goal continuation prompt.
-    /// Handle idle state: block until a user input arrives.
-    #[tracing::instrument(skip(self))]
-    async fn handle_idle(&mut self) -> Result<(), AgentError> {
-        if self.cancel_token.is_cancelled() {
-            self.cancel_token.reset_if_cancelled();
-            return Ok(());
-        }
-
-        let input = tokio::select! {
-            biased;
-            input = self.input_rx.recv() => input,
-            steer = self.steer_rx.recv() => {
-                steer.map(|blocks| AgentInput::User {
-                    content: blocks,
-                    generation: self.input_stale_since.load(Ordering::Relaxed),
-                })
-            }
-        };
-
+    async fn handle_input(&mut self, input: AgentInput) -> Result<(), AgentError> {
         match input {
-            Some(AgentInput::User {
-                content,
-                generation,
-            }) => {
-                let current_gen = self.input_stale_since.load(Ordering::Relaxed);
-                if generation < current_gen {
-                    tracing::info!(
-                        "discarding stale user input (generation {} < {})",
-                        generation,
-                        current_gen
-                    );
-                    return Ok(());
-                }
-                self.inject_user_message(content).await
-            }
-            Some(AgentInput::TaskResult { task_id, content }) => {
-                tracing::debug!("Task result received: {}", task_id);
-                self.cancel_token.reset_if_cancelled();
-                let msg = Message::with_blocks(Role::User, content);
-                self.persist_message(&msg).await;
-                self.message_buffer.push(msg);
-                self.context.transition_to(AgentState::Streaming);
-                Ok(())
-            }
-            Some(AgentInput::PermissionResponse {
-                req_id,
-                approved: _,
-            }) => {
-                tracing::warn!("received PermissionResponse via input channel (should use PermissionResponder instead): req_id={}", req_id);
-                Ok(())
-            }
-            Some(AgentInput::Shutdown) => {
+            AgentInput::User { content } => self.inject_user_message(content).await,
+            AgentInput::Steer(blocks) => self.inject_user_message(blocks).await,
+            AgentInput::Shutdown => {
                 tracing::info!("received close signal");
                 if let Some(turn) = self.current_turn.take() {
                     if let Err(e) = turn.cancel().await {
                         tracing::warn!("Failed to cancel turn on shutdown: {}", e);
                     }
                 }
-                self.context.transition_to(AgentState::Closed);
+                self.emit(Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Stopped {
+                        reason: StopReason::Completed {
+                            finish_reason: None,
+                        },
+                    },
+                }));
+                Err(AgentError::Shutdown)
+            }
+            AgentInput::PermissionResponse {
+                req_id,
+                approved,
+                remember,
+            } => {
+                if let Some(ref responder) = self.permission_responder {
+                    responder.respond(&req_id, approved, remember).await;
+                } else {
+                    tracing::warn!("PermissionResponse received but no responder available");
+                }
                 Ok(())
             }
-            Some(AgentInput::Compact) => {
+            AgentInput::Compact => {
                 tracing::info!("received compact request");
                 let result = self.force_full_compact().await;
                 if let Err(e) = result {
@@ -696,27 +624,36 @@ impl Agent {
                 }
                 Ok(())
             }
-            Some(AgentInput::Continue) => {
+            AgentInput::Continue => {
                 self.cancel_token.reset_if_cancelled();
                 self.context.transition_to(AgentState::Streaming);
                 Ok(())
             }
-            Some(AgentInput::Rewind {
+            AgentInput::Rewind {
                 message_id,
                 target,
                 result_tx,
-            }) => {
+            } => {
                 tracing::info!("received rewind to {}", message_id.as_str());
                 self.process_rewind(message_id, target, result_tx).await?;
                 Ok(())
             }
-            Some(AgentInput::Clear) => {
+            AgentInput::Clear => {
                 self.handle_clear().await;
                 Ok(())
             }
-            None => {
-                tracing::info!("input channel closed (clean shutdown)");
-                self.context.transition_to(AgentState::Closed);
+            AgentInput::Cancel => {
+                tracing::info!("received cancel signal");
+                self.cancel_token.cancel();
+                self.context.transition_to(AgentState::Idle);
+                Ok(())
+            }
+            AgentInput::AskUserResponse { req_id, response } => {
+                if let Some(ref responder) = self.ask_user_responder {
+                    responder.respond(&req_id, response).await;
+                } else {
+                    tracing::warn!("AskUserResponse received but no responder available");
+                }
                 Ok(())
             }
         }
@@ -741,9 +678,7 @@ impl Agent {
 
         // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
         // We only persist the message here, the turn object is created later
-        self.emit_user_message_event(&msg.id, &msg.content);
-        self.persist_message(&msg).await;
-        self.message_buffer.push(msg);
+        self.push_user_message(msg);
         self.context.transition_to(AgentState::Streaming);
         Ok(())
     }
@@ -789,44 +724,33 @@ impl Agent {
         );
 
         let assistant_msg_id = MessageId::new();
-        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Request {
-            agent_id: self.id.clone(),
+        self.emit(Event::Model(ModelEvent::Request {
             message_id: assistant_msg_id.clone(),
             message_count: self.message_buffer.len(),
-        })) {
-            tracing::warn!("Failed to send model request event: {}", e);
-        }
-
-        // Drain pending steer messages and inject them as a user message before streaming
-        let mut steer_blocks: Vec<ContentBlock> = Vec::new();
-        while let Ok(blocks) = self.steer_rx.try_recv() {
-            steer_blocks.extend(blocks);
-        }
-        if !steer_blocks.is_empty() {
-            tracing::info!(
-                "injecting {} steer block(s) before streaming",
-                steer_blocks.len()
-            );
-            let steer_msg = Message::with_blocks(Role::User, steer_blocks);
-            self.emit_user_message_event(&steer_msg.id, &steer_msg.content);
-            self.persist_message(&steer_msg).await;
-            self.message_buffer.push(steer_msg);
-        }
+        }));
 
         // Validate and clean message buffer before sending to provider
         self.message_buffer.sanitize();
 
         // Clone messages and tools for the spawned task (needs 'static)
         let messages: Vec<Arc<Message>> = self.message_buffer.messages().to_vec();
-        let messages =
-            crate::utils::asset::resolve_messages(&messages, &self.shared.data_dir).await;
+        let resolved_messages: Vec<Arc<Message>> = messages
+            .into_iter()
+            .filter(|m| !matches!(m.role, Role::Internal))
+            .collect();
+        let resolved_messages =
+            crate::utils::asset::resolve_messages(&resolved_messages, &self.shared.data_dir).await;
 
         // Spawn provider request in a separate task to allow cancellation
         let provider = self.shared.provider.clone();
         let model_config = self.shared.model_config.clone();
         let stream_task = tokio::spawn(
-            async move { provider.stream(&messages, &tools, &model_config).await }
-                .instrument(tracing::Span::current()),
+            async move {
+                provider
+                    .stream(&resolved_messages, &tools, &model_config)
+                    .await
+            }
+            .instrument(tracing::Span::current()),
         );
         let abort_handle = stream_task.abort_handle();
 
@@ -874,24 +798,13 @@ impl Agent {
                 msg.finish_reason = Some(fr);
             }
 
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
+            self.push_message(msg);
         }
 
-        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Completed {
-            agent_id: self.id.clone(),
-            message_id: assistant_msg_id.clone(),
-        })) {
-            tracing::warn!("Failed to send completed event: {}", e);
-        }
-
-        if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::End {
-            agent_id: self.id.clone(),
+        self.emit(Event::Model(ModelEvent::End {
             message_id: assistant_msg_id.clone(),
             content: end_content,
-        })) {
-            tracing::warn!("Failed to send model end event: {}", e);
-        }
+        }));
 
         if result.finish_reason.is_none() {
             tracing::warn!("model response has no finish_reason");
@@ -899,8 +812,7 @@ impl Agent {
                 crate::event::ErrorPhase::Streaming,
                 "model response missing finish_reason",
                 true,
-            )
-            .await;
+            );
         }
         self.transition_after_streaming(result.finish_reason).await
     }
@@ -927,39 +839,30 @@ impl Agent {
                     Ok(Some(item)) => match item {
                         ModelStreamItem::Chunk(chunk) => {
                             state.handle_chunk(&chunk);
-                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Chunk {
-                                agent_id: self.id.clone(),
+                                                        self.emit(Event::Model(ModelEvent::Chunk {
                                 message_id: message_id.clone(),
                                 content: chunk,
-                            })) {
-                                tracing::warn!("Failed to send chunk event: {}", e);
-                            }
+                            }));
                         }
                         ModelStreamItem::ToolCallDelta { id, name, arguments_delta } => {
                             // Forward incremental tool call update to TUI for UI feedback
-                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::ToolCallDelta {
-                                agent_id: self.id.clone(),
+                                                        self.emit(Event::Model(ModelEvent::ToolCallDelta {
                                 message_id: message_id.clone(),
                                 tool_id: id,
                                 tool_name: name,
                                 arguments_delta,
-                            })) {
-                                tracing::warn!("Failed to send tool call delta event: {}", e);
-                            }
+                            }));
                         }
                         ModelStreamItem::ToolCall(request) => {
                             state.handle_tool_call(request);
                         }
                         ModelStreamItem::Complete => break,
                         ModelStreamItem::Fallback { from, to } => {
-                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::Fallback {
-                                agent_id: self.id.clone(),
+                                                        self.emit(Event::Model(ModelEvent::Fallback {
                                 message_id: message_id.clone(),
                                 from,
                                 to,
-                            })) {
-                                tracing::warn!("Failed to send fallback event: {}", e);
-                            }
+                            }));
                         }
                         ModelStreamItem::TokenUsage(usage) => {
                             // NOTE: this is right because each response's prompt_tokens will contain whole history
@@ -974,21 +877,17 @@ impl Agent {
                             // Get context window from compactor or use default
                             let context_window = self.shared.compactor.as_ref()
                                 .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
-                            if let Err(e) = self.event_bus.try_send(Event::Model(ModelEvent::TokenUsage {
-                                agent_id: self.id.clone(),
+                                                        self.emit(Event::Model(ModelEvent::TokenUsage {
                                 message_id: message_id.clone(),
                                 prompt_tokens: usage.prompt_tokens,
                                 completion_tokens: usage.completion_tokens,
                                 total_tokens: total,
                                 context_window,
-                            })) {
-                                tracing::warn!("Failed to send token usage event: {}", e);
-                            }
+                            }));
                             // Record token usage
                             if let Some(store) = &self.shared.usage_store {
                                 let record = crate::storage::UsageRecord::new(
                                     self.session_id.clone(),
-                                    self.id.clone(),
                                     usage,
                                     self.shared.model_config.model_id.clone(),
                                     self.shared.model_config.provider.to_string(),
@@ -1032,7 +931,7 @@ impl Agent {
         if !self.context.transition_to(AgentState::Compacting) {
             tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
         }
-        self.emit_compaction_event(true).await;
+        self.emit_compaction_event(true);
 
         let result = compactor
             .auto_compact(
@@ -1049,7 +948,7 @@ impl Agent {
                 prev_state
             );
         }
-        self.emit_compaction_event(false).await;
+        self.emit_compaction_event(false);
         self.handle_compaction_result(result, old_count).await
     }
 
@@ -1066,7 +965,7 @@ impl Agent {
         if !self.context.transition_to(AgentState::Compacting) {
             tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
         }
-        self.emit_compaction_event(true).await;
+        self.emit_compaction_event(true);
 
         let result = compactor
             .full_compact(
@@ -1084,7 +983,7 @@ impl Agent {
                 prev_state
             );
         }
-        self.emit_compaction_event(false).await;
+        self.emit_compaction_event(false);
         self.handle_compaction_result(result, old_count).await
     }
 
@@ -1132,13 +1031,12 @@ impl Agent {
             }
             Err(CompactionError::Cancelled) => {
                 tracing::info!("compaction cancelled");
-                self.emit_operation_cancelled("compaction").await;
+                self.emit_operation_cancelled("compaction");
                 Err("Compaction was cancelled".to_string())
             }
             Err(CompactionError::Api(e)) => {
                 tracing::warn!("compaction failed: {}", e);
-                self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false)
-                    .await;
+                self.emit_error(crate::event::ErrorPhase::Compaction, &e.clone(), false);
                 Err(format!("Compaction failed: {e}"))
             }
         };
@@ -1147,16 +1045,8 @@ impl Agent {
     }
 
     /// Emit compaction start/end event.
-    async fn emit_compaction_event(&self, active: bool) {
-        if let Err(e) = self
-            .event_bus
-            .try_send(Event::Model(ModelEvent::Compacting {
-                agent_id: self.id.clone(),
-                active,
-            }))
-        {
-            tracing::warn!("Failed to send compacting event (active={}): {}", active, e);
-        }
+    fn emit_compaction_event(&self, active: bool) {
+        self.emit(Event::Model(ModelEvent::Compacting { active }));
     }
 
     /// Record compactor token usage
@@ -1167,7 +1057,6 @@ impl Agent {
         if let Some(store) = &self.shared.usage_store {
             let record = crate::storage::UsageRecord::new(
                 self.session_id.clone(),
-                self.id.clone(),
                 usage,
                 self.shared.model_config.model_id.clone(),
                 self.shared.model_config.provider.to_string(),
@@ -1195,16 +1084,9 @@ impl Agent {
         *self.message_buffer.messages_mut() = new_messages;
 
         // Persist compacted messages (without system messages)
-        if let Some(store) = &self.shared.message_store {
-            let to_persist: Vec<Message> = messages
-                .into_iter()
-                .filter(|m| m.role != Role::System)
-                .map(|m| (*m).clone())
-                .collect();
-            if let Err(e) = store.replace(&self.session_id, &to_persist).await {
-                tracing::warn!("failed to persist compacted messages: {}", e);
-            }
-        }
+        self.emit(Event::Internal(
+            crate::event::InternalEvent::MessageReplaced { messages },
+        ));
     }
 
     /// Check and run compaction if needed
@@ -1260,15 +1142,13 @@ impl Agent {
         if matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
             tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
             let msg = Message::user("continue");
-            self.emit_user_message_event(&msg.id, &msg.content);
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
+            self.push_user_message(msg);
             self.context.transition_to(AgentState::Streaming);
             return Ok(());
         }
 
         // No tool calls: check PreStop hooks for goal auto-continue
-        let ctx = crate::hooks::HookContext::pre_stop(&self.session_id.0, &self.data_dir);
+        let ctx = crate::hooks::HookContext::pre_stop(&*self.session_id.0, &self.data_dir);
         let result = self.hook_registry.run_pre_stop(&ctx).await;
 
         if let crate::hooks::HookResult::PreStop(decision) = result {
@@ -1276,8 +1156,7 @@ impl Agent {
                 let steer_blocks = decision.steer_blocks.unwrap_or(Vec::new());
                 if !steer_blocks.is_empty() {
                     let msg = Message::with_blocks(Role::User, steer_blocks);
-                    self.persist_message(&msg).await;
-                    self.message_buffer.push(msg);
+                    self.push_user_message(msg);
                 }
                 tracing::info!(
                     "PreStop hooks decided to continue session, transitioning to Streaming"
@@ -1292,13 +1171,11 @@ impl Agent {
         if let Some(ref store) = self.shared.goal_store {
             if let Ok(Some(goal)) = store.load(&self.session_id).await {
                 if !matches!(goal.status, crate::goal::GoalStatus::Active) {
-                    let _ = self.event_bus.try_send(Event::System(
-                        crate::event::SystemEvent::GoalUpdated {
-                            session_id: self.session_id.clone(),
-                            description: goal.description.clone(),
-                            status: goal.status.as_str().to_string(),
-                        },
-                    ));
+                    self.emit(Event::System(crate::event::SystemEvent::GoalUpdated {
+                        session_id: self.session_id.clone(),
+                        description: goal.description.clone(),
+                        status: goal.status.as_str().to_string(),
+                    }));
                 }
             }
         }
@@ -1332,22 +1209,18 @@ impl Agent {
         for call in &tool_calls {
             let args_str = serde_json::to_string(&call.arguments).ok();
             let message_id = tool_message_ids[&call.id].clone();
-            if let Err(e) = self.event_bus.try_send(Event::Tool(ToolEvent::Start {
-                agent_id: self.id.clone(),
+            self.emit(Event::Tool(ToolEvent::Start {
                 message_id,
                 tool_id: call.id.clone(),
                 tool_name: call.name.clone(),
                 arguments: args_str,
-            })) {
-                tracing::warn!("Failed to send tool start event: {}", e);
-            }
+            }));
         }
 
         // Check permissions for each tool call
         let permission_result = crate::permissions::check_tool_permissions(
             &tool_calls,
             self.permission_checker.as_deref(),
-            &self.id,
         )
         .await;
 
@@ -1357,25 +1230,24 @@ impl Agent {
             .into_iter()
             .map(|(tool_call_id, error_msg)| {
                 let message_id = tool_message_ids[&tool_call_id].clone();
-                let message = Message::tool_result(
+                let tool_name = tool_calls
+                    .iter()
+                    .find(|c| c.id == tool_call_id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
+                let output = crate::types::ToolOutput::error(error_msg.clone());
+                let (event, message) = crate::tools::executor::build_tool_result(
+                    &tool_call_id,
+                    &tool_name,
+                    &output,
+                    0,
                     message_id.clone(),
-                    tool_call_id.clone(),
-                    error_msg.clone(),
+                    self.max_tool_output_length,
                 );
                 ToolExecutionResult {
                     tool_call_id: tool_call_id.clone(),
-                    message_id: message_id.clone(),
-                    event: ToolEvent::End {
-                        agent_id: self.id.clone(),
-                        message_id,
-                        tool_id: tool_call_id.clone(),
-                        tool_name: String::new(),
-                        content_blocks: vec![crate::types::ToolOutputBlock::Text {
-                            text: error_msg.clone(),
-                        }],
-                        elapsed_ms: 0,
-                        is_error: true,
-                    },
+                    message_id,
+                    event,
                     message,
                 }
             })
@@ -1383,11 +1255,11 @@ impl Agent {
 
         // === PreToolUse hooks ===
         approved_calls = super::hooks::run_pre_tool_hooks(
-            &self.id,
-            &self.session_id,
+            &self.session_id.0,
             &self.working_dir,
             &self.hook_registry,
             approved_calls,
+            &tool_message_ids,
             &mut denied_results,
         )
         .await;
@@ -1402,7 +1274,6 @@ impl Agent {
             Vec::new()
         } else {
             crate::tools::execute_tools_parallel(&ToolExecParams {
-                agent_id: &self.id,
                 tool_calls: &approved_calls,
                 tool_registry: &self.tool_registry,
                 cancel_token: Some(&cancel_token),
@@ -1423,8 +1294,7 @@ impl Agent {
 
         // === PostToolUse hooks ===
         let (post_results, continue_session, post_contexts) = super::hooks::run_post_tool_hooks(
-            &self.id,
-            &self.session_id,
+            &self.session_id.0,
             &self.working_dir,
             &self.hook_registry,
             results,
@@ -1439,11 +1309,8 @@ impl Agent {
             if self.cancel_token.is_cancelled() {
                 return Err(AgentError::Cancelled("tool execution".into()));
             }
-            if let Err(e) = self.event_bus.try_send(Event::Tool(result.event)) {
-                tracing::warn!("Failed to send tool end event: {}", e);
-            }
-            self.persist_message(&result.message).await;
-            self.message_buffer.push(result.message);
+            self.emit(Event::Tool(result.event));
+            self.push_message(result.message);
         }
 
         // Inject PostToolUse hook contexts as independent messages after all
@@ -1451,8 +1318,7 @@ impl Agent {
         // `sanitize()` won't strip the chain.
         for ctx_text in post_contexts {
             let msg = Message::user(ctx_text);
-            self.persist_message(&msg).await;
-            self.message_buffer.push(msg);
+            self.push_user_message(msg);
         }
 
         if !continue_session {
@@ -1489,10 +1355,8 @@ impl Agent {
                 Err(e) => {
                     attempt += 1;
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
-                    self.emit_retrying(attempt, max_retries, &e.to_string())
-                        .await;
-                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true)
-                        .await;
+                    self.emit_retrying(attempt, max_retries, &e.to_string());
+                    self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true);
                     tokio::time::sleep(tokio::time::Duration::from_secs(u64::from(attempt))).await;
                 }
             }

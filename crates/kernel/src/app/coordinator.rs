@@ -1,16 +1,15 @@
-use crate::agent::{AgentConfig, AgentShared, AgentState};
-use crate::app::session::{normalize_session_title, Session, SessionConfig};
+use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
+use crate::app::conductor::Conductor;
+use crate::comms::InputBus;
+use crate::event::{Event, SystemEvent};
 use crate::permissions::Level;
 use crate::providers::Provider;
 use crate::storage::usage::{DailyUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
+use crate::tools::AskUserResponse;
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 
 /// Input for creating a new session
 #[derive(Debug, Clone)]
@@ -23,9 +22,8 @@ pub struct CreateSessionInput {
 
 pub struct Coordinator {
     agent_shared: Arc<AgentShared>,
-    sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
-    /// Epoch seconds of the last event received from any session.
-    last_activity_at: Arc<AtomicU64>,
+    input_bus: Arc<InputBus>,
+    conductor: Arc<Conductor>,
     /// Default agent configuration for new sessions.
     agent_config: AgentConfig,
     /// Project store for project operations
@@ -134,6 +132,7 @@ impl Coordinator {
         ));
         let checkpoint_store = storage.checkpoint_store();
         let data_dir = storage.data_dir().to_path_buf();
+        let data_dir_for_conductor = data_dir.clone();
         let project_store = storage.project_store();
         let pinned_session_store = storage.pinned_session_store();
         let goal_store = storage.goal_store();
@@ -163,11 +162,22 @@ impl Coordinator {
             channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));
 
         let agent_shared = agent_shared.with_channel_manager(channel_manager.clone());
-        let event_bus = crate::event_bus::EventBus::new();
-        let agent_shared = agent_shared.with_event_bus(event_bus);
+        let event_bus = crate::comms::EventBus::new();
+        let agent_shared = agent_shared.with_event_bus(event_bus.clone());
         let agent_shared = Arc::new(agent_shared);
-        let sessions = Arc::new(DashMap::new());
-        let last_activity_at = Arc::new(AtomicU64::new(Self::now_epoch()));
+
+        let input_bus = InputBus::new();
+        let rx = input_bus.subscribe_all();
+        let base_prompt = agent_config.system_prompt.clone();
+        let conductor = Arc::new(Conductor::new(
+            agent_shared.clone(),
+            agent_config.clone(),
+            rx,
+            event_bus,
+            input_bus.clone(),
+            base_prompt,
+            data_dir_for_conductor,
+        ));
         let agent_config = agent_config;
         let cron_store = if enable_cron {
             Some(storage.cron_store())
@@ -177,8 +187,8 @@ impl Coordinator {
 
         Arc::new(Self {
             agent_shared,
-            sessions,
-            last_activity_at,
+            input_bus,
+            conductor,
             agent_config,
             project_store,
             pinned_session_store,
@@ -187,81 +197,9 @@ impl Coordinator {
         })
     }
 
-    pub fn start(&self, token: tokio_util::sync::CancellationToken) {
-        Self::spawn_session_pruner(Arc::clone(&self.sessions), token);
-    }
-
-    fn now_epoch() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-
-    /// Spawn a background task that shuts down idle sessions.
-    /// A session is considered idle when:
-    /// 1. The agent is in `Idle` state (not streaming/running).
-    /// 2. No user activity for more than `IDLE_TIMEOUT_SECS` (10 minutes).
-    ///
-    /// This prevents unbounded memory growth when TUI clients disconnect
-    /// while the agent is waiting for input.
-    fn spawn_session_pruner(
-        sessions: Arc<DashMap<SessionId, Arc<RwLock<Session>>>>,
-        token: tokio_util::sync::CancellationToken,
-    ) {
-        const IDLE_TIMEOUT_SECS: u64 = 600;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    biased;
-                    () = token.cancelled() => {
-                        tracing::info!("Session pruner shutting down");
-                        break;
-                    }
-                    _ = interval.tick() => {}
-                }
-                let mut to_shutdown = Vec::new();
-                for entry in sessions.iter() {
-                    let sid = entry.key().clone();
-                    let session = entry.value().read().await;
-                    if let Some(AgentState::Idle) = session.agent_state() {
-                        if session.idle_seconds() >= IDLE_TIMEOUT_SECS {
-                            to_shutdown.push(sid);
-                        }
-                    }
-                }
-                for sid in to_shutdown {
-                    if let Some(s_entry) = sessions.get(&sid) {
-                        let session = s_entry.value().read().await;
-                        if let Some(AgentState::Idle) = session.agent_state() {
-                            if session.idle_seconds() >= IDLE_TIMEOUT_SECS {
-                                tracing::info!(session_id = %sid.0, "idle for too long — shutting down");
-                                session.close().await;
-                                sessions.remove(&sid);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    /// Shut down a running session (close agent + remove from memory).
-    #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn shutdown_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session(session_id)?;
-        session.read().await.close().await;
-        self.sessions.remove(session_id);
-        tracing::info!("shut down");
-        Ok(())
-    }
-
-    /// Seconds since the last activity across all sessions.
-    pub fn idle_seconds(&self) -> u64 {
-        let last = self.last_activity_at.load(Ordering::Relaxed);
-        Self::now_epoch().saturating_sub(last)
+    pub fn start(&self, _token: tokio_util::sync::CancellationToken) {
+        let conductor = self.conductor.clone();
+        tokio::spawn(async move { conductor.run().await });
     }
 
     // ── Project API ──────────────────────────────────────────────────────
@@ -319,9 +257,13 @@ impl Coordinator {
     pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
         let title = normalize_session_title(&title);
         self.session_store().await.update_title(id, &title).await?;
-        if let Some(session) = self.get_session(id) {
-            let session = session.read().await;
-            session.emit_title_updated(&title);
+        if let Some(ref bus) = self.agent_shared.event_bus {
+            let _ = bus
+                .handle(id.clone())
+                .try_send(Event::System(SystemEvent::TitleUpdated {
+                    session_id: id.clone(),
+                    title,
+                }));
         }
         Ok(())
     }
@@ -370,7 +312,7 @@ impl Coordinator {
     /// Create a new session with the given input.
     #[tracing::instrument(skip(self, input))]
     pub async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
-        let project = match &input.project_id {
+        let _project = match &input.project_id {
             Some(pid) => Some(
                 self.project_store
                     .get(pid)
@@ -395,28 +337,9 @@ impl Coordinator {
                 input.project_id.as_ref(),
                 working_dir.as_deref(),
                 Some(input.auto_approve_level.as_str()),
+                None,
             )
             .await?;
-
-        let mut agent_config = self.agent_config.clone();
-        if !input.tool_blocklist.is_empty() {
-            agent_config.tool_blocklist.extend(input.tool_blocklist);
-        }
-
-        let config = SessionConfig {
-            agent: agent_config,
-            project,
-            working_dir: working_dir.map(std::path::PathBuf::from),
-            auto_approve_level: input.auto_approve_level,
-            data_dir: self.data_dir().await.clone(),
-        };
-
-        let agent_shared = Arc::clone(&self.agent_shared);
-
-        if let Err(e) = self.init_session(id.clone(), config, agent_shared).await {
-            let _ = self.session_store().await.delete(&id).await;
-            return Err(e);
-        }
 
         if let Some(ref pid) = input.project_id {
             let _ = self.project_store.touch(pid).await;
@@ -425,54 +348,12 @@ impl Coordinator {
         Ok(id)
     }
 
-    /// Initialize a session in memory.
-    async fn init_session(
-        &self,
-        session_id: SessionId,
-        config: SessionConfig,
-        agent_shared: Arc<AgentShared>,
-    ) -> Result<()> {
-        if self.sessions.contains_key(&session_id) {
-            return Err(SessionError::AlreadyExists {
-                session_id: session_id.0,
-            }
-            .into());
-        }
-
-        let session = Session::init(session_id.clone(), config, agent_shared).await?;
-
-        let session_arc = Arc::new(RwLock::new(session));
-
-        if self
-            .sessions
-            .insert(session_id.clone(), Arc::clone(&session_arc))
-            .is_some()
-        {
-            // Raced with another init — close the orphaned agent so it exits.
-            session_arc.read().await.close().await;
-            return Err(SessionError::AlreadyExists {
-                session_id: session_id.0,
-            }
-            .into());
-        }
-
-        Ok(())
-    }
-
     /// Restore a session from storage by its ID, optionally overriding the tool blocklist.
     pub async fn restore_session(
         &self,
         session_id: &SessionId,
-        tool_blocklist: Vec<String>,
+        _tool_blocklist: Vec<String>,
     ) -> Result<SessionId> {
-        let live = self.get_session(session_id).is_some();
-        tracing::info!(session_id = %session_id.0, "restore_session: live={}", live);
-
-        if live {
-            tracing::info!(session_id = %session_id.0, "already live, re-attaching");
-            return Ok(session_id.clone());
-        }
-
         let info = self
             .session_store()
             .await
@@ -480,46 +361,11 @@ impl Coordinator {
             .await?
             .ok_or_else(|| {
                 KernelError::from(SessionError::NotFound {
-                    session_id: session_id.0.clone(),
+                    session_id: session_id.0.to_string(),
                 })
             })?;
 
-        let auto_approve_level = info
-            .auto_approve_level
-            .as_deref()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(Level::Safe);
-
-        let project = match &info.project_id {
-            Some(pid) => self.project_store.get(pid).await?,
-            None => None,
-        };
-        let working_dir = info.working_dir.map(std::path::PathBuf::from);
-
-        let mut agent_config = self.agent_config.clone();
-        if !tool_blocklist.is_empty() {
-            agent_config.tool_blocklist.extend(tool_blocklist);
-        }
-
-        let config = SessionConfig {
-            agent: agent_config,
-            project,
-            working_dir,
-            auto_approve_level,
-            data_dir: self.data_dir().await.clone(),
-        };
         tracing::info!(session_id = %session_id.0, "Restoring from storage");
-        if let Err(e) = self
-            .init_session(info.id.clone(), config, Arc::clone(&self.agent_shared))
-            .await
-        {
-            if e.is_session_already_exists() {
-                tracing::debug!(session_id = %session_id.0, "already initialized — treating as restored");
-                return Ok(info.id);
-            }
-            return Err(e);
-        }
-        tracing::info!(session_id = %session_id.0, "restored");
         Ok(info.id)
     }
 
@@ -538,7 +384,7 @@ impl Coordinator {
             .await?
             .ok_or_else(|| {
                 KernelError::from(SessionError::NotFound {
-                    session_id: parent_id.0.clone(),
+                    session_id: parent_id.0.to_string(),
                 })
             })?;
 
@@ -612,26 +458,6 @@ impl Coordinator {
             Err(e) => tracing::warn!("failed to copy checkpoints: {}", e),
         }
 
-        let project = match &parent_info.project_id {
-            Some(pid) => self.project_store.get(pid).await?,
-            None => None,
-        };
-
-        let config = SessionConfig {
-            agent: self.agent_config.clone(),
-            project,
-            working_dir: parent_info.working_dir.map(std::path::PathBuf::from),
-            auto_approve_level,
-            data_dir: self.data_dir().await.clone(),
-        };
-
-        if let Err(e) = self
-            .init_session(new_id.clone(), config, Arc::clone(&self.agent_shared))
-            .await
-        {
-            let _ = self.session_store().await.delete(&new_id).await;
-            return Err(e);
-        }
         tracing::info!("forked session {} initialized", new_id.0);
         Ok(new_id)
     }
@@ -654,57 +480,9 @@ impl Coordinator {
         })
     }
 
-    pub fn get_session(&self, id: &SessionId) -> Option<Arc<RwLock<Session>>> {
-        self.sessions.get(id).map(|e| Arc::clone(e.value()))
-    }
-
-    /// Get runtime status for a session (streaming, compacting, etc.)
-    pub async fn get_session_status(&self, id: &SessionId) -> Result<crate::types::SessionStatus> {
-        let phase = if let Some(session) = self.get_session(id) {
-            let session = session.read().await;
-            match session.agent_state() {
-                Some(crate::agent::AgentState::Streaming) => "streaming",
-                Some(crate::agent::AgentState::ExecutingTool) => "executing_tool",
-                Some(crate::agent::AgentState::Compacting) => "compacting",
-                Some(crate::agent::AgentState::Closed) => "closed",
-                _ => "idle",
-            }
-        } else {
-            "idle"
-        };
-        Ok(crate::types::SessionStatus {
-            phase: phase.to_string(),
-        })
-    }
-
-    fn require_session(&self, session_id: &SessionId) -> Result<Arc<RwLock<Session>>> {
-        self.get_session(session_id).ok_or_else(|| {
-            SessionError::NotFound {
-                session_id: session_id.0.clone(),
-            }
-            .into()
-        })
-    }
-
-    async fn require_session_or_restore(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Arc<RwLock<Session>>> {
-        if let Some(session) = self.get_session(session_id) {
-            return Ok(session);
-        }
-        self.restore_session(session_id, Vec::new()).await?;
-        self.get_session(session_id).ok_or_else(|| {
-            SessionError::NotFound {
-                session_id: session_id.0.clone(),
-            }
-            .into()
-        })
-    }
-
     /// Return the number of sessions currently live in memory.
     pub fn live_session_count(&self) -> usize {
-        self.sessions.len()
+        self.conductor.active_count()
     }
 
     /// List skills available to a session, merging global skills with workspace skills.
@@ -714,13 +492,28 @@ impl Coordinator {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<Arc<crate::skill::Skill>>> {
-        let session = self.require_session(session_id)?;
-        let session = session.read().await;
+        let info = self
+            .session_store()
+            .await
+            .get(session_id)
+            .await?
+            .ok_or_else(|| SessionError::NotFound {
+                session_id: session_id.0.to_string(),
+            })?;
+
+        let working_dir = info.working_dir.map(std::path::PathBuf::from);
+        let project_dir = match &info.project_id {
+            Some(pid) => self.project_store.get(pid).await?.map(|p| p.dir),
+            None => None,
+        };
+        let data_dir = self.data_dir().await;
+        let cwd = working_dir
+            .or(project_dir)
+            .or_else(|| Some(data_dir.join("workspace")));
+
+        let workspace_skill_dir = cwd.map(|d| d.join(".agents/skills")).filter(|d| d.exists());
 
         let global_skills = self.agent_config.skills.clone();
-
-        let workspace_skill_dir = session.workspace_skill_dir().cloned();
-        drop(session);
 
         let mut skills = match workspace_skill_dir {
             Some(dir) => {
@@ -753,6 +546,32 @@ impl Coordinator {
         Ok(skills)
     }
 
+    /// Get full session info merged with runtime phase
+    pub async fn get_session(&self, sid: &SessionId) -> Result<crate::types::SessionResponse> {
+        let phase = match self.conductor.get_state(sid) {
+            Some(AgentState::Streaming) => "streaming",
+            Some(AgentState::ExecutingTool) => "executing_tool",
+            Some(AgentState::Compacting) => "compacting",
+            Some(AgentState::Idle) | None => "idle",
+        };
+        let info = self.session_store().await.get(sid).await?;
+        let info = info.ok_or_else(|| crate::types::SessionError::NotFound {
+            session_id: sid.0.to_string(),
+        })?;
+        Ok(crate::types::SessionResponse {
+            id: info.id,
+            phase: phase.to_string(),
+            title: info.title,
+            parent_id: info.parent_id,
+            project_id: info.project_id,
+            working_dir: info.working_dir,
+            message_count: info.message_count,
+            created_at: info.created_at,
+            updated_at: info.updated_at,
+            auto_approve_level: info.auto_approve_level,
+        })
+    }
+
     /// Send a multi-modal message with content blocks
     #[tracing::instrument(skip(self, blocks), fields(session_id = %session_id.0))]
     pub async fn send_message(
@@ -760,20 +579,33 @@ impl Coordinator {
         session_id: &SessionId,
         blocks: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
-        tracing::debug!("sending {} content blocks", blocks.len());
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.send_blocks(blocks).await;
-        if let Err(ref e) = result {
-            tracing::error!("failed to send blocks: {}", e);
+        let title = normalize_session_title(&text_from_blocks(&blocks));
+        if !title.is_empty() {
+            let _ = self
+                .session_store()
+                .await
+                .update_title(session_id, &title)
+                .await;
+            if let Some(ref bus) = self.agent_shared.event_bus {
+                let _ = bus.handle(session_id.clone()).try_send(Event::System(
+                    SystemEvent::TitleUpdated {
+                        session_id: session_id.clone(),
+                        title,
+                    },
+                ));
+            }
         }
-        result
+        self.input_bus
+            .publish(session_id.clone(), AgentInput::User { content: blocks })
+            .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
+        Ok(())
     }
 
     /// Subscribe to events for a session (to be called by TUI)
     pub fn subscribe_session_events(
         &self,
         session_id: &SessionId,
-    ) -> crate::event_bus::EventBusSubscriber {
+    ) -> crate::comms::EventBusSubscriber {
         self.agent_shared
             .event_bus
             .as_ref()
@@ -782,98 +614,92 @@ impl Coordinator {
     }
 
     /// Get the global event bus.
-    pub fn event_bus(&self) -> Option<Arc<crate::event_bus::EventBus>> {
+    pub fn event_bus(&self) -> Option<Arc<crate::comms::EventBus>> {
         self.agent_shared.event_bus.clone()
-    }
-
-    #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]
-    pub async fn send_steer(
-        &self,
-        session_id: &SessionId,
-        content: Vec<crate::types::ContentBlock>,
-    ) -> Result<()> {
-        tracing::debug!("sending steer");
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.send_steer(content);
-        if let Err(ref e) = result {
-            tracing::error!("failed to send steer: {}", e);
-        }
-        result
     }
 
     /// Send a continue command to trigger the agent from Idle to Streaming
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn send_continue(&self, session_id: &SessionId) -> Result<()> {
-        tracing::debug!("sending continue");
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.send_continue().await;
-        if let Err(ref e) = result {
-            tracing::error!("failed to send continue: {}", e);
+    pub fn send_continue(&self, session_id: &SessionId) {
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Continue)
+        {
+            tracing::warn!("Failed to publish continue input: {}", e);
         }
-        result
+    }
+
+    #[tracing::instrument(skip(self, content), fields(session_id = %session_id.0))]
+    pub fn send_steer(&self, session_id: &SessionId, content: Vec<crate::types::ContentBlock>) {
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Steer(content))
+        {
+            tracing::warn!("Failed to publish steer input: {}", e);
+        }
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn cancel(&self, session_id: &SessionId) -> Result<()> {
-        if let Some(session) = self.get_session(session_id) {
-            session.read().await.cancel();
+    pub fn cancel(&self, session_id: &SessionId) {
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Cancel)
+        {
+            tracing::warn!("Failed to publish cancel input: {}", e);
         }
-        Ok(())
     }
 
     /// Clear the session's agent context (messages, file state, todos, persisted history).
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn clear_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.clear().await;
-        if let Err(ref e) = result {
-            tracing::error!("failed to clear session: {}", e);
-        } else {
-            tracing::info!("session cleared");
+    pub fn clear_session(&self, session_id: &SessionId) {
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Clear)
+        {
+            tracing::warn!("Failed to publish clear input: {}", e);
         }
-        result
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn send_permission_response(
+    pub fn send_permission_response(
         &self,
         session_id: &SessionId,
         req_id: &str,
         approved: bool,
         remember: bool,
-    ) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        session
-            .read()
-            .await
-            .send_permission_response(req_id, approved, remember)
-            .await?;
-        Ok(())
+    ) {
+        if let Err(e) = self.input_bus.publish(
+            session_id.clone(),
+            AgentInput::PermissionResponse {
+                req_id: req_id.to_string(),
+                approved,
+                remember,
+            },
+        ) {
+            tracing::warn!("Failed to publish permission response: {}", e);
+        }
     }
 
     #[tracing::instrument(skip(self, response), fields(session_id = %session_id.0))]
-    pub async fn send_ask_user_response(
+    pub fn send_ask_user_response(
         &self,
         session_id: &SessionId,
         req_id: &str,
-        response: crate::tools::AskUserResponse,
-    ) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        session
-            .read()
-            .await
-            .send_ask_user_response(req_id, response)
-            .await?;
-        Ok(())
+        response: AskUserResponse,
+    ) {
+        if let Err(e) = self.input_bus.publish(
+            session_id.clone(),
+            AgentInput::AskUserResponse {
+                req_id: req_id.to_string(),
+                response,
+            },
+        ) {
+            tracing::warn!("Failed to publish ask_user response: {}", e);
+        }
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
     pub async fn set_permission_level(&self, session_id: &SessionId, level: Level) -> Result<()> {
-        // Update in-memory state if session is currently live
-        if let Some(session) = self.get_session(session_id) {
-            session.read().await.set_permission_level(level).await;
-        }
-        // Always persist to database regardless of whether session is in memory
         let rows = self
             .session_store()
             .await
@@ -893,15 +719,13 @@ impl Coordinator {
 
     /// Request compaction for a session's message buffer
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub async fn compact_session(&self, session_id: &SessionId) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.compact().await;
-        if let Err(ref e) = result {
-            tracing::error!("failed to compact: {}", e);
-        } else {
-            tracing::info!("compaction requested");
+    pub fn compact_session(&self, session_id: &SessionId) {
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Compact)
+        {
+            tracing::warn!("Failed to publish compact input: {}", e);
         }
-        result
     }
 
     /// Rewind a session to a specific checkpoint
@@ -912,14 +736,22 @@ impl Coordinator {
         message_id: crate::types::MessageId,
         target: crate::checkpoint::RewindTarget,
     ) -> Result<()> {
-        let session = self.require_session_or_restore(session_id).await?;
-        let result = session.read().await.rewind(message_id, target).await;
-        if let Err(ref e) = result {
-            tracing::error!("failed to rewind: {}", e);
-        } else {
-            tracing::info!("rewound successfully");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.input_bus
+            .publish(
+                session_id.clone(),
+                AgentInput::Rewind {
+                    message_id,
+                    target,
+                    result_tx: tx,
+                },
+            )
+            .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
+        match rx.recv().await {
+            Some(Ok(())) => Ok(()),
+            Some(Err(e)) => Err(KernelError::Checkpoint(e.to_string())),
+            None => Err(KernelError::Checkpoint("Rewind channel closed".to_string())),
         }
-        result
     }
 
     #[tracing::instrument(skip(self, state), fields(session_id = %session_id.0))]
@@ -931,18 +763,21 @@ impl Coordinator {
         let store = self.goal_store().await;
         store.save(&session_id.0, &state).await?;
 
-        if let Some(session) = self.get_session(session_id) {
-            let session = session.read().await;
-            let _ = session
-                .send_steer(vec![crate::types::ContentBlock::Text {
-                    text: state.build_continue_prompt(),
-                }])
-                .map_err(|e| tracing::warn!("goal start steer failed: {}", e));
-            if session.agent_state() == Some(crate::agent::AgentState::Idle) {
-                let _ = session
-                    .send_continue()
-                    .await
-                    .map_err(|e| tracing::warn!("goal start continue failed: {}", e));
+        if let Err(e) = self.input_bus.publish(
+            session_id.clone(),
+            AgentInput::Steer(vec![crate::types::ContentBlock::Text {
+                text: state.build_continue_prompt(),
+            }]),
+        ) {
+            tracing::warn!("Failed to publish goal steer: {}", e);
+        }
+
+        if self.conductor.get_state(session_id) == Some(AgentState::Idle) {
+            if let Err(e) = self
+                .input_bus
+                .publish(session_id.clone(), AgentInput::Continue)
+            {
+                tracing::warn!("Failed to publish goal continue: {}", e);
             }
         }
 
@@ -1034,13 +869,13 @@ impl Coordinator {
         state.status = crate::goal::GoalStatus::Active;
         store.save(&session_id.0, &state).await?;
 
-        if let Some(session) = self.get_session(session_id) {
-            let session = session.read().await;
-            let prompt = state.objective_updated_prompt();
-            let blocks = vec![crate::types::ContentBlock::Text { text: prompt }];
-            let _ = session
-                .send_steer(blocks)
-                .map_err(|e| tracing::warn!("update goal steer failed: {}", e));
+        let prompt = state.objective_updated_prompt();
+        let blocks = vec![crate::types::ContentBlock::Text { text: prompt }];
+        if let Err(e) = self
+            .input_bus
+            .publish(session_id.clone(), AgentInput::Steer(blocks))
+        {
+            tracing::warn!("Failed to publish goal update steer: {}", e);
         }
 
         if let Some(ref bus) = self.event_bus() {
@@ -1282,12 +1117,7 @@ impl crate::cron::CronExecutor for Coordinator {
                 session_id,
                 content,
             } => {
-                let sid = SessionId(session_id.clone());
-                if self.get_session(&sid).is_none() {
-                    self.restore_session(&sid, Vec::new())
-                        .await
-                        .map_err(CronError::Session)?;
-                }
+                let sid = SessionId::from(session_id.clone());
                 let text = render_template(content);
                 let blocks = vec![ContentBlock::Text { text }];
                 self.send_message(&sid, blocks)
@@ -1319,4 +1149,14 @@ impl crate::cron::CronExecutor for Coordinator {
         }
         Ok(())
     }
+}
+
+/// Normalize session title: collapse whitespace, trim, truncate to 20 chars.
+fn normalize_session_title(title: &str) -> String {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    title.chars().take(20).collect::<String>()
+}
+
+fn text_from_blocks(blocks: &[crate::types::ContentBlock]) -> String {
+    blocks.iter().filter_map(|b| b.as_text()).collect()
 }

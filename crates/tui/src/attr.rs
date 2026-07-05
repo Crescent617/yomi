@@ -77,8 +77,6 @@ pub const START_TOOL: &str = "start_tool";
 pub const COMPLETE_TOOL: &str = "complete_tool";
 /// Attribute for failing tool execution.
 pub const FAIL_TOOL: &str = "fail_tool";
-/// Attribute for updating tool progress.
-pub const UPDATE_TOOL_PROGRESS: &str = "update_tool_progress";
 /// Attribute for clearing the tool call display.
 pub const CLEAR_TOOL_CALL: &str = "clear_tool_call";
 /// Attribute for appending tool call delta.

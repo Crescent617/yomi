@@ -19,10 +19,11 @@ pub mod agent;
 pub mod app;
 pub mod checkpoint;
 pub mod client;
+pub mod comms;
 pub mod compactor;
 pub mod config;
+pub mod daemon_signal;
 pub mod event;
-pub mod event_bus;
 pub mod goal;
 pub mod hooks;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
@@ -51,7 +52,7 @@ pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedF
 
 // Re-export commonly used types
 pub use app::coordinator::CreateSessionInput;
-pub use app::{Coordinator, Session, SessionConfig};
+pub use app::Coordinator;
 pub use config::{env_names, Config, ModelProvider};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Copy, Undo } from "lucide-svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
-  import type { ChatMessage } from "../../state.svelte";
+  import type { Message } from "../../state.svelte";
   import { showNotification, getSession } from "../../state.svelte";
   import * as api from "../../api";
 
@@ -9,7 +9,7 @@
     message,
     session_id,
   }: {
-    message: ChatMessage;
+    message: Message;
     session_id: string;
   } = $props();
 
@@ -52,6 +52,7 @@
   }
 
   async function copyText() {
+    if (message.type === "tool") return;
     try {
       await navigator.clipboard.writeText(message.content || "");
       showNotification("Text copied", "success", 2000);

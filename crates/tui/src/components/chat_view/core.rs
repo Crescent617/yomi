@@ -76,8 +76,6 @@ pub enum HistoryMessage {
         /// Pre-parsed JSON arguments to avoid re-parsing on every render.
         parsed_args: Option<serde_json::Value>,
         elapsed_ms: Option<u64>,
-        tokens: Option<u32>,
-        progress: Option<String>,
         content_blocks: Vec<ToolOutputBlock>,
     },
     Error(String),
@@ -335,8 +333,6 @@ impl ChatView {
             arguments,
             parsed_args,
             elapsed_ms: None,
-            tokens: None,
-            progress: None,
             content_blocks: Vec::new(),
         });
         self.push_new_msg_cache();
@@ -387,26 +383,6 @@ impl ChatView {
                     *status = ToolStatus::Failed;
                     *err = Some(error);
                     *elapsed = Some(elapsed_ms);
-                    self.invalidate_msg_cache(i);
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Update tool progress (for long-running tools like subagent)
-    pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, tokens: Option<u32>) {
-        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
-            if let HistoryMessage::Tool {
-                tool_id: id,
-                progress,
-                tokens: tok,
-                ..
-            } = msg
-            {
-                if id == tool_id {
-                    *progress = Some(message.to_string());
-                    *tok = tokens;
                     self.invalidate_msg_cache(i);
                     break;
                 }
@@ -1393,15 +1369,6 @@ impl Component for ChatView {
                     self.fail_tool(&tool_id, error, elapsed_ms);
                 }
             }
-            attr::UPDATE_TOOL_PROGRESS => {
-                if let AttrValue::String(text) = value {
-                    let parts: Vec<&str> = text.split('\x00').collect();
-                    let tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
-                    let message = parts.get(1).map_or(String::new(), |s| (*s).to_string());
-                    let tokens = parts.get(2).and_then(|s| s.parse().ok());
-                    self.update_tool_progress(&tool_id, &message, tokens);
-                }
-            }
             attr::PAGE_UP | attr::PAGE_DOWN => {
                 if let AttrValue::Number(height) = value {
                     match cmd {
@@ -1517,7 +1484,7 @@ impl ChatViewComponent {
                         .complete_tool(tool_call_id, output, 0, Vec::new());
                 }
             }
-            kernel::types::Role::System => {}
+            kernel::types::Role::System | kernel::types::Role::Internal => {}
         }
     }
 }

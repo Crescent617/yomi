@@ -21,6 +21,14 @@ impl CancelToken {
         }
     }
 
+    /// Create a `CancelToken` from an existing tokio `CancellationToken`.
+    #[must_use]
+    pub fn from_runtime_token(token: CancellationToken) -> Self {
+        Self {
+            inner: Arc::new(ArcSwap::new(Arc::new(token))),
+        }
+    }
+
     /// 请求取消
     pub fn cancel(&self) {
         self.inner.load().cancel();
@@ -37,6 +45,16 @@ impl CancelToken {
     pub fn reset_if_cancelled(&self) {
         if self.is_cancelled() {
             self.inner.store(Arc::new(CancellationToken::new()));
+        }
+    }
+
+    /// 创建子 token，当父 token 被取消时，子 token 也会被取消
+    /// 子 token 的 reset 不会影响父 token
+    #[must_use]
+    pub fn child_token(&self) -> Self {
+        let child = self.inner.load().child_token();
+        Self {
+            inner: Arc::new(ArcSwap::new(Arc::new(child))),
         }
     }
 
@@ -65,6 +83,11 @@ impl CancelToken {
     pub fn runtime_token(&self) -> CancellationToken {
         (**self.inner.load()).clone()
     }
+}
+
+/// Check if an error is a cancellation error.
+pub fn is_cancelled_error(err: &crate::types::KernelError) -> bool {
+    err.is_cancelled()
 }
 
 impl Default for CancelToken {

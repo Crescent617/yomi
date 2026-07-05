@@ -35,55 +35,18 @@ impl SessionInfo {
     }
 }
 
-/// Default limit for listing sessions (safety cap)
-const DEFAULT_LIST_LIMIT: usize = 1000;
-
-/// Arguments for listing sessions with various filters
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[deprecated(
-    since = "0.2.0",
-    note = "Use cursor-based list(project_id, before, limit) instead"
-)]
-pub struct ListArgs {
-    /// Filter: sessions with `updated_at` < before
-    pub before: Option<chrono::DateTime<chrono::Utc>>,
-    /// Filter: sessions with `updated_at` > after
-    pub after: Option<chrono::DateTime<chrono::Utc>>,
-    /// Filter: exact match on working directory
-    pub working_dir: Option<String>,
-    /// Limit number of results (None = unlimited)
-    pub limit: Option<usize>,
-    /// Offset for pagination
-    pub offset: Option<usize>,
-    /// Order by `updated_at` (default: descending)
-    pub order_asc: bool,
-}
-
-#[allow(deprecated)]
-impl Default for ListArgs {
-    fn default() -> Self {
-        Self {
-            before: None,
-            after: None,
-            working_dir: None,
-            limit: Some(DEFAULT_LIST_LIMIT),
-            offset: None,
-            order_asc: false,
-        }
-    }
-}
-
 /// Storage for session lifecycle and metadata
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Create a new session with the given ID, optional `project_id`, optional working directory,
-    /// optional `auto_approve_level`, and optional `tool_blocklist` (JSON array)
+    /// optional `auto_approve_level`, and optional `parent_id`
     async fn create(
         &self,
         id: &SessionId,
         project_id: Option<&crate::types::ProjectId>,
         working_dir: Option<&str>,
         auto_approve_level: Option<&str>,
+        parent_id: Option<&SessionId>,
     ) -> Result<()>;
 
     /// Fork a session, copying its metadata (including `auto_approve_level`)

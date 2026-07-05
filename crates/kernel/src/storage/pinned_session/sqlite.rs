@@ -27,7 +27,7 @@ struct PinnedSessionRow {
 impl From<PinnedSessionRow> for PinnedSessionInfo {
     fn from(row: PinnedSessionRow) -> Self {
         Self {
-            session_id: SessionId(row.session_id),
+            session_id: SessionId::from(row.session_id),
             icon_emoji: row.icon_emoji,
             pinned_at: row.pinned_at,
         }
@@ -47,9 +47,9 @@ struct PinnedSessionDetailRow {
 impl From<PinnedSessionDetailRow> for PinnedSessionDetail {
     fn from(row: PinnedSessionDetailRow) -> Self {
         Self {
-            session_id: SessionId(row.session_id),
+            session_id: SessionId::from(row.session_id),
             title: row.title,
-            project_id: row.project_id.map(ProjectId),
+            project_id: row.project_id.map(ProjectId::from),
             updated_at: row.updated_at,
             icon_emoji: row.icon_emoji,
             pinned_at: row.pinned_at,
@@ -67,7 +67,7 @@ impl PinnedSessionStore for SqlitePinnedSessionStore {
                  icon_emoji = excluded.icon_emoji,
                  pinned_at = excluded.pinned_at",
         )
-        .bind(&session_id.0)
+        .bind(&*session_id.0)
         .bind(emoji)
         .execute(&self.pool)
         .await
@@ -77,7 +77,7 @@ impl PinnedSessionStore for SqlitePinnedSessionStore {
 
     async fn unpin(&self, session_id: &SessionId) -> Result<()> {
         sqlx::query("DELETE FROM pinned_sessions WHERE session_id = ?")
-            .bind(&session_id.0)
+            .bind(&*session_id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to unpin session: {e}")))?;
@@ -87,7 +87,7 @@ impl PinnedSessionStore for SqlitePinnedSessionStore {
     async fn update_emoji(&self, session_id: &SessionId, emoji: Option<&str>) -> Result<()> {
         let result = sqlx::query("UPDATE pinned_sessions SET icon_emoji = ? WHERE session_id = ?")
             .bind(emoji)
-            .bind(&session_id.0)
+            .bind(&*session_id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to update pinned emoji: {e}")))?;
@@ -104,7 +104,7 @@ impl PinnedSessionStore for SqlitePinnedSessionStore {
         let row = sqlx::query_as::<_, PinnedSessionRow>(
             "SELECT session_id, icon_emoji, pinned_at FROM pinned_sessions WHERE session_id = ?",
         )
-        .bind(&session_id.0)
+        .bind(&*session_id.0)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to get pinned session: {e}")))?;

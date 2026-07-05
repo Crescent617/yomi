@@ -46,6 +46,9 @@ pub struct AgentSpawnArgs {
     pub allow_command_hooks: bool,
     /// Maximum tool output length in bytes
     pub max_tool_output_length: usize,
+    /// Mailbox for receiving input messages. Created by Conductor or subagent caller.
+    pub mailbox: Arc<crate::comms::Mailbox>,
+    pub input_bus: Option<Arc<crate::comms::InputBus>>,
 }
 
 impl std::fmt::Debug for AgentSpawnArgs {
@@ -64,13 +67,20 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("tool_blocklist", &self.tool_blocklist)
             .field("allow_command_hooks", &self.allow_command_hooks)
             .field("max_tool_output_length", &self.max_tool_output_length)
+            .field("mailbox", &self.mailbox)
+            .field("input_bus", &self.input_bus.is_some())
             .finish()
     }
 }
 
 impl AgentSpawnArgs {
-    /// Create a new config with the given base prompt and session
-    pub fn new(base_prompt: impl Into<String>, session_id: impl Into<String>) -> Self {
+    /// Create a new config with the given base prompt, session, mailbox and working directory
+    pub fn new(
+        base_prompt: impl Into<String>,
+        session_id: impl Into<String>,
+        mailbox: impl Into<Arc<crate::comms::Mailbox>>,
+        working_dir: impl Into<std::path::PathBuf>,
+    ) -> Self {
         Self {
             base_prompt: base_prompt.into(),
             skills: Vec::new(),
@@ -79,12 +89,14 @@ impl AgentSpawnArgs {
             parent_session_id: None,
             max_iterations: 100,
             enable_subagent: true,
-            working_dir: std::path::PathBuf::new(),
+            working_dir: working_dir.into(),
             cancel_token: None,
             file_state_store: None,
             tool_blocklist: Vec::new(),
             allow_command_hooks: false,
             max_tool_output_length: 40_000,
+            input_bus: None,
+            mailbox: mailbox.into(),
         }
     }
 
@@ -129,14 +141,6 @@ impl AgentSpawnArgs {
         self
     }
 
-    /// Set working directory
-    #[must_use]
-    pub fn with_working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
-        self.working_dir = dir.into();
-        self
-    }
-
-    /// Set cancel token to share with parent (for cascading cancellation)
     #[must_use]
     pub fn with_cancel_token(mut self, token: super::CancelToken) -> Self {
         self.cancel_token = Some(token);
@@ -164,6 +168,13 @@ impl AgentSpawnArgs {
     #[must_use]
     pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
         self.allow_command_hooks = allow;
+        self
+    }
+
+    /// Set the input bus for publishing messages (needed by subagent tool)
+    #[must_use]
+    pub fn with_input_bus(mut self, input_bus: Arc<crate::comms::InputBus>) -> Self {
+        self.input_bus = Some(input_bus);
         self
     }
 
@@ -211,42 +222,23 @@ impl std::fmt::Display for SubAgentMode {
 }
 
 /// Agent state machine
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Idle,
     Streaming,
     ExecutingTool,
     Compacting,
-    Closed,
 }
 
 impl AgentState {
-    pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Closed)
-    }
-
-    pub const fn valid_transitions(&self) -> &'static [Self] {
-        match self {
-            Self::Idle => &[Self::Streaming, Self::Compacting, Self::Closed],
-            Self::Streaming => &[Self::ExecutingTool, Self::Compacting, Self::Idle],
-            Self::ExecutingTool => &[Self::Streaming, Self::Idle, Self::Closed],
-            Self::Compacting => &[Self::Idle, Self::Streaming],
-            Self::Closed => &[],
-        }
-    }
-
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Streaming => "streaming",
             Self::ExecutingTool => "executing_tool",
             Self::Compacting => "compacting",
-            Self::Closed => "completed",
         }
-    }
-
-    pub fn can_transition_to(&self, target: Self) -> bool {
-        self.valid_transitions().contains(&target)
     }
 }
 
@@ -256,22 +248,35 @@ pub struct AgentExecutionContext {
     inner: Arc<AgentExecutionContextInner>,
 }
 
-#[derive(Debug)]
 struct AgentExecutionContextInner {
     state_tx: tokio::sync::watch::Sender<AgentState>,
     iteration_count: AtomicUsize,
+    on_state_change: Option<Box<dyn Fn(AgentState) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for AgentExecutionContextInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentExecutionContextInner")
+            .field("state_tx", &self.state_tx)
+            .field("iteration_count", &self.iteration_count)
+            .field("on_state_change", &self.on_state_change.is_some())
+            .finish()
+    }
 }
 
 impl AgentExecutionContext {
-    pub fn new(initial_state: AgentState) -> (Self, tokio::sync::watch::Receiver<AgentState>) {
-        let (state_tx, state_rx) = tokio::sync::watch::channel(initial_state);
-        let ctx = Self {
+    pub fn new(
+        initial_state: AgentState,
+        on_state_change: Option<Box<dyn Fn(AgentState) + Send + Sync>>,
+    ) -> Self {
+        let (state_tx, _) = tokio::sync::watch::channel(initial_state);
+        Self {
             inner: Arc::new(AgentExecutionContextInner {
                 state_tx,
                 iteration_count: AtomicUsize::new(0),
+                on_state_change,
             }),
-        };
-        (ctx, state_rx)
+        }
     }
 
     pub fn transition_to(&self, new_state: AgentState) -> bool {
@@ -279,11 +284,10 @@ impl AgentExecutionContext {
         if current == new_state {
             return true;
         }
-        if !current.can_transition_to(new_state) {
-            tracing::warn!("Invalid state transition: {:?} -> {:?}", current, new_state);
-            return false;
-        }
         self.inner.state_tx.send_replace(new_state);
+        if let Some(ref hook) = self.inner.on_state_change {
+            hook(new_state);
+        }
         true
     }
 
@@ -340,7 +344,7 @@ pub struct AgentShared {
     /// Optional goal store for autonomous goal-mode execution
     pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
     /// Global event bus for all agents and sessions
-    pub event_bus: Option<Arc<crate::event_bus::EventBus>>,
+    pub event_bus: Option<Arc<crate::comms::EventBus>>,
 }
 
 impl AgentShared {
@@ -483,7 +487,7 @@ impl AgentShared {
 
     /// Set the event bus
     #[must_use]
-    pub fn with_event_bus(mut self, event_bus: Arc<crate::event_bus::EventBus>) -> Self {
+    pub fn with_event_bus(mut self, event_bus: Arc<crate::comms::EventBus>) -> Self {
         self.event_bus = Some(event_bus);
         self
     }
@@ -507,14 +511,6 @@ pub enum AgentError {
     #[error("Cancelled: {0}")]
     Cancelled(String),
 
-    /// Input channel closed unexpectedly
-    #[error("Input channel closed")]
-    ChannelClosed,
-
-    /// Steer channel is full (backpressure)
-    #[error("Steer channel full")]
-    ChannelFull,
-
     /// Stream task panicked
     #[error("Stream task panicked: {0}")]
     StreamTaskPanicked(String),
@@ -534,13 +530,17 @@ pub enum AgentError {
     /// Serialization error
     #[error("Serialization error: {0}")]
     Serialization(String),
+
+    /// Agent was shut down by request
+    #[error("Shutdown")]
+    Shutdown,
 }
 
 impl AgentError {
     pub fn is_retryable(&self) -> bool {
         use AgentError::{
-            Cancelled, ChannelClosed, ChannelFull, MaxIterationsExceeded, NoPermissionChecker,
-            PermissionCheckFailed, Provider, Serialization, StreamTaskPanicked,
+            Cancelled, MaxIterationsExceeded, NoPermissionChecker, PermissionCheckFailed, Provider,
+            Serialization, Shutdown, StreamTaskPanicked,
         };
         match self {
             // Delegate to ProviderError's retry logic
@@ -548,11 +548,10 @@ impl AgentError {
             // These errors should NOT be retried
             MaxIterationsExceeded { .. }
             | Cancelled(_)
-            | ChannelClosed
-            | ChannelFull
             | PermissionCheckFailed(_)
             | NoPermissionChecker
-            | Serialization(_) => false,
+            | Serialization(_)
+            | Shutdown => false,
             // Stream task panics might be transient
             StreamTaskPanicked(_) => true,
         }
@@ -562,44 +561,12 @@ impl AgentError {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, AgentError::Cancelled(_))
     }
+
+    /// Check if this is a shutdown error (graceful termination)
+    pub fn is_shutdown(&self) -> bool {
+        matches!(self, AgentError::Shutdown)
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_terminal_states_have_no_transitions() {
-        assert!(AgentState::Closed.valid_transitions().is_empty());
-    }
-
-    #[test]
-    fn test_streaming_can_execute_tool_or_finish() {
-        assert!(AgentState::Streaming.can_transition_to(AgentState::ExecutingTool));
-        assert!(AgentState::Streaming.can_transition_to(AgentState::Idle));
-        assert!(!AgentState::Streaming.can_transition_to(AgentState::Closed));
-    }
-
-    #[test]
-    fn test_executing_tool_transitions() {
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Idle));
-        assert!(AgentState::ExecutingTool.can_transition_to(AgentState::Closed));
-    }
-
-    #[test]
-    fn test_waiting_for_input_transitions() {
-        assert!(AgentState::Idle.can_transition_to(AgentState::Streaming));
-        assert!(AgentState::Idle.can_transition_to(AgentState::Compacting));
-        assert!(!AgentState::Idle.can_transition_to(AgentState::ExecutingTool));
-        assert!(!AgentState::Idle.can_transition_to(AgentState::Idle));
-    }
-
-    #[test]
-    fn test_compacting_transitions() {
-        assert!(AgentState::Compacting.can_transition_to(AgentState::Idle));
-        assert!(AgentState::Compacting.can_transition_to(AgentState::Streaming));
-        assert!(!AgentState::Compacting.can_transition_to(AgentState::ExecutingTool));
-        assert!(!AgentState::Compacting.can_transition_to(AgentState::Closed));
-    }
-}
+mod tests {}

@@ -36,7 +36,7 @@ impl AnthropicProvider {
             .iter()
             .filter_map(|m| {
                 let role = match m.role {
-                    Role::System => return None, // System is handled separately
+                    Role::System | Role::Internal => return None, // System is handled separately
                     Role::User | Role::Tool => "user",
                     Role::Assistant => "assistant",
                 };

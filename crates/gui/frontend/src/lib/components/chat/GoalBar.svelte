@@ -10,6 +10,7 @@
   } from "lucide-svelte";
   import { getActiveSession } from "../../state.svelte";
   import * as api from "../../api";
+  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
   const activeSession = $derived(getActiveSession());
 
@@ -18,6 +19,8 @@
   let loading = $state(false);
   let editingGoal = $state(false);
   let editGoalText = $state("");
+
+  let stopConfirmOpen = $state(false);
 
   let el: HTMLDivElement;
   let handleEl: HTMLDivElement;
@@ -151,12 +154,13 @@
     }
   }
 
-  async function handleStopGoal() {
+  function handleStopGoal() {
     if (!activeSession?.id || loading) return;
-    const confirmed = confirm(
-      "Are you sure you want to stop the current goal?",
-    );
-    if (!confirmed) return;
+    stopConfirmOpen = true;
+  }
+
+  async function doStopGoal() {
+    if (!activeSession?.id || loading) return;
     loading = true;
     try {
       await api.stopGoal(activeSession.id);
@@ -514,3 +518,17 @@
     </div>
   </div>
 {/if}
+
+<ConfirmDialog
+  open={stopConfirmOpen}
+  title="Stop Goal"
+  message="Are you sure you want to stop the current goal?"
+  confirmText="Stop"
+  onConfirm={() => {
+    stopConfirmOpen = false;
+    doStopGoal();
+  }}
+  onCancel={() => {
+    stopConfirmOpen = false;
+  }}
+/>

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Terminal } from "lucide-svelte";
-  import type { ChatMessage } from "../../state.svelte";
+  import type { SystemMessage } from "../../state.svelte";
 
-  let { message }: { message: ChatMessage } = $props();
+  let { message }: { message: SystemMessage } = $props();
 
   let expanded = $state(false);
 

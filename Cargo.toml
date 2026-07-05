@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.54"
+version = "0.3.0"
 edition = "2021"
 authors = ["Huaru Li <crescent617@outlook.com>"]
 license = "MIT"
@@ -24,8 +24,8 @@ anyhow = "1.0"
 tracing = "0.1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+
 ulid = "1.2"
-uuid = { version = "1.23", features = ["v4", "serde", "v7"] }
 
 # TUI deps
 crossterm = { version = "0.29", features = ["bracketed-paste"] }

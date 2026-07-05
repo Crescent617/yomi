@@ -2,68 +2,109 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use ulid::Ulid;
-use uuid::Uuid;
 
-/// Unique identifier for agents
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct AgentId(SmolStr);
+// ─── Prefix constants ───────────────────────────────────────────────────────
 
-impl Default for AgentId {
-    fn default() -> Self {
-        Self::new()
-    }
+pub const SESS_PREFIX: &str = "sess_";
+pub const SUB_PREFIX: &str = "sub_";
+pub const PROJ_PREFIX: &str = "proj_";
+pub const MSG_PREFIX: &str = "msg_";
+pub const CRON_PREFIX: &str = "cron_";
+pub const EVT_PREFIX: &str = "evt_";
+
+// ─── Macro: generate a distinct newtype for each ID ───────────────────────
+
+macro_rules! define_id {
+    (
+        $(#[$meta:meta])*
+        $name:ident => $prefix:literal
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        #[repr(transparent)]
+        pub struct $name(pub SmolStr);
+
+        impl $name {
+            pub const PREFIX: &'static str = $prefix;
+
+            pub fn new() -> Self {
+                Self(SmolStr::new(format!("{}{}", Self::PREFIX, Ulid::new())))
+            }
+
+            pub fn as_str(&self) -> &str {
+                self.0.as_str()
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+            fn deref(&self) -> &str {
+                self.0.as_str()
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(s: String) -> Self {
+                Self(SmolStr::new(s))
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(s: &str) -> Self {
+                Self(SmolStr::new(s))
+            }
+        }
+
+        impl From<SmolStr> for $name {
+            fn from(s: SmolStr) -> Self {
+                Self(s)
+            }
+        }
+
+        impl From<&SmolStr> for $name {
+            fn from(s: &SmolStr) -> Self {
+                Self(s.clone())
+            }
+        }
+    };
 }
 
-impl AgentId {
-    pub fn new() -> Self {
-        Self(SmolStr::new(Uuid::now_v7().to_string()))
+// ─── Generate all ID types ──────────────────────────────────────────────
+
+define_id!(SessionId => "sess_");
+define_id!(ProjectId => "proj_");
+define_id!(MessageId => "msg_");
+define_id!(CronJobId => "cron_");
+define_id!(EventId => "evt_");
+
+// ─── Specialised extensions ─────────────────────────────────────────────
+
+impl SessionId {
+    pub fn new_subagent() -> Self {
+        Self(SmolStr::new(format!("sub_{}", Ulid::new())))
     }
 
-    /// Create from an existing string (used for database retrieval)
-    pub fn from_string(s: impl Into<String>) -> Self {
-        Self(SmolStr::new(s.into()))
-    }
-
-    /// Get the string representation
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for AgentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+    pub fn is_subagent(&self) -> bool {
+        self.0.starts_with("sub_")
     }
 }
-
-/// Unique identifier for projects
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ProjectId(pub String);
 
 impl ProjectId {
-    pub fn new() -> Self {
-        Self(Uuid::now_v7().to_string())
-    }
-
-    /// The default workspace project ID (all zeros UUID).
-    /// This is a valid UUID v4 nil value, used as a stable identifier
-    /// for the per-data-directory default project.
     pub fn default_workspace() -> Self {
-        Self("00000000-0000-0000-0000-000000000000".to_string())
-    }
-}
-
-impl Default for ProjectId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for ProjectId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        Self(SmolStr::new("00000000-0000-0000-0000-000000000000")) // for compatibility
     }
 }
 
@@ -78,85 +119,36 @@ pub struct Project {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Unique identifier for sessions
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SessionId(pub String);
-
-impl std::ops::Deref for SessionId {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl SessionId {
-    pub fn new() -> Self {
-        Self(format!("sess_{}", Ulid::new()))
-    }
-
-    /// Create from an existing string (used for database retrieval)
-    pub fn from_string(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-
-    /// Get the string representation
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Session runtime status for UI state syncing
+/// Session response with metadata and runtime status
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct SessionStatus {
+pub struct SessionResponse {
+    pub id: SessionId,
     pub phase: String,
+    pub title: Option<String>,
+    pub parent_id: Option<SessionId>,
+    pub project_id: Option<ProjectId>,
+    pub working_dir: Option<String>,
+    pub message_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub auto_approve_level: Option<String>,
 }
 
-impl Default for SessionStatus {
+impl Default for SessionResponse {
     fn default() -> Self {
         Self {
+            id: SessionId::new(),
             phase: "idle".to_string(),
+            title: None,
+            parent_id: None,
+            project_id: None,
+            working_dir: None,
+            message_count: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            auto_approve_level: None,
         }
-    }
-}
-
-impl Default for SessionId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Unique identifier for messages
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct MessageId(SmolStr);
-
-impl MessageId {
-    pub fn new() -> Self {
-        Self(SmolStr::new(Uuid::now_v7().to_string()))
-    }
-
-    /// Create from an existing string (used for database retrieval)
-    pub fn from_string(s: impl Into<String>) -> Self {
-        Self(SmolStr::new(s.into()))
-    }
-
-    /// Get the string representation
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for MessageId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 
@@ -168,6 +160,7 @@ pub enum Role {
     User,
     Assistant,
     Tool,
+    Internal,
 }
 
 /// Finish reason - normalized across providers
@@ -325,6 +318,10 @@ pub struct Message {
     /// Only set for assistant messages from API
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<FinishReason>,
+    /// Internal metadata for UI display (not sent to model).
+    /// E.g., {"`subagent_session_id"`: "sess-xxx"} for subagent tool.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub metadata: Option<std::collections::HashMap<String, String>>,
 }
 
 impl Default for Message {
@@ -339,6 +336,7 @@ impl Default for Message {
             token_usage: None,
             response_id: None,
             finish_reason: None,
+            metadata: None,
         }
     }
 }
@@ -590,7 +588,7 @@ impl From<&str> for ToolOutputBlock {
 }
 
 /// Tool output - supports multimodal content (text + images)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolOutput {
     pub contents: Vec<ToolOutputBlock>,
     pub is_error: bool,

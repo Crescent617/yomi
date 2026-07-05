@@ -53,6 +53,10 @@ pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
 pub use websearch::{WebSearchTool, WEBSEARCH_TOOL_NAME};
 pub use write::{WriteTool, WRITE_TOOL_NAME};
 
+/// Guidance for tools that launch async/background tasks.
+/// Tells the agent to end its turn immediately and wait for the result notification.
+pub const ASYNC_LAUNCH_GUIDE: &str = "After launching, end your current turn immediately — do not sleep, poll, or re-launch. The result will be sent automatically when complete.";
+
 /// Context provided to tools during execution
 pub struct ToolExecCtx<'a> {
     /// The ID of this tool call

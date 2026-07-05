@@ -23,7 +23,7 @@ async fn resolve_session_id(storage: &StorageSet, session_id: Option<String>) ->
                         .as_ref()
                         .is_some_and(|d| d.starts_with(cwd_str.as_ref()))
                 })
-                .map(|s| s.id.0)
+                .map(|s| s.id.0.to_string())
                 .context("No session found in current directory. Use --session to specify one.")
         }
     }

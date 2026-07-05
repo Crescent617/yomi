@@ -53,7 +53,7 @@ impl CronStore for SqliteCronStore {
                 next_run_at, last_run_at, run_count, max_runs, expires_at, last_error
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&job.id.0)
+        .bind(&*job.id.0)
         .bind(&job.name)
         .bind(&job.schedule)
         .bind(&action_json)
@@ -74,7 +74,7 @@ impl CronStore for SqliteCronStore {
 
     async fn get(&self, id: &CronJobId) -> Result<Option<CronJob>, CronError> {
         let row = sqlx::query_as::<_, CronJobRow>("SELECT * FROM cron_jobs WHERE id = ?")
-            .bind(&id.0)
+            .bind(&*id.0)
             .fetch_optional(&self.pool)
             .await?;
 
@@ -133,7 +133,7 @@ impl CronStore for SqliteCronStore {
         .bind(input.expires_at.map(|t| t.to_rfc3339()))
         .bind(input.next_run_at.map(|t| t.to_rfc3339()))
         .bind(Utc::now().to_rfc3339())
-        .bind(&id.0)
+        .bind(&*id.0)
         .execute(&self.pool)
         .await?;
 
@@ -142,7 +142,7 @@ impl CronStore for SqliteCronStore {
 
     async fn delete(&self, id: &CronJobId) -> Result<bool, CronError> {
         let result = sqlx::query("DELETE FROM cron_jobs WHERE id = ?")
-            .bind(&id.0)
+            .bind(&*id.0)
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
@@ -174,7 +174,7 @@ impl CronStore for SqliteCronStore {
         .bind(Utc::now().to_rfc3339())
         .bind(error.as_ref())
         .bind(Utc::now().to_rfc3339())
-        .bind(&id.0)
+        .bind(&*id.0)
         .execute(&self.pool)
         .await?;
 
@@ -212,7 +212,7 @@ impl From<CronJobRow> for CronJob {
         let status = row.status.parse().unwrap_or(CronJobStatus::Failed);
 
         Self {
-            id: CronJobId(row.id),
+            id: CronJobId::from(row.id),
             name: row.name,
             schedule: row.schedule,
             action,

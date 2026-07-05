@@ -15,7 +15,7 @@ pub async fn list_sessions(
 ) -> Result<PaginatedSessions, GuiError> {
     let coord = state.coordinator.clone();
 
-    let pid = project_id.map(kernel::types::ProjectId);
+    let pid = project_id.map(kernel::types::ProjectId::from);
     let before_dt = match before {
         Some(s) => Some(
             chrono::DateTime::parse_from_rfc3339(&s)
@@ -44,7 +44,7 @@ pub async fn create_session(
     let coord = state.coordinator.clone();
     let level = parse_level(&auto_approve_level)?;
     let input = kernel::CreateSessionInput {
-        project_id: project_id.map(kernel::types::ProjectId),
+        project_id: project_id.map(kernel::types::ProjectId::from),
         working_dir: working_dir.map(std::path::PathBuf::from),
         auto_approve_level: level,
         tool_blocklist: vec![],
@@ -53,7 +53,7 @@ pub async fn create_session(
         .create_session(input)
         .await
         .map_err(GuiError::kernel)?;
-    Ok(session_id.0)
+    Ok(session_id.0.to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -62,7 +62,7 @@ pub async fn restore_session(
     session_id: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     coord
         .restore_session(&sid, Vec::new())
         .await
@@ -78,12 +78,12 @@ pub async fn fork_session(
 ) -> Result<String, GuiError> {
     let coord = state.coordinator.clone();
     let level = parse_level(&auto_approve_level)?;
-    let pid = SessionId(parent_id);
+    let pid = SessionId::from(parent_id);
     let new_id = coord
         .fork_session(&pid, level)
         .await
         .map_err(GuiError::kernel)?;
-    Ok(new_id.0)
+    Ok(new_id.0.to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -92,7 +92,7 @@ pub async fn delete_session(
     session_id: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     coord.delete_session(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }
@@ -103,11 +103,8 @@ pub async fn shutdown_session(
     session_id: String,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
-    coord
-        .shutdown_session(&sid)
-        .await
-        .map_err(GuiError::kernel)?;
+    let sid = SessionId::from(session_id);
+    let _ = coord.cancel(&sid).await;
     Ok(())
 }
 
@@ -118,7 +115,7 @@ pub async fn pin_session(
     icon_emoji: Option<String>,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     coord
         .pin_session(&sid, icon_emoji)
         .await
@@ -129,7 +126,7 @@ pub async fn pin_session(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn unpin_session(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     coord.unpin_session(&sid).await.map_err(GuiError::kernel)?;
     Ok(())
 }
@@ -141,7 +138,7 @@ pub async fn set_pinned_session_emoji(
     icon_emoji: Option<String>,
 ) -> Result<(), GuiError> {
     let coord = state.coordinator.clone();
-    let sid = SessionId(session_id);
+    let sid = SessionId::from(session_id);
     coord
         .set_pinned_session_emoji(&sid, icon_emoji)
         .await

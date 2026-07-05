@@ -362,7 +362,7 @@ mod tests {
         }
 
         async fn get(&self, id: &CronJobId) -> Result<Option<CronJob>, CronError> {
-            Ok(self.jobs.lock().unwrap().get(&id.0).cloned())
+            Ok(self.jobs.lock().unwrap().get(id.0.as_str()).cloned())
         }
 
         async fn list(
@@ -381,9 +381,9 @@ mod tests {
             self.updates
                 .lock()
                 .unwrap()
-                .push((id.0.clone(), input.clone()));
+                .push((id.0.to_string(), input.clone()));
             let mut jobs = self.jobs.lock().unwrap();
-            if let Some(job) = jobs.get_mut(&id.0) {
+            if let Some(job) = jobs.get_mut(id.0.as_str()) {
                 if let Some(name) = &input.name {
                     job.name.clone_from(name);
                 }
@@ -442,7 +442,7 @@ mod tests {
         run_count: u32,
     ) -> CronJob {
         CronJob {
-            id: CronJobId(id.to_string()),
+            id: CronJobId::from(id.to_string()),
             name: "test".to_string(),
             schedule: schedule.to_string(),
             action: CronAction::Shell {

@@ -61,7 +61,7 @@ impl ChannelStore for SqliteChannelStore {
         .await
         .map_err(|e| storage_err(format!("Failed to find channel mapping: {e}")))?;
 
-        Ok(row.map(|r| SessionId::from_string(r.0)))
+        Ok(row.map(|r| SessionId::from(r.0)))
     }
 
     async fn list_mappings(&self, channel_name: &str) -> Result<Vec<(String, SessionId)>> {
@@ -76,7 +76,7 @@ impl ChannelStore for SqliteChannelStore {
 
         Ok(rows
             .into_iter()
-            .map(|(chat_id, sid)| (chat_id, SessionId::from_string(sid)))
+            .map(|(chat_id, sid)| (chat_id, SessionId::from(sid)))
             .collect())
     }
 
@@ -103,11 +103,7 @@ impl ChannelStore for SqliteChannelStore {
         ))
     }
 
-    async fn delete_mapping(
-        &self,
-        channel_name: &str,
-        mapping_key: &str,
-    ) -> Result<()> {
+    async fn delete_mapping(&self, channel_name: &str, mapping_key: &str) -> Result<()> {
         sqlx::query(
             "DELETE FROM channel_session_mappings
              WHERE channel_name = ? AND external_chat_id = ?",

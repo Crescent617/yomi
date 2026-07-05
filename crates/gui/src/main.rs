@@ -42,7 +42,7 @@ pub fn run() {
             commands::chat::subscribe,
             commands::chat::unsubscribe,
             commands::chat::get_messages,
-            commands::chat::get_session_status,
+            commands::chat::get_session,
             commands::chat::cancel_session,
             commands::chat::respond_permission,
             commands::chat::respond_ask_user,

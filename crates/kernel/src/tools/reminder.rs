@@ -5,25 +5,26 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 use crate::agent::AgentInput;
+use crate::comms::InputBus;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{ContentBlock, KernelError, Result, ToolOutput};
+use crate::types::{ContentBlock, KernelError, Result, SessionId, ToolOutput};
 
 pub const REMINDER_TOOL_NAME: &str = "reminder";
 
 /// Tool for scheduling reminders to the agent itself.
 pub struct ReminderTool {
-    input_tx: mpsc::Sender<AgentInput>,
+    input_bus: Arc<InputBus>,
 }
 
 impl ReminderTool {
     /// Create a new reminder tool.
-    pub fn new(input_tx: mpsc::Sender<AgentInput>) -> Self {
-        Self { input_tx }
+    pub fn new(input_bus: Arc<InputBus>) -> Self {
+        Self { input_bus }
     }
 }
 
@@ -56,7 +57,7 @@ impl Tool for ReminderTool {
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let delay = args["delay_seconds"]
             .as_u64()
             .ok_or_else(|| KernelError::tool("delay_seconds must be a positive integer"))?;
@@ -72,8 +73,9 @@ impl Tool for ReminderTool {
             .ok_or_else(|| KernelError::tool("message must be a string"))?
             .to_string();
 
-        let input_tx = self.input_tx.clone();
-        let tool_call_id = _ctx.tool_call_id.to_string();
+        let input_bus = self.input_bus.clone();
+        let session_id = ctx.session_id.clone();
+        let _tool_call_id = ctx.tool_call_id.to_string();
         let message_for_reminder = message.clone();
 
         // Spawn a background task to deliver the reminder
@@ -82,16 +84,16 @@ impl Tool for ReminderTool {
 
             // Send reminder as a task result to wake up the agent
             let reminder = format!("Reminder (after {delay}s): {message_for_reminder}");
-            let _ = input_tx
-                .send(AgentInput::TaskResult {
-                    task_id: tool_call_id,
-                    content: vec![ContentBlock::Text { text: reminder }],
-                })
-                .await;
+            if let Err(e) = input_bus.publish(
+                SessionId::from(session_id.clone()),
+                AgentInput::Steer(vec![ContentBlock::Text { text: reminder }]),
+            ) {
+                tracing::warn!("Failed to publish reminder: {}", e);
+            }
         });
 
         Ok(ToolOutput::text(format!(
-            "Reminder scheduled  in {delay} seconds"
+            "Reminder scheduled in {delay} seconds"
         )))
     }
 }

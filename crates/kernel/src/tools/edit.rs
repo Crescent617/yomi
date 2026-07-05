@@ -159,7 +159,13 @@ impl Tool for EditTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Replace text in a file. Use this instead of sed. Provide old_str to locate the text (should be unique enough) and new_str to replace it. Supports replace_all=true to replace all occurrences."
+        "Replace text in a file. Use this instead of sed.
+Rules:
+1. EXACT: old_str must be a VERBATIM copy from the file (indentation included).
+2. MINIMAL: just the line(s) being changed, never include large blocks.
+3. UNIQUE: If the text appears multiple times, add 1-2 surrounding lines to disambiguate. Or use replace_all=true for global replacement.
+4. READ FIRST: Read the file to get exact content before editing.
+5. PARALLEL: Make edits in parallel (in same response) rather than one by one."
     }
 
     fn schema(&self) -> Value {
@@ -240,11 +246,11 @@ impl Tool for EditTool {
             }
         }
 
-        // Track file for checkpoint before modification
-        ctx.track_edit(&path).await;
-
         // Acquire lock to serialize concurrent tool calls
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
+
+        // Track file for checkpoint before modification (under lock to avoid stale backup)
+        ctx.track_edit(&path).await;
 
         // Read file content (now protected by exclusive lock)
         let content = tokio::fs::read_to_string(&path).await?;

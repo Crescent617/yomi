@@ -1,7 +1,7 @@
 //! Token usage tracking - record and aggregate token consumption
 
 use crate::providers::TokenUsage as ProviderTokenUsage;
-use crate::types::{AgentId, KernelError, Result, SessionId};
+use crate::types::{KernelError, Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -52,7 +52,6 @@ impl std::str::FromStr for UsageType {
 pub struct UsageRecord {
     pub id: String,
     pub session_id: SessionId,
-    pub agent_id: AgentId,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cached_tokens: u64,
@@ -66,16 +65,14 @@ impl UsageRecord {
     /// Create a new usage record
     pub fn new(
         session_id: SessionId,
-        agent_id: AgentId,
         usage: ProviderTokenUsage,
         model: impl Into<String>,
         provider: impl Into<String>,
         usage_type: UsageType,
     ) -> Self {
         Self {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: ulid::Ulid::new().to_string(),
             session_id,
-            agent_id,
             prompt_tokens: u64::from(usage.prompt_tokens),
             completion_tokens: u64::from(usage.completion_tokens),
             cached_tokens: u64::from(usage.cached_tokens.unwrap_or(0)),

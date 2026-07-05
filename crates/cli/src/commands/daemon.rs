@@ -67,47 +67,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             server.start(config.channels.clone()).await;
             let shutdown = tokio_util::sync::CancellationToken::new();
 
-            {
-                let shutdown_sig = shutdown.clone();
-                tokio::spawn(async move {
-                    #[cfg(unix)]
-                    {
-                        let mut sigterm = tokio::signal::unix::signal(
-                            tokio::signal::unix::SignalKind::terminate(),
-                        )
-                        .expect("Failed to register SIGTERM handler");
-                        let mut sigint = tokio::signal::unix::signal(
-                            tokio::signal::unix::SignalKind::interrupt(),
-                        )
-                        .expect("Failed to register SIGINT handler");
-                        let shutdown_clone = shutdown_sig.clone();
-                        tokio::select! {
-                            _ = sigterm.recv() => {
-                                tracing::info!("Received SIGTERM, initiating graceful shutdown");
-                            }
-                            _ = sigint.recv() => {
-                                tracing::info!("Received SIGINT, initiating graceful shutdown");
-                            }
-                            () = shutdown_clone.cancelled() => {
-                                // shutdown triggered by idle auto-exit or external
-                            }
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let shutdown_clone = shutdown_sig.clone();
-                        tokio::select! {
-                            _ = tokio::signal::ctrl_c() => {
-                                tracing::info!("Received Ctrl-C, initiating graceful shutdown");
-                            }
-                            () = shutdown_clone.cancelled() => {
-                                // shutdown triggered externally
-                            }
-                        }
-                    }
-                    shutdown_sig.cancel();
-                });
-            }
+            let _signal_handle = kernel::daemon_signal::spawn_signal_listener(shutdown.clone());
 
             if auto_exit {
                 let server_for_exit = server.clone();
@@ -115,8 +75,8 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 let shutdown_clone = shutdown.clone();
                 tokio::spawn(async move {
                     tracing::info!(
-                        "Daemon starting with {} session(s), idle check {}s",
-                        coord_for_exit.idle_seconds(),
+                        "Daemon starting with {} active agent(s), idle check {}s",
+                        coord_for_exit.live_session_count(),
                         DAEMON_IDLE_TIMEOUT_SECS
                     );
                     let mut interval = tokio::time::interval(IDLE_CHECK_INTERVAL);
@@ -128,14 +88,12 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                                 break;
                             }
                             _ = interval.tick() => {
-                                let idle = coord_for_exit.idle_seconds();
                                 let clients = server_for_exit.connection_count();
-                                if idle >= DAEMON_IDLE_TIMEOUT_SECS
-                                    && clients == 0
+                                if clients == 0
                                     && coord_for_exit.live_session_count() == 0
                                 {
                                     tracing::info!(
-                                        "Auto-exiting daemon after {idle}s idle with no clients or sessions"
+                                        "Auto-exiting daemon with no clients or sessions"
                                     );
                                     shutdown_clone.cancel();
                                     break;

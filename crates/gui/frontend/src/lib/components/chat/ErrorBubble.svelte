@@ -1,8 +1,8 @@
 <script lang="ts">
   import { AlertCircle } from "lucide-svelte";
-  import type { ChatMessage } from "../../state.svelte";
+  import type { ErrorMessage } from "../../state.svelte";
 
-  let { message }: { message: ChatMessage } = $props();
+  let { message }: { message: ErrorMessage } = $props();
 </script>
 
 <div class="flex justify-center my-2">

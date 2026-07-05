@@ -1,8 +1,9 @@
 use crate::agent::AgentInput;
+use crate::comms::InputBus;
 use crate::const_concat;
 use crate::tools::helper::truncate::truncate_keep_edges;
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{KernelError, Result, ToolOutput};
+use crate::types::{KernelError, Result, SessionId, ToolOutput};
 use crate::utils::id::gen_base56_id;
 
 use async_trait::async_trait;
@@ -10,12 +11,12 @@ use regex::Regex;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 /// Regex to match ANSI escape sequences
@@ -32,12 +33,12 @@ pub const SHELL_TOOL_NAME: &str = "shell";
 
 #[derive(Clone)]
 pub struct ShellToolCtx {
-    input_tx: Option<mpsc::Sender<AgentInput>>,
+    input_bus: Option<Arc<InputBus>>,
 }
 
 impl ShellToolCtx {
-    pub fn new(input_tx: Option<mpsc::Sender<AgentInput>>) -> Self {
-        Self { input_tx }
+    pub fn new(input_bus: Option<Arc<InputBus>>) -> Self {
+        Self { input_bus }
     }
 }
 
@@ -78,14 +79,18 @@ impl Tool for ShellTool {
     }
 
     fn desc(&self) -> &'static str {
-        const BG_GUIDE: &str = r"
+        const BG_GUIDE: &str = const_concat!(
+            r"
 ## What is background mode
 - When `background` is true, the command runs at background, and returns immediately with a `task_id`, `pid`, and output file path.
 - The pid can be used to monitor or kill the process externally if needed. The output file contains real-time stdout and stderr of the command, which can be useful for long-running tasks.
-- No need to sleep. When the command completes, you'll be notified automatically.
+- ",
+            crate::tools::ASYNC_LAUNCH_GUIDE,
+            r"
 
 ## When to using background mode
-For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary.";
+For long-running commands (e.g. start a server, run a script with unknown duration) to avoid blocking the agent and allow real-time monitoring of the output. For short commands that return quickly, background mode is not necessary."
+        );
         const_concat!(
             if cfg!(target_os = "windows") {
                 "Execute a shell command using cmd.exe. Reserve exclusively for system commands that require shell execution. Prefer dedicated tools (read, edit, grep) when available. DO NOT use for git push or dangerous operations without explicit user request."
@@ -111,7 +116,7 @@ For long-running commands (e.g. start a server, run a script with unknown durati
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run command in background. When true, returns immediately with task_id, pid, and output file path. Output will be sent via notification when complete.",
+                    "description": format!("Run command in background. When true, returns immediately with task_id, pid, and output file path. {} Output will be sent via notification when complete.", crate::tools::ASYNC_LAUNCH_GUIDE),
                     "default": false
                 }
             },
@@ -132,8 +137,14 @@ For long-running commands (e.g. start a server, run a script with unknown durati
 
         let cancel_token = ctx.cancel_token.clone();
         if background {
-            self.exec_async(command, timeout_secs, &ctx.working_dir, cancel_token)
-                .await
+            self.exec_async(
+                command,
+                timeout_secs,
+                &ctx.working_dir,
+                cancel_token,
+                &ctx.session_id,
+            )
+            .await
         } else {
             self.exec_sync(
                 command,
@@ -255,15 +266,16 @@ impl ShellTool {
         timeout_secs: Option<u64>,
         working_dir: &std::path::Path,
         cancel_token: Option<tokio_util::sync::CancellationToken>,
+        session_id: &str,
     ) -> Result<ToolOutput> {
         let ctx = self
             .ctx
             .as_ref()
             .ok_or_else(|| KernelError::tool("Background mode requires context"))?;
 
-        // Check if input_tx is available (subagents don't have this)
-        let input_tx = ctx
-            .input_tx
+        // Check if input_bus is available (subagents don't have this)
+        let input_bus = ctx
+            .input_bus
             .clone()
             .ok_or_else(|| KernelError::tool("Background mode not supported in subagents"))?;
 
@@ -288,6 +300,7 @@ impl ShellTool {
         let task_id_clone = task_id.clone();
         let output_path_clone = output_path;
         let command_clone = command.to_string();
+        let session_id = session_id.to_string();
 
         tokio::spawn(async move {
             let result = wait_for_child(
@@ -324,16 +337,17 @@ impl ShellTool {
                 ),
             };
 
-            let _ = input_tx
-                .send(AgentInput::TaskResult {
-                    task_id: task_id_clone.clone(),
-                    content: vec![crate::types::ContentBlock::Text { text }],
-                })
-                .await;
+            if let Err(e) = input_bus.publish(
+                SessionId::from(session_id.clone()),
+                AgentInput::Steer(vec![crate::types::ContentBlock::Text { text }]),
+            ) {
+                tracing::warn!("Failed to publish shell async result: {}", e);
+            }
         });
 
         Ok(ToolOutput::text(format!(
-            "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\nYou will be notified when it completes."
+            "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\n{}\nYou will be notified when it completes.",
+            crate::tools::ASYNC_LAUNCH_GUIDE
         )))
     }
 }

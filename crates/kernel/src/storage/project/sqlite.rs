@@ -23,7 +23,7 @@ impl SqliteProjectStore {
 impl ProjectStore for SqliteProjectStore {
     async fn create(&self, id: &ProjectId, name: &str, dir: &str) -> Result<()> {
         sqlx::query("INSERT INTO projects (id, name, dir) VALUES (?, ?, ?)")
-            .bind(&id.0)
+            .bind(&*id.0)
             .bind(name)
             .bind(dir)
             .execute(&self.pool)
@@ -36,7 +36,7 @@ impl ProjectStore for SqliteProjectStore {
         let row = sqlx::query_as::<_, ProjectRow>(
             "SELECT id, name, dir, created_at, updated_at FROM projects WHERE id = ?",
         )
-        .bind(&id.0)
+        .bind(&*id.0)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| storage_err(format!("failed to get project: {e}")))?;
@@ -70,7 +70,7 @@ impl ProjectStore for SqliteProjectStore {
     async fn update_name(&self, id: &ProjectId, name: &str) -> Result<()> {
         sqlx::query("UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
             .bind(name)
-            .bind(&id.0)
+            .bind(&*id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to update project name: {e}")))?;
@@ -79,7 +79,7 @@ impl ProjectStore for SqliteProjectStore {
 
     async fn touch(&self, id: &ProjectId) -> Result<()> {
         sqlx::query("UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(&id.0)
+            .bind(&*id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to touch project: {e}")))?;
@@ -88,7 +88,7 @@ impl ProjectStore for SqliteProjectStore {
 
     async fn delete(&self, id: &ProjectId) -> Result<()> {
         sqlx::query("DELETE FROM projects WHERE id = ?")
-            .bind(&id.0)
+            .bind(&*id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to delete project: {e}")))?;
@@ -109,7 +109,7 @@ struct ProjectRow {
 impl From<ProjectRow> for Project {
     fn from(row: ProjectRow) -> Self {
         Self {
-            id: ProjectId(row.id),
+            id: ProjectId::from(row.id),
             name: row.name,
             dir: row.dir.into(),
             created_at: row.created_at,

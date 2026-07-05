@@ -18,12 +18,11 @@
     sessionCursors,
     pinnedSessionMeta,
     setActiveSession,
-    loadSessionMessages,
     loadPinnedSessions,
     getSession,
     showNotification,
-    syncSessionStatus,
     refreshCheckpoints,
+    activateSession as stateActivateSession,
   } from "../../state.svelte";
 
   let { collapsed = false }: { collapsed?: boolean } = $props();
@@ -154,16 +153,7 @@
   async function activateSession(id: string) {
     const prev = sessionState.activeSessionId;
     try {
-      await api.subscribe(id);
-      setActiveSession(id);
-      // Sync initial runtime status from backend (streaming / compacting)
-      const status = await api.getSessionStatus(id);
-      const session = getSession(id);
-      if (session) {
-        syncSessionStatus(id, status);
-      }
-      const msgs = await api.getMessages(id);
-      if (getSession(id)) loadSessionMessages(id, msgs);
+      await stateActivateSession(id);
       refreshCheckpoints(id);
     } catch (e: unknown) {
       console.error(

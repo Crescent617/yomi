@@ -166,7 +166,7 @@ impl Model {
 /// Run the TUI application
 #[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn run_tui(
-    event_rx: kernel::event_bus::EventBusSubscriber,
+    event_rx: kernel::comms::EventBusSubscriber,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
     ctrl_tx: mpsc::Sender<ControlCommand>,
     coordinator: Arc<dyn CoordinatorApi>,
