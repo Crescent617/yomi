@@ -92,7 +92,7 @@ cargo test -p kernel --test sqlite_session  # 或运行现有 session 存储测�
 
 ## 阶段 2：业务层（Session + Agent 改造）
 
-**目标**：`Coordinator` 能正确创建带/不带 Project 的 Session，`AgentSpawnArgs` 支持无工作目录。
+**目标**：`Kernel` 能正确创建带/不带 Project 的 Session，`AgentSpawnArgs` 支持无工作目录。
 
 ### Step 2.1：`AgentSpawnArgs` 默认值改造（`kernel/src/agent/types.rs`）
 
@@ -123,11 +123,11 @@ cargo check --lib
 cargo check --lib
 ```
 
-### Step 2.3：`Coordinator` 重写（`kernel/src/app/coordinator.rs`）
+### Step 2.3：`Kernel` 重写（`kernel/src/app/coordinator.rs`）
 
 - 新增 `CreateSessionInput` struct
-- `Coordinator` struct 新增 `project_store: Arc<dyn ProjectStore>`（从 `StorageSet` 获取）
-- `Coordinator::new` 接收 `project_store`
+- `Kernel` struct 新增 `project_store: Arc<dyn ProjectStore>`（从 `StorageSet` 获取）
+- `Kernel::new` 接收 `project_store`
 - 新增 `resolve_cwd` helper：
   ```rust
   fn resolve_cwd(config: &SessionConfig) -> Option<PathBuf> {
@@ -175,20 +175,20 @@ cargo test -p kernel  # 跑全部 kernel 测试，修复编译错误
 cargo check --lib
 ```
 
-### Step 3.2：`CoordinatorApi` Trait 扩展（`kernel/src/client/mod.rs`）
+### Step 3.2：`KernelApi` Trait 扩展（`kernel/src/client/mod.rs`）
 
 - 新增 Project 相关方法
 - `create_session` 签名改为接收 `CreateSessionInput`
 - `list_sessions` 签名改为 `(project_id, before, limit) -> Result<(Vec<SessionInfo>, bool)>`
-- `LocalCoordinator`（即 `Coordinator` 的 `impl CoordinatorApi`）同步扩展
-- `RemoteCoordinator` 实现新增 Project 方法的 RPC 转发
+- `LocalKernel`（即 `Kernel` 的 `impl KernelApi`）同步扩展
+- `RemoteKernel` 实现新增 Project 方法的 RPC 转发
 
 **验证**：
 ```bash
 cargo check --lib
 ```
 
-> **风险**：`RemoteCoordinator` 的 `call` 方法需要为新增的 Project 请求写转发逻辑。如果 `RequestMethod` 有 `Serialize` 问题（如 `DateTime` 在 `ListSessions` 中），确保序列化正确。`DateTime` 已有 `Serialize` 支持，应该没问题。
+> **风险**：`RemoteKernel` 的 `call` 方法需要为新增的 Project 请求写转发逻辑。如果 `RequestMethod` 有 `Serialize` 问题（如 `DateTime` 在 `ListSessions` 中），确保序列化正确。`DateTime` 已有 `Serialize` 支持，应该没问题。
 
 ### Step 3.3：`KernelServer` 适配 v3（`kernel/src/server/mod.rs`）
 
@@ -306,7 +306,7 @@ cargo check -p yomi-gui
 
 阶段 3: 传输层
   3.1 wire.rs (v3)
-  3.2 client/mod.rs (CoordinatorApi 扩展 + RemoteCoordinator)
+  3.2 client/mod.rs (KernelApi 扩展 + RemoteKernel)
   3.3 server/mod.rs (dispatch_request)
   
   验证: cargo check --lib

@@ -8,8 +8,12 @@
 
   async function approve(req_id: string, remember: boolean) {
     if (!activeSession) return;
+    const perm = activeSession.pending_permissions.find(
+      (p) => p.req_id === req_id,
+    );
+    const sessionId = perm?.session_id || activeSession.id;
     try {
-      await api.respondPermission(activeSession.id, req_id, true, remember);
+      await api.respondPermission(sessionId, req_id, true, remember);
       activeSession.pending_permissions =
         activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
@@ -23,8 +27,12 @@
 
   async function deny(req_id: string) {
     if (!activeSession) return;
+    const perm = activeSession.pending_permissions.find(
+      (p) => p.req_id === req_id,
+    );
+    const sessionId = perm?.session_id || activeSession.id;
     try {
-      await api.respondPermission(activeSession.id, req_id, false, false);
+      await api.respondPermission(sessionId, req_id, false, false);
       activeSession.pending_permissions =
         activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {

@@ -8,6 +8,7 @@ use crate::{attr, id::Id};
 use kernel::event::{AgentStatus, Event, StopReason};
 use kernel::tools::TODO_TOOL_NAME;
 use kernel::types::FinishReason;
+use std::sync::Arc;
 
 use super::types::{Model, StreamingStatus};
 
@@ -15,12 +16,28 @@ impl Model {
     /// Caps processing time to ~8ms per frame to avoid UI stalls when
     /// a large batch of events arrives over IPC.
     pub async fn process_kernel_event(&mut self) {
+        use super::event_pump::TaggedEvent;
         use tokio::sync::mpsc::error::TryRecvError;
 
         let start = std::time::Instant::now();
         loop {
             let event = match self.event_rx.try_recv() {
-                Ok(ev) => ev,
+                Ok(TaggedEvent::Main(ev)) => ev,
+                Ok(TaggedEvent::Subagent {
+                    parent_tool_id,
+                    session_id,
+                    event: ev,
+                }) => {
+                    tracing::debug!(
+                        "Processing subagent event for {} ({}): {:?}",
+                        parent_tool_id,
+                        session_id,
+                        std::mem::discriminant(&ev)
+                    );
+                    self.handle_subagent_event(&parent_tool_id, &session_id, &ev)
+                        .await;
+                    continue;
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     tracing::error!("EventPump disconnected");
@@ -28,7 +45,10 @@ impl Model {
                 }
             };
 
-            tracing::debug!("Processing event: {:?}", std::mem::discriminant(&event));
+            tracing::debug!(
+                "Processing main event: {:?}",
+                std::mem::discriminant(&event)
+            );
 
             match event {
                 // User message from kernel (render after kernel accepts it)
@@ -124,6 +144,25 @@ impl Model {
                         tracing::warn!("Failed to show tool start: {e}");
                     }
                     self.state.should_redraw = true;
+                }
+                Event::Tool(kernel::event::ToolEvent::Metadata {
+                    tool_id, metadata, ..
+                }) => {
+                    if let Some(subagent_sid) = metadata.get("subagent_session_id") {
+                        let description = metadata
+                            .get("subagent_description")
+                            .cloned()
+                            .unwrap_or_default();
+                        let payload = format!("{tool_id}\x00{subagent_sid}\x00{description}");
+                        if let Err(e) = self.app.attr(
+                            &Id::ChatView,
+                            Attribute::Custom(attr::INIT_SUBAGENT),
+                            AttrValue::String(payload),
+                        ) {
+                            tracing::warn!("Failed to init subagent: {e}");
+                        }
+                        self.state.should_redraw = true;
+                    }
                 }
                 Event::Tool(kernel::event::ToolEvent::End {
                     tool_id,
@@ -395,6 +434,7 @@ impl Model {
                 // Could be shown in status bar for debugging if needed
                 Event::Agent(kernel::event::AgentEvent::AskUserQuestion {
                     req_id,
+                    session_id,
                     questions,
                     ..
                 }) => {
@@ -406,24 +446,35 @@ impl Model {
                     Self::send_desktop_notification("Yomi", "Agent has a question for you");
 
                     // Auto-deny any previous pending ask-user request
-                    if let Some((old_req_id, _, _)) = self.pending_ask_user.take() {
+                    if let Some((old_req_id, old_session_id, _, _)) = self.pending_ask_user.take() {
                         tracing::warn!(
                             "Auto-denying stale ask_user request {} (new: {})",
                             old_req_id,
                             req_id
                         );
-                        let _ =
-                            self.ctrl_tx
-                                .try_send(kernel::event::ControlCommand::AskUserResponse {
-                                    req_id: old_req_id,
-                                    answers: Vec::new(),
-                                });
+                        let coord = Arc::clone(&self.kernel);
+                        let sid = kernel::types::SessionId::from(old_session_id);
+                        tokio::spawn(async move {
+                            let response = kernel::tools::AskUserResponse {
+                                answers: std::collections::HashMap::new(),
+                            };
+                            if let Err(e) = coord
+                                .send_ask_user_response(&sid, &old_req_id, response)
+                                .await
+                            {
+                                tracing::error!(
+                                    "Failed to send auto-deny ask_user response: {}",
+                                    e
+                                );
+                            }
+                        });
                     }
 
                     // Store the request and show the first question
                     let first = questions.first().cloned();
                     self.pending_ask_user = Some((
                         req_id,
+                        session_id.clone(),
                         std::collections::VecDeque::from(questions),
                         std::collections::HashMap::new(),
                     ));
@@ -435,6 +486,7 @@ impl Model {
                 }
                 Event::Agent(kernel::event::AgentEvent::PermissionRequest {
                     req_id,
+                    session_id,
                     tool_name,
                     tool_args,
                     tool_level,
@@ -447,20 +499,27 @@ impl Model {
                     );
                     // If a previous permission request is still pending, auto-deny it
                     // so the server doesn't hang waiting for a response.
-                    if let Some(old_id) = self.pending_permission.replace(req_id.clone()) {
+                    if let Some((old_id, old_session_id)) = self.pending_permission.take() {
                         tracing::warn!(
                             "Auto-denying stale permission request {} (new: {})",
                             old_id,
                             req_id
                         );
-                        let _ = self
-                            .ctrl_tx
-                            .try_send(kernel::event::ControlCommand::Response {
-                                req_id: old_id,
-                                approved: false,
-                                remember: false,
-                            });
+                        let coord = Arc::clone(&self.kernel);
+                        let sid = kernel::types::SessionId::from(old_session_id);
+                        tokio::spawn(async move {
+                            if let Err(e) = coord
+                                .send_permission_response(&sid, &old_id, false, false)
+                                .await
+                            {
+                                tracing::error!(
+                                    "Failed to send auto-deny permission response: {}",
+                                    e
+                                );
+                            }
+                        });
                     }
+                    self.pending_permission = Some((req_id, session_id.clone()));
 
                     // Show confirmation dialog with "Always approve" and "YOLO" options
                     let message =
@@ -479,12 +538,66 @@ impl Model {
                     tracing::debug!("Dialog focused");
                     self.state.should_redraw = true;
                 }
+                Event::Agent(kernel::event::AgentEvent::PermissionAck { req_id }) => {
+                    if let Some((old_id, _)) = self.pending_permission.as_ref() {
+                        if old_id == &req_id {
+                            self.pending_permission = None;
+                            self.state.should_redraw = true;
+                        }
+                    }
+                }
+                Event::Agent(kernel::event::AgentEvent::AskUserAck { req_id }) => {
+                    if let Some((old_id, _, _, _)) = self.pending_ask_user.as_ref() {
+                        if old_id == &req_id {
+                            self.pending_ask_user = None;
+                            self.state.should_redraw = true;
+                        }
+                    }
+                }
                 _ => {}
             }
             // Cap event processing time to keep UI responsive (~60fps budget)
             if start.elapsed() > std::time::Duration::from_millis(8) {
                 break;
             }
+        }
+    }
+
+    /// Handle events coming from a subagent session.
+    ///
+    /// These events are associated with a specific `Agent` tool call via
+    /// `parent_tool_id`.  The UI can use them to show real-time progress
+    /// inside that tool call's card.
+    async fn handle_subagent_event(
+        &mut self,
+        parent_tool_id: &str,
+        _session_id: &str,
+        event: &Event,
+    ) {
+        use tuirealm::props::{AttrValue, Attribute};
+
+        let is_stopped = matches!(
+            event,
+            Event::Agent(kernel::event::AgentEvent::Lifecycle {
+                state: kernel::event::AgentStatus::Stopped { .. },
+                ..
+            })
+        );
+
+        let event_json = serde_json::to_string(event).unwrap_or_default();
+        let payload = format!("{parent_tool_id}\x00{event_json}");
+        let _ = self.app.attr(
+            &Id::ChatView,
+            Attribute::Custom(attr::UPDATE_SUBAGENT),
+            AttrValue::String(payload),
+        );
+
+        if is_stopped {
+            let _ = self.app.attr(
+                &Id::ChatView,
+                Attribute::Custom(attr::FINALIZE_SUBAGENT),
+                AttrValue::String(parent_tool_id.to_string()),
+            );
         }
     }
 }

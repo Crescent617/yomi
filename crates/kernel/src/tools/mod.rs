@@ -17,6 +17,7 @@ pub mod shell;
 pub mod skill_load;
 pub mod sleep;
 pub mod subagent;
+pub mod task;
 pub mod todo;
 pub mod update_goal;
 pub mod webfetch;
@@ -302,6 +303,7 @@ impl ToolRegistry {
     }
 
     /// Register standard tools with the given configuration.
+    #[must_use]
     pub fn with_standard_tools(mut self, config: ToolRegistryConfig) -> Self {
         let file_state_store = config
             .file_state_store
@@ -412,6 +414,7 @@ impl ToolRegistry {
 
 /// Feature flags for tool registration.
 #[derive(Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ToolFlags {
     /// Enable subagent tool for spawning child agents.
     pub subagent: bool,

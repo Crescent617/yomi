@@ -3,49 +3,38 @@ import type { GitInfo } from "./api";
 import type { TaggedContentBlock } from "./types";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-// 非活跃 session 自动 unsubscribe 延迟（60 秒）
-const INACTIVE_UNSUBSCRIBE_DELAY = 60_000;
+import { listen } from "@tauri-apps/api/event";
 
 const inFlightActivations = new Map<string, Promise<void>>();
 
-const pendingUnsubscribeTimers: Record<
-  string,
-  ReturnType<typeof setTimeout>
-> = {};
-
-export function scheduleUnsubscribe(session_id: string) {
-  const session = getSession(session_id);
-  if (!session) return;
-  if (session.id === sessionState.activeSessionId) return; // 当前活跃的，不清理
-  if (session.phase !== "idle" && session.phase !== "closed") return; // 正在运行，不清理
-
-  cancelPendingUnsubscribe(session_id);
-
-  pendingUnsubscribeTimers[session_id] = setTimeout(() => {
-    api.unsubscribe(session_id).catch(() => {});
-    delete pendingUnsubscribeTimers[session_id];
-  }, INACTIVE_UNSUBSCRIBE_DELAY);
-}
-
-export function cancelPendingUnsubscribe(session_id: string) {
-  const timer = pendingUnsubscribeTimers[session_id];
-  if (timer) {
-    clearTimeout(timer);
-    delete pendingUnsubscribeTimers[session_id];
-  }
-}
-
-export function unsubscribeAllInactive() {
-  for (const session_id of Object.keys(pendingUnsubscribeTimers)) {
-    clearTimeout(pendingUnsubscribeTimers[session_id]);
-    delete pendingUnsubscribeTimers[session_id];
-  }
-  for (const session of sessionState.sessions) {
-    if (session.id !== sessionState.activeSessionId) {
-      api.unsubscribe(session.id).catch(() => {});
-    }
-  }
+/** Start listening for kernel notifications and update non-active sessions. */
+export function startNotificationListener(): Promise<() => void> {
+  return listen(
+    "kernel:noti",
+    (
+      e: {
+        payload: {
+          state_changed?: { session_id: string; status: string };
+          title_updated?: { session_id: string; title: string };
+        };
+      },
+    ) => {
+      const payload = e.payload;
+      if (payload.state_changed) {
+        const { session_id, status } = payload.state_changed;
+        const session = getSession(session_id);
+        if (!session) return;
+        session.phase = status;
+        session.is_running = status !== "idle" && status !== "closed";
+      }
+      if (payload.title_updated) {
+        const { session_id, title } = payload.title_updated;
+        const session = getSession(session_id);
+        if (!session) return;
+        session.alias = title;
+      }
+    },
+  );
 }
 
 export interface TabEntry {
@@ -76,6 +65,7 @@ export interface ToolCall {
   elapsed_ms?: number;
   folded?: boolean;
   subagent_session_id?: string;
+  subagent?: SubagentState;
 }
 
 interface BaseMessage {
@@ -110,6 +100,7 @@ export interface ToolMessage extends BaseMessage {
   output: string;
   elapsed_ms?: number;
   subagent_session_id?: string;
+  subagent?: SubagentState;
 }
 
 export interface SystemMessage extends BaseMessage {
@@ -139,6 +130,7 @@ export interface ProjectState {
 
 export interface PendingPermission {
   req_id: string;
+  session_id?: string;
   tool_name: string;
   tool_args: string;
   tool_level: string;
@@ -160,8 +152,16 @@ export interface AskQuestion {
 
 export interface PendingAskUser {
   req_id: string;
-
+  session_id?: string;
   questions: AskQuestion[];
+}
+
+export interface SubagentState {
+  session_id: string;
+  events: { type: string; data: unknown }[];
+  pending_permission: PendingPermission | null;
+  pending_ask_users: PendingAskUser[];
+  is_stopped: boolean;
 }
 
 export interface QueuedInput {
@@ -179,12 +179,11 @@ export interface SessionState {
   messages: Message[];
   phase: string;
   is_running: boolean;
-  unread: number;
   checkpoints: unknown[];
   tabs: Tab[];
   active_tab_id: string;
   pending_permissions: PendingPermission[];
-  pending_ask_user: PendingAskUser | null;
+  pending_ask_users: PendingAskUser[];
   queued_input: QueuedInput | null;
   updated_at: string;
   permission_level?: string;
@@ -335,12 +334,11 @@ export function refreshSessions() {
             messages: [],
             phase: "idle",
             is_running: false,
-            unread: 0,
             checkpoints: [],
             tabs: [],
             active_tab_id: "chat",
             pending_permissions: [],
-            pending_ask_user: null,
+            pending_ask_users: [],
             queued_input: null,
             updated_at: s.created_at,
             permission_level: s.auto_approve_level,
@@ -384,12 +382,11 @@ export function loadPinnedSessions() {
             messages: [],
             phase: "idle",
             is_running: false,
-            unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
             active_tab_id: "chat",
             pending_permissions: [],
-            pending_ask_user: null,
+            pending_ask_users: [],
             queued_input: null,
             updated_at: p.updated_at,
             is_pinned: true,
@@ -415,14 +412,10 @@ export function getActiveSession(): SessionState | null {
 export function setActiveSession(id: string | null) {
   const prevId = sessionState.activeSessionId;
   if (prevId && id !== prevId) {
-    const prev = getSession(prevId);
-    if (prev) prev.unread = 0;
-    // 旧 session 进入非活跃，如果不在 streaming，延迟 unsubscribe
-    scheduleUnsubscribe(prevId);
+    api.unsubscribe(prevId).catch(() => {});
   }
-  // 新 session 被激活，取消可能存在的 pending unsubscribe
   if (id) {
-    cancelPendingUnsubscribe(id);
+    api.subscribe(id, null).catch(() => {});
   }
   sessionState.activeSessionId = id;
 }
@@ -446,12 +439,11 @@ export async function loadSessionData(sessionId: string) {
     messages: [],
     phase: info.phase,
     is_running: info.phase !== "idle" && info.phase !== "closed",
-    unread: 0,
     checkpoints: [],
     tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
     active_tab_id: "chat",
     pending_permissions: [],
-    pending_ask_user: null,
+    pending_ask_users: [],
     queued_input: null,
     updated_at: new Date().toISOString(),
     permission_level: info.auto_approve_level || undefined,
@@ -478,7 +470,6 @@ export async function activateSession(sessionId: string) {
         const msgs = await api.getMessages(sessionId);
         loadSessionMessages(sessionId, msgs);
       }
-      await api.subscribe(sessionId);
     } finally {
       inFlightActivations.delete(sessionId);
     }
@@ -807,6 +798,22 @@ export function loadSessionMessages(
     }
   }
 
+  // Preserve runtime subagent state across message reloads
+  const existing = getSession(session_id);
+  if (existing) {
+    const existingSubagent = new Map<string, SubagentState>();
+    for (const m of existing.messages) {
+      if (m.type === "tool" && m.subagent) {
+        existingSubagent.set(m.tool_call_id, m.subagent);
+      }
+    }
+    for (const m of parsedMessages) {
+      if (m.type === "tool" && existingSubagent.has(m.tool_call_id)) {
+        m.subagent = existingSubagent.get(m.tool_call_id);
+      }
+    }
+  }
+
   upsertSession({
     ...session,
     messages: parsedMessages,
@@ -902,15 +909,22 @@ interface AgentEvent {
   };
   permission_request?: {
     req_id: string;
+    session_id?: string;
     tool_name: string;
     tool_args?: string;
     tool_level?: string;
     reason?: string;
   };
+  permission_ack?: {
+    req_id: string;
+  };
   ask_user_question?: {
     req_id: string;
-
+    session_id?: string;
     questions: AskQuestion[];
+  };
+  ask_user_ack?: {
+    req_id: string;
   };
   retrying?: {
     attempt: number;
@@ -944,7 +958,7 @@ type KernelEvent =
   | { tool: ToolEvent }
   | { user: UserEvent };
 
-export function handleEvent(session_id: string, rawEvent: unknown) {
+export function handleEvent(session_id: string, event_id: string | undefined, rawEvent: unknown) {
   let session = getSession(session_id);
   if (!session) return;
 
@@ -963,16 +977,6 @@ export function handleEvent(session_id: string, rawEvent: unknown) {
 
   // Re-fetch session in case an event handler replaced it in sessionState.sessions
   session = getSession(session_id) ?? session;
-  if (sessionState.activeSessionId !== session_id) {
-    session.unread++;
-  }
-}
-
-/** Schedule unsubscribe if the session is not currently active. */
-function scheduleUnsubscribeIfInactive(session: SessionState) {
-  if (session.id !== sessionState.activeSessionId) {
-    scheduleUnsubscribe(session.id);
-  }
 }
 
 function findMessageById(
@@ -1093,6 +1097,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const active = event.compacting.active;
     if (!active) {
       // Compaction finished — reload messages to reflect compacted history
+      streamingMessages[session.id] = [];
       api
         .getMessages(session.id)
         .then((msgs) => {
@@ -1249,11 +1254,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.state_changed) {
     session.phase = event.state_changed.state;
     session.is_running = session.phase !== "idle" && session.phase !== "closed";
-    if (session.is_running) {
-      cancelPendingUnsubscribe(session.id);
-    } else {
-      scheduleUnsubscribeIfInactive(session);
-    }
     return true;
   }
 
@@ -1266,7 +1266,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     } else if (typeof state === "object" && state.stopped) {
       session.phase = "idle";
       session.is_running = false;
-      scheduleUnsubscribeIfInactive(session);
       const buf = streamingMessages[session.id] ?? [];
       if (buf.length > 0) {
         // 基于 ID 去重：跳过已存在于 session.messages 中的 streaming buffer 项。
@@ -1371,7 +1370,6 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     const level = event.error.is_recoverable ? "warn" : "error";
     showNotification(errorMsg, level, 5000);
     sendDesktopNotification("Yomi", errorMsg, session.id);
-    scheduleUnsubscribeIfInactive(session);
     return true;
   } else if (event.retrying) {
     const retry = event.retrying;
@@ -1391,6 +1389,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     const req = event.permission_request;
     session.pending_permissions.push({
       req_id: req.req_id,
+      session_id: req.session_id,
       tool_name: req.tool_name,
       tool_args: req.tool_args ?? "",
       tool_level: req.tool_level ?? "safe",
@@ -1400,12 +1399,29 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     return true;
   } else if (event.ask_user_question) {
     const req = event.ask_user_question;
-    session.pending_ask_user = {
+    session.pending_ask_users.push({
       req_id: req.req_id,
+      session_id: req.session_id,
       questions: req.questions,
-    };
+    });
     showNotification("Agent has a question for you", "info", 5000);
     sendDesktopNotification("Yomi", "Agent has a question for you", session.id);
+    return true;
+  } else if (event.permission_ack) {
+    const req_id = event.permission_ack.req_id;
+    const idx = session.pending_permissions.findIndex(
+      (p) => p.req_id === req_id,
+    );
+    if (idx >= 0) {
+      session.pending_permissions = session.pending_permissions.toSpliced(idx, 1);
+    }
+    return true;
+  } else if (event.ask_user_ack) {
+    const req_id = event.ask_user_ack.req_id;
+    const idx = session.pending_ask_users.findIndex((a) => a.req_id === req_id);
+    if (idx >= 0) {
+      session.pending_ask_users = session.pending_ask_users.toSpliced(idx, 1);
+    }
     return true;
   }
   return false;
@@ -1456,7 +1472,6 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     session.phase = "closed";
     session.is_running = false;
     streamingMessages[session.id] = [];
-    scheduleUnsubscribeIfInactive(session);
     return true;
   } else if (event.session_switched) {
     return true;
@@ -1476,7 +1491,6 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     streamingMessages[session.id] = [];
     session.phase = "idle";
     session.is_running = false;
-    scheduleUnsubscribeIfInactive(session);
     loadSessionMessages(session.id, event.rewound.messages);
     // Refresh checkpoints list after rewind
     refreshCheckpoints(session.id);

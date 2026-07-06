@@ -26,7 +26,7 @@
                               │
                               ▼
                     ┌─────────────────┐
-                    │   Coordinator   │  ← in-process
+                    │   Kernel   │  ← in-process
                     │   (kernel)      │
                     └────────┬────────┘
                              │
@@ -49,7 +49,7 @@
 - **GUI 侧**：只负责**管理界面**（CRUD + 展示），不处理调度逻辑
 - **调度执行**：由 `KernelServer` 中的 `CronScheduler` 负责
   - GUI 启动 daemon 时，scheduler 自动启动
-  - 如果只用 in-process `Coordinator`（未启动 daemon），scheduler 不运行，任务仅持久化
+  - 如果只用 in-process `Kernel`（未启动 daemon），scheduler 不运行，任务仅持久化
   - **Automation 面板顶部需显示 daemon 运行状态 banner**："定时任务需 daemon 运行时才执行"
 
 ### 1.3 数据流
@@ -454,12 +454,12 @@ export async function loadJobs(status?: string) {
 
 ## 8. 关键决策
 
-### 8.1 为什么 GUI command 直接访问 `cron_store` 而不是 `CoordinatorApi`？
+### 8.1 为什么 GUI command 直接访问 `cron_store` 而不是 `KernelApi`？
 
-- `CoordinatorApi` trait 目前没有 cron 方法
-- 添加 trait 方法需要同时修改 `LocalCoordinator` 和 `RemoteCoordinator`
-- GUI 使用 in-process `Coordinator`，直接访问更高效
-- 未来如果 CLI/TUI 也需要 cron 管理，可以再补 `CoordinatorApi`
+- `KernelApi` trait 目前没有 cron 方法
+- 添加 trait 方法需要同时修改 `LocalKernel` 和 `RemoteKernel`
+- GUI 使用 in-process `Kernel`，直接访问更高效
+- 未来如果 CLI/TUI 也需要 cron 管理，可以再补 `KernelApi`
 
 ### 8.2 为什么 GUI 不启动自己的 scheduler？
 

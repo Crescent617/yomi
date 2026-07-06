@@ -4,6 +4,7 @@
     projectState,
     getSession,
     getActiveSession,
+    activateSession,
     openBrowser,
     closeBrowser,
     closeTab,
@@ -362,12 +363,11 @@
             messages: [],
             phase: "idle",
             is_running: false,
-            unread: 0,
             checkpoints: [],
             tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
             active_tab_id: "chat",
             pending_permissions: [],
-            pending_ask_user: null,
+            pending_ask_users: [],
             queued_input: null,
             updated_at: s.updated_at ?? s.created_at,
             permission_level: s.auto_approve_level ?? level ?? "caution",
@@ -375,8 +375,6 @@
           });
         }
       }
-      setActiveSession(id);
-      await api.subscribe(id);
       const sessionInfo = await api.getSession(id);
       const msgs = await api.getMessages(id);
       const session = sessionState.sessions.find((s) => s.id === id);
@@ -397,6 +395,7 @@
           session.messages = [...session.messages, ...buf];
           streamingMessages[id] = [];
         }
+        await activateSession(id);
       }
       // Send the home input
       homeInput = "";

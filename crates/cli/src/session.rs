@@ -3,10 +3,10 @@
 use crate::{storage::AppStorage, utils::DEBUG_MODE};
 use anyhow::Result;
 use kernel::{
-    app::coordinator::CreateSessionInput,
-    client::CoordinatorApi,
-    event::ControlCommand,
-    permissions::Level,
+    client::KernelApi,
+    event::Command,
+    kernel::CreateSessionInput,
+    permission::Level,
     tools::AskUserResponse,
     types::{ContentBlock, SessionId},
 };
@@ -18,7 +18,7 @@ use tui::run_tui;
 /// On `session_not_found` (daemon restart), attempts `restore_session` once.
 /// Exponential backoff capped at 2s. Returns `Err` after `max_retries` failures.
 async fn send_with_retry(
-    coordinator: &dyn CoordinatorApi,
+    kernel: &dyn KernelApi,
     session_id: &SessionId,
     blocks: Vec<ContentBlock>,
     max_retries: u32,
@@ -26,14 +26,14 @@ async fn send_with_retry(
     let mut retries = 0;
     let mut restored = false;
     loop {
-        match coordinator.send_message(session_id, blocks.clone()).await {
+        match kernel.send_message(session_id, blocks.clone()).await {
             Ok(()) => return Ok(()),
             Err(ref e) if !restored && e.is_session_not_found() => {
                 tracing::info!(
                     "Session {} missing on daemon, attempting restore...",
                     session_id.0
                 );
-                match coordinator.restore_session(session_id, Vec::new()).await {
+                match kernel.restore_session(session_id, Vec::new()).await {
                     Ok(_) => {
                         tracing::info!("Session restored successfully");
                         restored = true;
@@ -94,12 +94,12 @@ pub enum SessionArg {
 }
 
 /// Resolve session from command line arguments.
-/// `auto_approve_level` is passed directly to the coordinator,
+/// `auto_approve_level` is passed directly to the kernel,
 /// which holds the agent configuration internally.
 pub async fn resolve_session(
     session_arg: &SessionArg,
     is_launch: bool,
-    coordinator: &dyn CoordinatorApi,
+    kernel: &dyn KernelApi,
     app_storage: &AppStorage,
     working_dir: &Path,
     auto_approve_level: Level,
@@ -113,7 +113,7 @@ pub async fn resolve_session(
 
             tool_blocklist: vec![],
         };
-        return Ok(coordinator.create_session(input).await?);
+        return Ok(kernel.create_session(input).await?);
     }
 
     match session_arg {
@@ -122,7 +122,7 @@ pub async fn resolve_session(
             let session_id = SessionId::from(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match coordinator.restore_session(&session_id, Vec::new()).await {
+            match kernel.restore_session(&session_id, Vec::new()).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
@@ -134,7 +134,7 @@ pub async fn resolve_session(
 
                         tool_blocklist: vec![],
                     };
-                    Ok(coordinator.create_session(input).await?)
+                    Ok(kernel.create_session(input).await?)
                 }
             }
         }
@@ -144,7 +144,7 @@ pub async fn resolve_session(
                 let session_id = SessionId::from(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match coordinator.restore_session(&session_id, Vec::new()).await {
+                match kernel.restore_session(&session_id, Vec::new()).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
@@ -155,7 +155,7 @@ pub async fn resolve_session(
                             auto_approve_level,
                             tool_blocklist: vec![],
                         };
-                        Ok(coordinator.create_session(input).await?)
+                        Ok(kernel.create_session(input).await?)
                     }
                 }
             }
@@ -168,7 +168,7 @@ pub async fn resolve_session(
 
                     tool_blocklist: vec![],
                 };
-                Ok(coordinator.create_session(input).await?)
+                Ok(kernel.create_session(input).await?)
             }
         },
         // No --session: create new session
@@ -180,16 +180,14 @@ pub async fn resolve_session(
 
                 tool_blocklist: vec![],
             };
-            Ok(coordinator.create_session(input).await?)
+            Ok(kernel.create_session(input).await?)
         }
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
                 let source_id = SessionId::from(entry.session_id);
                 println!("Forking last session: {}", source_id.0);
-                Ok(coordinator
-                    .fork_session(&source_id, auto_approve_level)
-                    .await?)
+                Ok(kernel.fork_session(&source_id, auto_approve_level).await?)
             }
             None => {
                 println!("No previous session found to fork, starting new session");
@@ -200,16 +198,14 @@ pub async fn resolve_session(
 
                     tool_blocklist: vec![],
                 };
-                Ok(coordinator.create_session(input).await?)
+                Ok(kernel.create_session(input).await?)
             }
         },
         // --fork <id>: fork specific session
         SessionArg::ForkSpecific(id) => {
             let source_id = SessionId::from(id.clone());
             println!("Forking session: {}", source_id.0);
-            Ok(coordinator
-                .fork_session(&source_id, auto_approve_level)
-                .await?)
+            Ok(kernel.fork_session(&source_id, auto_approve_level).await?)
         }
     }
 }
@@ -217,7 +213,7 @@ pub async fn resolve_session(
 /// Run a single session lifecycle
 #[allow(clippy::too_many_arguments)]
 pub async fn run_session_loop(
-    coordinator: Arc<dyn CoordinatorApi>,
+    kernel: Arc<dyn KernelApi>,
     session_id: SessionId,
     ctx: SessionContext,
     app_storage: Arc<AppStorage>,
@@ -241,14 +237,14 @@ pub async fn run_session_loop(
 
     // Create channels
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<ContentBlock>>(100);
-    let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::channel::<ControlCommand>(10);
+    let (ctrl_tx, mut ctrl_rx) = tokio::sync::mpsc::channel::<Command>(10);
 
     // Spawn input forwarding task.
     // Keeps retrying transient errors (connection lost, daemon restarting).
     // On `session_not_found` (daemon was restarted and lost in-memory state)
     // we automatically call `restore_session` so the TUI can continue
     // seamlessly.
-    let coord_for_input = coordinator.clone();
+    let coord_for_input = kernel.clone();
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
@@ -282,17 +278,17 @@ pub async fn run_session_loop(
     });
 
     // Spawn control command handling task
-    let coord_for_ctrl = coordinator.clone();
+    let coord_for_ctrl = kernel.clone();
     let session_id_for_ctrl = session_id.clone();
     tokio::spawn(async move {
         while let Some(cmd) = ctrl_rx.recv().await {
             match cmd {
-                ControlCommand::Cancel => {
+                Command::Cancel => {
                     if let Err(e) = coord_for_ctrl.cancel(&session_id_for_ctrl).await {
                         tracing::error!("Failed to cancel request: {}", e);
                     }
                 }
-                ControlCommand::Response {
+                Command::Response {
                     req_id,
                     approved,
                     remember,
@@ -304,7 +300,7 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send permission response: {}", e);
                     }
                 }
-                ControlCommand::SetLevel(level) => {
+                Command::SetLevel(level) => {
                     if let Err(e) = coord_for_ctrl
                         .set_permission_level(&session_id_for_ctrl, level)
                         .await
@@ -312,12 +308,12 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to set permission level: {}", e);
                     }
                 }
-                ControlCommand::Compact => {
+                Command::Compact => {
                     if let Err(e) = coord_for_ctrl.compact_session(&session_id_for_ctrl).await {
                         tracing::error!("Failed to compact session: {}", e);
                     }
                 }
-                ControlCommand::StartGoal(config) => {
+                Command::StartGoal(config) => {
                     if let Err(e) = coord_for_ctrl
                         .start_goal(&session_id_for_ctrl, config)
                         .await
@@ -325,12 +321,12 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to start goal: {}", e);
                     }
                 }
-                ControlCommand::StopGoal => {
+                Command::StopGoal => {
                     if let Err(e) = coord_for_ctrl.stop_goal(&session_id_for_ctrl).await {
                         tracing::error!("Failed to stop goal: {}", e);
                     }
                 }
-                ControlCommand::Rewind { message_id, target } => {
+                Command::Rewind { message_id, target } => {
                     if let Err(e) = coord_for_ctrl
                         .rewind_session(&session_id_for_ctrl, message_id, target)
                         .await
@@ -338,7 +334,7 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to rewind session: {}", e);
                     }
                 }
-                ControlCommand::AskUserResponse { req_id, answers } => {
+                Command::AskUserResponse { req_id, answers } => {
                     let response = AskUserResponse {
                         answers: answers.into_iter().collect(),
                     };
@@ -349,17 +345,17 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send ask_user response: {}", e);
                     }
                 }
-                ControlCommand::PauseGoal => {
+                Command::PauseGoal => {
                     if let Err(e) = coord_for_ctrl.pause_goal(&session_id_for_ctrl).await {
                         tracing::error!("Failed to pause goal: {}", e);
                     }
                 }
-                ControlCommand::ResumeGoal => {
+                Command::ResumeGoal => {
                     if let Err(e) = coord_for_ctrl.resume_goal(&session_id_for_ctrl).await {
                         tracing::error!("Failed to resume goal: {}", e);
                     }
                 }
-                ControlCommand::EditGoal { description } => {
+                Command::EditGoal { description } => {
                     if let Err(e) = coord_for_ctrl
                         .update_goal(&session_id_for_ctrl, description)
                         .await
@@ -367,7 +363,7 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to edit goal: {}", e);
                     }
                 }
-                ControlCommand::Steer { content } => {
+                Command::Steer { content } => {
                     if let Err(e) = coord_for_ctrl
                         .send_steer(&session_id_for_ctrl, content)
                         .await
@@ -375,12 +371,12 @@ pub async fn run_session_loop(
                         tracing::error!("Failed to send steer: {}", e);
                     }
                 }
-                ControlCommand::Continue => {
+                Command::Continue => {
                     if let Err(e) = coord_for_ctrl.send_continue(&session_id_for_ctrl).await {
                         tracing::error!("Failed to send continue: {}", e);
                     }
                 }
-                ControlCommand::GetGoal => {
+                Command::GetGoal => {
                     // GetGoal is a query; no-op for CLI since it returns a value
                     tracing::debug!("GetGoal command received in CLI session — no action");
                 }
@@ -389,13 +385,13 @@ pub async fn run_session_loop(
     });
 
     // Subscribe to session events (broadcast channel - TUI can lag but won't block)
-    let event_rx = coordinator.subscribe_session_events(&session_id).await?;
+    let event_rx = kernel.subscribe_session_events(&session_id, None).await?;
 
     let tui_result = run_tui(
         event_rx,
         input_tx.clone(),
         ctrl_tx,
-        coordinator.clone(),
+        kernel.clone(),
         ctx.working_dir.to_string_lossy().to_string(),
         input_history,
         initial_message,
@@ -417,9 +413,9 @@ pub async fn run_session_loop(
     // Only record session if the session has actual messages in storage.
     // If we can't reach storage (e.g. daemon disconnected), conservatively
     // keep the session rather than risk deleting data.
-    match coordinator.get_session_messages(&session_id).await {
+    match kernel.get_session_messages(&session_id).await {
         Ok(msgs) if msgs.is_empty() => {
-            if let Err(e) = coordinator.delete_session(&session_id).await {
+            if let Err(e) = kernel.delete_session(&session_id).await {
                 tracing::warn!("Failed to delete empty session: {}", e);
             }
             println!("Goodbye~");

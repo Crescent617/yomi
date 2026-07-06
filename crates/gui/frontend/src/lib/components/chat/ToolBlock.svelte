@@ -127,7 +127,7 @@
   <!-- Header — always visible, clickable -->
   <button
     type="button"
-    class="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+    class="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors"
     onclick={() => (expanded = !expanded)}
   >
     {#if tool.status === "running"}
@@ -170,7 +170,7 @@
       <div class="ml-auto flex items-center gap-1">
         <button
           type="button"
-          class="relative inline-flex items-center gap-1 rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+          class="relative inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground bg-transparent hover:bg-background dark:hover:bg-muted transition-colors"
           onmouseenter={() => (showSessionId = true)}
           onmouseleave={() => (showSessionId = false)}
           onclick={(e) => {
@@ -188,7 +188,7 @@
                 class="absolute left-1/2 -translate-x-1/2 -bottom-[3px] w-2 h-2 bg-card rotate-45 border-r border-b border-border/20"
               ></div>
               <div
-                class="relative px-3 py-2 bg-card rounded-lg border border-border/20 shadow-xl text-[11px] text-foreground whitespace-nowrap font-mono"
+                class="relative px-3 py-2 bg-card rounded-lg border border-border/20 text-[11px] text-foreground whitespace-nowrap font-mono"
               >
                 {tool.subagent_session_id}
               </div>
@@ -249,6 +249,19 @@
           <div class="font-medium mb-0.5">Error:</div>
           <pre
             class="bg-red-50/80 dark:bg-red-950/40 rounded px-2 py-1 whitespace-pre-wrap">{tool.error}</pre>
+        </div>
+      {/if}
+
+      <!-- Subagent status -->
+      {#if tool.subagent}
+        <div class="border-t border-black/5 dark:border-white/10 pt-2 mt-1">
+          {#if !tool.subagent.is_stopped}
+            <div
+              class="text-xs italic text-muted-foreground flex items-center gap-1 py-1"
+            >
+              <Loader2 class="w-3 h-3 animate-spin" /> Subagent running…
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

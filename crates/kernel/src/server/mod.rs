@@ -1,78 +1,50 @@
-use crate::agent::AgentConfig;
-use crate::app::coordinator::CreateSessionInput;
-use crate::app::Coordinator;
-use crate::config::Config;
-use crate::cron::CronJobId;
-use crate::skill::{deduplicate_skills, SkillLoader};
+use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent};
+use crate::kernel::Kernel;
 use crate::transport::{recv_frame, send_frame};
-use crate::types::{ProjectId, Result, SessionId};
-use crate::wire::{RequestMethod, ResponseBody, RpcError, WireMsg};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use crate::types::Result;
+use crate::wire::WireMsg;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
+mod dispatcher;
+mod event_buffer;
+use event_buffer::{EventBuffer, SessionSubscribers};
 
-/// Load skills from disk and build a complete `AgentConfig` from a `Config`.
-/// `base_dir` is used to resolve relative skill folder paths.
-pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
-    let skill_folders = config
-        .skill_folders()
-        .iter()
-        .map(PathBuf::from)
-        .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
-        .collect::<Vec<_>>();
-
-    let mut skills = SkillLoader::new(skill_folders)
-        .load_all()
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to load skills: {e}");
-            Vec::new()
-        });
-
-    deduplicate_skills(&mut skills);
-
-    if !skills.is_empty() {
-        tracing::info!("Loaded {} skill(s)", skills.len());
-        for skill in &skills {
-            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
-        }
-    }
-
-    let mut agent = config.agent.clone();
-    agent.skills = skills;
-    agent.allow_command_hooks = config.features.allow_command_hooks;
-    agent
-}
-
-/// Kernel daemon server. Bridges external connections to the local Coordinator.
+/// Kernel daemon server. Bridges external connections to the local Kernel.
 #[derive(Clone)]
 pub struct KernelServer {
-    coordinator: Arc<Coordinator>,
-    connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
-    next_conn_id: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) kernel: Arc<Kernel>,
+    pub(crate) connections: Arc<dashmap::DashMap<u64, tokio_util::sync::CancellationToken>>,
+    pub(crate) next_conn_id: Arc<std::sync::atomic::AtomicU64>,
     /// Cron scheduler.  Held here because the `KernelServer` owns the lifecycle
     /// of the cron subsystem (start / reload / shutdown) independently of the
-    /// `Coordinator`, which only provides the data layer (`CronStore`).
-    cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
-    shutdown: tokio_util::sync::CancellationToken,
+    /// `Kernel`, which only provides the data layer (`CronStore`).
+    pub(crate) cron_scheduler: Arc<std::sync::Mutex<Option<Arc<crate::cron::CronScheduler>>>>,
+    pub(crate) shutdown: tokio_util::sync::CancellationToken,
+    /// Per-session event buffer for replay on re-subscribe.
+    pub(crate) event_buffer: Arc<EventBuffer>,
+    /// Real-time event subscribers per session.
+    pub(crate) session_subscribers: Arc<SessionSubscribers>,
 }
 
 impl KernelServer {
-    pub fn new(coordinator: Arc<Coordinator>) -> Self {
+    pub fn new(kernel: Arc<Kernel>) -> Self {
         Self {
-            coordinator,
+            kernel,
             connections: Arc::new(dashmap::DashMap::new()),
             next_conn_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
             shutdown: tokio_util::sync::CancellationToken::new(),
+            event_buffer: Arc::new(EventBuffer::new(10_000)),
+            session_subscribers: Arc::new(SessionSubscribers::new()),
         }
     }
 
     pub async fn start(&self, configs: Vec<crate::channels::ChannelConfig>) {
-        self.coordinator.start(self.shutdown.clone());
+        self.kernel.start();
 
-        if let Some(store) = self.coordinator.cron_store.as_ref() {
+        if let Some(store) = self.kernel.cron_store.as_ref() {
             let (task_tx, task_rx) = mpsc::channel(64);
             let scheduler = Arc::new(crate::cron::CronScheduler::new(Arc::clone(store), task_tx));
 
@@ -81,7 +53,7 @@ impl KernelServer {
             tokio::spawn(async move { sched_clone.run(cron_token).await });
 
             let worker = crate::cron::CronWorker::new(
-                Arc::clone(&self.coordinator) as Arc<dyn crate::cron::CronExecutor>,
+                Arc::clone(&self.kernel) as Arc<dyn crate::cron::CronExecutor>,
                 task_rx,
                 Arc::clone(store),
                 Some(Arc::clone(&scheduler)),
@@ -92,12 +64,52 @@ impl KernelServer {
             *self.cron_scheduler.lock().unwrap() = Some(scheduler);
         }
 
-        if let Some(ref mgr) = self.coordinator.channel_manager {
-            let weak = Arc::downgrade(&self.coordinator);
+        if let Some(ref mgr) = self.kernel.channel_manager {
+            let weak = Arc::downgrade(&self.kernel);
             if let Err(e) = mgr.start_all(self.shutdown.clone(), configs, weak).await {
                 tracing::warn!(error = %e, "some channels failed to start");
             }
         }
+
+        // Start the global event-forwarder task that assigns event IDs,
+        // buffers events, and forwards them to real-time subscribers.
+        self.start_event_forwarder(self.shutdown.child_token());
+    }
+
+    fn start_event_forwarder(&self, cancel: tokio_util::sync::CancellationToken) {
+        let event_buffer = Arc::clone(&self.event_buffer);
+        let session_subscribers = Arc::clone(&self.session_subscribers);
+        let bus = match self.kernel.event_bus() {
+            Some(b) => b,
+            None => return,
+        };
+
+        tokio::spawn(async move {
+            let mut subscriber = bus.subscribe_all();
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    Some((sid, envelope)) = subscriber.recv() => {
+                        // Buffer first, then forward.
+                        event_buffer.push(envelope.clone());
+
+                        match &envelope.event {
+                            Event::Internal(InternalEvent::MessageAdded { .. }) => {
+                                event_buffer.clear(&sid);
+                            }
+                            Event::Agent(AgentEvent::Lifecycle { state: AgentStatus::Stopped { .. } }) => {
+                                event_buffer.remove(&sid);
+                            }
+                            _ => {}
+                        }
+
+                        session_subscribers.try_send(&sid, &envelope);
+                    }
+                }
+            }
+            tracing::info!("event forwarder exited");
+        });
     }
 
     /// Run the server on an IPC endpoint (Unix socket or TCP).
@@ -159,6 +171,7 @@ impl KernelServer {
 
     pub fn shutdown(&self) {
         self.shutdown.cancel();
+        self.kernel.stop();
     }
 
     pub fn connection_count(&self) -> usize {
@@ -196,8 +209,36 @@ impl KernelServer {
             }
         });
 
-        let subscriptions: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let notification_cancel = cancel.clone();
+        let notification_send_tx = send_tx.clone();
+        let bus = self.kernel.notification_bus();
+        let mut rx = bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    () = notification_cancel.cancelled() => break,
+                    res = rx.recv() => {
+                        match res {
+                            Ok(noti) => {
+                                if let Err(e) = notification_send_tx.send(WireMsg::Noti(noti)).await {
+                                    tracing::debug!("Notification send error: {e}");
+                                    break;
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("Notification subscriber lagged, dropped {n} messages");
+                            }
+                            Err(broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        let subscriptions: std::sync::Arc<
+            tokio::sync::RwLock<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
+        > = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
         loop {
             let msg = tokio::select! {
@@ -226,7 +267,7 @@ impl KernelServer {
                 WireMsg::Request { id, method } => {
                     let body = self
                         .dispatch_request(
-                            Arc::clone(&subscriptions),
+                            std::sync::Arc::clone(&subscriptions),
                             send_tx.clone(),
                             cancel.clone(),
                             method,
@@ -239,7 +280,7 @@ impl KernelServer {
                         break;
                     }
                 }
-                WireMsg::Event { .. } | WireMsg::Response { .. } => {
+                WireMsg::Event { .. } | WireMsg::Response { .. } | WireMsg::Noti { .. } => {
                     tracing::warn!("Unexpected message from client: {:?}", msg);
                 }
                 WireMsg::Pong => {}
@@ -257,601 +298,7 @@ impl KernelServer {
 
         Ok(())
     }
-
-    async fn dispatch_request(
-        &self,
-        subscriptions: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
-        send_tx: mpsc::Sender<WireMsg>,
-        cancel: tokio_util::sync::CancellationToken,
-        method: RequestMethod,
-    ) -> ResponseBody {
-        match method {
-            // ── Project ──────────────────────────────────────────────────
-            RequestMethod::ListProjects => rpc_body(
-                "list_projects_failed",
-                self.coordinator.list_projects().await,
-            ),
-            RequestMethod::CreateProject { dir, name } => rpc_body(
-                "create_project_failed",
-                self.coordinator.create_project(dir.into(), name).await,
-            ),
-            RequestMethod::GetProject { project_id } => rpc_body(
-                "get_project_failed",
-                self.coordinator
-                    .get_project(&ProjectId::from(project_id))
-                    .await,
-            ),
-            RequestMethod::RenameProject { project_id, name } => rpc_body(
-                "rename_project_failed",
-                self.coordinator
-                    .rename_project(&ProjectId::from(project_id), name)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::DeleteProject { project_id } => rpc_body(
-                "delete_project_failed",
-                self.coordinator
-                    .delete_project(&ProjectId::from(project_id))
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-
-            // ── Session ──────────────────────────────────────────────────
-            RequestMethod::CreateSession {
-                project_id,
-                working_dir,
-                auto_approve_level,
-            } => {
-                let input = CreateSessionInput {
-                    project_id: project_id.map(ProjectId::from),
-                    working_dir: working_dir.map(std::path::PathBuf::from),
-                    auto_approve_level,
-                    tool_blocklist: Vec::new(),
-                };
-                rpc_body(
-                    "create_session_failed",
-                    self.coordinator
-                        .create_session(input)
-                        .await
-                        .map(|sid| sid.0),
-                )
-            }
-            RequestMethod::RestoreSession {
-                session_id,
-                tool_blocklist,
-            } => {
-                let sid = SessionId::from(session_id);
-                rpc_body(
-                    "restore_session_failed",
-                    self.coordinator
-                        .restore_session(&sid, tool_blocklist)
-                        .await
-                        .map(|sid| sid.0),
-                )
-            }
-            RequestMethod::ForkSession {
-                parent_id,
-                auto_approve_level,
-            } => {
-                let parent = SessionId::from(parent_id);
-                rpc_body(
-                    "fork_session_failed",
-                    self.coordinator
-                        .fork_session(&parent, auto_approve_level)
-                        .await
-                        .map(|sid| sid.0),
-                )
-            }
-            RequestMethod::SendMessage { session_id, blocks } => rpc_body(
-                "send_message_failed",
-                self.coordinator
-                    .send_message(&SessionId::from(session_id), blocks)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::ListSessionSkills { session_id } => rpc_body(
-                "list_session_skills_failed",
-                self.coordinator
-                    .list_session_skills(&SessionId::from(session_id))
-                    .await,
-            ),
-            RequestMethod::Command { session_id, cmd } => {
-                let sid = SessionId::from(session_id);
-                rpc_body(
-                    "command_failed",
-                    dispatch_command(&self.coordinator, &sid, cmd).await,
-                )
-            }
-            RequestMethod::Subscribe { session_id } => {
-                let sid = SessionId::from(session_id.clone());
-
-                let rx = self.coordinator.subscribe_session_events(&sid);
-
-                let session_id_for_task = session_id.clone();
-                let send_tx2 = send_tx.clone();
-                let cancel2 = cancel.clone();
-
-                let mut subs = subscriptions.write().await;
-                if let Some(old) = subs.remove(&session_id) {
-                    old.abort();
-                }
-
-                let handle = tokio::spawn(async move {
-                    let mut rx = rx;
-                    loop {
-                        let event = tokio::select! {
-                            biased;
-                            () = cancel2.cancelled() => break,
-                            opt = rx.recv() => match opt {
-                                Some((_sid, ev)) => ev,
-                                None => break,
-                            },
-                        };
-                        let msg = WireMsg::Event {
-                            session_id: session_id_for_task.clone(),
-                            event,
-                        };
-                        if let Err(e) = send_tx2.try_send(msg) {
-                            match e {
-                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                                    tracing::warn!(
-                                        "Outbound channel full, dropping event for session={}",
-                                        session_id_for_task
-                                    );
-                                }
-                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
-                            }
-                        }
-                    }
-                });
-
-                subs.insert(session_id, handle);
-                ResponseBody::Ok {
-                    result: serde_json::Value::Null,
-                }
-            }
-            RequestMethod::Unsubscribe { session_id } => {
-                if let Some(handle) = subscriptions.write().await.remove(&session_id) {
-                    handle.abort();
-                }
-                ResponseBody::Ok {
-                    result: serde_json::Value::Null,
-                }
-            }
-            RequestMethod::GetSessionMessages { session_id } => rpc_body(
-                "get_messages_failed",
-                self.coordinator
-                    .get_session_messages(&SessionId::from(session_id))
-                    .await,
-            ),
-            RequestMethod::GetSession { session_id } => rpc_body(
-                "get_session_failed",
-                self.coordinator
-                    .get_session(&SessionId::from(session_id))
-                    .await,
-            ),
-            RequestMethod::DeleteSession { session_id } => rpc_body(
-                "delete_failed",
-                self.coordinator
-                    .delete_session(&SessionId::from(session_id))
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::ListSessions {
-                project_id,
-                before,
-                limit,
-            } => {
-                let pid = project_id.as_ref().map(|p| ProjectId::from(p.clone()));
-                let result = self
-                    .coordinator
-                    .list_sessions(pid.as_ref(), before, limit)
-                    .await;
-                rpc_body("list_sessions_failed", result)
-            }
-            RequestMethod::GetCheckpoints { session_id } => rpc_body(
-                "get_checkpoints_failed",
-                self.coordinator
-                    .get_checkpoints(&SessionId::from(session_id))
-                    .await,
-            ),
-            RequestMethod::GetTodos { session_id } => rpc_body(
-                "get_todos_failed",
-                self.coordinator
-                    .get_todos(&SessionId::from(session_id))
-                    .await,
-            ),
-            RequestMethod::RenameSession { session_id, title } => rpc_body(
-                "rename_session_failed",
-                self.coordinator
-                    .rename_session(&SessionId::from(session_id), title)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::PinSession {
-                session_id,
-                icon_emoji,
-            } => rpc_body(
-                "pin_session_failed",
-                self.coordinator
-                    .pin_session(&SessionId::from(session_id), icon_emoji)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::UnpinSession { session_id } => rpc_body(
-                "unpin_session_failed",
-                self.coordinator
-                    .unpin_session(&SessionId::from(session_id))
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::SetPinnedSessionEmoji {
-                session_id,
-                icon_emoji,
-            } => rpc_body(
-                "set_pinned_session_emoji_failed",
-                self.coordinator
-                    .set_pinned_session_emoji(&SessionId::from(session_id), icon_emoji)
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
-            RequestMethod::ListPinnedSessions => rpc_body(
-                "list_pinned_sessions_failed",
-                self.coordinator.list_pinned_sessions().await,
-            ),
-            RequestMethod::ShutdownSession { session_id: _ } => ResponseBody::Ok {
-                result: serde_json::Value::Null,
-            },
-
-            // ── Cron Job ──────────────────────────────────────────────────
-            RequestMethod::CreateCronJob {
-                name,
-                schedule,
-                action,
-                max_runs,
-                expires_at,
-            } => {
-                let input = crate::cron::CreateCronJobInput {
-                    name,
-                    schedule,
-                    action,
-                    max_runs,
-                    expires_at,
-                };
-                match self.coordinator.create_cron_job(input).await {
-                    Ok(job_id) => {
-                        if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                            scheduler.reload();
-                        }
-                        ok_body(JobIdResponse {
-                            job_id: job_id.0.to_string(),
-                        })
-                    }
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "create_cron_job_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-            RequestMethod::ListCronJobs { status, limit } => {
-                let status = status.and_then(|s| s.parse().ok());
-                match self.coordinator.list_cron_jobs(status, limit).await {
-                    Ok(jobs) => ResponseBody::Ok {
-                        result: match serde_json::to_value(jobs) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                return ResponseBody::Err {
-                                    error: RpcError {
-                                        code: "serialize_error".to_string(),
-                                        message: e.to_string(),
-                                        detail: None,
-                                    },
-                                };
-                            }
-                        },
-                    },
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "list_cron_jobs_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-            RequestMethod::GetCronJob { job_id } => {
-                match self
-                    .coordinator
-                    .get_cron_job(&CronJobId::from(job_id))
-                    .await
-                {
-                    Ok(Some(job)) => ResponseBody::Ok {
-                        result: match serde_json::to_value(job) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                return ResponseBody::Err {
-                                    error: RpcError {
-                                        code: "serialize_error".to_string(),
-                                        message: e.to_string(),
-                                        detail: None,
-                                    },
-                                };
-                            }
-                        },
-                    },
-                    // Return null so the client can distinguish "not found" from a real error.
-                    Ok(None) => ResponseBody::Ok {
-                        result: serde_json::Value::Null,
-                    },
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "get_cron_job_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-            RequestMethod::UpdateCronJob {
-                job_id,
-                name,
-                schedule,
-                action,
-                status,
-                max_runs,
-                expires_at,
-            } => {
-                let status = status.and_then(|s| s.parse().ok());
-                let input = crate::cron::UpdateCronJobInput {
-                    name,
-                    schedule,
-                    action,
-                    status,
-                    max_runs,
-                    expires_at,
-                    ..Default::default()
-                };
-                match self
-                    .coordinator
-                    .update_cron_job(&CronJobId::from(job_id), input)
-                    .await
-                {
-                    // Return true/false so the client can distinguish "updated" from "not found".
-                    Ok(updated) => {
-                        if updated {
-                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                                scheduler.reload();
-                            }
-                        }
-                        ResponseBody::Ok {
-                            result: serde_json::Value::Bool(updated),
-                        }
-                    }
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "update_cron_job_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-            RequestMethod::DeleteCronJob { job_id } => {
-                match self
-                    .coordinator
-                    .delete_cron_job(&CronJobId::from(job_id))
-                    .await
-                {
-                    // Return true/false so the client can distinguish "deleted" from "not found".
-                    Ok(deleted) => {
-                        if deleted {
-                            if let Some(ref scheduler) = *self.cron_scheduler.lock().unwrap() {
-                                scheduler.reload();
-                            }
-                        }
-                        ResponseBody::Ok {
-                            result: serde_json::Value::Bool(deleted),
-                        }
-                    }
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "delete_cron_job_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-
-            RequestMethod::TriggerCronJob { job_id } => {
-                match self
-                    .coordinator
-                    .trigger_cron_job(&CronJobId::from(job_id))
-                    .await
-                {
-                    Ok(()) => ResponseBody::Ok {
-                        result: serde_json::Value::Null,
-                    },
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "trigger_cron_job_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-
-            // ── Usage ───────────────────────────────────────────────────────
-            RequestMethod::GetUsageSummary { days } => {
-                let days = days.unwrap_or(365);
-                match self.coordinator.get_usage_summary(days).await {
-                    Ok(summary) => ok_body(summary),
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "get_usage_summary_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-            RequestMethod::GetDailyUsage { days } => {
-                match self.coordinator.get_daily_usage(days).await {
-                    Ok(daily) => ok_body(daily),
-                    Err(e) => ResponseBody::Err {
-                        error: RpcError {
-                            code: "get_daily_usage_failed".to_string(),
-                            message: e.to_string(),
-                            detail: None,
-                        },
-                    },
-                }
-            }
-
-            // ── Channel ────────────────────────────────────────────────────
-            RequestMethod::ListChannels => {
-                let channels = self.coordinator.list_channels();
-                ok_body(channels)
-            }
-
-            RequestMethod::Hello => ok_body(ProtoResponse {
-                proto: crate::wire::WIRE_PROTOCOL_VERSION,
-            }),
-        }
-    }
 }
 
-async fn dispatch_command(
-    coordinator: &Coordinator,
-    sid: &SessionId,
-    cmd: crate::event::ControlCommand,
-) -> Result<serde_json::Value> {
-    use crate::event::ControlCommand;
-    match cmd {
-        ControlCommand::Cancel => {
-            coordinator.cancel(sid);
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::Response {
-            req_id,
-            approved,
-            remember,
-        } => {
-            coordinator.send_permission_response(sid, &req_id, approved, remember);
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::AskUserResponse { req_id, answers } => {
-            let response = crate::tools::AskUserResponse {
-                answers: answers.into_iter().collect(),
-            };
-            coordinator.send_ask_user_response(sid, &req_id, response);
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::SetLevel(level) => {
-            coordinator.set_permission_level(sid, level).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::Compact => {
-            coordinator.compact_session(sid);
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::StartGoal(state) => {
-            coordinator.start_goal(sid, state).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::StopGoal => {
-            coordinator.stop_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::PauseGoal => {
-            coordinator.pause_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::ResumeGoal => {
-            coordinator.resume_goal(sid).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::EditGoal { description } => {
-            coordinator.update_goal(sid, description).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::GetGoal => {
-            let goal = coordinator.get_goal(sid).await?;
-            Ok(serde_json::to_value(goal)?)
-        }
-        ControlCommand::Rewind { message_id, target } => {
-            coordinator.rewind_session(sid, message_id, target).await?;
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::Steer { content } => {
-            coordinator.send_steer(sid, content);
-            Ok(serde_json::Value::Null)
-        }
-        ControlCommand::Continue => {
-            coordinator.send_continue(sid);
-            Ok(serde_json::Value::Null)
-        }
-    }
-}
-
-/// Serialize a value into `ResponseBody::Ok`, handling serialization errors.
-fn ok_body<T: serde::Serialize>(val: T) -> ResponseBody {
-    match serde_json::to_value(val) {
-        Ok(v) => ResponseBody::Ok { result: v },
-        Err(e) => ResponseBody::Err {
-            error: RpcError {
-                code: "serialize_error".to_string(),
-                message: e.to_string(),
-                detail: None,
-            },
-        },
-    }
-}
-
-#[derive(serde::Serialize)]
-struct JobIdResponse {
-    job_id: String,
-}
-
-#[derive(serde::Serialize)]
-struct ProtoResponse {
-    proto: u32,
-}
-
-fn rpc_body<T: serde::Serialize>(
-    default_code: &str,
-    result: crate::types::Result<T>,
-) -> ResponseBody {
-    match result {
-        Ok(val) => match serde_json::to_value(val) {
-            Ok(v) => ResponseBody::Ok { result: v },
-            Err(e) => ResponseBody::Err {
-                error: RpcError {
-                    code: "serialize_error".to_string(),
-                    message: e.to_string(),
-                    detail: None,
-                },
-            },
-        },
-        Err(e) => {
-            let (code, detail) = match &e {
-                crate::types::KernelError::Session(ref se) => (
-                    "session_error",
-                    Some(serde_json::to_value(se).expect("SessionError serializes")),
-                ),
-                _ => (default_code, None),
-            };
-            ResponseBody::Err {
-                error: RpcError {
-                    code: code.to_string(),
-                    message: e.to_string(),
-                    detail,
-                },
-            }
-        }
-    }
-}
+#[cfg(test)]
+mod event_buffer_test;

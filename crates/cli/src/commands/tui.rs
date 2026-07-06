@@ -7,9 +7,9 @@ use crate::{
 };
 use anyhow::Result;
 use kernel::{
-    client::{CoordinatorApi, RemoteCoordinator},
+    client::{KernelApi, RemoteKernel},
     config::Config,
-    permissions::Level,
+    permission::Level,
     utils::strs,
 };
 use std::io::{self, IsTerminal, Read};
@@ -52,7 +52,7 @@ pub struct TuiArgs {
     #[allow(clippy::option_option)]
     pub fork: Option<Option<String>>,
 
-    /// Run with background daemon (external coordinator)
+    /// Run with background daemon (external kernel)
     #[arg(long, visible_alias = "bg")]
     pub daemon: bool,
 }
@@ -142,13 +142,13 @@ pub async fn run(args: TuiArgs) -> Result<()> {
     tokio::fs::create_dir_all(&config.data_dir).await?;
 
     let app_storage = Arc::new(AppStorage::new(config.data_dir.clone())?);
-    let _log_guard = kernel::logging::init_logging(&config, "tui", false)?;
+    let _log_guard = kernel::utils::logging::init_logging(&config, "tui", false)?;
 
-    let coordinator: Arc<dyn CoordinatorApi> = if args.daemon {
+    let kernel: Arc<dyn KernelApi> = if args.daemon {
         daemon::spawn_daemon().await?;
-        Arc::new(RemoteCoordinator::new(daemon::socket_addr()))
+        Arc::new(RemoteKernel::new(daemon::socket_addr()))
     } else {
-        create_local_coordinator(&config).await?
+        create_local_kernel(&config).await?
     };
 
     print_startup_info(&config);
@@ -189,7 +189,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         let session_id = resolve_session(
             &session_arg,
             is_launch,
-            coordinator.as_ref(),
+            kernel.as_ref(),
             &app_storage,
             &working_dir,
             config.auto_approve,
@@ -197,7 +197,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         .await?;
 
         let result = run_session_loop(
-            coordinator.clone(),
+            kernel.clone(),
             session_id,
             session_ctx.clone(),
             app_storage.clone(),
@@ -237,15 +237,16 @@ pub async fn run(args: TuiArgs) -> Result<()> {
         break;
     }
 
+    kernel.stop();
     Ok(())
 }
 
-async fn create_local_coordinator(config: &Config) -> Result<Arc<kernel::Coordinator>> {
-    let coordinator = kernel::build_coordinator(config, false)
+async fn create_local_kernel(config: &Config) -> Result<Arc<kernel::Kernel>> {
+    let kernel = kernel::build_kernel(config, false)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to build coordinator: {e}"))?;
-    coordinator.start(tokio_util::sync::CancellationToken::new());
-    Ok(coordinator)
+        .map_err(|e| anyhow::anyhow!("Failed to build kernel: {e}"))?;
+    kernel.start();
+    Ok(kernel)
 }
 
 fn print_startup_info(config: &Config) {

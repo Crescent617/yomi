@@ -1,5 +1,5 @@
-use crate::app::coordinator::{Coordinator, CreateSessionInput};
 use crate::event::{Event, ModelEvent};
+use crate::kernel::{CreateSessionInput, Kernel};
 use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -25,7 +25,7 @@ struct ChannelInstance {
 }
 
 /// Manages the lifecycle of all platform channels and routes incoming
-/// messages to the coordinator.
+/// messages to the kernel.
 pub struct ChannelHub {
     store: Arc<dyn ChannelStore>,
     instances: Arc<DashMap<String, ChannelInstance>>,
@@ -45,7 +45,7 @@ impl ChannelHub {
         &self,
         token: CancellationToken,
         configs: Vec<ChannelConfig>,
-        coordinator: std::sync::Weak<Coordinator>,
+        kernel: std::sync::Weak<Kernel>,
     ) -> Result<()> {
         let mut errors = Vec::new();
         for config in configs {
@@ -58,7 +58,7 @@ impl ChannelHub {
                 continue;
             }
             if let Err(e) = self
-                .start_instance(config, token.child_token(), coordinator.clone())
+                .start_instance(config, token.child_token(), kernel.clone())
                 .await
             {
                 error!(error = %e, "failed to start channel");
@@ -66,8 +66,8 @@ impl ChannelHub {
             }
         }
 
-        // Start the global event forwarder if we have a coordinator with an event bus.
-        if let Some(coord) = coordinator.upgrade() {
+        // Start the global event forwarder if we have a kernel with an event bus.
+        if let Some(coord) = kernel.upgrade() {
             if let Some(bus) = coord.event_bus() {
                 self.start_event_forwarder(bus, token.child_token()).await;
             }
@@ -92,7 +92,7 @@ impl ChannelHub {
         &self,
         config: ChannelConfig,
         token: CancellationToken,
-        coordinator: std::sync::Weak<Coordinator>,
+        kernel: std::sync::Weak<Kernel>,
     ) -> Result<()> {
         let name = config.name.clone();
         info!(channel = %name, "starting channel");
@@ -146,9 +146,9 @@ impl ChannelHub {
                             info!(channel = %name_proc, chat_id = %msg.external_chat_id, "ignoring non-mention message");
                             continue;
                         }
-                        // Route to coordinator
-                        let Some(coord) = coordinator.upgrade() else {
-                            warn!("coordinator gone, stopping processing loop");
+                        // Route to kernel
+                        let Some(coord) = kernel.upgrade() else {
+                            warn!("kernel gone, stopping processing loop");
                             break;
                         };
                         match handle_incoming_message(
@@ -220,7 +220,7 @@ impl ChannelHub {
                 tokio::select! {
                     biased;
                     () = token.cancelled() => break,
-                    Some((session_id, event)) = rx.recv() => {
+                    Some((session_id, envelope)) = rx.recv() => {
                         let routing = match store.find_routing_by_session(&session_id).await {
                             Ok(Some(r)) => r,
                             Ok(None) => continue,
@@ -233,7 +233,7 @@ impl ChannelHub {
                         let Some(instance) = instances.get(&routing.channel_name) else { continue };
                         let adapter = Arc::clone(&instance.adapter);
 
-                        match event {
+                        match envelope.event {
                             Event::Model(ModelEvent::Request { .. }) => {
                                 let chat_id = routing.external_chat_id.clone();
                                 tokio::spawn(async move {
@@ -319,7 +319,7 @@ async fn handle_incoming_message(
     channel_name: &str,
     _config: &ChannelConfig,
     store: &Arc<dyn ChannelStore>,
-    coordinator: Arc<Coordinator>,
+    kernel: Arc<Kernel>,
     msg: ChannelMessage,
 ) -> Result<Option<String>> {
     let chat_id = msg.external_chat_id.clone();
@@ -330,13 +330,13 @@ async fn handle_incoming_message(
     match cmd {
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                coordinator.clear_session(&sid);
+                kernel.clear_session(&sid);
             }
             Ok(Some("Context cleared.".to_string()))
         }
         ChannelCommand::Stop => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                coordinator.cancel(&sid);
+                kernel.cancel(&sid);
                 return Ok(Some("Stopped.".to_string()));
             }
             Ok(Some("No active session to stop.".to_string()))
@@ -345,26 +345,26 @@ async fn handle_incoming_message(
             let sid = get_or_create_session(
                 channel_name,
                 store,
-                &coordinator,
+                &kernel,
                 &chat_id,
                 &mapping_key,
                 reply_msg_id.as_deref(),
             )
             .await?;
-            coordinator.send_steer(&sid, vec![ContentBlock::Text { text }]);
+            kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
         ChannelCommand::None => {
             let sid = get_or_create_session(
                 channel_name,
                 store,
-                &coordinator,
+                &kernel,
                 &chat_id,
                 &mapping_key,
                 reply_msg_id.as_deref(),
             )
             .await?;
-            coordinator.send_message(&sid, msg.content).await?;
+            kernel.send_message(&sid, msg.content).await?;
             Ok(None)
         }
     }
@@ -374,7 +374,7 @@ async fn handle_incoming_message(
 async fn get_or_create_session(
     channel_name: &str,
     store: &Arc<dyn ChannelStore>,
-    coordinator: &Coordinator,
+    kernel: &Kernel,
     chat_id: &str,
     mapping_key: &str,
     reply_msg_id: Option<&str>,
@@ -386,11 +386,11 @@ async fn get_or_create_session(
         return Ok(sid);
     }
 
-    let sid = coordinator
+    let sid = kernel
         .create_session(CreateSessionInput {
             project_id: None,
             working_dir: None,
-            auto_approve_level: crate::permissions::Level::Dangerous,
+            auto_approve_level: crate::permission::Level::Dangerous,
             tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
         })
         .await?;
@@ -442,236 +442,6 @@ fn build_adapter(
     }
 }
 
-// ── Mock adapter for testing ───────────────────────────────────────
-
 #[cfg(test)]
-pub struct MockAdapter {
-    pub name: String,
-    pub outgoing: tokio::sync::Mutex<Vec<(String, Vec<ContentBlock>)>>,
-}
-
-#[cfg(test)]
-impl MockAdapter {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            outgoing: tokio::sync::Mutex::new(Vec::new()),
-        }
-    }
-}
-
-#[cfg(test)]
-#[async_trait::async_trait]
-impl PlatformAdapter for MockAdapter {
-    async fn run_receiver(
-        &self,
-        _incoming: mpsc::Sender<ChannelMessage>,
-        cancel: CancellationToken,
-    ) -> std::result::Result<(), super::ChannelError> {
-        cancel.cancelled().await;
-        Ok(())
-    }
-
-    async fn send_message(
-        &self,
-        external_chat_id: &str,
-        blocks: Vec<ContentBlock>,
-        _reply_msg_id: Option<&str>,
-    ) -> std::result::Result<(), super::ChannelError> {
-        self.outgoing
-            .lock()
-            .await
-            .push((external_chat_id.to_string(), blocks));
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::channels::store::SqliteChannelStore;
-    use crate::channels::PlatformConfig;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn create_test_pool() -> (sqlx::SqlitePool, Arc<SqliteChannelStore>) {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            r"CREATE TABLE channel_session_mappings (
-                channel_name TEXT NOT NULL,
-                external_chat_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                actual_chat_id TEXT NOT NULL,
-                reply_msg_id TEXT,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (channel_name, external_chat_id)
-            );
-            CREATE INDEX idx_channel_mapping_session ON channel_session_mappings(session_id);",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let store = Arc::new(SqliteChannelStore::new(pool.clone()));
-        (pool, store)
-    }
-
-    #[tokio::test]
-    async fn test_start_and_shutdown() {
-        let (_pool, store) = create_test_pool().await;
-        let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store);
-
-        let configs = vec![
-            ChannelConfig {
-                name: "mock1".to_string(),
-                enabled: true,
-                platform: crate::channels::PlatformConfig::Telegram {
-                    token: "fake".to_string(),
-                },
-                allowed_chats: vec![],
-                allowed_users: vec![],
-                blocked_chats: vec![],
-                blocked_users: vec![],
-                require_mention: false,
-                auto_approve_level: crate::permissions::Level::Safe,
-            },
-            ChannelConfig {
-                name: "mock2".to_string(),
-                enabled: true,
-                platform: crate::channels::PlatformConfig::Telegram {
-                    token: "fake2".to_string(),
-                },
-                allowed_chats: vec![],
-                allowed_users: vec![],
-                blocked_chats: vec![],
-                blocked_users: vec![],
-                require_mention: false,
-                auto_approve_level: crate::permissions::Level::Safe,
-            },
-        ];
-
-        hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
-            .await
-            .unwrap();
-
-        let channels = hub.list_channels();
-        assert_eq!(channels.len(), 2);
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_disabled_channel_skipped() {
-        let (_pool, store) = create_test_pool().await;
-        let cancel = CancellationToken::new();
-        let ch = ChannelHub::new(store);
-
-        let configs = vec![
-            ChannelConfig {
-                name: "enabled".to_string(),
-                enabled: true,
-                platform: PlatformConfig::Telegram {
-                    token: "fake".into(),
-                },
-                ..Default::default()
-            },
-            ChannelConfig {
-                name: "disabled".to_string(),
-                enabled: false,
-                platform: PlatformConfig::Telegram {
-                    token: "fake".into(),
-                },
-                ..Default::default()
-            },
-        ];
-
-        ch.start_all(cancel.clone(), configs, std::sync::Weak::new())
-            .await
-            .unwrap();
-
-        let channels = ch.list_channels();
-        assert_eq!(channels.len(), 1);
-        assert_eq!(channels[0].name, "enabled");
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_skip_existing_channel() {
-        let (_pool, store) = create_test_pool().await;
-        let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store);
-
-        let config = ChannelConfig {
-            name: "only_once".to_string(),
-            enabled: true,
-            platform: PlatformConfig::Telegram {
-                token: "fake".into(),
-            },
-            ..Default::default()
-        };
-
-        hub.start_all(cancel.clone(), vec![config.clone()], std::sync::Weak::new())
-            .await
-            .unwrap();
-        assert_eq!(hub.list_channels().len(), 1);
-
-        // Second attempt should be skipped
-        hub.start_all(cancel.clone(), vec![config], std::sync::Weak::new())
-            .await
-            .unwrap();
-        assert_eq!(hub.list_channels().len(), 1);
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_mock_adapter_send_message() {
-        let adapter = MockAdapter::new("test");
-        let blocks = vec![ContentBlock::Text {
-            text: "hello".into(),
-        }];
-        adapter.send_message("chat1", blocks, None).await.unwrap();
-        let out = adapter.outgoing.lock().await;
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0, "chat1");
-    }
-
-    #[tokio::test]
-    async fn test_skip_duplicate_channel() {
-        let (_pool, store) = create_test_pool().await;
-        let cancel = CancellationToken::new();
-        let hub = ChannelHub::new(store);
-
-        // Create a huge number of configs with the same name to trigger skip
-        let configs = vec![
-            ChannelConfig {
-                name: "dup".to_string(),
-                enabled: true,
-                platform: PlatformConfig::Telegram {
-                    token: "fake".into(),
-                },
-                ..Default::default()
-            },
-            ChannelConfig {
-                name: "dup".to_string(),
-                enabled: true,
-                platform: PlatformConfig::Telegram {
-                    token: "fake2".into(),
-                },
-                ..Default::default()
-            },
-        ];
-
-        // Should succeed but only start one
-        hub.start_all(cancel.clone(), configs, std::sync::Weak::new())
-            .await
-            .unwrap();
-        assert_eq!(hub.list_channels().len(), 1);
-
-        cancel.cancel();
-    }
-}
+#[path = "hub_test.rs"]
+mod tests;

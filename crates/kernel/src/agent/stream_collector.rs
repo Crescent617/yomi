@@ -12,7 +12,7 @@ pub struct StreamCollectionResult {
     pub content_blocks: Vec<ContentBlock>,
     pub tool_calls: Vec<ToolCall>,
     /// Token usage
-    pub token_usage: Option<crate::providers::TokenUsage>,
+    pub token_usage: Option<crate::provider::TokenUsage>,
     /// API response ID (e.g., "chatcmpl-xxx" or "`msg_xxx`")
     pub response_id: Option<String>,
     /// Finish/stop reason (normalized across providers)
@@ -28,7 +28,7 @@ pub struct StreamCollectorState {
     has_redacted_thinking: bool,
     pending_tool_calls: Vec<ToolCall>,
     /// Token usage
-    token_usage: Option<crate::providers::TokenUsage>,
+    token_usage: Option<crate::provider::TokenUsage>,
     /// API response ID
     response_id: Option<String>,
     /// Finish/stop reason
@@ -57,7 +57,7 @@ impl StreamCollectorState {
         }
     }
 
-    pub(crate) fn handle_tool_call(&mut self, request: crate::providers::ToolCallRequest) {
+    pub(crate) fn handle_tool_call(&mut self, request: crate::provider::ToolCallRequest) {
         self.pending_tool_calls.push(ToolCall {
             id: request.id,
             name: request.name,
@@ -65,7 +65,7 @@ impl StreamCollectorState {
         });
     }
 
-    pub(crate) fn handle_token_usage(&mut self, usage: crate::providers::TokenUsage) {
+    pub(crate) fn handle_token_usage(&mut self, usage: crate::provider::TokenUsage) {
         self.token_usage = Some(usage);
     }
 

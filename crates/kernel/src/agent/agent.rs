@@ -6,7 +6,7 @@ use super::{
 use crate::comms::{EventSink, Mailbox};
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
-use crate::permissions::Checker;
+use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
 use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
 use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
@@ -15,7 +15,7 @@ use crate::FinishReason;
 use futures::TryStreamExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tracing::{info, warn, Instrument};
+use tracing::{info, Instrument};
 
 /// Input messages that can be sent to an Agent
 #[derive(Clone)]
@@ -98,13 +98,15 @@ impl Agent {
             .expect("event_bus must be configured")
             .handle(session_id.clone());
 
+        let session_id_for_hook = session_id.clone();
         let event_bus_for_hook = event_bus.clone();
         let context = AgentExecutionContext::new(
             AgentState::Idle,
             Some(Box::new(move |state: AgentState| {
-                if let Err(e) =
-                    event_bus_for_hook.try_send(Event::Agent(AgentEvent::StateChanged { state }))
-                {
+                if let Err(e) = event_bus_for_hook.try_send(crate::event::Envelope::new(
+                    session_id_for_hook.clone(),
+                    Event::Agent(AgentEvent::StateChanged { state }),
+                )) {
                     tracing::warn!("Failed to send StateChanged event for {:?}: {}", state, e);
                 }
             })),
@@ -190,7 +192,8 @@ impl Agent {
 
     /// Emit an event through the event sink.
     fn emit(&self, event: Event) {
-        self.event_sink.emit(event);
+        self.event_sink
+            .emit(crate::event::Envelope::new(self.session_id.clone(), event));
     }
 
     /// Create a runtime `CancellationToken` linked to the Agent's custom `CancelToken`.
@@ -526,7 +529,6 @@ impl Agent {
     }
 
     /// Shared rewind handler used by both normal input loop and goal idle.
-    #[tracing::instrument(skip(self))]
     async fn process_rewind(
         &mut self,
         message_id: MessageId,
@@ -644,7 +646,6 @@ impl Agent {
 
     /// Inject a user message (with interceptors) and transition to Streaming.
     /// Also creates a checkpoint for rewind support.
-    #[tracing::instrument(skip(self))]
     async fn inject_user_message(
         &mut self,
         mut content: Vec<ContentBlock>,
@@ -669,7 +670,6 @@ impl Agent {
     /// Truncate messages at the given message ID (remove it and everything after).
     /// This rewinds to the state just before this message was sent.
     /// Returns true if truncation was performed, false if message not found.
-    #[tracing::instrument(skip(self))]
     fn truncate_at(&mut self, message_id: &MessageId) -> bool {
         let messages = self.message_buffer.messages_mut();
 
@@ -691,7 +691,6 @@ impl Agent {
         }
     }
 
-    #[tracing::instrument(skip(self))]
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
         // 1. Check and run compaction if needed (at the very beginning)
         if self.maybe_compact_messages().await {
@@ -801,14 +800,13 @@ impl Agent {
     }
 
     /// Collect all output from the stream until completion
-    #[tracing::instrument(skip(self, stream))]
     async fn collect_stream_output(
         &mut self,
-        stream: &mut crate::providers::ModelStream,
+        stream: &mut crate::provider::ModelStream,
         message_id: MessageId,
     ) -> Result<super::stream_collector::StreamCollectionResult, AgentError> {
         use super::stream_collector::StreamCollectorState;
-        use crate::providers::ModelStreamItem;
+        use crate::provider::ModelStreamItem;
 
         let mut state = StreamCollectorState::default();
 
@@ -902,7 +900,6 @@ impl Agent {
     }
 
     /// Force compaction regardless of threshold.
-    #[tracing::instrument(skip(self))]
     pub async fn force_compact(&mut self) -> Result<String, String> {
         let compactor = self
             .shared
@@ -936,7 +933,6 @@ impl Agent {
     }
 
     /// Force full compaction (skip micro-compaction).
-    #[tracing::instrument(skip(self))]
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
         let compactor = self
             .shared
@@ -972,7 +968,6 @@ impl Agent {
 
     /// Handle compaction result, update state, and return user message.
     /// Clears file state store only if messages were actually reduced (real compaction).
-    #[tracing::instrument(skip(self))]
     async fn handle_compaction_result(
         &mut self,
         result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
@@ -1033,7 +1028,7 @@ impl Agent {
     }
 
     /// Record compactor token usage
-    async fn record_compactor_token_usage(&self, usage: crate::providers::TokenUsage) {
+    async fn record_compactor_token_usage(&self, usage: crate::provider::TokenUsage) {
         if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
             return; // No usage to record
         }
@@ -1093,7 +1088,6 @@ impl Agent {
     }
 
     /// Transition to appropriate state after streaming completes
-    #[tracing::instrument(skip(self))]
     async fn transition_after_streaming(
         &mut self,
         finish_reason: Option<crate::types::FinishReason>,
@@ -1167,7 +1161,6 @@ impl Agent {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
     async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
         // Early-out if cancelled before doing any work
         if self.cancel_token.is_cancelled() {
@@ -1201,7 +1194,7 @@ impl Agent {
         }
 
         // Check permissions for each tool call
-        let permission_result = crate::permissions::check_tool_permissions(
+        let permission_result = crate::permission::check_tool_permissions(
             &tool_calls,
             self.permission_checker.as_deref(),
         )

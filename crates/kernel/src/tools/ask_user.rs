@@ -174,15 +174,20 @@ impl Tool for AskUserTool {
 
         let req_id = ulid::Ulid::new().to_string();
         let session_id = crate::types::SessionId::from(_ctx.session_id.clone());
+        let session_id_str = session_id.0.to_string();
 
         // Subscribe to input bus BEFORE emitting the event to avoid missing the response.
-        let mut subscriber = self.input_bus.subscribe(session_id);
+        let mut subscriber = self.input_bus.subscribe(session_id.clone());
 
         self.event_bus
-            .send(Event::Agent(AgentEvent::AskUserQuestion {
-                req_id: req_id.clone(),
-                questions: input.questions,
-            }))
+            .send(crate::event::Envelope::new(
+                session_id.clone(),
+                Event::Agent(AgentEvent::AskUserQuestion {
+                    req_id: req_id.clone(),
+                    session_id: session_id_str,
+                    questions: input.questions,
+                }),
+            ))
             .await
             .map_err(|e| KernelError::io(format!("Failed to send AskUserQuestion event: {e}")))?;
 
@@ -207,7 +212,7 @@ impl Tool for AskUserTool {
         })
         .await;
 
-        match result {
+        let result = match result {
             Ok(response) => Ok(ToolOutput::text(format_answers(&response.answers))),
             Err(_) => {
                 tracing::warn!("AskUser request {} timed out (2 min)", req_id);
@@ -215,7 +220,19 @@ impl Tool for AskUserTool {
                     "Ask user request timed out (2 minutes)".to_string(),
                 ))
             }
-        }
+        };
+
+        let _ = self
+            .event_bus
+            .send(crate::event::Envelope::new(
+                session_id.clone(),
+                Event::Agent(AgentEvent::AskUserAck {
+                    req_id: req_id.clone(),
+                }),
+            ))
+            .await;
+
+        result
     }
 }
 
@@ -232,16 +249,5 @@ fn format_answers(answers: &HashMap<String, String>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_answers() {
-        let mut answers = HashMap::new();
-        answers.insert("Which library?".to_string(), "chrono".to_string());
-
-        let text = format_answers(&answers);
-        assert!(text.contains("chrono"));
-        assert!(text.contains("Which library?"));
-    }
-}
+#[path = "ask_user_test.rs"]
+mod tests;

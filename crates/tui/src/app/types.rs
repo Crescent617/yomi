@@ -1,15 +1,16 @@
 //! Application types and state definitions
 
-use kernel::client::CoordinatorApi;
-use kernel::permissions::Level;
+use kernel::client::KernelApi;
+use kernel::permission::Level;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+use super::event_pump::TaggedEvent;
 use crate::{
     id::Id,
     msg::{Msg, UserEvent},
 };
-use kernel::event::{ControlCommand, Event};
+use kernel::event::Command;
 use kernel::types::ContentBlock;
 use std::sync::Arc;
 use tuirealm::{application::Application, terminal::CrosstermTerminalAdapter};
@@ -86,13 +87,13 @@ pub struct Model {
     pub state: AppState,
     pub terminal: CrosstermTerminalAdapter,
     /// Channel to receive events from kernel (via transparent pump)
-    pub event_rx: mpsc::Receiver<Event>,
+    pub event_rx: mpsc::Receiver<TaggedEvent>,
     /// Channel to send input to kernel (supports multi-modal content blocks)
     pub input_tx: mpsc::Sender<Vec<ContentBlock>>,
     /// Channel to send control commands (cancel, permission responses, level changes, compaction)
-    pub ctrl_tx: mpsc::Sender<ControlCommand>,
-    /// Coordinator API for storage operations (sessions, checkpoints, todos)
-    pub(crate) coordinator: Arc<dyn CoordinatorApi>,
+    pub ctrl_tx: mpsc::Sender<Command>,
+    /// Kernel API for storage operations (sessions, checkpoints, todos)
+    pub(crate) kernel: Arc<dyn KernelApi>,
     /// Current assistant response content (for adding to history when complete)
     pub(crate) current_content: String,
     /// Current assistant thinking (for adding to history when complete)
@@ -101,10 +102,12 @@ pub struct Model {
     pub(crate) thinking_start_time: Option<Instant>,
     /// Application mode - single source of truth
     pub(crate) mode: AppMode,
-    /// Pending permission request (`req_id`) waiting for user confirmation
-    pub(crate) pending_permission: Option<String>,
-    /// Pending ask-user request: (`req_id`, remaining questions, collected answers)
+    /// Pending permission request: (`req_id`, `session_id`) waiting for user confirmation
+    pub(crate) pending_permission: Option<(String, String)>,
+    /// Pending ask-user request: (`req_id`, `session_id`, remaining questions, collected answers)
+    #[allow(clippy::type_complexity)]
     pub(crate) pending_ask_user: Option<(
+        String,
         String,
         std::collections::VecDeque<kernel::tools::AskQuestion>,
         std::collections::HashMap<String, String>,

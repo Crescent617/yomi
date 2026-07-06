@@ -10,11 +10,15 @@ use tuirealm::ratatui::{
     text::{Line, Span},
 };
 
-use crate::components::chat_view::{HistoryMessage, ToolStatus};
+use crate::components::chat_view::{HistoryMessage, SubagentState, ToolStatus};
 use crate::markdown_stream::StreamingMarkdownRenderer;
 use crate::theme::{chars, colors};
 use crate::utils::text::{preprocess, truncate_by_chars, truncate_by_width};
 
+use kernel::tools::{
+    task::{TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME},
+    ASK_USER_TOOL_NAME,
+};
 use kernel::tools::{
     EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
     SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SLEEP_TOOL_NAME, SUBAGENT_TOOL_NAME,
@@ -22,10 +26,6 @@ use kernel::tools::{
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
-use kernel::{
-    task::{TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME},
-    tools::ASK_USER_TOOL_NAME,
-};
 
 #[allow(clippy::cast_precision_loss)]
 pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
@@ -53,6 +53,7 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             parsed_args,
             elapsed_ms,
             content_blocks,
+            subagent,
         } => render_tool(
             tool_name,
             status,
@@ -63,6 +64,7 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             parsed_args.as_ref(),
             *elapsed_ms,
             content_blocks,
+            subagent.as_ref(),
             width,
         ),
         HistoryMessage::Error(error) => render_error(error),
@@ -174,6 +176,7 @@ fn render_tool(
     parsed_args: Option<&serde_json::Value>,
     elapsed_ms: Option<u64>,
     content_blocks: &[ToolOutputBlock],
+    subagent: Option<&SubagentState>,
     width: usize,
 ) -> Vec<Arc<Line<'static>>> {
     let mut lines = Vec::new();
@@ -434,6 +437,136 @@ fn render_tool(
             }
         }
     }
+
+    // Render inline subagent progress if present
+    if let Some(sa) = subagent {
+        lines.extend(render_subagent_inline(sa, width));
+    }
+
+    lines
+}
+
+/// Render a subagent's real-time progress inline inside its parent tool card.
+fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'static>>> {
+    let mut lines = Vec::new();
+    let guide = chars::MSG_INDENT_GUIDE;
+    let guide_style = Style::default().fg(colors::text_secondary());
+
+    // Status icon: dim everything when finished (Running stays accent).
+    let (status_icon, status_color) = match sa.status {
+        crate::components::chat_view::SubagentStatus::Running => ("󰔟", colors::accent_warning()),
+        crate::components::chat_view::SubagentStatus::Completed => ("", colors::text_secondary()),
+        crate::components::chat_view::SubagentStatus::Failed => ("", colors::text_secondary()),
+        crate::components::chat_view::SubagentStatus::Cancelled => ("", colors::text_secondary()),
+    };
+
+    let total_tokens = sa.total_prompt_tokens + sa.total_completion_tokens;
+
+    if sa.folded {
+        // Folded: show a single line combining latest activity + tokens + session_id.
+        let summary = sa
+            .events
+            .iter()
+            .rev()
+            .find_map(|ev| match ev {
+                kernel::event::Event::Tool(kernel::event::ToolEvent::Start {
+                    tool_name, ..
+                }) => Some(tool_name.as_str()),
+                _ => None,
+            })
+            .unwrap_or("Running…");
+        let mut spans = vec![
+            Span::styled(guide, guide_style),
+            Span::styled(
+                format!("{status_icon} {summary}"),
+                Style::default().fg(status_color),
+            ),
+        ];
+        if total_tokens > 0 {
+            spans.push(Span::styled(
+                format!(
+                    " · {} tokens",
+                    kernel::utils::tokens::format_actual_tokens(total_tokens)
+                ),
+                Style::default().fg(status_color),
+            ));
+        }
+        spans.push(Span::styled(
+            format!(" · {}", sa.session_id),
+            Style::default().fg(colors::text_secondary()),
+        ));
+        lines.push(Arc::new(Line::from(spans)));
+    } else {
+        // Header line (always shown): description + accumulated tokens + session_id
+        let mut header_spans = vec![
+            Span::styled(guide, guide_style),
+            Span::styled(
+                format!("{status_icon} {}", sa.description),
+                Style::default().fg(status_color),
+            ),
+        ];
+        if total_tokens > 0 {
+            header_spans.push(Span::styled(
+                format!(
+                    " · {} tokens",
+                    kernel::utils::tokens::format_actual_tokens(total_tokens)
+                ),
+                Style::default().fg(status_color),
+            ));
+        }
+        header_spans.push(Span::styled(
+            format!(" · {}", sa.session_id),
+            Style::default().fg(colors::text_secondary()),
+        ));
+        lines.push(Arc::new(Line::from(header_spans)));
+
+        // Show last few events as a simple activity log.
+        // NOTE: ModelEvent::Chunk is filtered out in event_pump.rs to avoid
+        // TUI spam, so we only show structural events (tool start/end, lifecycle).
+        let event_lines: Vec<String> = sa
+            .events
+            .iter()
+            .rev()
+            .take(8)
+            .map(|ev| match ev {
+                kernel::event::Event::Tool(kernel::event::ToolEvent::Start {
+                    tool_name, ..
+                }) => format!(" {tool_name}"),
+                kernel::event::Event::Tool(kernel::event::ToolEvent::End {
+                    tool_name,
+                    is_error,
+                    ..
+                }) => {
+                    if *is_error {
+                        format!(" {tool_name}")
+                    } else {
+                        format!(" {tool_name}")
+                    }
+                }
+                kernel::event::Event::Agent(kernel::event::AgentEvent::Lifecycle {
+                    state: kernel::event::AgentStatus::Stopped { reason },
+                    ..
+                }) => match reason {
+                    kernel::event::StopReason::Completed { .. } => " Agent completed".to_string(),
+                    kernel::event::StopReason::Cancelled { .. } => " Cancelled".to_string(),
+                    kernel::event::StopReason::Failed { error } => format!(" Failed: {error}"),
+                    kernel::event::StopReason::MaxIterations { reached } => {
+                        format!(" Max iterations ({reached})")
+                    }
+                },
+                _ => String::new(),
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        for line in event_lines.into_iter().rev() {
+            lines.push(Arc::new(Line::from(vec![
+                Span::styled(guide, guide_style),
+                Span::styled(line, Style::default().fg(colors::text_secondary())),
+            ])));
+        }
+    }
+
     lines
 }
 

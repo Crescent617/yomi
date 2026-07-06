@@ -16,53 +16,48 @@ macro_rules! env_name {
 }
 
 pub mod agent;
-pub mod app;
 pub mod checkpoint;
 pub mod client;
 pub mod comms;
 pub mod compactor;
 pub mod config;
-pub mod daemon_signal;
 pub mod event;
 pub mod goal;
 pub mod hooks;
+pub mod kernel;
 pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
 pub mod channels;
 pub mod cron;
-pub mod logging;
 pub mod memory;
-pub mod permissions;
+pub mod notification;
+pub mod permission;
 pub mod prompt;
-pub mod providers;
+pub mod provider;
 pub mod server;
 pub mod skill;
 pub mod storage;
-pub mod task;
 pub mod tools;
 pub mod transport;
 pub mod types;
 pub mod utils;
 pub mod wire;
-
-// Re-export permissions types
-pub use permissions::{Checker, Level, ToolLevelResolver};
-
-// Re-export checkpoint types
 pub use checkpoint::{Checkpoint, CheckpointStore, FileOp, RewindTarget, TrackedFileInfo};
-
-// Re-export commonly used types
-pub use app::coordinator::CreateSessionInput;
-pub use app::Coordinator;
 pub use config::{env_names, Config, ModelProvider};
+pub use cron::{
+    CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
+    CronScheduler, CronStore, CronWorker, SqliteCronStore, UpdateCronJobInput,
+};
 pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
-
+pub use kernel::CreateSessionInput;
+pub use kernel::Kernel;
+pub use permission::{Checker, Level, ToolLevelResolver};
 pub use prompt::SystemPromptBuilder;
-pub use providers::{
+pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
+pub use provider::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
     ThinkingConfig, ToolCallRequest,
 };
 pub use skill::{deduplicate_skills, Skill, SkillLoader};
-// Re-export storage domains
 pub use storage::{
     file_state::{FileState, FileStateStore, JsonlFileStateStore},
     message::{JsonlMessageStore, MessageStore},
@@ -75,46 +70,37 @@ pub use storage::{
     usage::{SqliteUsageStore, UsageRecord, UsageStore, UsageSummary, UsageType},
     StorageSet,
 };
-pub use tools::{Tool, ToolRegistry};
-pub use types::*;
-pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
-
-// Re-exports for providers
-pub use providers::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
-pub use tools::{
-    execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
-    SubagentTool, WriteTool,
-};
-
-// Cron system re-exports
-pub use cron::{
-    CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
-    CronScheduler, CronStore, CronWorker, SqliteCronStore, UpdateCronJobInput,
-};
-
-// Task system re-exports
-pub use task::{
+pub use tools::task::{
     CreateTaskInput, CreateTaskOutput, GetTaskOutput, ListTasksOutput, SharedTaskStore,
     SqliteTaskStorage, StatusChange, Task, TaskCreateTool, TaskEvent, TaskGetTool, TaskListItem,
     TaskListTool, TaskStatus, TaskStore, TaskSummary, TaskUpdateTool, TaskUpdates,
     UpdateTaskOutput, TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME,
     TASK_UPDATE_TOOL_NAME,
 };
+pub use tools::{
+    execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
+    SubagentTool, WriteTool,
+};
+pub use tools::{Tool, ToolRegistry};
+pub use types::*;
+pub use utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
+use crate::agent::AgentConfig;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Full coordinator initialisation: load config, apply env overrides,
-/// finalise, and build a `Coordinator` with the given cron setting.
+/// Full kernel initialisation: load config, apply env overrides,
+/// finalise, and build a `Kernel` with the given cron setting.
 ///
 /// `config_path` overrides the default config discovery when provided.
 ///
-/// Returns `(coordinator, config, config_file)` so callers can derive `base_dir`
+/// Returns `(kernel, config, config_file)` so callers can derive `base_dir`
 /// from `config_file.parent()` if needed.
-pub async fn init_coordinator(
+pub async fn init_kernel(
     config_path: Option<&PathBuf>,
     enable_cron: bool,
-) -> Result<(Arc<Coordinator>, Config, Option<PathBuf>)> {
+) -> Result<(Arc<Kernel>, Config, Option<PathBuf>)> {
     let config_file = config_path.cloned().or_else(Config::discover_file);
     let mut config = match &config_file {
         Some(path) => Config::from_file(path)
@@ -124,8 +110,8 @@ pub async fn init_coordinator(
     config.apply_env_overrides();
     config.finalize();
 
-    let coordinator = build_coordinator(&config, enable_cron).await?;
-    Ok((coordinator, config, config_file))
+    let kernel = build_kernel(&config, enable_cron).await?;
+    Ok((kernel, config, config_file))
 }
 
 /// Create a provider from configuration.
@@ -142,13 +128,45 @@ pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
     }
 }
 
-/// Build a `Coordinator` from an already-finalized `Config`.
+/// Load skills from disk and build a complete `AgentConfig` from a `Config`.
+/// `base_dir` is used to resolve relative skill folder paths.
+pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
+    let skill_folders = config
+        .skill_folders()
+        .iter()
+        .map(PathBuf::from)
+        .map(|p| if p.is_relative() { base_dir.join(p) } else { p })
+        .collect::<Vec<_>>();
+
+    let mut skills = SkillLoader::new(skill_folders)
+        .load_all()
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load skills: {e}");
+            Vec::new()
+        });
+
+    deduplicate_skills(&mut skills);
+
+    if !skills.is_empty() {
+        tracing::info!("Loaded {} skill(s)", skills.len());
+        for skill in &skills {
+            tracing::debug!("  - {} (from {})", skill.name, skill.source_path.display());
+        }
+    }
+
+    let mut agent = config.agent.clone();
+    agent.skills = skills;
+    agent.allow_command_hooks = config.features.allow_command_hooks;
+    agent
+}
+
+/// Build a `Kernel` from an already-finalized `Config`.
 ///
 /// `config.data_dir` is used to resolve relative skill folders and build the agent config.
 /// This function does not discover or load config — callers must do that first.
 ///
-/// Returns the fully constructed `Coordinator` wrapped in an `Arc`.
-pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc<Coordinator>> {
+/// Returns the fully constructed `Kernel` wrapped in an `Arc`.
+pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kernel>> {
     tokio::fs::create_dir_all(&config.data_dir)
         .await
         .map_err(|e| KernelError::storage(format!("Failed to create data directory: {e}")))?;
@@ -178,7 +196,7 @@ pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc
 
     let agent_config = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || server::build_agent_config(&config, &config.data_dir)
+        move || build_agent_config(&config, &config.data_dir)
     })
     .await
     .map_err(|e| {
@@ -187,7 +205,7 @@ pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc
         ))
     })?;
 
-    let coordinator = Coordinator::new(
+    let kernel = Kernel::new(
         &storage,
         provider,
         agent_config,
@@ -206,5 +224,5 @@ pub async fn build_coordinator(config: &Config, enable_cron: bool) -> Result<Arc
         },
     );
 
-    Ok(coordinator)
+    Ok(kernel)
 }

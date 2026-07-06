@@ -412,10 +412,10 @@ fn resolve_cwd(config: &SessionConfig) -> Option<PathBuf> {
 }
 ```
 
-### 5.2 Coordinator 新增 Project API
+### 5.2 Kernel 新增 Project API
 
 ```rust
-impl Coordinator {
+impl Kernel {
     pub async fn create_project(
         &self,
         dir: PathBuf,
@@ -460,10 +460,10 @@ impl Coordinator {
 }
 ```
 
-### 5.3 Coordinator Session 创建
+### 5.3 Kernel Session 创建
 
 ```rust
-impl Coordinator {
+impl Kernel {
     pub async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         let project = match &input.project_id {
             Some(pid) => Some(
@@ -505,7 +505,7 @@ impl Coordinator {
 }
 ```
 
-### 5.4 Coordinator 恢复 / Fork / 列表
+### 5.4 Kernel 恢复 / Fork / 列表
 
 ```rust
 /// 恢复 Session
@@ -573,10 +573,10 @@ pub async fn list_sessions(
 }
 ```
 
-### 5.5 Coordinator::new 接收 StorageSet
+### 5.5 Kernel::new 接收 StorageSet
 
 ```rust
-impl Coordinator {
+impl Kernel {
     pub fn new(
         storage: &StorageSet,
         provider: Arc<dyn Provider>,
@@ -647,11 +647,11 @@ pub enum RequestMethod {
 }
 ```
 
-### 6.2 CoordinatorApi Trait（扩展）
+### 6.2 KernelApi Trait（扩展）
 
 ```rust
 #[async_trait::async_trait]
-pub trait CoordinatorApi: Send + Sync {
+pub trait KernelApi: Send + Sync {
     // --- Project ---
     async fn list_projects(&self) -> Result<Vec<Project>>;
     async fn create_project(&self, dir: PathBuf, name: Option<String>) -> Result<Project>;
@@ -856,9 +856,9 @@ pub async fn create_session(
 | 6 | `SessionConfig` 改为 `Option<Project>` + `Option<working_dir>` | 是 |
 | 7 | `AgentSpawnArgs::new()` 默认值改为空 `PathBuf` | 是 |
 | 8 | `Session::init` 中按 `resolve_cwd` 条件调用 `with_working_dir` | 是 |
-| 9 | `Coordinator` 新增 Project API + 重写 Session 创建/恢复/Fork | 是 |
+| 9 | `Kernel` 新增 Project API + 重写 Session 创建/恢复/Fork | 是 |
 | 10 | `wire.rs` 升到 v3 | 是 |
-| 11 | `CoordinatorApi` 扩展 + `RemoteCoordinator` 实现 | 是 |
+| 11 | `KernelApi` 扩展 + `RemoteKernel` 实现 | 是 |
 | 12 | `KernelServer::dispatch_request` 适配 v3 | 是 |
 | 13 | `lib.rs` re-export 调整 | 否 |
 | 14 | GUI `commands/project.rs` + 改造 `commands/session.rs` | 是 |
@@ -899,7 +899,7 @@ pub async fn create_session(
 10. `src/app/coordinator.rs` — 新增 `CreateSessionInput`；新增 Project API；重写 Session 入口；`resolve_cwd`
 11. `src/app/mod.rs` — 确认 `SessionConfig` / `CreateSessionInput` pub use
 12. `src/wire.rs` — v3
-13. `src/client/mod.rs` — `CoordinatorApi` 扩展
+13. `src/client/mod.rs` — `KernelApi` 扩展
 14. `src/server/mod.rs` — v3 dispatch
 15. `src/lib.rs` — re-export `Project`, `ProjectId`, `CreateSessionInput`, `ProjectStore`
 

@@ -4,7 +4,7 @@
 //! 1. Micro-compaction: Clear old tool result content (fast, no API call)
 //! 2. Full summarization: Use API to generate conversation summary
 
-use crate::providers::{ModelConfig, ModelStreamItem, Provider};
+use crate::provider::{ModelConfig, ModelStreamItem, Provider};
 use crate::types::{ContentBlock, Message, Role};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -20,12 +20,12 @@ pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
 #[derive(Debug, Clone)]
 pub struct CompactionResult {
     pub messages: Vec<Arc<Message>>,
-    pub token_usage: crate::providers::TokenUsage,
+    pub token_usage: crate::provider::TokenUsage,
 }
 
 impl CompactionResult {
     /// Create a new compaction result
-    pub fn new(messages: Vec<Arc<Message>>, token_usage: crate::providers::TokenUsage) -> Self {
+    pub fn new(messages: Vec<Arc<Message>>, token_usage: crate::provider::TokenUsage) -> Self {
         Self {
             messages,
             token_usage,
@@ -49,8 +49,8 @@ pub enum CompactionError {
     Api(String),
 }
 
-impl From<crate::providers::ProviderError> for CompactionError {
-    fn from(e: crate::providers::ProviderError) -> Self {
+impl From<crate::provider::ProviderError> for CompactionError {
+    fn from(e: crate::provider::ProviderError) -> Self {
         CompactionError::Api(e.to_string())
     }
 }
@@ -252,7 +252,7 @@ impl Compactor {
             // Note: We still filter out system messages here
             return Ok(CompactionResult::new(
                 non_system,
-                crate::providers::TokenUsage::default(),
+                crate::provider::TokenUsage::default(),
             ));
         }
 
@@ -296,7 +296,7 @@ impl Compactor {
             if !self.should_compact(&after_micro) {
                 return Ok(Some(CompactionResult::new(
                     after_micro,
-                    crate::providers::TokenUsage::default(),
+                    crate::provider::TokenUsage::default(),
                 )));
             }
             // Need full compaction on top of micro results
@@ -326,7 +326,7 @@ async fn generate_summary(
     provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
     cancel_token: Option<CancellationToken>,
-) -> Result<(String, crate::providers::TokenUsage), CompactionError> {
+) -> Result<(String, crate::provider::TokenUsage), CompactionError> {
     use crate::agent::MessageBuffer;
 
     let mut msg_buf = MessageBuffer::from_arc_messages(messages);
@@ -380,7 +380,7 @@ async fn generate_summary(
 
     // Collect response with cancellation check
     let mut summary = String::with_capacity(SUMMARY_MAX_TOKENS as usize);
-    let mut token_usage = crate::providers::TokenUsage::default();
+    let mut token_usage = crate::provider::TokenUsage::default();
 
     loop {
         let item = tokio::select! {
@@ -416,67 +416,4 @@ async fn generate_summary(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{MessageId, MessageTokenUsage};
-    use std::sync::Arc;
-
-    #[test]
-    fn test_calculate_tokens_with_usage() {
-        let messages: Vec<Arc<Message>> = vec![
-            Arc::new(Message::user("Hello")),
-            Arc::new(Message::assistant("Hi there")),
-            {
-                let mut msg = Message::assistant("Let me help");
-                msg.token_usage = Some(MessageTokenUsage {
-                    prompt_tokens: 100,
-                    completion_tokens: 50,
-                    total_tokens: 150,
-                });
-                Arc::new(msg)
-            },
-        ];
-
-        let tokens = Compactor::calculate_tokens(&messages);
-        // Should use the actual usage (150) plus estimation for messages after
-        assert!(tokens >= 150);
-    }
-
-    #[test]
-    fn test_micro_compact() {
-        use std::sync::Arc;
-
-        let compactor = Compactor::new(0.5, 200, 2, 1000); // threshold=100, keep last 2 messages
-        let messages: Vec<Arc<Message>> = vec![
-            Arc::new(Message::user("Task 1")),
-            Arc::new(Message::tool_result(
-                MessageId::default(),
-                "call-1",
-                "Result 1",
-            )), // will be cleared (index 1)
-            Arc::new(Message::user("Task 2")),
-            Arc::new(Message::tool_result(
-                MessageId::default(),
-                "call-2",
-                "Result 2",
-            )), // kept (index 3, in keep_recent)
-            Arc::new(Message::user("Current task")), // kept (index 4)
-        ];
-
-        let compacted = compactor.micro_compact(&messages);
-        assert!(compacted.is_some());
-        let new_messages = compacted.unwrap();
-        // Old tool result should be cleared
-        assert_eq!(
-            new_messages[1].text_content(),
-            "[Old tool result content cleared]"
-        );
-        // Recent tool result should be preserved (keep_recent = 2)
-        assert_eq!(new_messages[3].text_content(), "Result 2");
-        assert_eq!(new_messages[4].text_content(), "Current task");
-
-        // Second compaction should return None (already cleared)
-        let compacted_again = compactor.micro_compact(&new_messages);
-        assert!(compacted_again.is_none());
-    }
-}
+mod tests;

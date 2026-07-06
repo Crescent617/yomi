@@ -1,6 +1,6 @@
 //! Token usage tracking - record and aggregate token consumption
 
-use crate::providers::TokenUsage as ProviderTokenUsage;
+use crate::provider::TokenUsage as ProviderTokenUsage;
 use crate::types::{KernelError, Result, SessionId};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

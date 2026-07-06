@@ -7,7 +7,7 @@
 ```
 Agent (mpsc::Sender<Event>)
     ↓
-Coordinator::forward_session_events (task) 从 mpsc 读
+Kernel::forward_session_events (task) 从 mpsc 读
     ↓
 per-session broadcast::Sender<Event>
     ↓
@@ -15,15 +15,15 @@ TUI / GUI / Server 订阅
 ```
 
 **问题：**
-1. **Agent 只发不管往哪发** — Agent 通过 `mpsc::Sender<Event>` 把事件丢给 Coordinator，自己不知道 session 上下文。
-2. **Coordinator 太重** — 既要管 session 生命周期，又要管 `forward_session_events` 任务、维护 `session_event_senders: DashMap<...>`。
+1. **Agent 只发不管往哪发** — Agent 通过 `mpsc::Sender<Event>` 把事件丢给 Kernel，自己不知道 session 上下文。
+2. **Kernel 太重** — 既要管 session 生命周期，又要管 `forward_session_events` 任务、维护 `session_event_senders: DashMap<...>`。
 3. **Session 有两套事件出口** — `Session` 自己持有一个 `event_tx: Option<broadcast::Sender<Event>>` 发系统事件（TitleUpdated 等），Agent 又走另一套 mpsc。事件源不统一。
-4. **Subscribe 逻辑分散** — 外部订阅者要找 `Coordinator::subscribe_session_events`，它再查 `DashMap` 拿 per-session broadcast。没有"一个总线"的概念。
+4. **Subscribe 逻辑分散** — 外部订阅者要找 `Kernel::subscribe_session_events`，它再查 `DashMap` 拿 per-session broadcast。没有"一个总线"的概念。
 
 ## 目标
 
 1. 统一所有事件出口到单一总线
-2. Coordinator 不再管理事件转发
+2. Kernel 不再管理事件转发
 3. 支持全局订阅和单 session 订阅
 4. 简化架构，减少中间任务
 5. **Event bus 与 session 生命周期完全解耦** — 异步触发的 agent 也能订阅已结束或尚未开始的 session
@@ -251,7 +251,7 @@ impl EventBus {
 // Agent
 self.event_tx.try_send(Event::Agent(...))
 
-// Coordinator
+// Kernel
 let (broadcast_tx, _) = broadcast::channel(256);
 session.set_event_sender(broadcast_tx.clone());
 tokio::spawn(forward_session_events(agent_rx, broadcast_tx, ...));
@@ -267,7 +267,7 @@ coordinator.subscribe_session_events(&sid)
 // Agent
 self.event_bus.try_send(Event::Agent(...))
 
-// Coordinator
+// Kernel
 let event_bus = Arc::new(EventBus::new());
 // ...
 let handle = event_bus.handle(session_id.clone());
@@ -322,7 +322,7 @@ pub struct AgentShared {
 - 所有 `emit_title_updated`、`emit_goal_updated` 等用 `event_bus.try_send(...)` 代替 `event_tx.send(...)`
 - 去掉 `set_event_sender`
 
-### 5. 修改 `Coordinator`（`app/coordinator.rs`）
+### 5. 修改 `Kernel`（`app/coordinator.rs`）
 
 - 移除：
   - `session_event_senders: Arc<DashMap<SessionId, broadcast::Sender<Event>>>`
@@ -349,7 +349,7 @@ pub struct AgentShared {
   - 当前检查 `broadcast_tx.receiver_count() == 0`。
   - 新设计中，检查 `event_bus` 的某个方法（如 `listener_count(session_id) == 0`），或者干脆不检查（因为 listener 是 guard，没有 subscriber 时自然没有 listener）。
   - 实际上，如果没有任何 subscriber 监听某个 session，那该 session 的 `session_listeners` 是空的。`EventBus` 可以暴露 `has_subscribers(session_id)` 方法。
-  - 或者更简单：`spawn_session_pruner` 改为检查 session 是否 Idle 且**没有外部引用**（`AgentHandle` 是否还在）。但这属于 Coordinator 的职责，bus 不需要管。
+  - 或者更简单：`spawn_session_pruner` 改为检查 session 是否 Idle 且**没有外部引用**（`AgentHandle` 是否还在）。但这属于 Kernel 的职责，bus 不需要管。
   - **最简方案**：pruner 不需要检查 subscriber 数量。它检查 `Arc<RwLock<Session>>` 的引用计数，或者只是定时检查 session 状态。
 
 ### 6. 修改 `Server`（`server/mod.rs`）
@@ -375,7 +375,7 @@ pub struct AgentShared {
 
 ### 7. 修改 `client/mod.rs`
 
-`CoordinatorApi` 接口：
+`KernelApi` 接口：
 - `subscribe_session_events` 签名变化：
   ```rust
   // 旧
@@ -383,14 +383,14 @@ pub struct AgentShared {
   // 新
   async fn subscribe_session_events(&self, session_id: &SessionId) -> Result<EventBusSubscriber>;
   ```
-- `LocalCoordinator`（`Coordinator` 的 `CoordinatorApi` 实现）直接透传。
-- `RemoteCoordinator` 需要调整：
+- `LocalKernel`（`Kernel` 的 `KernelApi` 实现）直接透传。
+- `RemoteKernel` 需要调整：
   - 当前 `subscribe_events_internal` 在本地维护一个 `broadcast::Sender` router，然后 subscribe 到远程，把远程事件转发到本地 broadcast。
   - 新设计中，可以保持类似的本地 router 逻辑，但用 `mpsc::UnboundedSender` 代替 `broadcast::Sender`。
-  - 或者更简单：`RemoteCoordinator` 的 `subscribe_session_events` 返回一个包装了 WebSocket 接收逻辑的 `EventBusSubscriber`（或者自定义的 subscriber 类型）。
-  - 这取决于 `RemoteCoordinator` 的实现细节。如果 `EventBusSubscriber` 是 `kernel` 的内部类型，远程客户端可能无法直接持有它。
-  - **替代方案**：保持 `EventBusSubscriber` 为 `kernel` 内部类型，但 `CoordinatorApi` 的 `subscribe_session_events` 返回一个 `Box<dyn EventStream>` trait object，或者干脆保留 `broadcast::Receiver<Event>` 作为外部 API。
-  - **建议**：先不改动 `CoordinatorApi` 的返回类型。`Coordinator::subscribe_session_events` 内部从 `EventBusSubscriber` 转换为 `broadcast::Receiver`（在 `EventBus` 内部加一个 `subscribe_broadcast` 方法，或者让 Coordinator 自己桥接）。这样外部 API 不变，内部用新的 bus。
+  - 或者更简单：`RemoteKernel` 的 `subscribe_session_events` 返回一个包装了 WebSocket 接收逻辑的 `EventBusSubscriber`（或者自定义的 subscriber 类型）。
+  - 这取决于 `RemoteKernel` 的实现细节。如果 `EventBusSubscriber` 是 `kernel` 的内部类型，远程客户端可能无法直接持有它。
+  - **替代方案**：保持 `EventBusSubscriber` 为 `kernel` 内部类型，但 `KernelApi` 的 `subscribe_session_events` 返回一个 `Box<dyn EventStream>` trait object，或者干脆保留 `broadcast::Receiver<Event>` 作为外部 API。
+  - **建议**：先不改动 `KernelApi` 的返回类型。`Kernel::subscribe_session_events` 内部从 `EventBusSubscriber` 转换为 `broadcast::Receiver`（在 `EventBus` 内部加一个 `subscribe_broadcast` 方法，或者让 Kernel 自己桥接）。这样外部 API 不变，内部用新的 bus。
   - 但用户要求简化，所以可能直接改 API 更好。
   - 先搁置这个问题，实现时再看。
 
@@ -413,7 +413,7 @@ Agent                    EventBus                    TUI
  │                        │ forward to TUI           │
  │                        │─────────────────────────>│
  │                        │                          │
- │ Coordinator::shutdown  │                          │
+ │ Kernel::shutdown  │                          │
  │                        │                          │
  │  (no need to          │                          │
  │   unregister from bus)│                          │
@@ -432,14 +432,14 @@ Agent                    EventBus                    TUI
    - session 结束不需要通知 bus。
    - 异步触发的 agent 也能订阅任何 session。
 
-4. **Agent 结束时的 cleanup**：Agent 显式发送 `SystemEvent::Shutdown`（通过 `event_bus`）。Coordinator 的 pruner 改为检查 session 状态 + 引用计数，而不是 subscriber 数量。
+4. **Agent 结束时的 cleanup**：Agent 显式发送 `SystemEvent::Shutdown`（通过 `event_bus`）。Kernel 的 pruner 改为检查 session 状态 + 引用计数，而不是 subscriber 数量。
 
-5. **外部 API 的兼容性**：`CoordinatorApi::subscribe_session_events` 返回类型从 `broadcast::Receiver` 改为 `EventBusSubscriber`。如果需要保留外部 API 不变，可以在 `Coordinator` 层做桥接（`EventBusSubscriber -> broadcast::Sender`）。建议直接改，因为 `EventBusSubscriber` 更简洁（没有 lag 错误）。
+5. **外部 API 的兼容性**：`KernelApi::subscribe_session_events` 返回类型从 `broadcast::Receiver` 改为 `EventBusSubscriber`。如果需要保留外部 API 不变，可以在 `Kernel` 层做桥接（`EventBusSubscriber -> broadcast::Sender`）。建议直接改，因为 `EventBusSubscriber` 更简洁（没有 lag 错误）。
 
 ## 优势
 
 1. **统一出口** — Agent 和 Session 都通过 `EventBusHandle` 发事件，不再各自为政。
-2. **Coordinator 减负** — 不再需要 `forward_session_events` 任务和 `session_event_senders` DashMap，Coordinator 只负责业务逻辑。
+2. **Kernel 减负** — 不再需要 `forward_session_events` 任务和 `session_event_senders` DashMap，Kernel 只负责业务逻辑。
 3. **零丢包** — mpsc 缓冲保证事件不丢（buffer 满时 `try_send` 返回错误，生产者可以感知）。
 4. **订阅灵活** — 支持全局订阅和单 session 订阅，且与 session 生命周期无关。
 5. **测试友好** — `EventBusHandle` 是纯发送端，测试时可以直接构造，mock 事件流更简单。
@@ -451,6 +451,6 @@ Agent                    EventBus                    TUI
 2. 改 `AgentShared`（加 `event_bus`）
 3. 改 `Agent`（去掉 mpsc，接入 bus）
 4. 改 `Session`（去掉独立 broadcast，接入 bus）
-5. 改 `Coordinator`（简化事件管理）
+5. 改 `Kernel`（简化事件管理）
 6. 改 `Server` 和 `Client`（适配新的 subscribe API）
 7. `cargo check` 修编译错误

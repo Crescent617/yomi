@@ -81,6 +81,15 @@ pub const FAIL_TOOL: &str = "fail_tool";
 pub const CLEAR_TOOL_CALL: &str = "clear_tool_call";
 /// Attribute for appending tool call delta.
 pub const APPEND_TOOL_CALL_DELTA: &str = "append_tool_call_delta";
+/// Attribute for initializing a subagent state on a tool message.
+/// Payload: `parent_tool_id\x00subagent_session_id\x00description`
+pub const INIT_SUBAGENT: &str = "init_subagent";
+/// Attribute for updating a subagent state with a new event.
+/// Payload: serialized `SubagentEvent` (JSON).
+pub const UPDATE_SUBAGENT: &str = "update_subagent";
+/// Attribute for finalizing a subagent state.
+/// Payload: `parent_tool_id`
+pub const FINALIZE_SUBAGENT: &str = "finalize_subagent";
 
 // =============================================================================
 // Expand/Collapse

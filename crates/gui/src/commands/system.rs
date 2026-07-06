@@ -105,7 +105,7 @@ pub async fn get_usage_summary(
     state: State<'_, AppState>,
     days: Option<i64>,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.coordinator.clone();
+    let coord = state.kernel.clone();
     let days = days.unwrap_or(365);
     let summary = coord
         .get_usage_summary(days)
@@ -124,7 +124,7 @@ pub async fn get_daily_usage(
     state: State<'_, AppState>,
     days: i64,
 ) -> Result<serde_json::Value, GuiError> {
-    let coord = state.coordinator.clone();
+    let coord = state.kernel.clone();
     tracing::info!("get_daily_usage called with days={}", days);
     let daily = coord
         .get_daily_usage(days)

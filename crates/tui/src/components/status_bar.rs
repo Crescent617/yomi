@@ -21,7 +21,7 @@ use tuirealm::{
 use crate::utils::text::truncate_by_width;
 
 use crate::{attr, msg::Msg, theme::colors};
-use kernel::permissions::Level;
+use kernel::permission::Level;
 use std::ops::{Deref, DerefMut};
 
 /// Tip message for status bar (center section)

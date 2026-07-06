@@ -16,7 +16,7 @@ pub async fn list_cron_jobs(
     };
 
     let jobs = state
-        .coordinator
+        .kernel
         .list_cron_jobs(status_parsed, limit)
         .await
         .map_err(|e| GuiError::kernel(format!("list cron jobs failed: {e}")))?;
@@ -57,7 +57,7 @@ pub async fn create_cron_job(
     };
 
     let job_id = state
-        .coordinator
+        .kernel
         .create_cron_job(input)
         .await
         .map_err(|e| GuiError::kernel(format!("create cron job failed: {e}")))?;
@@ -115,7 +115,7 @@ pub async fn update_cron_job(
     };
 
     state
-        .coordinator
+        .kernel
         .update_cron_job(&CronJobId::from(job_id), input)
         .await
         .map_err(|e| GuiError::kernel(format!("update cron job failed: {e}")))?;
@@ -126,7 +126,7 @@ pub async fn update_cron_job(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
     state
-        .coordinator
+        .kernel
         .delete_cron_job(&CronJobId::from(job_id))
         .await
         .map_err(|e| GuiError::kernel(format!("delete cron job failed: {e}")))?;
@@ -137,7 +137,7 @@ pub async fn delete_cron_job(state: State<'_, AppState>, job_id: String) -> Resu
 #[tauri::command(rename_all = "snake_case")]
 pub async fn trigger_cron_job(state: State<'_, AppState>, job_id: String) -> Result<(), GuiError> {
     state
-        .coordinator
+        .kernel
         .trigger_cron_job(&CronJobId::from(job_id))
         .await
         .map_err(|e| GuiError::kernel(format!("trigger cron job failed: {e}")))?;

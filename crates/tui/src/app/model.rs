@@ -9,9 +9,9 @@ use tuirealm::{
 };
 
 use crate::{attr, components::info_bar::Notification, id::Id};
-use kernel::client::CoordinatorApi;
+use kernel::client::KernelApi;
 use kernel::comms::EventBusSubscriber;
-use kernel::event::ControlCommand;
+use kernel::event::Command;
 use kernel::types::ContentBlock;
 
 use super::types::{AppMode, AppState, Model, StreamingStatus};
@@ -31,8 +31,8 @@ impl Model {
     pub fn new(
         event_rx: EventBusSubscriber,
         input_tx: mpsc::Sender<Vec<ContentBlock>>,
-        ctrl_tx: mpsc::Sender<ControlCommand>,
-        coordinator: Arc<dyn CoordinatorApi>,
+        ctrl_tx: mpsc::Sender<Command>,
+        kernel: Arc<dyn KernelApi>,
         input_history: Vec<String>,
         working_dir: std::path::PathBuf,
         initial_message: Option<String>,
@@ -43,7 +43,7 @@ impl Model {
 
         let (event_pump, event_rx) = super::event_pump::EventPump::spawn(
             event_rx,
-            Arc::clone(&coordinator),
+            Arc::clone(&kernel),
             session_id.clone(),
             crate::config().auto_approve,
         );
@@ -64,7 +64,7 @@ impl Model {
             event_rx,
             input_tx,
             ctrl_tx,
-            coordinator,
+            kernel,
             current_content: String::new(),
             current_thinking: String::new(),
             thinking_start_time: None,
@@ -125,12 +125,13 @@ impl Model {
 
     /// Advance to the next ask-user question or send the final response.
     pub(crate) fn advance_ask_user(&mut self, answer: Option<String>) {
-        let Some((req_id, mut questions, mut answers)) = self.pending_ask_user.take() else {
+        let Some((req_id, session_id, mut questions, mut answers)) = self.pending_ask_user.take()
+        else {
             return;
         };
 
         let Some(current) = questions.pop_front() else {
-            self.pending_ask_user = Some((req_id, questions, answers));
+            self.pending_ask_user = Some((req_id, session_id, questions, answers));
             return;
         };
         if let Some(ans) = answer {
@@ -138,36 +139,46 @@ impl Model {
         }
 
         if questions.is_empty() {
-            // All questions answered – send response to kernel
+            // All questions answered – send response directly to the correct session
             let req_id_clone = req_id.clone();
-            let _ = self
-                .ctrl_tx
-                .try_send(kernel::event::ControlCommand::AskUserResponse {
-                    req_id,
-                    answers: answers.into_iter().collect(),
-                });
+            let coord = Arc::clone(&self.kernel);
+            let sid = kernel::types::SessionId::from(session_id);
+            let answers_map: std::collections::HashMap<String, String> =
+                answers.into_iter().collect();
+            tokio::spawn(async move {
+                let response = kernel::tools::AskUserResponse {
+                    answers: answers_map,
+                };
+                if let Err(e) = coord.send_ask_user_response(&sid, &req_id, response).await {
+                    tracing::error!("Failed to send ask_user response: {}", e);
+                }
+            });
             tracing::info!("AskUser response sent for req_id={}", req_id_clone);
             self.set_focus(&Id::InputBox);
         } else {
             // More questions remain – show the next one
             let next = questions.front().cloned().unwrap_or(current);
-            self.pending_ask_user = Some((req_id, questions, answers));
+            self.pending_ask_user = Some((req_id, session_id, questions, answers));
             self.show_ask_user_question(&next);
         }
     }
 
     /// Cancel the current ask-user request.
     pub(crate) fn cancel_ask_user(&mut self) {
-        let Some((req_id, _, _)) = self.pending_ask_user.take() else {
+        let Some((req_id, session_id, _, _)) = self.pending_ask_user.take() else {
             return;
         };
         let req_id_clone = req_id.clone();
-        let _ = self
-            .ctrl_tx
-            .try_send(kernel::event::ControlCommand::AskUserResponse {
-                req_id,
-                answers: Vec::new(),
-            });
+        let coord = Arc::clone(&self.kernel);
+        let sid = kernel::types::SessionId::from(session_id);
+        tokio::spawn(async move {
+            let response = kernel::tools::AskUserResponse {
+                answers: std::collections::HashMap::new(),
+            };
+            if let Err(e) = coord.send_ask_user_response(&sid, &req_id, response).await {
+                tracing::error!("Failed to cancel ask_user request: {}", e);
+            }
+        });
         tracing::info!("AskUser request cancelled for req_id={}", req_id_clone);
         self.set_focus(&Id::InputBox);
     }

@@ -46,28 +46,28 @@ Scaffold  Chat      Explorer  Terminal  Polish
 
 **阻塞后续**：✅ 是，此步不做完无法开工前端
 
-### Week 1 Day 3–4: Rust 后端 — RemoteCoordinator 连接
+### Week 1 Day 3–4: Rust 后端 — RemoteKernel 连接
 
 **任务清单**:
 - [ ] `crates/gui/src-tauri/Cargo.toml` 添加 `yomi-kernel = { path = "../../kernel" }`
 - [ ] 创建 `crates/gui/src-tauri/src/state.rs`:
   ```rust
   pub struct AppState {
-      pub coordinator: Arc<Mutex<RemoteCoordinator>>,
+      pub coordinator: Arc<Mutex<RemoteKernel>>,
   }
   ```
 - [ ] 创建 `crates/gui/src-tauri/src/commands/session.rs`:
-  - `list_sessions` — 薄包装 `CoordinatorApi::list_sessions`
-  - `create_session` — 包装 `CoordinatorApi::create_session`
-  - `restore_session` — 包装 `CoordinatorApi::restore_session`
+  - `list_sessions` — 薄包装 `KernelApi::list_sessions`
+  - `create_session` — 包装 `KernelApi::create_session`
+  - `restore_session` — 包装 `KernelApi::restore_session`
 - [ ] 创建 `crates/gui/src-tauri/src/commands/chat.rs`:
-  - `send_message` — 包装 `CoordinatorApi::send_message`
-  - `subscribe` / `unsubscribe` — 包装 `CoordinatorApi::subscribe` / `unsubscribe`
+  - `send_message` — 包装 `KernelApi::send_message`
+  - `subscribe` / `unsubscribe` — 包装 `KernelApi::subscribe` / `unsubscribe`
 - [ ] `main.rs` 中 `tauri::Builder::default().manage(AppState::new(...))`
 - [ ] 测试：Tauri 命令能成功调用 kernel daemon（先启动 `cargo run --bin yomi` 确保 daemon 在跑）
 
 **关键决策**：
-- `RemoteCoordinator` 的 `connect` 是 lazy 的，第一次 API 调用才会触发连接
+- `RemoteKernel` 的 `connect` 是 lazy 的，第一次 API 调用才会触发连接
 - `Arc<Mutex<>>` 是必须的，因为 Tauri 命令是并发处理的
 
 ### Week 1 Day 5: Event Bridge（Rust → Frontend Push）
@@ -320,7 +320,7 @@ Scaffold  Chat      Explorer  Terminal  Polish
 ```
 Phase 1 (Scaffold & Bridge)
 ├── Tauri project scaffold
-├── RemoteCoordinator connection
+├── RemoteKernel connection
 ├── Event bridge (Rust → FE)
 └── Chat page (MessageList + Input)
     └── Phase 2
@@ -365,7 +365,7 @@ Phase 1 (Scaffold & Bridge)
 
 | 风险 | 概率 | 影响 | 对策 |
 |---|---|---|---|
-| `RemoteCoordinator` 与 Tauri 的 async runtime 冲突 | 低 | 高 | 提前在 Phase 1 Day 3 做 PoC，若有问题用 `tokio::sync::mpsc` 隔离 |
+| `RemoteKernel` 与 Tauri 的 async runtime 冲突 | 低 | 高 | 提前在 Phase 1 Day 3 做 PoC，若有问题用 `tokio::sync::mpsc` 隔离 |
 | CodeMirror 6 + Svelte 5 runes  reactive 冲突 | 中 | 中 | 用 `$effect` 同步 CM6 state ↔ Svelte state，不直接 bind |
 | xterm.js + Tauri v2 mobile 不兼容 | 中 | 中 | Phase 4 再处理移动端 terminal，Desktop 优先 |
 | Shiki 大文件高亮卡顿 | 中 | 低 | 限制 preview 文件大小（>1MB  fallback 为纯文本），加 async loading |
@@ -403,13 +403,13 @@ GUI 和 kernel daemon 的唯一交互点：
 
 | 方向 | 方式 | 内容 |
 |---|---|---|
-| GUI → Kernel | `CoordinatorApi` trait 方法 | `create_session`, `send_message`, `subscribe`, `get_checkpoints`, etc. |
+| GUI → Kernel | `KernelApi` trait 方法 | `create_session`, `send_message`, `subscribe`, `get_checkpoints`, etc. |
 | Kernel → GUI | Tauri `Emitter` (broadcast `Event`) | `model_chunk`, `tool_start`, `permission_request`, `error`, etc. |
 
 **禁止事项**：
 - GUI 前端**不直接**访问 kernel 的 SQLite 数据库
 - GUI Rust 层**不直接**调用 kernel 的内部模块（如 `app::coordinator`）
-- 所有数据交换必须通过 `CoordinatorApi` + `Event` 两个接口
+- 所有数据交换必须通过 `KernelApi` + `Event` 两个接口
 
 ---
 

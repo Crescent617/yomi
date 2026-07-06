@@ -2,7 +2,7 @@ use crate::agent::{AgentShared, SubAgentMode};
 use crate::comms::InputBus;
 use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{ContentBlock, KernelError, Message, Result, SessionId, ToolOutput};
+use crate::types::{ContentBlock, EventId, KernelError, Message, Result, SessionId, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -106,9 +106,95 @@ impl SubagentTool {
 
         let mut status = SubAgentStatus::Completed;
 
-        while let Some((sid, event)) = subscriber.recv().await {
+        while let Some((sid, envelope)) = subscriber.recv().await {
             if sid.0 != session_id.0 {
                 continue;
+            }
+            let event = envelope.event;
+
+            // Forward ask_user and permission events to the parent session so
+            // UI layers (TUI/GUI) can display them in the same event stream.
+            // Also forward acks so the parent can clean up stale pending requests.
+            match &event {
+                Event::Agent(AgentEvent::AskUserQuestion {
+                    req_id, questions, ..
+                }) => {
+                    if let Some(ref bus) = self.shared.event_bus {
+                        let _ = bus.publish(
+                            self.parent_session_id.clone(),
+                            crate::event::Envelope {
+                                session_id: self.parent_session_id.clone(),
+                                event_id: EventId::new(),
+                                event: Event::Agent(AgentEvent::AskUserQuestion {
+                                    req_id: req_id.clone(),
+                                    session_id: session_id.0.to_string(),
+                                    questions: questions.clone(),
+                                }),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                Event::Agent(AgentEvent::PermissionRequest {
+                    req_id,
+                    tool_id,
+                    tool_name,
+                    tool_args,
+                    tool_level,
+                    reason,
+                    ..
+                }) => {
+                    if let Some(ref bus) = self.shared.event_bus {
+                        let _ = bus.publish(
+                            self.parent_session_id.clone(),
+                            crate::event::Envelope {
+                                session_id: self.parent_session_id.clone(),
+                                event_id: EventId::new(),
+                                event: Event::Agent(AgentEvent::PermissionRequest {
+                                    req_id: req_id.clone(),
+                                    session_id: session_id.0.to_string(),
+                                    tool_id: tool_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    tool_args: tool_args.clone(),
+                                    tool_level: tool_level.clone(),
+                                    reason: reason.clone(),
+                                }),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                Event::Agent(AgentEvent::PermissionAck { req_id }) => {
+                    if let Some(ref bus) = self.shared.event_bus {
+                        let _ = bus.publish(
+                            self.parent_session_id.clone(),
+                            crate::event::Envelope {
+                                session_id: self.parent_session_id.clone(),
+                                event_id: EventId::new(),
+                                event: Event::Agent(AgentEvent::PermissionAck {
+                                    req_id: req_id.clone(),
+                                }),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                Event::Agent(AgentEvent::AskUserAck { req_id }) => {
+                    if let Some(ref bus) = self.shared.event_bus {
+                        let _ = bus.publish(
+                            self.parent_session_id.clone(),
+                            crate::event::Envelope {
+                                session_id: self.parent_session_id.clone(),
+                                event_id: EventId::new(),
+                                event: Event::Agent(AgentEvent::AskUserAck {
+                                    req_id: req_id.clone(),
+                                }),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                _ => {}
             }
 
             if let Event::Agent(AgentEvent::Lifecycle {
@@ -389,7 +475,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         })
     }
 
-    async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
+    async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         // Extract and clone all values from args first to avoid lifetime issues
         let description = args["description"]
             .as_str()
@@ -444,26 +530,40 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 "parent_session_id".to_string(),
                 self.parent_session_id.to_string(),
             );
+            metadata.insert("parent_tool_id".to_string(), ctx.tool_call_id.to_string());
             if let Err(e) = bus.publish(
                 self.parent_session_id.clone(),
-                crate::event::Event::Tool(crate::event::ToolEvent::Metadata {
-                    message_id: _ctx.message_id.clone(),
-                    tool_id: _ctx.tool_call_id.to_string(),
-                    metadata,
-                }),
+                crate::event::Envelope {
+                    session_id: self.parent_session_id.clone(),
+                    event_id: EventId::new(),
+                    event: crate::event::Event::Tool(crate::event::ToolEvent::Metadata {
+                        message_id: ctx.message_id.clone(),
+                        tool_id: ctx.tool_call_id.to_string(),
+                        metadata,
+                    }),
+                },
             ) {
                 tracing::warn!("Failed to publish subagent metadata: {}", e);
             }
         }
 
-        // Persist subagent session to database with parent_id and default title
+        // Persist subagent session to database with inherited metadata from parent
         if let Some(ref store) = self.shared.session_store {
+            let (parent_level, parent_wd, parent_project) =
+                match store.get(&self.parent_session_id).await {
+                    Ok(Some(info)) => (info.auto_approve_level, info.working_dir, info.project_id),
+                    Ok(None) => (None, None, None),
+                    Err(e) => {
+                        tracing::warn!("failed to get parent session metadata: {}", e);
+                        (None, None, None)
+                    }
+                };
             if let Err(e) = store
                 .create(
                     &session_id,
-                    None, // project_id
-                    None, // working_dir
-                    None, // auto_approve_level
+                    parent_project.as_ref(),
+                    parent_wd.as_deref(),
+                    parent_level.as_deref(),
                     Some(&self.parent_session_id),
                 )
                 .await
@@ -509,9 +609,18 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     "Subagent with task '{description}' spawned in async mode. {} Results will be sent automatically when complete.",
                     crate::tools::ASYNC_LAUNCH_GUIDE
                 );
+                let cancel = ctx
+                    .cancel_token
+                    .expect("cancel_token must be available for subagent tool");
                 let self_clone = self.clone();
                 tokio::spawn(async move {
-                    let (output, status) = self_clone.run_subagent(params).await;
+                    let (output, status) = tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            (String::new(), SubAgentStatus::Cancelled)
+                        }
+                        result = self_clone.run_subagent(params) => result,
+                    };
                     let steer = match &status {
                         SubAgentStatus::Completed => {
                             format!("Task '{description}' completed:\n\n{output}")

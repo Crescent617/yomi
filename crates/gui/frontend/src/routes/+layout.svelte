@@ -5,7 +5,8 @@
   import {
     handleEvent,
     getSession,
-    unsubscribeAllInactive,
+    sessionState,
+    startNotificationListener,
   } from "../lib/state.svelte";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
   import {
@@ -13,32 +14,38 @@
     startThemeListener,
     stopThemeListener,
   } from "../lib/settings.svelte";
+  import * as api from "../lib/api";
   import "../app.css";
 
   // @ts-expect-error svelte onMount 返回类型在 lib 升级后被误判
   onMount(async () => {
     await initSettings();
     startThemeListener();
-    const unlisten = listen(
+    const unlistenEvent = listen(
       "kernel:event",
-      (e: { payload: { session_id: string; event: unknown } }) => {
-        const { session_id, event } = e.payload;
+      (e: { payload: { session_id: string; event_id?: string; event: unknown } }) => {
+        const { session_id, event_id, event } = e.payload;
         const session = getSession(session_id);
         if (session) {
-          handleEvent(session_id, event);
+          handleEvent(session_id, event_id, event);
         }
       },
     );
+    const unlistenNoti = startNotificationListener();
     const appWindow = getCurrentWindow();
     const unlistenClose = await appWindow.onCloseRequested(() => {
       try {
-        unsubscribeAllInactive();
+        const active = sessionState.activeSessionId;
+        if (active) {
+          api.unsubscribe(active);
+        }
       } catch (e) {
         console.error("Error in onCloseRequested:", e);
       }
     });
     return () => {
-      unlisten.then((fn: () => void) => fn());
+      unlistenEvent.then((fn: () => void) => fn());
+      unlistenNoti.then((fn: () => void) => fn());
       unlistenClose();
       stopThemeListener();
     };

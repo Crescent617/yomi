@@ -1,21 +1,15 @@
 use crate::comms::EventBusHandle;
-use crate::event::Event;
+use crate::event::Envelope;
 
-/// 统一事件发送接口。主 agent 使用 `EventBusHandle`，子 agent 使用 `mpsc::Sender<Event>`，
+/// 统一事件发送接口。主 agent 使用 `EventBusHandle`，
 /// 测试可以使用 `NoOpEventSink` 或自定义收集器。
 pub trait EventSink: Send + Sync {
-    fn emit(&self, event: Event);
+    fn emit(&self, envelope: Envelope);
 }
 
 impl EventSink for EventBusHandle {
-    fn emit(&self, event: Event) {
-        self.try_send(event).ok();
-    }
-}
-
-impl EventSink for tokio::sync::mpsc::Sender<Event> {
-    fn emit(&self, event: Event) {
-        self.try_send(event).ok();
+    fn emit(&self, envelope: Envelope) {
+        self.try_send(envelope).ok();
     }
 }
 
@@ -23,5 +17,5 @@ impl EventSink for tokio::sync::mpsc::Sender<Event> {
 pub struct NoOpEventSink;
 
 impl EventSink for NoOpEventSink {
-    fn emit(&self, _: Event) {}
+    fn emit(&self, _: Envelope) {}
 }
