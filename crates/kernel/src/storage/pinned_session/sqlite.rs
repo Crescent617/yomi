@@ -134,6 +134,7 @@ impl PinnedSessionStore for SqlitePinnedSessionStore {
                  p.pinned_at
              FROM pinned_sessions p
              JOIN sessions s ON s.id = p.session_id
+             WHERE s.id NOT LIKE 'sub_%'
              ORDER BY p.pinned_at DESC",
         )
         .fetch_all(&self.pool)

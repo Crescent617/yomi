@@ -5,6 +5,7 @@ mod error;
 mod state;
 
 use state::AppState;
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,9 +17,25 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
-            let (coordinator, data_dir) = tauri::async_runtime::block_on(daemon::get_coordinator())
-                .map_err(|e| format!("failed to get coordinator: {e}"))?;
-            app.manage(AppState::new(coordinator, data_dir));
+            let (kernel, data_dir) = tauri::async_runtime::block_on(daemon::get_kernel())
+                .map_err(|e| format!("failed to get kernel: {e}"))?;
+            app.manage(AppState::new(kernel.clone(), data_dir));
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = match kernel.subscribe_notifications().await {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        tracing::warn!("Failed to subscribe to notifications: {e}");
+                        return;
+                    }
+                };
+                while let Some(noti) = rx.recv().await {
+                    let payload = serde_json::to_value(&noti).unwrap_or_default();
+                    let _ = app_handle.emit("kernel:noti", payload);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -126,7 +143,7 @@ fn main() {
         .unwrap_or_default();
     config.finalize();
 
-    let _guard = kernel::logging::init_logging(&config, "gui", true).unwrap_or_else(|e| {
+    let _guard = kernel::utils::logging::init_logging(&config, "gui", true).unwrap_or_else(|e| {
         eprintln!("Failed to initialize file logging: {e}. Logging to stderr only.");
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new("info"))

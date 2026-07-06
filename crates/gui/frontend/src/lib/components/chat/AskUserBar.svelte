@@ -4,7 +4,7 @@
   import * as api from "../../api";
 
   const activeSession = $derived(getActiveSession());
-  const askUser = $derived(activeSession?.pending_ask_user);
+  const askUser = $derived(activeSession?.pending_ask_users[0]);
 
   // Map question header -> selected option labels
   let selections = $state<Record<string, string[]>>({});
@@ -26,6 +26,7 @@
 
   async function submit() {
     if (!activeSession || !askUser) return;
+    const sessionId = askUser.session_id || activeSession.id;
     const answers: [string, string][] = [];
     for (const q of askUser.questions) {
       const selected = selections[q.header] ?? [];
@@ -37,8 +38,8 @@
       answers.push([q.header, answer || "(skipped)"]);
     }
     try {
-      await api.respondAskUser(activeSession.id, askUser.req_id, answers);
-      activeSession.pending_ask_user = null;
+      await api.respondAskUser(sessionId, askUser.req_id, answers);
+      activeSession.pending_ask_users.shift();
       selections = {};
       customInputs = {};
     } catch (e: unknown) {
@@ -52,13 +53,14 @@
 
   async function dismiss() {
     if (!activeSession || !askUser) return;
+    const sessionId = askUser.session_id || activeSession.id;
     // Send empty response to unblock the agent
     try {
-      await api.respondAskUser(activeSession.id, askUser.req_id, []);
+      await api.respondAskUser(sessionId, askUser.req_id, []);
     } catch {
       /* ignore */
     }
-    activeSession.pending_ask_user = null;
+    activeSession.pending_ask_users.shift();
     selections = {};
     customInputs = {};
   }

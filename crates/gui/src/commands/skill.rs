@@ -8,7 +8,7 @@ pub async fn list_session_skills(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<serde_json::Value>, GuiError> {
-    let coord = state.coordinator.clone();
+    let coord = state.kernel.clone();
     let skills = coord
         .list_session_skills(&kernel::types::SessionId::from(session_id))
         .await

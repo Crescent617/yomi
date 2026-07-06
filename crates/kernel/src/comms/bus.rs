@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::event::Event;
 use crate::types::SessionId;
 
 const CMD_CHAN_SIZE: usize = 256;
@@ -53,17 +52,29 @@ where
         }
     }
 
-    /// 订阅单个 key 的消息。
+    /// 订阅单个 key 的消息（默认接收全部）。
     pub fn subscribe(&self, key: K) -> PubSubSubscriber<T, K> {
+        self.subscribe_filtered(key, |_| true)
+    }
+
+    /// 订阅单个 key 的消息，支持自定义过滤。
+    pub fn subscribe_filtered<F>(&self, key: K, filter: F) -> PubSubSubscriber<T, K>
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
         let (tx, rx) = mpsc::channel::<(K, T)>(256);
         let id = next_listener_id();
 
-        let listener = Listener { id, tx };
+        let listener = Listener {
+            id,
+            tx,
+            filter: Arc::new(filter),
+        };
         if let Err(e) = self.cmd_tx.try_send(Command::SubscribeSession {
             session_id: key.clone(),
             listener,
         }) {
-            tracing::error!(error = %e, "pubsub subscribe command dropped (channel full)");
+            tracing::error!(error = %e, "pubsub subscribe_filtered command dropped (channel full)");
         }
 
         PubSubSubscriber {
@@ -74,14 +85,26 @@ where
         }
     }
 
-    /// 订阅所有消息。
+    /// 订阅所有消息（默认接收全部）。
     pub fn subscribe_all(&self) -> PubSubSubscriber<T, K> {
+        self.subscribe_all_filtered(|_| true)
+    }
+
+    /// 订阅所有消息，支持自定义过滤。
+    pub fn subscribe_all_filtered<F>(&self, filter: F) -> PubSubSubscriber<T, K>
+    where
+        F: Fn(&T) -> bool + Send + Sync + 'static,
+    {
         let (tx, rx) = mpsc::channel::<(K, T)>(256);
         let id = next_listener_id();
 
-        let listener = Listener { id, tx };
+        let listener = Listener {
+            id,
+            tx,
+            filter: Arc::new(filter),
+        };
         if let Err(e) = self.cmd_tx.try_send(Command::SubscribeGlobal { listener }) {
-            tracing::error!(error = %e, "pubsub subscribe_all command dropped (channel full)");
+            tracing::error!(error = %e, "pubsub subscribe_all_filtered command dropped (channel full)");
         }
 
         PubSubSubscriber {
@@ -90,6 +113,10 @@ where
             session_id: None,
             rx,
         }
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.cmd_tx.try_send(Command::Shutdown);
     }
 
     /// 直接发送一条消息，无需先创建句柄。
@@ -175,6 +202,7 @@ impl<T, K> Drop for PubSubSubscriber<T, K> {
 struct Listener<T, K> {
     id: u64,
     tx: mpsc::Sender<(K, T)>,
+    filter: Arc<dyn Fn(&T) -> bool + Send + Sync>,
 }
 
 enum Command<T, K> {
@@ -189,6 +217,7 @@ enum Command<T, K> {
         id: u64,
         session_id: Option<K>,
     },
+    Shutdown,
 }
 
 fn next_listener_id() -> u64 {
@@ -233,6 +262,7 @@ async fn run_forwarder<T, K>(
                             global_listeners.retain(|l| l.id != id);
                         }
                     }
+                    Command::Shutdown => break,
                 }
             }
 
@@ -254,7 +284,7 @@ async fn run_forwarder<T, K>(
     }
 }
 
-/// 尝试向 listener 列表发送事件，移除已关闭的 listener。
+/// 尝试向 listener 列表发送事件，应用 filter，移除已关闭的 listener。
 fn try_send_to_listeners<T, K>(listeners: &mut Vec<Listener<T, K>>, key: &K, ev: &T)
 where
     K: Clone,
@@ -262,6 +292,9 @@ where
 {
     let mut to_remove = Vec::new();
     for l in &*listeners {
+        if !(l.filter)(ev) {
+            continue;
+        }
         match l.tx.try_send((key.clone(), ev.clone())) {
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 to_remove.push(l.id);
@@ -283,6 +316,6 @@ where
 
 // ── Type aliases ─────────────────────────────────────────────────────
 
-pub type EventBus = PubSub<Event, SessionId>;
-pub type EventBusHandle = PubSubHandle<SessionId, Event>;
-pub type EventBusSubscriber = PubSubSubscriber<Event, SessionId>;
+pub type EventBus = PubSub<crate::event::Envelope, SessionId>;
+pub type EventBusHandle = PubSubHandle<SessionId, crate::event::Envelope>;
+pub type EventBusSubscriber = PubSubSubscriber<crate::event::Envelope, SessionId>;

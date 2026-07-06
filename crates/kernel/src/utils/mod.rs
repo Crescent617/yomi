@@ -6,9 +6,11 @@ pub mod html;
 pub mod id;
 pub mod image;
 pub mod line_numbers;
+pub mod logging;
 pub mod path;
 pub mod rg_helper;
 pub mod search;
+pub mod signal;
 pub mod strs;
 pub mod tokens;
 

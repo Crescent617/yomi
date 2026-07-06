@@ -5,8 +5,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tuirealm::{application::PollStrategy, terminal::TerminalAdapter};
 
-use kernel::client::CoordinatorApi;
-use kernel::event::ControlCommand;
+use kernel::client::KernelApi;
+use kernel::event::Command;
 use kernel::types::ContentBlock;
 
 use super::types::{Model, TuiResult};
@@ -168,8 +168,8 @@ impl Model {
 pub async fn run_tui(
     event_rx: kernel::comms::EventBusSubscriber,
     input_tx: mpsc::Sender<Vec<ContentBlock>>,
-    ctrl_tx: mpsc::Sender<ControlCommand>,
-    coordinator: Arc<dyn CoordinatorApi>,
+    ctrl_tx: mpsc::Sender<Command>,
+    kernel: Arc<dyn KernelApi>,
     working_dir: String,
     input_history: Vec<String>,
     initial_message: Option<String>,
@@ -180,7 +180,7 @@ pub async fn run_tui(
         event_rx,
         input_tx,
         ctrl_tx,
-        coordinator,
+        kernel,
         input_history,
         working_dir_path,
         initial_message,

@@ -1,5 +1,5 @@
 use crate::compactor::Compactor;
-use crate::providers::{ModelConfig, ProviderError};
+use crate::provider::{ModelConfig, ProviderError};
 use crate::skill::Skill;
 use crate::types::Message;
 use serde::{Deserialize, Serialize};
@@ -311,10 +311,10 @@ impl AgentExecutionContext {
 /// Shared resources across agents
 #[derive(Clone)]
 pub struct AgentShared {
-    pub provider: Arc<dyn crate::providers::Provider>,
+    pub provider: Arc<dyn crate::provider::Provider>,
     pub model_config: Arc<ModelConfig>,
     /// Task store for task tools (legacy)
-    pub task_store: Option<Arc<crate::task::TaskStore>>,
+    pub task_store: Option<Arc<crate::tools::task::TaskStore>>,
     /// Todo storage for todo list persistence
     pub todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
     /// Context compactor for managing long conversations
@@ -326,7 +326,7 @@ pub struct AgentShared {
     /// Usage store for token tracking
     pub usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
     /// Shared permission state for all agents in a session
-    pub permission_state: Option<crate::permissions::PermissionState>,
+    pub permission_state: Option<crate::permission::PermissionState>,
     /// Skill folders for the `skill_load` tool
     pub skill_folders: Vec<std::path::PathBuf>,
     /// File state store for tracking file modification times (cleared on compaction)
@@ -350,15 +350,15 @@ pub struct AgentShared {
 impl AgentShared {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        provider: Arc<dyn crate::providers::Provider>,
+        provider: Arc<dyn crate::provider::Provider>,
         model_config: Arc<ModelConfig>,
-        task_store: Option<Arc<crate::task::TaskStore>>,
+        task_store: Option<Arc<crate::tools::task::TaskStore>>,
         todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         compactor: Option<crate::compactor::Compactor>,
         session_store: Option<Arc<dyn crate::storage::SessionStore>>,
         message_store: Option<Arc<dyn crate::storage::MessageStore>>,
         usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
-        permission_state: Option<crate::permissions::PermissionState>,
+        permission_state: Option<crate::permission::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
         file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
         checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
@@ -382,15 +382,15 @@ impl AgentShared {
 
     #[allow(clippy::too_many_arguments)]
     pub fn with_data_dir(
-        provider: Arc<dyn crate::providers::Provider>,
+        provider: Arc<dyn crate::provider::Provider>,
         model_config: Arc<ModelConfig>,
-        task_store: Option<Arc<crate::task::TaskStore>>,
+        task_store: Option<Arc<crate::tools::task::TaskStore>>,
         todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         compactor: Option<crate::compactor::Compactor>,
         session_store: Option<Arc<dyn crate::storage::SessionStore>>,
         message_store: Option<Arc<dyn crate::storage::MessageStore>>,
         usage_store: Option<Arc<dyn crate::storage::UsageStore>>,
-        permission_state: Option<crate::permissions::PermissionState>,
+        permission_state: Option<crate::permission::PermissionState>,
         skill_folders: Vec<std::path::PathBuf>,
         file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
         checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
@@ -422,7 +422,7 @@ impl AgentShared {
     #[must_use]
     pub fn with_per_session(
         &self,
-        permission_state: Option<crate::permissions::PermissionState>,
+        permission_state: Option<crate::permission::PermissionState>,
         file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
         checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
     ) -> Self {
@@ -473,14 +473,14 @@ impl AgentShared {
 
     /// Set the provider
     #[must_use]
-    pub fn with_provider(mut self, provider: Arc<dyn crate::providers::Provider>) -> Self {
+    pub fn with_provider(mut self, provider: Arc<dyn crate::provider::Provider>) -> Self {
         self.provider = provider;
         self
     }
 
     /// Set the model config
     #[must_use]
-    pub fn with_model_config(mut self, model_config: Arc<crate::providers::ModelConfig>) -> Self {
+    pub fn with_model_config(mut self, model_config: Arc<crate::provider::ModelConfig>) -> Self {
         self.model_config = model_config;
         self
     }
@@ -569,4 +569,5 @@ impl AgentError {
 }
 
 #[cfg(test)]
-mod tests {}
+#[path = "types_test.rs"]
+mod tests;

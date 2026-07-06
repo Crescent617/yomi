@@ -5,7 +5,7 @@
 use super::message_buffer::MessageBuffer;
 use crate::compactor::{CompactionError, Compactor};
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
-use crate::providers::{ModelConfig, Provider};
+use crate::provider::{ModelConfig, Provider};
 use crate::storage::UsageStore;
 use crate::types::{Message, Role, SessionId};
 use std::sync::Arc;
@@ -237,7 +237,7 @@ impl CompactionManager {
     }
 
     /// Record compactor token usage
-    async fn record_compactor_token_usage(&self, usage: crate::providers::TokenUsage) {
+    async fn record_compactor_token_usage(&self, usage: crate::provider::TokenUsage) {
         if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
             return;
         }

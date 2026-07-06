@@ -1,6 +1,9 @@
 pub mod bus;
 pub use bus::*;
 
+#[cfg(test)]
+mod bus_test;
+
 pub mod event_sink;
 pub use event_sink::{EventSink, NoOpEventSink};
 

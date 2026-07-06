@@ -2,11 +2,25 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use kernel::client::CoordinatorApi;
+use kernel::client::KernelApi;
 use kernel::comms::EventBusSubscriber;
-use kernel::event::{Event, SystemEvent};
-use kernel::permissions::Level;
+use kernel::event::{AgentEvent, AgentStatus, Event, ModelEvent, SystemEvent, ToolEvent};
+use kernel::permission::Level;
 use kernel::types::SessionId;
+
+/// Tagged event that carries provenance information.
+///
+/// `Main` events come from the primary session; `Subagent` events come from
+/// a child agent and include the `parent_tool_id` so the UI can associate
+/// them with the correct `Agent` tool call.
+pub enum TaggedEvent {
+    Main(Event),
+    Subagent {
+        parent_tool_id: String,
+        session_id: String,
+        event: Event,
+    },
+}
 
 /// Transparent event pump that hides connection churn from the TUI.
 ///
@@ -16,6 +30,10 @@ use kernel::types::SessionId;
 /// and restores the session — the TUI sees a continuous stream of events
 /// plus explicit `Connected` / `ConnectionLost` notifications when the
 /// connection state changes.
+///
+/// In addition, the pump dynamically subscribes to any subagent sessions
+/// discovered via `ToolEvent::Metadata`, forwarding their events as
+/// [`TaggedEvent::Subagent`].
 pub(crate) struct EventPump {
     cancel: tokio_util::sync::CancellationToken,
 }
@@ -29,10 +47,10 @@ impl Drop for EventPump {
 impl EventPump {
     pub fn spawn(
         initial_rx: EventBusSubscriber,
-        coordinator: Arc<dyn CoordinatorApi>,
+        kernel: Arc<dyn KernelApi>,
         session_id: String,
         _auto_approve: Level,
-    ) -> (Self, mpsc::Receiver<Event>) {
+    ) -> (Self, mpsc::Receiver<TaggedEvent>) {
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let (tx, rx) = mpsc::channel(256);
@@ -43,9 +61,11 @@ impl EventPump {
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
             if crate::daemon_mode() {
-                if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
-                    session_id: sid.clone(),
-                })) {
+                if let Err(e) =
+                    tx.try_send(TaggedEvent::Main(Event::System(SystemEvent::Connected {
+                        session_id: sid.clone(),
+                    })))
+                {
                     tracing::warn!("EventPump failed to send initial connected notification: {e}");
                 }
             }
@@ -53,15 +73,15 @@ impl EventPump {
             'outer: loop {
                 // When subscriber is closed, resubscribe (infinite retry).
                 if current_rx.is_none() {
-                    match Self::resubscribe(&coordinator, &sid, _auto_approve, &cancel_for_task)
-                        .await
-                    {
+                    match Self::resubscribe(&kernel, &sid, _auto_approve, &cancel_for_task).await {
                         Some(new_rx) => {
                             tracing::info!("EventPump re-subscribed to {}", sid.0);
                             // Notify TUI that connection is back.
-                            if let Err(e) = tx.try_send(Event::System(SystemEvent::Connected {
-                                session_id: sid.clone(),
-                            })) {
+                            if let Err(e) = tx.try_send(TaggedEvent::Main(Event::System(
+                                SystemEvent::Connected {
+                                    session_id: sid.clone(),
+                                },
+                            ))) {
                                 tracing::warn!(
                                     "EventPump failed to send connected notification: {e}"
                                 );
@@ -82,8 +102,77 @@ impl EventPump {
 
                     opt = r.recv() => {
                         match opt {
-                            Some((_sid, event)) => {
-                                if let Err(e) = tx.send(event).await {
+                            Some((_sid, envelope)) => {
+                                let event = envelope.event;
+                                // Detect subagent launch and spawn a dedicated subscriber.
+                                if let Event::Tool(ToolEvent::Metadata { ref tool_id, ref metadata, .. }) = event {
+                                    if let Some(subagent_sid) = metadata.get("subagent_session_id") {
+                                        let parent_tool_id = metadata
+                                            .get("parent_tool_id")
+                                            .cloned()
+                                            .unwrap_or_else(|| tool_id.clone());
+                                        let sub_sid = SessionId::from(subagent_sid.clone());
+                                        let coord_clone = kernel.clone();
+                                        let tx_clone = tx.clone();
+                                        let cancel_clone = cancel_for_task.clone();
+                                        tokio::spawn(async move {
+                                            match coord_clone.subscribe_session_events(&sub_sid, None).await {
+                                                Ok(mut sub_rx) => {
+                                                    loop {
+                                                        tokio::select! {
+                                                            biased;
+                                                            () = cancel_clone.cancelled() => break,
+                                                            opt = sub_rx.recv() => {
+                                                                match opt {
+                                                                    Some((_sid, envelope)) => {
+                                                                        let ev = envelope.event;
+                                                                        // Skip high-frequency delta events to avoid TUI spam.
+                                                                        // Only forward structural events (tool start/end, lifecycle, usage).
+                                                                        let is_delta = matches!(
+                                                                            &ev,
+                                                                            Event::Model(ModelEvent::Chunk { .. } | ModelEvent::ToolCallDelta { .. })
+                                                                        );
+                                                                        if is_delta {
+                                                                            continue;
+                                                                        }
+
+                                                                        let is_stopped = matches!(
+                                                                            &ev,
+                                                                            Event::Agent(AgentEvent::Lifecycle {
+                                                                                state: AgentStatus::Stopped { .. },
+                                                                                ..
+                                                                            })
+                                                                        );
+                                                                        if let Err(e) = tx_clone.try_send(TaggedEvent::Subagent {
+                                                                            parent_tool_id: parent_tool_id.clone(),
+                                                                            session_id: sub_sid.0.to_string(),
+                                                                            event: ev,
+                                                                        }) {
+                                                                            tracing::warn!("Subagent event pump mpsc closed: {e}");
+                                                                            break;
+                                                                        }
+                                                                        if is_stopped {
+                                                                            break;
+                                                                        }
+                                                                    }
+                                                                    None => {
+                                                                        tracing::warn!("Subagent subscriber closed");
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!("Failed to subscribe to subagent session {}: {}", sub_sid.0, e);
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+
+                                if let Err(e) = tx.send(TaggedEvent::Main(event)).await {
                                     tracing::warn!("EventPump mpsc closed: {e}");
                                     break 'outer;
                                 }
@@ -106,7 +195,7 @@ impl EventPump {
     /// pump keeps trying forever so the TUI can recover from a daemon
     /// restart at any time.
     async fn resubscribe(
-        coordinator: &Arc<dyn CoordinatorApi>,
+        kernel: &Arc<dyn KernelApi>,
         session_id: &SessionId,
         _auto_approve: Level,
         cancel: &tokio_util::sync::CancellationToken,
@@ -118,7 +207,7 @@ impl EventPump {
             }
             match tokio::time::timeout(
                 Duration::from_secs(5),
-                coordinator.subscribe_session_events(session_id),
+                kernel.subscribe_session_events(session_id, None),
             )
             .await
             {
@@ -129,7 +218,7 @@ impl EventPump {
                             "Session {} missing on daemon, attempting restore…",
                             session_id.0
                         );
-                        match coordinator.restore_session(session_id, Vec::new()).await {
+                        match kernel.restore_session(session_id, Vec::new()).await {
                             Ok(_) => {
                                 // Session restored — immediately retry subscribe.
                                 continue;

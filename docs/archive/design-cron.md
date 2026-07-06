@@ -21,7 +21,7 @@
 
 ## 2. 设计原则
 
-1. **最小侵入**：Cron 模块独立，通过 trait 与 Coordinator/Server 交互，不修改现有 Agent/Session 核心逻辑。
+1. **最小侵入**：Cron 模块独立，通过 trait 与 Kernel/Server 交互，不修改现有 Agent/Session 核心逻辑。
 2. **持久化优先**：所有任务定义和状态落库，Server 重启后可恢复调度。
 3. **精确调度**：使用成熟 cron 解析库，支持标准 cron 表达式（含秒级）。调度引擎自研，精确 sleep 到触发点，避免轮询。
 4. **异步执行**：调度器只负责"到点触发"，实际执行交给独立 Worker，避免阻塞调度循环。
@@ -65,7 +65,7 @@ crates/kernel/src/cron/
               ┌──────────────┼──────────────┐
               ▼              ▼              ▼
         ┌─────────┐   ┌──────────┐   ┌──────────┐
-        │Coordinator│  │tokio::process│  │  (扩展)   │
+        │Kernel│  │tokio::process│  │  (扩展)   │
         │send_message│  │  Command    │   │          │
         └─────────┘   └──────────┘   └──────────┘
               │
@@ -393,7 +393,7 @@ impl CronScheduler {
 
 ```rust
 pub struct CronWorker {
-    coordinator: Arc<Coordinator>,
+    coordinator: Arc<Kernel>,
     task_rx: mpsc::Receiver<CronJob>,
     store: Arc<dyn CronStore>,
 }
@@ -434,7 +434,7 @@ impl CronWorker {
         }
     }
 
-    async fn execute(coordinator: &Coordinator, job: &CronJob) -> Result<(), CronError> {
+    async fn execute(coordinator: &Kernel, job: &CronJob) -> Result<(), CronError> {
         match &job.action {
             CronAction::SendMessage { session_id, content } => {
                 let sid = SessionId(session_id.clone());
@@ -541,7 +541,7 @@ pub enum RequestMethod {
 
 ```rust
 pub struct KernelServer {
-    coordinator: Arc<Coordinator>,
+    coordinator: Arc<Kernel>,
     config_file_path: Option<PathBuf>,
     base_dir: PathBuf,
     reload_lock: Arc<tokio::sync::Mutex<()>>,
@@ -553,7 +553,7 @@ pub struct KernelServer {
 
 impl KernelServer {
     pub fn new(
-        coordinator: Arc<Coordinator>,
+        coordinator: Arc<Kernel>,
         config_file_path: Option<PathBuf>,
         base_dir: PathBuf,
         cron_store: Option<Arc<dyn CronStore>>,  // NEW
@@ -695,7 +695,7 @@ cron = { workspace = true }
    - 验证动态添加/删除/更新任务后调度正确。
    - 验证 Server 重启后从 DB 恢复调度。
 4. **Worker 测试**：
-   - Mock Coordinator，验证 `SendMessage` action 正确调用。
+   - Mock Kernel，验证 `SendMessage` action 正确调用。
    - 验证 Shell action 命令执行和错误处理。
 5. **集成测试**：通过 RPC 创建任务，验证端到端触发。
 

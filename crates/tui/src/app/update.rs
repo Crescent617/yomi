@@ -14,8 +14,8 @@ use crate::{
     id::Id,
     msg::Msg,
 };
-use kernel::event::ControlCommand;
-use kernel::permissions::Level;
+use kernel::event::Command;
+use kernel::permission::Level;
 
 use super::types::{AppMode, Model};
 
@@ -102,7 +102,7 @@ impl Model {
                     None
                 }
                 Msg::CancelRequest => {
-                    let _ = self.ctrl_tx.try_send(ControlCommand::Cancel);
+                    let _ = self.ctrl_tx.try_send(Command::Cancel);
                     None
                 }
                 Msg::ClearQueuedMessage => {
@@ -235,13 +235,13 @@ impl Model {
                         let answer =
                             self.pending_ask_user
                                 .as_ref()
-                                .and_then(|(_, questions, _)| {
+                                .and_then(|(_, _, questions, _)| {
                                     questions.front().and_then(|q| {
                                         q.options.get(idx).map(|opt| opt.label.clone())
                                     })
                                 });
                         self.advance_ask_user(answer);
-                    } else if let Some(req_id) = self.pending_permission.take() {
+                    } else if let Some((req_id, session_id)) = self.pending_permission.take() {
                         let (approved, remember) = match idx {
                             0 => (true, false), // Approve once
                             1 => (true, true),  // Always approve this tool
@@ -260,17 +260,20 @@ impl Model {
                                     5000,
                                 ));
                                 // Send command to kernel to update permission level
-                                let _ = self
-                                    .ctrl_tx
-                                    .try_send(ControlCommand::SetLevel(Level::Dangerous));
+                                let _ = self.ctrl_tx.try_send(Command::SetLevel(Level::Dangerous));
                                 (true, false)
                             }
                             _ => (false, false), // Deny
                         };
-                        let _ = self.ctrl_tx.try_send(ControlCommand::Response {
-                            req_id,
-                            approved,
-                            remember,
+                        let coord = Arc::clone(&self.kernel);
+                        let sid = kernel::types::SessionId::from(session_id);
+                        tokio::spawn(async move {
+                            if let Err(e) = coord
+                                .send_permission_response(&sid, &req_id, approved, remember)
+                                .await
+                            {
+                                tracing::error!("Failed to send permission response: {}", e);
+                            }
                         });
                         // Return focus to input box
                         self.set_focus(&Id::InputBox);
@@ -287,11 +290,16 @@ impl Model {
                     // Priority: ask_user > permission request
                     if self.pending_ask_user.is_some() {
                         self.cancel_ask_user();
-                    } else if let Some(req_id) = self.pending_permission.take() {
-                        let _ = self.ctrl_tx.try_send(ControlCommand::Response {
-                            req_id,
-                            approved: false,
-                            remember: false,
+                    } else if let Some((req_id, session_id)) = self.pending_permission.take() {
+                        let coord = Arc::clone(&self.kernel);
+                        let sid = kernel::types::SessionId::from(session_id);
+                        tokio::spawn(async move {
+                            if let Err(e) = coord
+                                .send_permission_response(&sid, &req_id, false, false)
+                                .await
+                            {
+                                tracing::error!("Failed to send permission deny response: {}", e);
+                            }
                         });
                         // Return focus to input box
                         self.set_focus(&Id::InputBox);
@@ -307,7 +315,7 @@ impl Model {
                 }
                 Msg::CommandFork => {
                     // Fork current session and switch to the new one
-                    let coord = Arc::clone(&self.coordinator);
+                    let coord = Arc::clone(&self.kernel);
                     let tx = self.cmd_tx.clone();
                     let sid = kernel::types::SessionId::from(self.session_id.clone());
                     let level = self.permission_level;
@@ -326,13 +334,13 @@ impl Model {
                     None
                 }
                 Msg::CommandContinue => {
-                    let _ = self.ctrl_tx.try_send(ControlCommand::Continue);
+                    let _ = self.ctrl_tx.try_send(Command::Continue);
                     self.show_notification(&Notification::info("Agent continuing...", 3000));
                     None
                 }
                 Msg::CommandGoal(description) => {
                     let state = kernel::goal::GoalState::new(description);
-                    let _ = self.ctrl_tx.try_send(ControlCommand::StartGoal(state));
+                    let _ = self.ctrl_tx.try_send(Command::StartGoal(state));
                     self.show_notification(&Notification::info(
                         "Goal mode activated. Agent will work autonomously. Use /goal:stop to interrupt.",
                         5000,
@@ -340,7 +348,7 @@ impl Model {
                     None
                 }
                 Msg::CommandGoalStop => {
-                    let _ = self.ctrl_tx.try_send(ControlCommand::StopGoal);
+                    let _ = self.ctrl_tx.try_send(Command::StopGoal);
                     self.show_notification(&Notification::info(
                         "Goal mode stopped. Agent will wait for your input.",
                         3000,
@@ -390,7 +398,7 @@ impl Model {
                     self.show_notification(&Notification::info(msg, 5000));
 
                     // Send command to kernel
-                    let _ = self.ctrl_tx.try_send(ControlCommand::SetLevel(new_level));
+                    let _ = self.ctrl_tx.try_send(Command::SetLevel(new_level));
 
                     None
                 }
@@ -400,14 +408,12 @@ impl Model {
                 }
                 Msg::CommandCompact => {
                     // Send compact request
-                    let _ = self.ctrl_tx.try_send(ControlCommand::Compact);
+                    let _ = self.ctrl_tx.try_send(Command::Compact);
                     self.show_notification(&Notification::info("Compacting messages...", 3000));
                     None
                 }
                 Msg::CommandSteer(blocks) => {
-                    let _ = self
-                        .ctrl_tx
-                        .try_send(ControlCommand::Steer { content: blocks });
+                    let _ = self.ctrl_tx.try_send(Command::Steer { content: blocks });
                     self.show_notification(&Notification::info(
                         "Steer message queued for next step",
                         3000,
@@ -505,7 +511,7 @@ impl Model {
                     None
                 }
                 Msg::CommandSessions => {
-                    let coord = Arc::clone(&self.coordinator);
+                    let coord = Arc::clone(&self.kernel);
                     let tx = self.cmd_tx.clone();
                     let working_dir = self.working_dir.to_string_lossy().to_string();
                     tokio::spawn(async move {
@@ -587,7 +593,7 @@ impl Model {
                     None
                 }
                 Msg::CommandRewind => {
-                    let coord = Arc::clone(&self.coordinator);
+                    let coord = Arc::clone(&self.kernel);
                     let tx = self.cmd_tx.clone();
                     let session_id = self.session_id.clone();
                     tokio::spawn(async move {
@@ -642,7 +648,7 @@ impl Model {
                     None
                 }
                 Msg::CommandUndo => {
-                    let coord = Arc::clone(&self.coordinator);
+                    let coord = Arc::clone(&self.kernel);
                     let tx = self.cmd_tx.clone();
                     let ctrl_tx = self.ctrl_tx.clone();
                     let session_id = self.session_id.clone();
@@ -664,7 +670,7 @@ impl Model {
 
                         let latest = checkpoints.into_iter().max_by_key(|cp| cp.sequence);
                         if let Some(cp) = latest {
-                            let _ = ctrl_tx.try_send(ControlCommand::Rewind {
+                            let _ = ctrl_tx.try_send(Command::Rewind {
                                 message_id: kernel::types::MessageId::from(cp.message_id.clone()),
                                 target: kernel::checkpoint::RewindTarget::Both,
                             });
@@ -696,8 +702,8 @@ impl Model {
                         crate::msg::RewindTarget::Both => kernel::checkpoint::RewindTarget::Both,
                     };
 
-                    // Send rewind command to coordinator
-                    let _ = self.ctrl_tx.try_send(ControlCommand::Rewind {
+                    // Send rewind command to kernel
+                    let _ = self.ctrl_tx.try_send(Command::Rewind {
                         message_id: kernel::types::MessageId::from(message_id),
                         target: kernel_target,
                     });

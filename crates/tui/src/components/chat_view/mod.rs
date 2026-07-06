@@ -7,7 +7,11 @@ mod message_renderer;
 mod overlay;
 
 // Re-export from core
-pub use core::{ChatView, ChatViewComponent, HistoryMessage, MouseAction, Selection, ToolStatus};
+// Re-export from core
+pub use core::{
+    ChatView, ChatViewComponent, HistoryMessage, MouseAction, Selection, SubagentState,
+    SubagentStatus, ToolStatus,
+};
 
 // Re-export from overlay
 pub use overlay::{

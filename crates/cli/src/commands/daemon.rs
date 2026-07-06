@@ -48,8 +48,8 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 tracing::info!("Stale PID file, cleaning up");
             }
 
-            let (coordinator, config, _config_file) = kernel::init_coordinator(None, true).await?;
-            let _log_guard = kernel::logging::init_logging(&config, "daemon", true)?;
+            let (kernel, config, _config_file) = kernel::init_kernel(None, true).await?;
+            let _log_guard = kernel::utils::logging::init_logging(&config, "daemon", true)?;
 
             let addr = crate::daemon::socket_addr();
 
@@ -63,15 +63,15 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
             }
             tokio::fs::write(&pid_file, std::process::id().to_string()).await?;
 
-            let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
+            let server = kernel::server::KernelServer::new(Arc::clone(&kernel));
             server.start(config.channels.clone()).await;
             let shutdown = tokio_util::sync::CancellationToken::new();
 
-            let _signal_handle = kernel::daemon_signal::spawn_signal_listener(shutdown.clone());
+            let _signal_handle = kernel::utils::signal::spawn_signal_listener(shutdown.clone());
 
             if auto_exit {
                 let server_for_exit = server.clone();
-                let coord_for_exit = Arc::clone(&coordinator);
+                let coord_for_exit = Arc::clone(&kernel);
                 let shutdown_clone = shutdown.clone();
                 tokio::spawn(async move {
                     tracing::info!(

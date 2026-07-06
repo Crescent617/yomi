@@ -48,17 +48,17 @@ impl Model {
         use kernel::types::SessionId;
         let session_id = SessionId::from(self.session_id.clone());
 
-        let skills: Vec<(String, String)> =
-            match self.coordinator.list_session_skills(&session_id).await {
-                Ok(skills) => skills
-                    .into_iter()
-                    .map(|s| (s.name.clone(), s.description.clone()))
-                    .collect(),
-                Err(e) => {
-                    tracing::warn!("Failed to load session skills: {}", e);
-                    Vec::new()
-                }
-            };
+        let skills: Vec<(String, String)> = match self.kernel.list_session_skills(&session_id).await
+        {
+            Ok(skills) => skills
+                .into_iter()
+                .map(|s| (s.name.clone(), s.description.clone()))
+                .collect(),
+            Err(e) => {
+                tracing::warn!("Failed to load session skills: {}", e);
+                Vec::new()
+            }
+        };
 
         if let Ok(skills_json) = serde_json::to_string(&skills) {
             let _ = self.app.attr(
@@ -79,7 +79,7 @@ impl Model {
 
         let session_id = SessionId::from(self.session_id.clone());
 
-        let messages = match self.coordinator.get_session_messages(&session_id).await {
+        let messages = match self.kernel.get_session_messages(&session_id).await {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::warn!("Failed to load session messages: {}", e);
@@ -118,7 +118,7 @@ impl Model {
 
         // Sync runtime status (streaming / compacting) so the InfoBar is accurate
         // even when we switch to a session that is already in the middle of work.
-        match self.coordinator.get_session(&session_id).await {
+        match self.kernel.get_session(&session_id).await {
             Ok(status) => match status.phase.as_str() {
                 "streaming" | "executing_tool" => {
                     self.state.is_streaming = true;
@@ -147,7 +147,7 @@ impl Model {
 
     /// Initialize status bar with permission level and model name
     pub fn init_status_bar(&mut self) -> Result<()> {
-        use kernel::permissions::Level;
+        use kernel::permission::Level;
 
         let level_val = match self.permission_level {
             Level::Safe => 0,
@@ -182,11 +182,11 @@ impl Model {
         Ok(())
     }
 
-    /// Initialize todo list from coordinator
+    /// Initialize todo list from kernel
     pub async fn init_todo_list(&mut self) -> Result<()> {
         use kernel::types::SessionId;
         match self
-            .coordinator
+            .kernel
             .get_todos(&SessionId::from(self.session_id.clone()))
             .await
         {

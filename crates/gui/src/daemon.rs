@@ -6,7 +6,7 @@
 //!
 //! There is no in-process fallback — the daemon is the only supported path.
 //!
-//! All cron operations go through the `CoordinatorApi` so the same GUI code
+//! All cron operations go through the `KernelApi` so the same GUI code
 //! works regardless of which strategy is used.
 
 use anyhow::{Context, Result};
@@ -58,32 +58,29 @@ pub async fn try_connect() -> Option<kernel::transport::Stream> {
     }
 }
 
-/// Obtain a `CoordinatorApi` for the GUI.
+/// Obtain a `KernelApi` for the GUI.
 ///
 /// Tries two strategies in order:
 /// 1. Connect to an existing daemon.
 /// 2. Spawn a background daemon and connect to it.
 ///
 /// Returns an error if neither succeeds. The GUI does not fall back to an
-/// in-process coordinator — the daemon is the only supported path.
-pub async fn get_coordinator(
-) -> Result<(Arc<dyn kernel::client::CoordinatorApi>, std::path::PathBuf), String> {
+/// in-process kernel — the daemon is the only supported path.
+pub async fn get_kernel() -> Result<(Arc<dyn kernel::client::KernelApi>, std::path::PathBuf), String>
+{
     let addr = socket_addr();
     let default_config = kernel::config::Config::default();
     let data_dir = default_config.data_dir.clone();
     if try_connect().await.is_some() {
         tracing::info!("Connected to existing daemon at {addr}");
-        return Ok((
-            Arc::new(kernel::client::RemoteCoordinator::new(addr)),
-            data_dir,
-        ));
+        return Ok((Arc::new(kernel::client::RemoteKernel::new(addr)), data_dir));
     }
     let config = spawn_daemon()
         .await
         .map_err(|e| format!("failed to spawn daemon: {e}"))?;
     tracing::info!("Connected to spawned daemon at {addr}");
     Ok((
-        Arc::new(kernel::client::RemoteCoordinator::new(addr)),
+        Arc::new(kernel::client::RemoteKernel::new(addr)),
         config.data_dir,
     ))
 }
@@ -100,7 +97,7 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
         return Ok(kernel::config::Config::default());
     }
 
-    let (coordinator, config, _config_file) = kernel::init_coordinator(None, true).await?;
+    let (kernel, config, _config_file) = kernel::init_kernel(None, true).await?;
 
     let addr = socket_addr();
     let listener = kernel::transport::bind(&addr)
@@ -108,7 +105,7 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
         .with_context(|| format!("Failed to bind daemon listener on {addr}"))?;
     tracing::info!("Daemon listening on {addr}");
 
-    let server = kernel::server::KernelServer::new(Arc::clone(&coordinator));
+    let server = kernel::server::KernelServer::new(Arc::clone(&kernel));
     server.start(config.channels.clone()).await;
     let shutdown = CancellationToken::new();
 
@@ -117,7 +114,7 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
         *guard = Some(shutdown.clone());
     }
 
-    let _signal_handle = kernel::daemon_signal::spawn_signal_listener(shutdown.clone());
+    let _signal_handle = kernel::utils::signal::spawn_signal_listener(shutdown.clone());
 
     // Write PID file
     let pid = std::process::id();

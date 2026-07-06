@@ -219,8 +219,14 @@ export async function sendMessageBlocks(
   return invokeCmd("send_message_blocks", { session_id: session_id, blocks });
 }
 
-export async function subscribe(session_id: string): Promise<void> {
-  return invokeCmd("subscribe", { session_id: session_id });
+export async function subscribe(
+  session_id: string,
+  after_event_id?: string | null,
+): Promise<void> {
+  return invokeCmd("subscribe", {
+    session_id: session_id,
+    after_event_id: after_event_id ?? null,
+  });
 }
 
 export async function unsubscribe(session_id: string): Promise<void> {

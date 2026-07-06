@@ -37,7 +37,7 @@
 | **Extensions 实现接口** | extensions crate 依赖 kernel，实现 `Extension` trait |
 | **无循环依赖** | kernel 不引用 extensions 中的任何类型 |
 | **依赖注入** | 具体扩展通过 `build_coordinator` / `init_coordinator` 的参数注入 |
-| **Coordinator 做路由** | 扩展需要调用 kernel 的会话系统时，通过 `MessageRouter` trait 间接访问 |
+| **Kernel 做路由** | 扩展需要调用 kernel 的会话系统时，通过 `MessageRouter` trait 间接访问 |
 
 ### 2.2 目标架构
 
@@ -64,7 +64,7 @@
 │  ── `Extension` trait                                          │
 │  ── `MessageRouter` trait                                        │
 │  ── `channels` 模块 (types + traits + ChannelError)             │
-│  ── `Coordinator` (impl `MessageRouter`)                         │
+│  ── `Kernel` (impl `MessageRouter`)                         │
 │  ── `StorageSet` (含 `SqliteChannelStore`)                     │
 │  ── 不含任何平台专用库                                           │
 └─────────────────────────────────────────────────────────────────┘
@@ -89,7 +89,7 @@ use crate::channels::{ChannelInfo, PlatformAdapter};
 use crate::types::{Result, SessionId};
 
 /// 扩展的标准接口。
-/// 每个扩展实例由应用层创建，注入到 `Coordinator` 中。
+/// 每个扩展实例由应用层创建，注入到 `Kernel` 中。
 #[async_trait]
 pub trait Extension: Send + Sync {
     /// 扩展名称，用于日志和调试。
@@ -120,7 +120,7 @@ pub trait Extension: Send + Sync {
 
 ### 3.2 `MessageRouter` trait
 
-定义在 `kernel/src/extension.rs`。这是 kernel 暴露给扩展的**单向窗口**：扩展可以调用 kernel 的会话管理 API，但不需要了解 `Coordinator` 的全貌。
+定义在 `kernel/src/extension.rs`。这是 kernel 暴露给扩展的**单向窗口**：扩展可以调用 kernel 的会话管理 API，但不需要了解 `Kernel` 的全貌。
 
 ```rust
 use crate::app::coordinator::CreateSessionInput;
@@ -129,8 +129,8 @@ use crate::types::{ContentBlock, Result, SessionId};
 use tokio::sync::{broadcast, RwLock};
 use std::sync::Arc;
 
-/// 会话管理接口，由 `Coordinator` 实现。
-/// 扩展通过此 trait 与 kernel 的会话系统交互，无需依赖 `Coordinator` 本身。
+/// 会话管理接口，由 `Kernel` 实现。
+/// 扩展通过此 trait 与 kernel 的会话系统交互，无需依赖 `Kernel` 本身。
 #[async_trait]
 pub trait MessageRouter: Send + Sync {
     /// 创建新会话，返回 session ID。
@@ -154,17 +154,17 @@ pub trait MessageRouter: Send + Sync {
 }
 ```
 
-#### 为什么不用 `Coordinator` 直接当接口？
+#### 为什么不用 `Kernel` 直接当接口？
 
-- `Coordinator` 包含大量内核内部方法（cron、project、storage 等），如果扩展持有 `Coordinator` 的强引用，会破坏抽象边界。
-- `MessageRouter` 只暴露扩展需要的**最小接口**，未来添加新扩展平台时无需修改 `Coordinator` 的签名。
+- `Kernel` 包含大量内核内部方法（cron、project、storage 等），如果扩展持有 `Kernel` 的强引用，会破坏抽象边界。
+- `MessageRouter` 只暴露扩展需要的**最小接口**，未来添加新扩展平台时无需修改 `Kernel` 的签名。
 - 避免循环依赖：`extensions` 依赖 `kernel` 的 `Extension` 和 `MessageRouter` trait，`kernel` 不依赖 `extensions`。
 
-### 3.3 `Coordinator` 实现 `MessageRouter`
+### 3.3 `Kernel` 实现 `MessageRouter`
 
 ```rust
 #[async_trait]
-impl MessageRouter for Coordinator {
+impl MessageRouter for Kernel {
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {
         self.create_session(input).await
     }
@@ -315,7 +315,7 @@ pub async fn build_coordinator(
     config: &Config,
     enable_cron: bool,
     start_channels: bool,
-) -> Result<Arc<Coordinator>>;
+) -> Result<Arc<Kernel>>;
 ```
 
 **变更后：**
@@ -324,12 +324,12 @@ pub async fn build_coordinator(
     config: &Config,
     enable_cron: bool,
     extension: Option<Arc<dyn Extension>>,
-) -> Result<Arc<Coordinator>>;
+) -> Result<Arc<Kernel>>;
 ```
 
 **变更原因：**
 - `start_channels: bool` 的语义被扩展的注入所取代。应用层负责创建并传入扩展实例。
-- kernel 本身不再关心 channels 是否启动，只负责将扩展注册到 `Coordinator` 中。
+- kernel 本身不再关心 channels 是否启动，只负责将扩展注册到 `Kernel` 中。
 
 ### 6.2 `init_coordinator` 签名变更
 
@@ -339,7 +339,7 @@ pub async fn init_coordinator(
     config_path: Option<&PathBuf>,
     enable_cron: bool,
     start_channels: bool,
-) -> Result<(Arc<Coordinator>, Config, Option<PathBuf>)>;
+) -> Result<(Arc<Kernel>, Config, Option<PathBuf>)>;
 ```
 
 **变更后：**
@@ -348,14 +348,14 @@ pub async fn init_coordinator(
     config_path: Option<&PathBuf>,
     enable_cron: bool,
     extension: Option<Arc<dyn Extension>>,
-) -> Result<(Arc<Coordinator>, Config, Option<PathBuf>)>;
+) -> Result<(Arc<Kernel>, Config, Option<PathBuf>)>;
 ```
 
-### 6.3 `Coordinator` 结构体字段变更
+### 6.3 `Kernel` 结构体字段变更
 
 **变更前：**
 ```rust
-pub struct Coordinator {
+pub struct Kernel {
     // ...
     pub(crate) channel_manager: Option<Arc<crate::channels::hub::ChannelHub>>,
 }
@@ -363,7 +363,7 @@ pub struct Coordinator {
 
 **变更后：**
 ```rust
-pub struct Coordinator {
+pub struct Kernel {
     // ...
     pub(crate) extension: Option<Arc<dyn Extension>>,
 }
@@ -488,7 +488,7 @@ let coordinator = kernel::build_coordinator(config, false, None).await?;
 **决策**：只暴露 `create_session`、`restore_session`、`get_session`、`send_message`、`subscribe_session_events` 五个方法。
 
 **理由**：
-1. 这是 `ChannelHub` 当前使用的全部 `Coordinator` 方法。
+1. 这是 `ChannelHub` 当前使用的全部 `Kernel` 方法。
 2. 如果未来扩展需要更多方法（如 `fork_session`），可以逐步添加，不会破坏已有接口。
 
 ---
@@ -513,7 +513,7 @@ let coordinator = kernel::build_coordinator(config, false, None).await?;
    - 从 `kernel/src/channels/utils.rs` 移入 `kernel/src/utils/path.rs`
    - 删除 `utils.rs`
 
-5. **修改 `Coordinator`**
+5. **修改 `Kernel`**
    - 替换 `channel_manager` 为 `extension`
    - 实现 `MessageRouter` trait
    - 更新 `list_channels()`、`shutdown()` 相关方法
@@ -533,7 +533,7 @@ let coordinator = kernel::build_coordinator(config, false, None).await?;
    - 定义内部模块组织
    - 导入 `kernel::channels` 类型和 trait
 3. **移动 `ChannelHub` 到 `extensions/src/channels/hub.rs`**
-   - 将内部对 `Coordinator` 的引用改为 `Arc<dyn MessageRouter>`
+   - 将内部对 `Kernel` 的引用改为 `Arc<dyn MessageRouter>`
    - 将内部 `build_adapter` 逻辑改为 `ChannelsExtension` 的构造函数
 4. **移动 `TelegramAdapter` 和 `FeishuAdapter`**
 5. **实现 `extensions/src/lib.rs`**
@@ -561,7 +561,7 @@ let coordinator = kernel::build_coordinator(config, false, None).await?;
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
-| `MessageRouter` 方法不足 | 扩展无法调用某些 Coordinator 方法 | 按需扩展 trait，不会破坏已有实现 |
+| `MessageRouter` 方法不足 | 扩展无法调用某些 Kernel 方法 | 按需扩展 trait，不会破坏已有实现 |
 | 上层应用编译失败 | gui/cli 入口需要修改 | 修改量极小（3 个文件，各 3-5 行），已精确列出 |
 | 测试覆盖率下降 | 部分 channels 相关测试被移动 | 将测试随实现一起迁移到 extensions crate |
 | 第三方使用者（如果有）依赖 `ChannelHub` 类型 | 如果外部 crate 直接引用 `ChannelHub` 类型 | 当前项目无外部使用者，内部修改即可 |
@@ -597,14 +597,14 @@ let coordinator = kernel::build_coordinator(config, false, None).await?;
 
 ```diff
   // kernel::build_coordinator
-- pub async fn build_coordinator(config, enable_cron, start_channels) -> Result<Arc<Coordinator>>
-+ pub async fn build_coordinator(config, enable_cron, extension: Option<Arc<dyn Extension>>) -> Result<Arc<Coordinator>>
+- pub async fn build_coordinator(config, enable_cron, start_channels) -> Result<Arc<Kernel>>
++ pub async fn build_coordinator(config, enable_cron, extension: Option<Arc<dyn Extension>>) -> Result<Arc<Kernel>>
 
   // kernel::init_coordinator
 - pub async fn init_coordinator(config_path, enable_cron, start_channels) -> Result<...>
 + pub async fn init_coordinator(config_path, enable_cron, extension) -> Result<...>
 
-  // Coordinator::channel_manager()
+  // Kernel::channel_manager()
 - pub fn channel_manager(&self) -> Option<Arc<ChannelHub>>
 + pub fn extension(&self) -> Option<Arc<dyn Extension>>
 

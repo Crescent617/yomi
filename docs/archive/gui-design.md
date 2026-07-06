@@ -44,7 +44,7 @@ A cross-platform desktop/mobile GUI for Yomi built on **Tauri v2**, **Svelte 5**
 │                   │ IPC (Tauri Commands + Events)   │
 │  ┌────────────────┴────────────────────────────────┐  │
 │  │  Rust Bridge (Tauri Commands)                    │  │
-│  │  - RemoteCoordinator: reuses kernel::client directly │  │
+│  │  - RemoteKernel: reuses kernel::client directly │  │
 │  │  - EventBridge: forwards daemon events to FE   │  │
 │  │  - StateManager: local app state (window, theme) │  │
 │  └────────────────┬────────────────────────────────┘  │
@@ -54,7 +54,7 @@ A cross-platform desktop/mobile GUI for Yomi built on **Tauri v2**, **Svelte 5**
 ┌───────────────────┴─────────────────────────────────────┐
 │  Yomi Kernel Daemon (existing, unchanged)                 │
 │  - KernelServer (wire.rs / server/mod.rs)                │
-│  - Coordinator (app/coordinator.rs)                      │
+│  - Kernel (app/coordinator.rs)                      │
 │  - SQLite sessions, checkpoint rewind, goal mode...      │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -63,7 +63,7 @@ A cross-platform desktop/mobile GUI for Yomi built on **Tauri v2**, **Svelte 5**
 
 The GUI is a **separate workspace crate** at `crates/gui/`. It depends on `yomi-kernel` as a path dependency and contains both the Tauri Rust backend and the Svelte frontend.
 
-**Key insight**: The `yomi-kernel` crate **already exports a full IPC client** (`RemoteCoordinator` in `kernel::client`). The GUI Rust layer does NOT reimplement the Wire Protocol — it simply wraps the existing `RemoteCoordinator` in Tauri commands.
+**Key insight**: The `yomi-kernel` crate **already exports a full IPC client** (`RemoteKernel` in `kernel::client`). The GUI Rust layer does NOT reimplement the Wire Protocol — it simply wraps the existing `RemoteKernel` in Tauri commands.
 
 ```
 crates/gui/
@@ -75,14 +75,14 @@ crates/gui/
 │   └── src/
 │       ├── main.rs             # Tauri builder + mobile setup
 │       ├── lib.rs
-│       ├── state.rs            # AppState: holds Arc<RemoteCoordinator>
+│       ├── state.rs            # AppState: holds Arc<RemoteKernel>
 │       ├── terminal/
 │       │   ├── mod.rs
 │       │   ├── session.rs      # TerminalSession (portable-pty)
 │       │   └── manager.rs      # Multi-tab terminal manager
 │       └── commands/
 │           ├── mod.rs
-│           ├── session.rs      # thin wrappers around CoordinatorApi
+│           ├── session.rs      # thin wrappers around KernelApi
 │           ├── chat.rs
 │           ├── checkpoint.rs
 │           ├── skill.rs
@@ -132,16 +132,16 @@ custom-protocol = ["tauri/custom-protocol"]
 ```rust
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use yomi_kernel::client::RemoteCoordinator;
+use yomi_kernel::client::RemoteKernel;
 use yomi_kernel::transport::SocketAddr;
 
 pub struct AppState {
-    pub coordinator: Arc<Mutex<RemoteCoordinator>>,
+    pub coordinator: Arc<Mutex<RemoteKernel>>,
 }
 
 impl AppState {
     pub async fn new(addr: SocketAddr) -> Self {
-        let coordinator = RemoteCoordinator::connect(&addr).await
+        let coordinator = RemoteKernel::connect(&addr).await
             .expect("Failed to connect to kernel daemon");
         Self {
             coordinator: Arc::new(Mutex::new(coordinator)),
@@ -154,7 +154,7 @@ impl AppState {
 
 ```rust
 use tauri::State;
-use yomi_kernel::client::CoordinatorApi;
+use yomi_kernel::client::KernelApi;
 use yomi_kernel::permissions::Level;
 
 #[tauri::command]
@@ -1337,7 +1337,7 @@ yomi/                         # workspace root
 │       │   └── src/
 │       │       ├── main.rs
 │       │       ├── lib.rs
-│       │       ├── state.rs                # AppState: Arc<Mutex<RemoteCoordinator>>
+│       │       ├── state.rs                # AppState: Arc<Mutex<RemoteKernel>>
 │       │       ├── terminal/
 │       │       │   ├── mod.rs
 │       │       │   ├── session.rs
@@ -1504,12 +1504,12 @@ resolver = "2"
 │   └── src/
 │       ├── main.rs
 │       ├── lib.rs
-│       ├── state.rs                        # AppState: Arc<Mutex<RemoteCoordinator>>
+│       ├── state.rs                        # AppState: Arc<Mutex<RemoteKernel>>
 │       ├── terminal/                       # PTY management
 │       │   ├── mod.rs
 │       │   ├── session.rs                  # TerminalSession struct
 │       │   └── manager.rs                  # Multi-tab terminal manager
-│       └── commands/                       # thin Tauri wrappers around CoordinatorApi
+│       └── commands/                       # thin Tauri wrappers around KernelApi
 │           ├── mod.rs
 │           ├── session.rs
 │           ├── chat.rs
@@ -1528,7 +1528,7 @@ resolver = "2"
 │       │   ├── skill.rs
 │       │   ├── system.rs
 │       │   └── terminal.rs                 # terminal_spawn, write, resize, kill
-│       └── state.rs                        # AppState: Arc<Mutex<RemoteCoordinator>>
+│       └── state.rs                        # AppState: Arc<Mutex<RemoteKernel>>
 ├── static/
 │   └── favicon.png
 ├── vite.config.ts
@@ -1609,7 +1609,7 @@ tokio = { version = "1", features = ["process", "io-util"] }
 
 ### Phase 1: Bridge & Chat (Week 1-2)
 - [ ] Tauri v2 project scaffold with Svelte 5 + Tailwind v4
-- [ ] Rust `RemoteCoordinator` connection: reuse `kernel::client` directly
+- [ ] Rust `RemoteKernel` connection: reuse `kernel::client` directly
 - [ ] Frontend `api.ts`: type-safe wrappers around all Tauri commands
 - [ ] Global event listener: route `kernel:event` directly into reactive state
 - [ ] **Chat page**: MessageList, ChatInput, basic AssistantBubble
@@ -1680,9 +1680,9 @@ tokio = { version = "1", features = ["process", "io-util"] }
 
 ## Appendix: Wire Protocol Reuse
 
-The `yomi-kernel` crate already exports a production-grade IPC client (`RemoteCoordinator` in `kernel::client`). The GUI Rust layer reuses it directly — no new Wire Protocol client is written.
+The `yomi-kernel` crate already exports a production-grade IPC client (`RemoteKernel` in `kernel::client`). The GUI Rust layer reuses it directly — no new Wire Protocol client is written.
 
-**What the GUI gets for free** (from `RemoteCoordinator`):
+**What the GUI gets for free** (from `RemoteKernel`):
 
 | Feature | How it works |
 |---|---|
@@ -1697,7 +1697,7 @@ The `yomi-kernel` crate already exports a production-grade IPC client (`RemoteCo
 
 ```rust
 use tauri::State;
-use yomi_kernel::client::CoordinatorApi;
+use yomi_kernel::client::KernelApi;
 
 #[tauri::command]
 pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo>, String> {
@@ -1707,11 +1707,11 @@ pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionInfo
 ```
 
 The only "new" Rust code in the GUI crate is:
-- **`state.rs`**: holds `Arc<Mutex<RemoteCoordinator>>` in Tauri managed state
-- **`commands/`**: Tauri command wrappers that call `CoordinatorApi` methods
+- **`state.rs`**: holds `Arc<Mutex<RemoteKernel>>` in Tauri managed state
+- **`commands/`**: Tauri command wrappers that call `KernelApi` methods
 - **`terminal/`**: `portable-pty` integration (not in kernel crate, legitimately new)
 - **Event bridge**: converts `broadcast::Receiver<Event>` → Tauri `Emitter` for frontend push
 
-No Wire Protocol framing, no frame parsing, no heartbeat logic, no reconnect handling — all inherited from `yomi-kernel::client::RemoteCoordinator`.
+No Wire Protocol framing, no frame parsing, no heartbeat logic, no reconnect handling — all inherited from `yomi-kernel::client::RemoteKernel`.
 
 The event-forwarding channel uses `tokio::mpsc` internally, and a Tauri-managed thread emits to the frontend via `app_handle.emit("kernel:event", payload)`.

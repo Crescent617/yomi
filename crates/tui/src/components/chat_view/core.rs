@@ -40,6 +40,31 @@ pub enum ToolStatus {
     Cancelled,
 }
 
+/// Subagent execution status
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Real-time state of a running subagent, displayed inline inside its parent tool card.
+#[derive(Debug, Clone)]
+pub struct SubagentState {
+    pub session_id: String,
+    pub description: String,
+    pub status: SubagentStatus,
+    /// Accumulated events from the subagent (chunks, tool calls, lifecycle).
+    pub events: Vec<kernel::event::Event>,
+    /// Whether the inline detail view is folded.
+    pub folded: bool,
+    /// Accumulated prompt tokens across all `TokenUsage` events.
+    pub total_prompt_tokens: u32,
+    /// Accumulated completion tokens across all `TokenUsage` events.
+    pub total_completion_tokens: u32,
+}
+
 /// Result of handling a mouse event
 #[derive(Debug)]
 pub enum MouseAction {
@@ -57,6 +82,7 @@ pub enum MouseAction {
 
 /// A chat message in history
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum HistoryMessage {
     User(Vec<ContentBlock>),
     Assistant {
@@ -77,6 +103,8 @@ pub enum HistoryMessage {
         parsed_args: Option<serde_json::Value>,
         elapsed_ms: Option<u64>,
         content_blocks: Vec<ToolOutputBlock>,
+        /// Real-time subagent progress, if this tool is an `agent` call.
+        subagent: Option<SubagentState>,
     },
     Error(String),
     /// UI notice (e.g. reconnected to daemon). Not an LLM message role.
@@ -334,8 +362,94 @@ impl ChatView {
             parsed_args,
             elapsed_ms: None,
             content_blocks: Vec::new(),
+            subagent: None,
         });
         self.push_new_msg_cache();
+    }
+
+    /// Initialize a [`SubagentState`] on an existing `Agent` tool message.
+    pub fn init_subagent(&mut self, parent_tool_id: &str, session_id: String, description: String) {
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
+            if let HistoryMessage::Tool {
+                tool_id, subagent, ..
+            } = msg
+            {
+                if tool_id == parent_tool_id {
+                    *subagent = Some(SubagentState {
+                        session_id,
+                        description,
+                        status: SubagentStatus::Running,
+                        events: Vec::new(),
+                        folded: !self.expand_all,
+                        total_prompt_tokens: 0,
+                        total_completion_tokens: 0,
+                    });
+                    self.invalidate_msg_cache(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Append an event to an existing [`SubagentState`].
+    pub fn update_subagent(&mut self, parent_tool_id: &str, event: kernel::event::Event) {
+        for (i, msg) in self.messages.iter_mut().enumerate().rev() {
+            if let HistoryMessage::Tool {
+                tool_id,
+                subagent: Some(ref mut sa),
+                ..
+            } = msg
+            {
+                if tool_id == parent_tool_id {
+                    if let kernel::event::Event::Agent(kernel::event::AgentEvent::Lifecycle {
+                        state: kernel::event::AgentStatus::Stopped { ref reason },
+                        ..
+                    }) = event
+                    {
+                        sa.status = match reason {
+                            kernel::event::StopReason::Completed { .. } => {
+                                SubagentStatus::Completed
+                            }
+                            kernel::event::StopReason::Cancelled { .. } => {
+                                SubagentStatus::Cancelled
+                            }
+                            _ => SubagentStatus::Failed,
+                        };
+                    }
+                    if let kernel::event::Event::Model(kernel::event::ModelEvent::TokenUsage {
+                        prompt_tokens,
+                        completion_tokens,
+                        ..
+                    }) = event
+                    {
+                        sa.total_prompt_tokens += prompt_tokens;
+                        sa.total_completion_tokens += completion_tokens;
+                    }
+                    sa.events.push(event);
+                    self.invalidate_msg_cache(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Mark a subagent as finalized (when the parent `ToolEvent::End` arrives).
+    pub fn finalize_subagent(&mut self, parent_tool_id: &str) {
+        for msg in self.messages.iter_mut().rev() {
+            if let HistoryMessage::Tool {
+                tool_id,
+                subagent: Some(ref mut sa),
+                ..
+            } = msg
+            {
+                if tool_id == parent_tool_id {
+                    if matches!(sa.status, SubagentStatus::Running) {
+                        sa.status = SubagentStatus::Completed;
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     pub fn complete_tool(
@@ -1396,6 +1510,31 @@ impl Component for ChatView {
             attr::CLEAR_QUEUED_MESSAGE => {
                 self.clear_queued_message();
             }
+            attr::INIT_SUBAGENT => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let parent_tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    let session_id = parts.get(1).map_or(String::new(), |s| (*s).to_string());
+                    let description = parts.get(2).map_or(String::new(), |s| (*s).to_string());
+                    self.init_subagent(&parent_tool_id, session_id, description);
+                }
+            }
+            attr::UPDATE_SUBAGENT => {
+                if let AttrValue::String(text) = value {
+                    let parts: Vec<&str> = text.split('\x00').collect();
+                    let parent_tool_id = parts.first().map_or(String::new(), |s| (*s).to_string());
+                    if let Some(json) = parts.get(1) {
+                        if let Ok(event) = serde_json::from_str::<kernel::event::Event>(json) {
+                            self.update_subagent(&parent_tool_id, event);
+                        }
+                    }
+                }
+            }
+            attr::FINALIZE_SUBAGENT => {
+                if let AttrValue::String(parent_tool_id) = value {
+                    self.finalize_subagent(&parent_tool_id);
+                }
+            }
             _ => {}
         }
     }
@@ -1627,3 +1766,7 @@ fn display_col_to_char_idx(text: &str, start_byte: usize, end_byte: usize, col: 
 
     char_count
 }
+
+#[cfg(test)]
+#[path = "core_test.rs"]
+mod tests;

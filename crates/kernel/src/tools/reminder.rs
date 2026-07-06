@@ -78,9 +78,19 @@ impl Tool for ReminderTool {
         let _tool_call_id = ctx.tool_call_id.to_string();
         let message_for_reminder = message.clone();
 
-        // Spawn a background task to deliver the reminder
+        let cancel = ctx.cancel_token.clone();
         tokio::spawn(async move {
-            sleep(Duration::from_secs(delay)).await;
+            if let Some(c) = cancel {
+                tokio::select! {
+                    () = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                    () = c.cancelled() => {
+                        tracing::debug!("Reminder cancelled before delivery");
+                        return;
+                    }
+                }
+            } else {
+                sleep(Duration::from_secs(delay)).await;
+            }
 
             // Send reminder as a task result to wake up the agent
             let reminder = format!("Reminder (after {delay}s): {message_for_reminder}");
