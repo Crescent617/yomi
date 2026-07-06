@@ -102,6 +102,11 @@
 
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
+    // 优先使用直接从 tool_call_delta 来的状态（即使模型前面生成了文字）
+    if (session?.streaming_tool_name) {
+      return { tool_name: session.streaming_tool_name };
+    }
+
     if (session?.phase !== "streaming" && session?.phase !== "executing_tool")
       return null;
 
@@ -133,9 +138,12 @@
       {#if session?.phase === "streaming"}
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
       {:else if session?.phase === "executing_tool"}
-        <Zap size={12} class="animate-pulse text-amber-500 shrink-0" />
+        <Zap
+          size={12}
+          class="animate-breathe text-sky-500 shrink-0"
+        />
       {:else if session?.phase === "compacting"}
-        <Database size={12} class="animate-spin text-amber-500 shrink-0" />
+        <Database size={12} class="animate-spin text-sky-500 shrink-0" />
       {:else if streamingTokens > 0}
         <CheckCircle2 size={12} class="text-green-500 shrink-0" />
       {/if}
@@ -153,7 +161,7 @@
       {/if}
 
       {#if currentTool}
-        <span class="text-muted-foreground/70 truncate"
+        <span class="text-sky-500 font-medium truncate"
           >· calling {currentTool.tool_name}</span
         >
       {:else if session?.phase === "streaming"}
@@ -180,3 +188,21 @@
     </div>
   </div>
 {/if}
+
+<style>
+  @keyframes breathe {
+    0%, 100% {
+      opacity: 1;
+      filter: drop-shadow(0 0 2px rgba(14, 165, 233, 0.4));
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.5;
+      filter: drop-shadow(0 0 6px rgba(14, 165, 233, 0.9));
+      transform: scale(1.15);
+    }
+  }
+  :global(.animate-breathe) {
+    animation: breathe 1.5s ease-in-out infinite;
+  }
+</style>

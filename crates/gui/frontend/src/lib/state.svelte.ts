@@ -194,6 +194,8 @@ export interface SessionState {
     completion_tokens: number;
     total_tokens: number;
   };
+  /** 当前流式接收的工具调用名称，由 tool_call_delta 事件设置 */
+  streaming_tool_name?: string;
   git_info?: GitInfo | null;
   goal?: { description: string; status: string } | null;
   browserUrl?: string;
@@ -1010,6 +1012,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const content = chunk.content;
 
     if (content?.text) {
+      // 收到文本内容，说明模型在生成文字，不是 calling tool
+      session.streaming_tool_name = undefined;
       const text = content.text;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
@@ -1031,6 +1035,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       streamingMessages[session.id] = buf;
       return true;
     } else if (content?.thinking) {
+      // 收到 thinking 内容，说明模型在生成文字，不是 calling tool
+      session.streaming_tool_name = undefined;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
       if (
@@ -1059,6 +1065,9 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     return true;
   } else if (event.tool_call_delta) {
     const delta = event.tool_call_delta;
+    if (delta.tool_name) {
+      session.streaming_tool_name = delta.tool_name;
+    }
     const buf = streamingMessages[session.id] ?? [];
     const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
     let botMsg: BotMessage;
@@ -1110,6 +1119,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     return true;
   } else if (event.completed) {
     // Streaming chunks finished — merge buffer with dedup.
+    session.streaming_tool_name = undefined;
     const buf = streamingMessages[session.id] ?? [];
     if (buf.length > 0) {
       const seen = new Set(session.messages.map((m) => m.id));
@@ -1122,6 +1132,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     return true;
   } else if (event.error) {
     const err = event.error;
+    session.streaming_tool_name = undefined;
     showNotification(`Model error: ${err.error}`, "error", 3000);
     return false;
   } else if (event.request) {
@@ -1157,6 +1168,7 @@ function maybeRefreshGitInfo(session: SessionState) {
 
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
+    session.streaming_tool_name = undefined;
     const start = event.start;
     const msg = findMessageById(session, start.message_id);
     if (msg && msg.type === "tool") {
@@ -1262,10 +1274,12 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     if (state === "running") {
       session.phase = "streaming";
       session.is_running = true;
+      session.streaming_tool_name = undefined;
       return true;
     } else if (typeof state === "object" && state.stopped) {
       session.phase = "idle";
       session.is_running = false;
+      session.streaming_tool_name = undefined;
       const buf = streamingMessages[session.id] ?? [];
       if (buf.length > 0) {
         // 基于 ID 去重：跳过已存在于 session.messages 中的 streaming buffer 项。
