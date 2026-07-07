@@ -132,7 +132,6 @@
               output: msg.output,
               elapsed_ms: msg.elapsed_ms,
               subagent_session_id: msg.subagent_session_id,
-              folded: true,
             }}
           />
         {/if}
