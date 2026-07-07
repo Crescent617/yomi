@@ -190,7 +190,7 @@ impl Provider for AnthropicProvider {
         let url = if config.endpoint.is_empty() {
             "https://api.anthropic.com/v1/messages".to_string()
         } else {
-            format!("{}/v1/messages", config.endpoint.trim_end_matches('/'))
+            format!("{}/messages", config.endpoint.trim_end_matches('/'))
         };
 
         tracing::debug!(
@@ -243,13 +243,21 @@ impl Provider for AnthropicProvider {
             stream: true,
             temperature: config.temperature,
             thinking: None,
+            output_config: None,
         };
 
         // Enable thinking if configured
         if config.thinking.enabled {
             request_body.thinking = Some(AnthropicThinking {
-                type_: "enabled".to_string(),
+                type_: "adaptive".to_string(),
                 budget_tokens: config.thinking.budget_tokens,
+            });
+        }
+
+        // Set output_config effort if configured
+        if let Some(ref effort) = config.thinking.effort {
+            request_body.output_config = Some(AnthropicOutputConfig {
+                effort: effort.clone(),
             });
         }
 
@@ -368,6 +376,7 @@ struct AnthropicStreamState {
     accumulated_text: String,
     accumulated_thinking: String,
     input_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
     /// API response ID (from `message_start` event)
     response_id: Option<String>,
     /// Stop reason from `message_delta` (e.g., "`end_turn`", "`max_tokens`", "`stop_sequence`")
@@ -387,6 +396,7 @@ impl AnthropicStreamState {
             accumulated_text: String::new(),
             accumulated_thinking: String::new(),
             input_tokens: None,
+            cache_read_input_tokens: None,
             response_id: None,
             stop_reason: None,
         }
@@ -401,8 +411,9 @@ impl AnthropicStreamState {
 
         match event {
             AnthropicStreamEvent::MessageStart { message } => {
-                // Store input tokens from message_start event
+                // Store input tokens and cache read tokens from message_start event
                 self.input_tokens = Some(message.usage.input_tokens);
+                self.cache_read_input_tokens = Some(message.usage.cache_read_input_tokens);
                 // Capture response ID from message_start
                 self.response_id = Some(message.id);
                 // Capture stop_reason if already set (usually null at start)
@@ -475,14 +486,25 @@ impl AnthropicStreamState {
                     self.stop_reason = Some(reason);
                 }
                 // Extract token usage from the message delta
-                // Note: message_delta contains output_tokens, input_tokens should come from message_start
+                // Note: message_start provides input_tokens and cache tokens;
+                // message_delta provides output_tokens (and may repeat cache info)
                 if let Some(usage) = usage {
-                    let prompt_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
+                    let input_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
+                    let cache_read = self
+                        .cache_read_input_tokens
+                        .unwrap_or(usage.cache_read_input_tokens);
+                    // Total input = uncached input + cache read
+                    let prompt_tokens = input_tokens + cache_read;
+                    let cached_tokens = if cache_read > 0 {
+                        Some(cache_read)
+                    } else {
+                        None
+                    };
                     items.push(ModelStreamItem::TokenUsage(
                         crate::provider::TokenUsage::new(
                             prompt_tokens,
                             usage.output_tokens,
-                            None, // Anthropic doesn't support prompt caching in this format
+                            cached_tokens,
                         ),
                     ));
                 }
@@ -563,6 +585,13 @@ struct AnthropicRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<AnthropicThinking>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<AnthropicOutputConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicOutputConfig {
+    effort: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -702,8 +731,12 @@ struct AnthropicMessageDelta {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicUsage {
+    #[serde(default)]
     input_tokens: u32,
+    #[serde(default)]
     output_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]

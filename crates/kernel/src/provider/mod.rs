@@ -98,7 +98,7 @@ impl Default for ThinkingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            budget_tokens: 1024,
+            budget_tokens: 2048,
             effort: None,
         }
     }
