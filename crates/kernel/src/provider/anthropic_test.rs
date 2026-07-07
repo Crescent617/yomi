@@ -399,6 +399,7 @@ fn test_full_request_serialization() {
         stream: true,
         temperature: None,
         thinking: None,
+        output_config: None,
     };
 
     let json = serde_json::to_string_pretty(&request).unwrap();
@@ -439,7 +440,7 @@ fn test_full_request_serialization() {
 fn test_stream_state_token_usage() {
     let mut state = AnthropicStreamState::new();
 
-    // Simulate message_start with input_tokens
+    // Simulate message_start with input_tokens (no cache)
     let event = r#"{"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":100,"output_tokens":1}}}"#;
     let items = state.process(event).unwrap();
     assert!(items.is_empty()); // No items emitted on message_start
@@ -459,6 +460,42 @@ fn test_stream_state_token_usage() {
             assert_eq!(
                 usage.completion_tokens, 55,
                 "completion_tokens should be from message_delta"
+            );
+            assert_eq!(usage.cached_tokens, None, "no cache tokens");
+        }
+        _ => panic!("Expected TokenUsage item, got {:?}", items[0]),
+    }
+}
+
+#[test]
+fn test_stream_state_token_usage_with_cache() {
+    let mut state = AnthropicStreamState::new();
+
+    // Simulate message_start with cache tokens
+    let event = r#"{"type":"message_start","message":{"id":"msg_456","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":50,"output_tokens":0,"cache_read_input_tokens":100}}}"#;
+    let items = state.process(event).unwrap();
+    assert!(items.is_empty());
+
+    // Simulate message_delta with output_tokens
+    let event = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":30}}"#;
+    let items = state.process(event).unwrap();
+
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        ModelStreamItem::TokenUsage(usage) => {
+            // prompt_tokens = input_tokens + cache_read_input_tokens = 50 + 100 = 150
+            assert_eq!(
+                usage.prompt_tokens, 150,
+                "prompt_tokens should be input_tokens + cache_read_input_tokens"
+            );
+            assert_eq!(
+                usage.completion_tokens, 30,
+                "completion_tokens should be from message_delta"
+            );
+            assert_eq!(
+                usage.cached_tokens,
+                Some(100),
+                "cached_tokens should be cache_read_input_tokens"
             );
         }
         _ => panic!("Expected TokenUsage item, got {:?}", items[0]),
