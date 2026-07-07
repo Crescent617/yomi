@@ -55,7 +55,7 @@ export interface Tab {
 export interface ToolCall {
   id: string;
   tool_name: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   arguments?: string;
   parsed_args?: Record<string, unknown>;
   output?: string;
@@ -63,7 +63,6 @@ export interface ToolCall {
   progress?: string;
   tokens?: number;
   elapsed_ms?: number;
-  folded?: boolean;
   subagent_session_id?: string;
 }
 
@@ -1497,10 +1496,4 @@ function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
     return true;
   }
   return false;
-}
-
-export function updateConnectionStatus(
-  status: "connected" | "disconnected" | "connecting",
-) {
-  appState.connectionStatus = status;
 }

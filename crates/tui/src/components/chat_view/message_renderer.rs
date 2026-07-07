@@ -27,6 +27,44 @@ use kernel::tools::{
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
 
+/// Line-level diff: returns a list of (type, text) pairs.
+fn diff_lines(old_str: &str, new_str: &str) -> Vec<(&'static str, String)> {
+    let old_lines: Vec<&str> = old_str.split('\n').collect();
+    let new_lines: Vec<&str> = new_str.split('\n').collect();
+    let m = old_lines.len();
+    let n = new_lines.len();
+
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 1..=m {
+        for j in 1..=n {
+            if old_lines[i - 1] == new_lines[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
+            result.push(("context", old_lines[i - 1].to_string()));
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            result.push(("add", new_lines[j - 1].to_string()));
+            j -= 1;
+        } else {
+            result.push(("del", old_lines[i - 1].to_string()));
+            i -= 1;
+        }
+    }
+    result.reverse();
+    result
+}
+
 #[allow(clippy::cast_precision_loss)]
 pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
     match msg {
@@ -306,29 +344,89 @@ fn render_tool(
         // Show tool arguments if available
         if let Some(args) = arguments {
             if !args.is_empty() {
-                lines.push(Arc::new(Line::from(vec![
-                    Span::styled(
-                        chars::MSG_INDENT_GUIDE,
-                        Style::default().fg(colors::text_secondary()),
-                    ),
-                    Span::styled(
-                        "Arguments:",
-                        Style::default()
-                            .fg(colors::text_secondary())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ])));
-                for line in args.lines() {
+                if tool_name == EDIT_TOOL_NAME {
+                    // Special diff view for edit tool
+                    let mut diff_rendered = false;
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
+                        if let (Some(old_str), Some(new_str)) = (
+                            parsed["old_str"].as_str(),
+                            parsed["new_str"].as_str(),
+                        ) {
+                            diff_rendered = true;
+                            for (ty, text) in diff_lines(old_str, new_str) {
+                                let (sign, fg) = match ty {
+                                    "add" => ("+", colors::accent_success()),
+                                    "del" => ("−", colors::accent_error()),
+                                    _ => (" ", colors::text_secondary()),
+                                };
+                                lines.push(Arc::new(Line::from(vec![
+                                    Span::styled(
+                                        chars::MSG_INDENT2_GUIDE,
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                    Span::styled(
+                                        format!("{sign} "),
+                                        Style::default().fg(fg),
+                                    ),
+                                    Span::styled(
+                                        preprocess(text),
+                                        Style::default().fg(fg),
+                                    ),
+                                ])));
+                            }
+                        }
+                    }
+                    if !diff_rendered {
+                        lines.push(Arc::new(Line::from(vec![
+                            Span::styled(
+                                chars::MSG_INDENT_GUIDE,
+                                Style::default().fg(colors::text_secondary()),
+                            ),
+                            Span::styled(
+                                "Arguments:",
+                                Style::default()
+                                    .fg(colors::text_secondary())
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ])));
+                        for line in args.lines() {
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled(
+                                    chars::MSG_INDENT2_GUIDE,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
+                                Span::styled(
+                                    preprocess(line),
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
+                            ])));
+                        }
+                    }
+                } else {
                     lines.push(Arc::new(Line::from(vec![
                         Span::styled(
-                            chars::MSG_INDENT2_GUIDE,
+                            chars::MSG_INDENT_GUIDE,
                             Style::default().fg(colors::text_secondary()),
                         ),
                         Span::styled(
-                            preprocess(line),
-                            Style::default().fg(colors::text_secondary()),
+                            "Arguments:",
+                            Style::default()
+                                .fg(colors::text_secondary())
+                                .add_modifier(Modifier::BOLD),
                         ),
                     ])));
+                    for line in args.lines() {
+                        lines.push(Arc::new(Line::from(vec![
+                            Span::styled(
+                                chars::MSG_INDENT2_GUIDE,
+                                Style::default().fg(colors::text_secondary()),
+                            ),
+                            Span::styled(
+                                preprocess(line),
+                                Style::default().fg(colors::text_secondary()),
+                            ),
+                        ])));
+                    }
                 }
             }
         }
@@ -530,8 +628,17 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
             .take(8)
             .map(|ev| match ev {
                 kernel::event::Event::Tool(kernel::event::ToolEvent::Start {
-                    tool_name, ..
-                }) => format!(" {tool_name}"),
+                    tool_name,
+                    arguments,
+                    ..
+                }) => {
+                    let target = extract_tool_target(tool_name, arguments.as_deref());
+                    if let Some(t) = target {
+                        format!("{tool_name} {t}")
+                    } else {
+                        tool_name.to_string()
+                    }
+                }
                 kernel::event::Event::Tool(kernel::event::ToolEvent::End {
                     tool_name,
                     is_error,

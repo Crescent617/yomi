@@ -160,18 +160,18 @@ export function diffLines(
 
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      result.unshift({ type: "context", text: oldLines[i - 1] });
+      result.push({ type: "context", text: oldLines[i - 1] });
       i--;
       j--;
     } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      result.unshift({ type: "add", text: newLines[j - 1] });
+      result.push({ type: "add", text: newLines[j - 1] });
       j--;
     } else {
-      result.unshift({ type: "del", text: oldLines[i - 1] });
+      result.push({ type: "del", text: oldLines[i - 1] });
       i--;
     }
   }
-
+  result.reverse();
   return result;
 }
 
