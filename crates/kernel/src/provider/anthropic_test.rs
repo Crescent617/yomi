@@ -437,6 +437,40 @@ fn test_full_request_serialization() {
 }
 
 #[test]
+fn test_output_config_serialization() {
+    let request = AnthropicRequest {
+        model: "claude-sonnet-4-20250514".to_string(),
+        max_tokens: Some(8192),
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: vec![AnthropicContent::Text {
+                text: "Hello".to_string(),
+            }],
+        }],
+        system: None,
+        tools: None,
+        stream: true,
+        temperature: None,
+        thinking: None,
+        output_config: Some(AnthropicOutputConfig {
+            effort: "high".to_string(),
+        }),
+    };
+
+    let json = serde_json::to_string_pretty(&request).unwrap();
+    println!("Request with output_config: {json}");
+
+    assert!(
+        json.contains("\"output_config\""),
+        "Should contain output_config"
+    );
+    assert!(
+        json.contains("\"effort\": \"high\""),
+        "Should contain effort: high"
+    );
+}
+
+#[test]
 fn test_stream_state_token_usage() {
     let mut state = AnthropicStreamState::new();
 

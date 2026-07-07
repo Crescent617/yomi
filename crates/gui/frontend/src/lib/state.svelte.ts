@@ -934,7 +934,7 @@ type KernelEvent =
   | { user: UserEvent };
 
 export function handleEvent(session_id: string, event_id: string | undefined, rawEvent: unknown) {
-  let session = getSession(session_id);
+  const session = getSession(session_id);
   if (!session) return;
 
   const ev = rawEvent as KernelEvent;
@@ -949,9 +949,6 @@ export function handleEvent(session_id: string, event_id: string | undefined, ra
   } else if ("user" in ev) {
     handleUserEvent(session, ev.user);
   }
-
-  // Re-fetch session in case an event handler replaced it in sessionState.sessions
-  session = getSession(session_id) ?? session;
 }
 
 function findMessageById(

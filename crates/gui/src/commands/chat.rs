@@ -57,7 +57,7 @@ pub async fn subscribe(
 ) -> Result<(), GuiError> {
     let coord = state.kernel.clone();
     let sid = SessionId::from(session_id.clone());
-    let after = after_event_id.map(|id| kernel::types::EventId::from(id));
+    let after = after_event_id.map(kernel::types::EventId::from);
     let mut rx = match coord.subscribe_session_events(&sid, after.clone()).await {
         Ok(rx) => rx,
         Err(_) => {

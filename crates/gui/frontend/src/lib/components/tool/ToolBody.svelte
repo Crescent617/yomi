@@ -20,7 +20,7 @@
         <span class="font-mono">{editArgs.path}</span>
       </div>
       <div class="rounded border border-black/5 dark:border-white/10 overflow-hidden font-mono text-[11px] leading-relaxed">
-        {#each diffLines(editArgs.old_str, editArgs.new_str) as line}
+        {#each diffLines(editArgs.old_str, editArgs.new_str) as line, i (i)}
           <div class="flex
             {line.type === 'add' ? 'bg-green-50/60 dark:bg-green-950/20' : ''}
             {line.type === 'del' ? 'bg-red-50/60 dark:bg-red-950/20' : ''}"
