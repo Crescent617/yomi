@@ -2,7 +2,7 @@
   import { XCircle, Wrench, Lightbulb } from "lucide-svelte";
   import type { Message } from "../../state.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
-  import ToolBlock from "./ToolBlock.svelte";
+  import ToolBlock from "../tool/ToolBlock.svelte";
 
   let {
     messages,

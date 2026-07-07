@@ -65,7 +65,6 @@ export interface ToolCall {
   elapsed_ms?: number;
   folded?: boolean;
   subagent_session_id?: string;
-  subagent?: SubagentState;
 }
 
 interface BaseMessage {
@@ -100,7 +99,6 @@ export interface ToolMessage extends BaseMessage {
   output: string;
   elapsed_ms?: number;
   subagent_session_id?: string;
-  subagent?: SubagentState;
 }
 
 export interface SystemMessage extends BaseMessage {
@@ -154,14 +152,6 @@ export interface PendingAskUser {
   req_id: string;
   session_id?: string;
   questions: AskQuestion[];
-}
-
-export interface SubagentState {
-  session_id: string;
-  events: { type: string; data: unknown }[];
-  pending_permission: PendingPermission | null;
-  pending_ask_users: PendingAskUser[];
-  is_stopped: boolean;
 }
 
 export interface QueuedInput {
@@ -797,22 +787,6 @@ export function loadSessionMessages(
     if (msg.type === "assistant" && msg.token_usage) {
       latestTokenUsage = msg.token_usage;
       break;
-    }
-  }
-
-  // Preserve runtime subagent state across message reloads
-  const existing = getSession(session_id);
-  if (existing) {
-    const existingSubagent = new Map<string, SubagentState>();
-    for (const m of existing.messages) {
-      if (m.type === "tool" && m.subagent) {
-        existingSubagent.set(m.tool_call_id, m.subagent);
-      }
-    }
-    for (const m of parsedMessages) {
-      if (m.type === "tool" && existingSubagent.has(m.tool_call_id)) {
-        m.subagent = existingSubagent.get(m.tool_call_id);
-      }
     }
   }
 
