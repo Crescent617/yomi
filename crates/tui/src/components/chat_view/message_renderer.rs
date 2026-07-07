@@ -348,10 +348,9 @@ fn render_tool(
                     // Special diff view for edit tool
                     let mut diff_rendered = false;
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
-                        if let (Some(old_str), Some(new_str)) = (
-                            parsed["old_str"].as_str(),
-                            parsed["new_str"].as_str(),
-                        ) {
+                        if let (Some(old_str), Some(new_str)) =
+                            (parsed["old_str"].as_str(), parsed["new_str"].as_str())
+                        {
                             diff_rendered = true;
                             for (ty, text) in diff_lines(old_str, new_str) {
                                 let (sign, fg) = match ty {
@@ -364,14 +363,8 @@ fn render_tool(
                                         chars::MSG_INDENT2_GUIDE,
                                         Style::default().fg(colors::text_secondary()),
                                     ),
-                                    Span::styled(
-                                        format!("{sign} "),
-                                        Style::default().fg(fg),
-                                    ),
-                                    Span::styled(
-                                        preprocess(text),
-                                        Style::default().fg(fg),
-                                    ),
+                                    Span::styled(format!("{sign} "), Style::default().fg(fg)),
+                                    Span::styled(preprocess(text), Style::default().fg(fg)),
                                 ])));
                             }
                         }
@@ -636,7 +629,7 @@ fn render_subagent_inline(sa: &SubagentState, _width: usize) -> Vec<Arc<Line<'st
                     if let Some(t) = target {
                         format!("{tool_name} {t}")
                     } else {
-                        tool_name.to_string()
+                        tool_name.clone()
                     }
                 }
                 kernel::event::Event::Tool(kernel::event::ToolEvent::End {

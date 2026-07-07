@@ -124,12 +124,14 @@ impl AnthropicProvider {
                 }
                 ContentBlock::Thinking {
                     thinking,
-                    signature,
-                } if !thinking.is_empty() => {
-                    // Preserve thinking blocks for conversation continuity
+                    signature: Some(ref sig),
+                } if !thinking.is_empty() && !sig.is_empty() => {
+                    // Preserve thinking blocks for conversation continuity,
+                    // but only if we have a valid signature. Anthropic rejects
+                    // thinking blocks with missing or empty signatures.
                     content.push(AnthropicContent::Thinking {
                         thinking: thinking.clone(),
-                        signature: signature.clone().unwrap_or_default(),
+                        signature: sig.clone(),
                     });
                 }
                 ContentBlock::RedactedThinking { data } => {
@@ -377,10 +379,13 @@ struct AnthropicStreamState {
     accumulated_thinking: String,
     input_tokens: Option<u32>,
     cache_read_input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
     /// API response ID (from `message_start` event)
     response_id: Option<String>,
     /// Stop reason from `message_delta` (e.g., "`end_turn`", "`max_tokens`", "`stop_sequence`")
     stop_reason: Option<String>,
+    /// Whether `TokenUsage` has been emitted
+    token_usage_emitted: bool,
 }
 
 struct PartialToolCall {
@@ -397,8 +402,10 @@ impl AnthropicStreamState {
             accumulated_thinking: String::new(),
             input_tokens: None,
             cache_read_input_tokens: None,
+            output_tokens: None,
             response_id: None,
             stop_reason: None,
+            token_usage_emitted: false,
         }
     }
 
@@ -489,6 +496,8 @@ impl AnthropicStreamState {
                 // Note: message_start provides input_tokens and cache tokens;
                 // message_delta provides output_tokens (and may repeat cache info)
                 if let Some(usage) = usage {
+                    self.output_tokens = Some(usage.output_tokens);
+                    self.token_usage_emitted = true;
                     let input_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
                     let cache_read = self
                         .cache_read_input_tokens
@@ -504,6 +513,22 @@ impl AnthropicStreamState {
                         crate::provider::TokenUsage::new(
                             prompt_tokens,
                             usage.output_tokens,
+                            cached_tokens,
+                        ),
+                    ));
+                } else if self.input_tokens.is_some() {
+                    // message_delta without usage - fallback to stored values
+                    let cache_read = self.cache_read_input_tokens.unwrap_or(0);
+                    let prompt_tokens = self.input_tokens.unwrap_or(0) + cache_read;
+                    let cached_tokens = if cache_read > 0 {
+                        Some(cache_read)
+                    } else {
+                        None
+                    };
+                    items.push(ModelStreamItem::TokenUsage(
+                        crate::provider::TokenUsage::new(
+                            prompt_tokens,
+                            self.output_tokens.unwrap_or(0),
                             cached_tokens,
                         ),
                     ));
@@ -547,6 +572,26 @@ impl AnthropicStreamState {
                 name: tool.name,
                 arguments,
             }));
+        }
+
+        // Emit token usage if never emitted (e.g. message_delta had no usage)
+        if let Some(input_tokens) = self.input_tokens {
+            if !self.token_usage_emitted {
+                let cache_read = self.cache_read_input_tokens.unwrap_or(0);
+                let prompt_tokens = input_tokens + cache_read;
+                let cached_tokens = if cache_read > 0 {
+                    Some(cache_read)
+                } else {
+                    None
+                };
+                items.push(ModelStreamItem::TokenUsage(
+                    crate::provider::TokenUsage::new(
+                        prompt_tokens,
+                        self.output_tokens.unwrap_or(0),
+                        cached_tokens,
+                    ),
+                ));
+            }
         }
 
         // Emit response metadata if we have response_id

@@ -432,15 +432,18 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                         result = self_clone.run_subagent(params) => result,
                     };
                     let steer = match &status {
-                        SubAgentStatus::Completed => {
-                            agent_prefix(&session_id, format!("Task '{description}' completed:\n\n{output}"))
-                        }
-                        SubAgentStatus::Failed(e) => {
-                            agent_prefix(&session_id, format!("Task '{description}' failed:\n\n{output}\n\n[error: {e}]"))
-                        }
-                        SubAgentStatus::Cancelled => {
-                            agent_prefix(&session_id, format!("Task '{description}' cancelled:\n\n{output}\n\n[cancelled]"))
-                        }
+                        SubAgentStatus::Completed => agent_prefix(
+                            &session_id,
+                            format!("Task '{description}' completed:\n\n{output}"),
+                        ),
+                        SubAgentStatus::Failed(e) => agent_prefix(
+                            &session_id,
+                            format!("Task '{description}' failed:\n\n{output}\n\n[error: {e}]"),
+                        ),
+                        SubAgentStatus::Cancelled => agent_prefix(
+                            &session_id,
+                            format!("Task '{description}' cancelled:\n\n{output}\n\n[cancelled]"),
+                        ),
                     };
                     if let Err(e) = self_clone.input_bus.publish(
                         self_clone.parent_session_id.clone(),

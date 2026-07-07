@@ -8,7 +8,6 @@
     openBrowser,
     closeBrowser,
     closeTab,
-    setActiveSession,
     showNotification,
     loadSessionMessages,
     streamingMessages,
