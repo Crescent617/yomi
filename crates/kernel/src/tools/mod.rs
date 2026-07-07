@@ -42,7 +42,7 @@ pub use send_message::{SendMessageTool, SEND_MESSAGE_TOOL_NAME};
 pub use shell::{ShellTool, ShellToolCtx, SHELL_TOOL_NAME};
 pub use skill_load::{SkillTool, SKILL_FILENAME, SKILL_TOOL_NAME};
 pub use sleep::{SleepTool, SLEEP_TOOL_NAME};
-pub use subagent::{SubagentPreset, SubagentTool, SUBAGENT_TOOL_NAME};
+pub use subagent::{SubagentTool, SUBAGENT_TOOL_NAME};
 pub use todo::{TodoTool, TODO_TOOL_NAME};
 pub use update_goal::{UpdateGoalTool, UPDATE_GOAL_TOOL_NAME};
 pub use webfetch::{WebFetchTool, WEBFETCH_TOOL_NAME};
