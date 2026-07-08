@@ -739,9 +739,9 @@ interface AgentEvent {
     max_attempts: number;
     reason: string;
   };
-  rewound?: Record<string, never>;
+  rewound?: null;
   goal_updated?: { description: string; status: string };
-  goal_stopped?: Record<string, never>;
+  goal_stopped?: null;
 }
 
 interface UserEvent {
@@ -1238,12 +1238,11 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       session.pending_ask_users = session.pending_ask_users.toSpliced(idx, 1);
     }
     return true;
-  } else if (event.rewound) {
+  } else if (event.rewound !== undefined) {
     // Clear any streaming buffer since history changed
     streamingMessages[session.id] = [];
     session.phase = "idle";
     session.is_running = false;
-    // Reload messages from backend instead of using event payload
     api
       .getMessages(session.id)
       .then((msgs) => loadSessionMessages(session.id, msgs))
@@ -1260,7 +1259,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       status: event.goal_updated.status,
     };
     return true;
-  } else if (event.goal_stopped) {
+  } else if (event.goal_stopped !== undefined) {
     session.goal = null;
     return true;
   }
