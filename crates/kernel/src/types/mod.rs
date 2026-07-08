@@ -926,5 +926,6 @@ impl From<reqwest::Error> for KernelError {
     }
 }
 
-/// Result type alias for kernel operations
+pub mod session_message;
+pub use session_message::{AssistantMsg, SessionMessage, ToolMsg, UserMsg};
 pub type Result<T> = std::result::Result<T, KernelError>;

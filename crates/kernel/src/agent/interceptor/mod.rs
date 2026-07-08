@@ -18,7 +18,7 @@ pub struct InterceptCtx<'a> {
 /// This provides an extension point for injecting system reminders, context augmentation,
 /// or other message transformations in a pluggable way.
 #[async_trait]
-pub trait UserMessageInterceptor: Send + Sync {
+pub trait UserMsgInterceptor: Send + Sync {
     /// Intercept and possibly modify user message content.
     ///
     /// `ctx` provides access to the session id and full message history.
@@ -27,11 +27,11 @@ pub trait UserMessageInterceptor: Send + Sync {
 
 /// A composite interceptor that runs multiple interceptors in sequence.
 pub struct Interceptors {
-    interceptors: Vec<Arc<dyn UserMessageInterceptor>>,
+    interceptors: Vec<Arc<dyn UserMsgInterceptor>>,
 }
 
 impl Interceptors {
-    pub fn new(interceptors: Vec<Arc<dyn UserMessageInterceptor>>) -> Self {
+    pub fn new(interceptors: Vec<Arc<dyn UserMsgInterceptor>>) -> Self {
         Self { interceptors }
     }
 
@@ -43,7 +43,7 @@ impl Interceptors {
 }
 
 #[async_trait]
-impl UserMessageInterceptor for Interceptors {
+impl UserMsgInterceptor for Interceptors {
     async fn intercept(&self, content: &mut Vec<ContentBlock>, ctx: &InterceptCtx<'_>) {
         for interceptor in &self.interceptors {
             interceptor.intercept(content, ctx).await;

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 8;
+pub const WIRE_PROTOCOL_VERSION: u32 = 9;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +42,6 @@ pub enum ReqMethod {
     },
     RestoreSession {
         session_id: String,
-        tool_blocklist: Vec<String>,
     },
     ForkSession {
         parent_id: String,
@@ -77,7 +76,7 @@ pub enum ReqMethod {
         before: Option<DateTime<Utc>>,
         limit: usize,
     },
-    GetSessionMessages {
+    ListMessages {
         session_id: String,
     },
     GetSession {

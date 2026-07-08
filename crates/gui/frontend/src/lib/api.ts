@@ -233,7 +233,48 @@ export async function unsubscribe(session_id: string): Promise<void> {
   return invokeCmd("unsubscribe", { session_id: session_id });
 }
 
-export async function getMessages(session_id: string): Promise<unknown[]> {
+// SessionMessage types from kernel::list_messages (tagged union via kind)
+export interface SessionMessageUser {
+  kind: "user";
+  id: string;
+  content: TaggedContentBlock[];
+  created_at: string;
+}
+
+export interface SessionMessageAssistant {
+  kind: "assistant";
+  id: string;
+  content: TaggedContentBlock[];
+  tool_calls: { id: string; name: string; arguments: string }[] | null;
+  token_usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  } | null;
+  response_id: string | null;
+  finish_reason: string | null;
+  created_at: string;
+}
+
+export interface SessionMessageTool {
+  kind: "tool";
+  id: string;
+  tool_call_id: string;
+  name: string;
+  args: string;
+  result: TaggedContentBlock[];
+  meta: Record<string, string>;
+  created_at: string;
+}
+
+export type SessionMessage =
+  | SessionMessageUser
+  | SessionMessageAssistant
+  | SessionMessageTool;
+
+export async function getMessages(
+  session_id: string,
+): Promise<SessionMessage[]> {
   return invokeCmd("get_messages", { session_id: session_id });
 }
 

@@ -5,7 +5,6 @@ pub use conductor::Conductor;
 
 use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
 use crate::comms::InputBus;
-use crate::event::{Event, SystemEvent};
 use crate::permission::Level;
 use crate::provider::Provider;
 use crate::storage::usage::{DailyUsage, UsageSummary};
@@ -238,7 +237,7 @@ impl Kernel {
         dir: std::path::PathBuf,
         name: Option<String>,
     ) -> Result<Project> {
-        let abs = std::fs::canonicalize(&dir).unwrap_or(dir);
+        let abs = tokio::fs::canonicalize(&dir).await.unwrap_or(dir);
         let dir_str = abs
             .to_str()
             .ok_or_else(|| SessionError::Other("Invalid project directory path".to_string()))?;
@@ -289,15 +288,6 @@ impl Kernel {
             title: title.clone(),
         };
         let _ = self.notification_bus.send(noti);
-        if let Some(ref bus) = self.agent_shared.event_bus {
-            let _ = bus.handle(id.clone()).try_send(crate::event::Envelope::new(
-                id.clone(),
-                Event::System(SystemEvent::TitleUpdated {
-                    session_id: id.clone(),
-                    title,
-                }),
-            ));
-        }
         Ok(())
     }
 
@@ -355,12 +345,12 @@ impl Kernel {
             None => None,
         };
 
-        let working_dir = input.working_dir.map(|p| {
-            std::fs::canonicalize(&p)
-                .unwrap_or(p)
-                .to_string_lossy()
-                .to_string()
-        });
+        let working_dir = if let Some(p) = input.working_dir {
+            let canonical = tokio::fs::canonicalize(&p).await;
+            Some(canonical.unwrap_or(p).to_string_lossy().to_string())
+        } else {
+            None
+        };
 
         let id = SessionId::new();
         self.session_store()
@@ -381,12 +371,8 @@ impl Kernel {
         Ok(id)
     }
 
-    /// Restore a session from storage by its ID, optionally overriding the tool blocklist.
-    pub async fn restore_session(
-        &self,
-        session_id: &SessionId,
-        _tool_blocklist: Vec<String>,
-    ) -> Result<SessionId> {
+    /// Restore a session from storage by its ID.
+    pub async fn restore_session(&self, session_id: &SessionId) -> Result<SessionId> {
         let info = self
             .session_store()
             .await
@@ -624,17 +610,6 @@ impl Kernel {
                 title: title.clone(),
             };
             let _ = self.notification_bus.send(noti);
-            if let Some(ref bus) = self.agent_shared.event_bus {
-                let _ = bus
-                    .handle(session_id.clone())
-                    .try_send(crate::event::Envelope::new(
-                        session_id.clone(),
-                        Event::System(SystemEvent::TitleUpdated {
-                            session_id: session_id.clone(),
-                            title,
-                        }),
-                    ));
-            }
         }
         self.input_bus
             .publish(session_id.clone(), AgentInput::User { content: blocks })
@@ -758,6 +733,13 @@ impl Kernel {
                 rows,
             );
         }
+        // Update in-memory permission state for the live agent (real-time)
+        if self.conductor.set_permission_level(session_id, level) {
+            tracing::info!(
+                "permission level updated in-memory for live agent {}",
+                session_id.0
+            );
+        }
         Ok(())
     }
 
@@ -830,8 +812,7 @@ impl Kernel {
                 .handle(session_id.clone())
                 .try_send(crate::event::Envelope::new(
                     session_id.clone(),
-                    crate::event::Event::System(crate::event::SystemEvent::GoalUpdated {
-                        session_id: session_id.clone(),
+                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
                         description: state.description.clone(),
                         status: state.status.as_str().to_string(),
                     }),
@@ -855,8 +836,7 @@ impl Kernel {
                 .handle(session_id.clone())
                 .try_send(crate::event::Envelope::new(
                     session_id.clone(),
-                    crate::event::Event::System(crate::event::SystemEvent::GoalUpdated {
-                        session_id: session_id.clone(),
+                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
                         description: state.description.clone(),
                         status: state.status.as_str().to_string(),
                     }),
@@ -881,8 +861,7 @@ impl Kernel {
                 .handle(session_id.clone())
                 .try_send(crate::event::Envelope::new(
                     session_id.clone(),
-                    crate::event::Event::System(crate::event::SystemEvent::GoalUpdated {
-                        session_id: session_id.clone(),
+                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
                         description: state.description.clone(),
                         status: state.status.as_str().to_string(),
                     }),
@@ -930,8 +909,7 @@ impl Kernel {
                 .handle(session_id.clone())
                 .try_send(crate::event::Envelope::new(
                     session_id.clone(),
-                    crate::event::Event::System(crate::event::SystemEvent::GoalUpdated {
-                        session_id: session_id.clone(),
+                    crate::event::Event::Agent(crate::event::AgentEvent::GoalUpdated {
                         description: state.description.clone(),
                         status: state.status.as_str().to_string(),
                     }),
@@ -950,9 +928,7 @@ impl Kernel {
                 .handle(session_id.clone())
                 .try_send(crate::event::Envelope::new(
                     session_id.clone(),
-                    crate::event::Event::System(crate::event::SystemEvent::GoalStopped {
-                        session_id: session_id.clone(),
-                    }),
+                    crate::event::Event::Agent(crate::event::AgentEvent::GoalStopped),
                 ));
         }
         tracing::info!("goal mode stopped");
@@ -964,12 +940,13 @@ impl Kernel {
         self.session_store().await.delete(session_id).await
     }
 
-    /// Get messages for a session from storage
-    pub async fn get_session_messages(
+    /// List messages for a session with a clean typed API (User / Assistant / Tool)
+    pub async fn list_messages(
         &self,
         session_id: &SessionId,
-    ) -> Result<Vec<crate::types::Message>> {
-        self.message_store().await.get(&session_id.0).await
+    ) -> Result<Vec<crate::types::SessionMessage>> {
+        let raw = self.message_store().await.get(&session_id.0).await?;
+        Ok(crate::types::SessionMessage::from_storage(raw))
     }
 
     /// Get checkpoints for a session.

@@ -23,6 +23,22 @@ impl Model {
         loop {
             let event = match self.event_rx.try_recv() {
                 Ok(TaggedEvent::Main(ev)) => ev,
+                Ok(TaggedEvent::Connected) => {
+                    self.show_notification(&crate::components::info_bar::Notification::info(
+                        "Connected to daemon",
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                    continue;
+                }
+                Ok(TaggedEvent::ConnectionLost) => {
+                    self.show_notification(&crate::components::info_bar::Notification::warn(
+                        "Connection lost, reconnecting…",
+                        0,
+                    ));
+                    self.state.should_redraw = true;
+                    continue;
+                }
                 Ok(TaggedEvent::Subagent {
                     parent_tool_id,
                     session_id,
@@ -333,25 +349,9 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                // Connection lost - pump will auto-reconnect
-                Event::System(kernel::event::SystemEvent::ConnectionLost { .. }) => {
-                    self.show_notification(&crate::components::info_bar::Notification::warn(
-                        "Connection lost, reconnecting…",
-                        0,
-                    ));
-                    self.state.should_redraw = true;
-                }
-                Event::System(kernel::event::SystemEvent::Connected { .. }) => {
-                    self.show_notification(&crate::components::info_bar::Notification::info(
-                        "Connected to daemon",
-                        3000,
-                    ));
-                    self.state.should_redraw = true;
-                }
-                Event::System(kernel::event::SystemEvent::GoalUpdated {
+                Event::Agent(kernel::event::AgentEvent::GoalUpdated {
                     description,
                     status,
-                    ..
                 }) => {
                     let goal_str = format!("{status}\x00{description}");
                     if let Err(e) = self.app.attr(
@@ -367,7 +367,7 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                Event::System(kernel::event::SystemEvent::GoalStopped { .. }) => {
+                Event::Agent(kernel::event::AgentEvent::GoalStopped) => {
                     if let Err(e) = self.app.attr(
                         &Id::TodoList,
                         Attribute::Custom(attr::SET_GOAL),
@@ -381,48 +381,41 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                // Rewind completed - refresh messages from the event
-                Event::System(kernel::event::SystemEvent::Rewound { messages, .. }) => {
-                    // Recalculate token usage first (before moving messages)
-                    let context_window = crate::config().agent.compactor.context_window;
-                    let total_tokens: u32 = messages
-                        .iter()
-                        .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
-                        .next_back()
-                        .unwrap_or_else(|| {
-                            use kernel::utils::tokens;
-                            messages
-                                .iter()
-                                .map(|m| tokens::estimate_tokens(&m.text_content()))
-                                .sum::<usize>() as u32
-                        });
+                // Rewind completed - reload messages from backend
+                Event::Agent(kernel::event::AgentEvent::Rewound) => {
+                    let sid = kernel::types::SessionId::from(self.session_id.clone());
+                    match self.kernel.list_messages(&sid).await {
+                        Ok(session_messages) => {
+                            let context_window = crate::config().agent.compactor.context_window;
+                            let total_tokens = crate::app::calc_token_usage(&session_messages);
 
-                    // Refresh chat view with updated messages (truncate to before checkpoint)
-                    // Note: We use CLEAR_HISTORY + INIT_HISTORY because there's no truncate API
-                    let _ = self.app.attr(
-                        &Id::ChatView,
-                        Attribute::Custom(attr::CLEAR_HISTORY),
-                        AttrValue::Flag(true),
-                    );
+                            let _ = self.app.attr(
+                                &Id::ChatView,
+                                Attribute::Custom(attr::CLEAR_HISTORY),
+                                AttrValue::Flag(true),
+                            );
 
-                    if !messages.is_empty() {
-                        // Pass Vec<Arc<Message>> directly - avoids cloning Message content
-                        let _ = self.app.attr(
-                            &Id::ChatView,
-                            Attribute::Custom(attr::INIT_HISTORY),
-                            AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(
-                                messages,
-                            ))),
-                        );
+                            if !session_messages.is_empty() {
+                                let _ = self.app.attr(
+                                    &Id::ChatView,
+                                    Attribute::Custom(attr::INIT_HISTORY),
+                                    AttrValue::Payload(tuirealm::props::PropPayload::Any(
+                                        Box::new(session_messages),
+                                    )),
+                                );
+                            }
+
+                            let usage_str = format!("{total_tokens}\x00{context_window}");
+                            let _ = self.app.attr(
+                                &Id::StatusBar,
+                                Attribute::Custom(attr::SET_CTX_USAGE),
+                                AttrValue::String(usage_str),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to reload messages after rewind: {e}");
+                        }
                     }
-
-                    // Update token usage in status bar
-                    let usage_str = format!("{total_tokens}\x00{context_window}");
-                    let _ = self.app.attr(
-                        &Id::StatusBar,
-                        Attribute::Custom(attr::SET_CTX_USAGE),
-                        AttrValue::String(usage_str),
-                    );
 
                     self.show_notification(&crate::components::info_bar::Notification::success(
                         "Rewound to checkpoint",
@@ -557,7 +550,9 @@ impl Model {
                 _ => {}
             }
             // Cap event processing time to keep UI responsive (~60fps budget)
-            if start.elapsed() > std::time::Duration::from_millis(8) {
+            if start.elapsed()
+                > std::time::Duration::from_millis(crate::app::types::FRAME_BUDGET_MS)
+            {
                 break;
             }
         }

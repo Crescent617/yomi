@@ -57,7 +57,10 @@ impl FileStateStore {
     /// Updates in-memory state synchronously, then persists if a persistent store is configured.
     /// Persistence errors are logged but not returned (best-effort persistence).
     pub async fn record(&self, path: PathBuf, mtime: u64) {
-        let key = path.canonicalize().unwrap_or(path);
+        let key = match tokio::fs::canonicalize(&path).await {
+            Ok(p) => p,
+            Err(_) => path,
+        };
         self.mtimes.write().unwrap().insert(key.clone(), mtime);
 
         if let Some(ref store) = self.persistent {
@@ -134,13 +137,14 @@ impl FileStateStore {
         }
 
         // Canonicalize paths first to ensure consistency between memory and persistence
-        let canonicalized: Vec<(PathBuf, u64)> = states
-            .into_iter()
-            .map(|(path, mtime)| {
-                let key = path.canonicalize().unwrap_or(path);
-                (key, mtime)
-            })
-            .collect();
+        let mut canonicalized: Vec<(PathBuf, u64)> = Vec::with_capacity(states.len());
+        for (path, mtime) in states {
+            let key = match tokio::fs::canonicalize(&path).await {
+                Ok(p) => p,
+                Err(_) => path,
+            };
+            canonicalized.push((key, mtime));
+        }
 
         // Update memory first
         {

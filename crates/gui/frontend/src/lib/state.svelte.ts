@@ -1,5 +1,5 @@
 import * as api from "./api";
-import type { GitInfo } from "./api";
+import type { GitInfo, SessionMessage } from "./api";
 import type { TaggedContentBlock } from "./types";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -11,14 +11,13 @@ const inFlightActivations = new Map<string, Promise<void>>();
 export function startNotificationListener(): Promise<() => void> {
   return listen(
     "kernel:noti",
-    (
-      e: {
-        payload: {
-          state_changed?: { session_id: string; status: string };
-          title_updated?: { session_id: string; title: string };
-        };
-      },
-    ) => {
+    (e: {
+      payload: {
+        state_changed?: { session_id: string; status: string };
+        title_updated?: { session_id: string; title: string };
+        connection_lost?: { session_id: string };
+      };
+    }) => {
       const payload = e.payload;
       if (payload.state_changed) {
         const { session_id, status } = payload.state_changed;
@@ -32,6 +31,9 @@ export function startNotificationListener(): Promise<() => void> {
         const session = getSession(session_id);
         if (!session) return;
         session.alias = title;
+      }
+      if (payload.connection_lost) {
+        showNotification("Connection lost", "warn", 3000);
       }
     },
   );
@@ -66,6 +68,32 @@ export interface ToolCall {
   subagent_session_id?: string;
 }
 
+// ── Helper: extract plain text from content blocks ─────────────────────────
+
+export function textFromBlocks(blocks: TaggedContentBlock[]): string {
+  return blocks
+    .filter(
+      (b): b is TaggedContentBlock & { text: string } =>
+        b.type === "text" && typeof b.text === "string",
+    )
+    .map((b) => b.text)
+    .join("");
+}
+
+export function hasText(blocks: TaggedContentBlock[]): boolean {
+  return blocks.some((b) => b.type === "text" && b.text && b.text.length > 0);
+}
+
+export function findThinking(
+  blocks: TaggedContentBlock[],
+): { content: string; elapsed_ms: number } | null {
+  const block = blocks.find((b) => b.type === "thinking" && b.thinking);
+  if (!block || !block.thinking) return null;
+  return { content: block.thinking, elapsed_ms: 0 };
+}
+
+// ── Message types: match backend SessionMessage shape, minimal conversion ────
+
 interface BaseMessage {
   id: string;
   created_at: string;
@@ -73,14 +101,12 @@ interface BaseMessage {
 
 export interface UserMessage extends BaseMessage {
   type: "user";
-  content: string;
-  content_blocks?: TaggedContentBlock[];
+  content: TaggedContentBlock[];
 }
 
 export interface BotMessage extends BaseMessage {
   type: "assistant";
-  content: string;
-  thinking?: { content: string; elapsed_ms: number } | null;
+  content: TaggedContentBlock[];
   tool_calls?: { id: string; name: string; arguments: string }[];
   token_usage?: {
     prompt_tokens: number;
@@ -95,14 +121,9 @@ export interface ToolMessage extends BaseMessage {
   tool_name: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   arguments: string;
-  output: string;
+  result: TaggedContentBlock[];
   elapsed_ms?: number;
   subagent_session_id?: string;
-}
-
-export interface SystemMessage extends BaseMessage {
-  type: "system";
-  content: string;
 }
 
 export interface ErrorMessage extends BaseMessage {
@@ -110,12 +131,7 @@ export interface ErrorMessage extends BaseMessage {
   content: string;
 }
 
-export type Message =
-  | UserMessage
-  | BotMessage
-  | ToolMessage
-  | SystemMessage
-  | ErrorMessage;
+export type Message = UserMessage | BotMessage | ToolMessage | ErrorMessage;
 
 export interface ProjectState {
   id: string;
@@ -404,9 +420,18 @@ export function setActiveSession(id: string | null) {
   const prevId = sessionState.activeSessionId;
   if (prevId && id !== prevId) {
     api.unsubscribe(prevId).catch(() => {});
+    const prevSession = getSession(prevId);
+    if (prevSession) {
+      prevSession.streaming_tool_name = undefined;
+    }
   }
   if (id) {
     api.subscribe(id, null).catch(() => {});
+    // 切入新 session 时也清除可能残留的 streaming_tool_name（如之前异常中断）
+    const nextSession = getSession(id);
+    if (nextSession) {
+      nextSession.streaming_tool_name = undefined;
+    }
   }
   sessionState.activeSessionId = id;
 }
@@ -510,272 +535,60 @@ export function closeTab(session: SessionState, tabId: string) {
   }
 }
 
-function extractId(raw: unknown): string {
-  if (Array.isArray(raw) && raw.length > 0) raw = raw[0];
-  else if (typeof raw === "object" && raw !== null) {
-    const obj = raw as Record<string, unknown>;
-    raw = obj["0"] ?? obj[0] ?? null;
-  }
-  return typeof raw === "string" && raw.length > 0 ? raw : crypto.randomUUID();
-}
-
-function normalizeRole(
-  role: unknown,
-): "user" | "tool" | "system" | "assistant" | "error" | "internal" {
-  if (role === "User" || role === "user") return "user";
-  if (role === "tool" || role === "Tool") return "tool";
-  if (role === "system" || role === "System") return "system";
-  if (role === "internal" || role === "Internal") return "internal";
-  if (role === "error" || role === "Error") return "error";
-  return "assistant";
-}
-
-export interface RawMessage {
-  id?: unknown;
-  role: unknown;
-  content?: string | TaggedContentBlock[];
-  tool_call_id?: string;
-  tool_calls?: RawToolCall[];
-  token_usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-  created_at?: string;
-  _meta?: Record<string, string>;
-}
-
-interface RawToolCall {
-  id?: string;
-  name?: string;
-  tool_name?: string;
-  arguments?: string | Record<string, unknown>;
-}
-
 export function loadSessionMessages(
   session_id: string,
-  rawMessages: unknown[],
+  messages: SessionMessage[],
 ) {
   const session = getSession(session_id);
   if (!session) return;
 
-  const toolOutputs: Record<string, string> = {};
-  const toolOutputByName: Record<string, string> = {};
-  const toolMeta: Record<string, Record<string, string>> = {};
-  const toolCallDecls: Record<string, { name: string; arguments: string }> = {};
-
-  for (const m of rawMessages as RawMessage[]) {
-    const role = normalizeRole(m.role);
-    if (role === "internal") {
-      if (m._meta && m.tool_call_id) {
-        toolMeta[m.tool_call_id] = m._meta;
-      }
-      continue;
-    }
-
-    // Collect tool call declarations from assistant messages
-    if (role === "assistant" && Array.isArray(m.tool_calls)) {
-      for (const tc of m.tool_calls) {
-        const id = tc.id || "";
-        if (!id) continue;
-        const name = tc.name || tc.tool_name || "";
-        let args = "";
-        if (tc.arguments) {
-          args =
-            typeof tc.arguments === "string"
-              ? tc.arguments
-              : JSON.stringify(tc.arguments);
-        }
-        toolCallDecls[id] = { name, arguments: args };
-        const cleanId = id.replace(/^functions\./, "");
-        if (cleanId !== id) {
-          toolCallDecls[cleanId] = { name, arguments: args };
-        }
-      }
-      continue;
-    }
-
-    if (role !== "tool") continue;
-
-    let output = "";
-    if (Array.isArray(m.content)) {
-      output = m.content
-        .map((block: TaggedContentBlock) => {
-          if (typeof block === "string") return block;
-          return block.type === "text" && block.text ? block.text : "";
-        })
-        .join("");
-    } else if (typeof m.content === "string") {
-      output = m.content;
-    }
-    if (m.tool_call_id) {
-      toolOutputs[m.tool_call_id] = output;
-      const cleanId = m.tool_call_id.replace(/^functions\./, "");
-      if (cleanId !== m.tool_call_id) {
-        toolOutputs[cleanId] = output;
-      }
-      const match = m.tool_call_id.match(/^functions\.(\w+):/);
-      if (match) {
-        toolOutputByName[match[1].toLowerCase()] = output;
-      }
-      if (m._meta) {
-        toolMeta[m.tool_call_id] = m._meta;
-        if (cleanId !== m.tool_call_id) {
-          toolMeta[cleanId] = m._meta;
-        }
-      }
-    }
-    if (m.id && typeof m.id === "string") {
-      toolOutputs[m.id] = output;
-      if (m._meta) {
-        toolMeta[m.id] = m._meta;
-      }
-    }
-  }
-
-  // Second pass: build all messages as separate types
   const parsedMessages: Message[] = [];
-  for (const m of rawMessages as RawMessage[]) {
-    const role = normalizeRole(m.role);
-
-    if (role === "internal") {
-      continue;
-    }
-
-    if (role === "user") {
-      let textContent = "";
-      let blocks: TaggedContentBlock[] | undefined;
-      if (Array.isArray(m.content)) {
-        textContent = m.content
-          .map((b: TaggedContentBlock) =>
-            b.type === "text" && b.text ? b.text : "",
-          )
-          .join("");
-        if (m.content.some((b: TaggedContentBlock) => b.type !== "text")) {
-          blocks = m.content;
-        }
-      } else if (typeof m.content === "string") {
-        textContent = m.content;
+  for (const m of messages) {
+    switch (m.kind) {
+      case "user": {
+        parsedMessages.push({
+          id: m.id,
+          type: "user",
+          content: m.content,
+          created_at: m.created_at,
+        });
+        break;
       }
-      parsedMessages.push({
-        id: extractId(m.id),
-        type: "user",
-        content: textContent,
-        content_blocks: blocks,
-        created_at: m.created_at || new Date().toISOString(),
-      });
-    } else if (role === "tool") {
-      let output = "";
-      if (Array.isArray(m.content)) {
-        output = m.content
-          .map((block: TaggedContentBlock) => {
-            if (typeof block === "string") return block;
-            return block.type === "text" && block.text ? block.text : "";
-          })
-          .join("");
-      } else if (typeof m.content === "string") {
-        output = m.content;
+      case "assistant": {
+        parsedMessages.push({
+          id: m.id,
+          type: "assistant",
+          content: m.content,
+          tool_calls: m.tool_calls?.map((tc) => ({
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+          })),
+          token_usage: m.token_usage
+            ? {
+                prompt_tokens: m.token_usage.prompt_tokens,
+                completion_tokens: m.token_usage.completion_tokens,
+                total_tokens: m.token_usage.total_tokens,
+              }
+            : undefined,
+          created_at: m.created_at,
+        });
+        break;
       }
-      const tci = m.tool_call_id || "";
-      const decl = toolCallDecls[tci] ||
-        toolCallDecls[tci.replace(/^functions\./, "")] || {
-          name: "",
-          arguments: "",
-        };
-      parsedMessages.push({
-        id: extractId(m.id),
-        type: "tool",
-        tool_call_id: tci,
-        tool_name: decl.name,
-        // Messages loaded from DB are always completed (running only exists in streaming)
-        status: "completed",
-        arguments: decl.arguments,
-        output,
-        created_at: m.created_at || new Date().toISOString(),
-        subagent_session_id: toolMeta[tci]?.subagent_session_id,
-      });
-    } else if (role === "system" || role === "error") {
-      let text = "";
-      if (Array.isArray(m.content)) {
-        for (const block of m.content) {
-          if (typeof block === "string") {
-            text += block;
-          } else if (block.type === "text" && block.text) {
-            text += block.text;
-          }
-        }
-      } else if (typeof m.content === "string") {
-        text = m.content;
+      case "tool": {
+        parsedMessages.push({
+          id: m.id,
+          type: "tool",
+          tool_call_id: m.tool_call_id,
+          tool_name: m.name,
+          status: "completed",
+          arguments: m.args,
+          result: m.result,
+          created_at: m.created_at,
+          subagent_session_id: m.meta?.subagent_session_id,
+        });
+        break;
       }
-      parsedMessages.push({
-        id: extractId(m.id),
-        type: role as "system" | "error",
-        content: text,
-        created_at: m.created_at || new Date().toISOString(),
-      });
-    } else if (role === "assistant") {
-      let text = "";
-      let thinking: { content: string; elapsed_ms: number } | null = null;
-
-      if (Array.isArray(m.content)) {
-        for (const block of m.content) {
-          if (typeof block === "string") {
-            text += block;
-          } else if (
-            block.type === "text" ||
-            (block as unknown as Record<string, unknown>).text
-          ) {
-            text +=
-              ((block as unknown as Record<string, unknown>).text as string) ||
-              "";
-          } else if (
-            block.type === "thinking" ||
-            (block as unknown as Record<string, unknown>).thinking
-          ) {
-            thinking = {
-              content:
-                ((block as unknown as Record<string, unknown>)
-                  .thinking as string) || "",
-              elapsed_ms: 0,
-            };
-          }
-        }
-      } else if (typeof m.content === "string") {
-        text = m.content;
-      }
-
-      // Extract tool_calls declarations from the message
-      const tool_calls: { id: string; name: string; arguments: string }[] = [];
-      if (Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
-          const id = tc.id || "";
-          const name = tc.name || tc.tool_name || "";
-          let args = "";
-          if (tc.arguments) {
-            args =
-              typeof tc.arguments === "string"
-                ? tc.arguments
-                : JSON.stringify(tc.arguments);
-          }
-          tool_calls.push({ id, name, arguments: args });
-        }
-      }
-
-      parsedMessages.push({
-        id: extractId(m.id),
-        type: "assistant",
-        content: text,
-        thinking,
-        tool_calls: tool_calls.length > 0 ? tool_calls : undefined,
-        token_usage: m.token_usage
-          ? {
-              prompt_tokens: m.token_usage.prompt_tokens,
-              completion_tokens: m.token_usage.completion_tokens,
-              total_tokens: m.token_usage.total_tokens,
-            }
-          : undefined,
-        created_at: m.created_at || new Date().toISOString(),
-      });
     }
   }
 
@@ -906,17 +719,9 @@ interface AgentEvent {
     max_attempts: number;
     reason: string;
   };
-}
-
-interface SystemEvent {
-  connected?: Record<string, never>;
-  connection_lost?: Record<string, never>;
-  shutdown?: { error?: string };
-  session_switched?: { session_id: string };
-  title_updated?: { session_id: string; title: string };
-  rewound?: { session_id: string; messages: RawMessage[] };
-  goal_updated?: { session_id: string; description: string; status: string };
-  goal_stopped?: { session_id: string };
+  rewound?: Record<string, never>;
+  goal_updated?: { description: string; status: string };
+  goal_stopped?: Record<string, never>;
 }
 
 interface UserEvent {
@@ -929,21 +734,27 @@ interface UserEvent {
 type KernelEvent =
   | { model: ModelChunk }
   | { agent: AgentEvent }
-  | { system: SystemEvent }
   | { tool: ToolEvent }
   | { user: UserEvent };
 
-export function handleEvent(session_id: string, event_id: string | undefined, rawEvent: unknown) {
+export function handleEvent(
+  session_id: string,
+  event_id: string | undefined,
+  rawEvent: unknown,
+) {
   const session = getSession(session_id);
   if (!session) return;
 
   const ev = rawEvent as KernelEvent;
+  // 只有 model.tool_call_delta 表示正在 calling tool，其余事件都清除该状态
+  const isToolCalling = "model" in ev && ev.model.tool_call_delta != null;
+  if (!isToolCalling) {
+    session.streaming_tool_name = undefined;
+  }
   if ("model" in ev) {
     handleModelEvent(session, ev.model);
   } else if ("agent" in ev) {
     handleAgentEvent(session, ev.agent);
-  } else if ("system" in ev) {
-    handleSystemEvent(session, ev.system);
   } else if ("tool" in ev) {
     handleToolEvent(session, ev.tool);
   } else if ("user" in ev) {
@@ -982,8 +793,6 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
     const content = chunk.content;
 
     if (content?.text) {
-      // 收到文本内容，说明模型在生成文字，不是 calling tool
-      session.streaming_tool_name = undefined;
       const text = content.text;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
@@ -992,37 +801,56 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
         lastMsg.type === "assistant" &&
         lastMsg.id === chunk.message_id
       ) {
-        lastMsg.content += text;
+        const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+        if (
+          lastBlock &&
+          lastBlock.type === "text" &&
+          typeof lastBlock.text === "string"
+        ) {
+          lastBlock.text += text;
+        } else {
+          lastMsg.content.push({ type: "text", text });
+        }
       } else {
         buf.push({
           id: chunk.message_id,
           type: "assistant",
-          content: text,
-          thinking: null,
+          content: [{ type: "text", text }],
           created_at: new Date().toISOString(),
         });
       }
       streamingMessages[session.id] = buf;
       return true;
     } else if (content?.thinking) {
-      // 收到 thinking 内容，说明模型在生成文字，不是 calling tool
-      session.streaming_tool_name = undefined;
       const buf = streamingMessages[session.id] ?? [];
       const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+      const thinkingText = content.thinking.thinking ?? "";
       if (
         lastMsg &&
         lastMsg.type === "assistant" &&
         lastMsg.id === chunk.message_id
       ) {
-        if (!lastMsg.thinking)
-          lastMsg.thinking = { content: "", elapsed_ms: 0 };
-        lastMsg.thinking.content += content.thinking.thinking ?? "";
+        const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+        if (
+          lastBlock &&
+          lastBlock.type === "thinking" &&
+          typeof lastBlock.thinking === "string"
+        ) {
+          lastBlock.thinking += thinkingText;
+        } else {
+          lastMsg.content.push({
+            type: "thinking",
+            thinking: thinkingText,
+            signature: undefined,
+          });
+        }
       } else {
         buf.push({
           id: chunk.message_id,
           type: "assistant",
-          content: "",
-          thinking: { content: content.thinking.thinking ?? "", elapsed_ms: 0 },
+          content: [
+            { type: "thinking", thinking: thinkingText, signature: undefined },
+          ],
           created_at: new Date().toISOString(),
         });
       }
@@ -1049,8 +877,7 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
       botMsg = {
         id: delta.message_id,
         type: "assistant",
-        content: "",
-        thinking: null,
+        content: [],
         created_at: new Date().toISOString(),
       };
       buf.push(botMsg);
@@ -1087,22 +914,8 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
         );
     }
     return true;
-  } else if (event.completed) {
-    // Streaming chunks finished — merge buffer with dedup.
-    session.streaming_tool_name = undefined;
-    const buf = streamingMessages[session.id] ?? [];
-    if (buf.length > 0) {
-      const seen = new Set(session.messages.map((m) => m.id));
-      const deduped = buf.filter((m) => !seen.has(m.id));
-      if (deduped.length > 0) {
-        session.messages = [...session.messages, ...deduped];
-      }
-      streamingMessages[session.id] = [];
-    }
-    return true;
   } else if (event.error) {
     const err = event.error;
-    session.streaming_tool_name = undefined;
     showNotification(`Model error: ${err.error}`, "error", 3000);
     return false;
   } else if (event.request) {
@@ -1138,7 +951,6 @@ function maybeRefreshGitInfo(session: SessionState) {
 
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
-    session.streaming_tool_name = undefined;
     const start = event.start;
     const msg = findMessageById(session, start.message_id);
     if (msg && msg.type === "tool") {
@@ -1155,7 +967,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       tool_name: start.tool_name,
       status: "running",
       arguments: start.arguments ?? "",
-      output: "",
+      result: [],
       created_at: new Date().toISOString(),
     };
     buf.push(toolMsg);
@@ -1177,10 +989,10 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       id: md.message_id,
       type: "tool",
       tool_call_id: md.tool_id,
-      tool_name: "subagent",
+      tool_name: "agent",
       status: "running",
       arguments: "",
-      output: "",
+      result: [],
       created_at: new Date().toISOString(),
     };
     const sid = md.metadata["subagent_session_id"];
@@ -1196,13 +1008,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     if (msg && msg.type === "tool") {
       msg.status = end.is_error ? "failed" : "completed";
       msg.elapsed_ms = end.elapsed_ms;
-      msg.output =
-        end.content_blocks
-          ?.map((b: TaggedContentBlock) => {
-            if (typeof b === "string") return b;
-            return b.type === "text" && b.text ? b.text : "";
-          })
-          .join("") ?? "";
+      msg.result = end.content_blocks ?? [];
       maybeRefreshGitInfo(session);
       return true;
     }
@@ -1215,13 +1021,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       tool_name: end.tool_name,
       status: end.is_error ? "failed" : "completed",
       arguments: "",
-      output:
-        end.content_blocks
-          ?.map((b: TaggedContentBlock) => {
-            if (typeof b === "string") return b;
-            return b.type === "text" && b.text ? b.text : "";
-          })
-          .join("") ?? "",
+      result: end.content_blocks ?? [],
       created_at: new Date().toISOString(),
     };
     buf.push(toolMsg);
@@ -1244,12 +1044,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     if (state === "running") {
       session.phase = "streaming";
       session.is_running = true;
-      session.streaming_tool_name = undefined;
       return true;
     } else if (typeof state === "object" && state.stopped) {
       session.phase = "idle";
       session.is_running = false;
-      session.streaming_tool_name = undefined;
       const buf = streamingMessages[session.id] ?? [];
       if (buf.length > 0) {
         // 基于 ID 去重：跳过已存在于 session.messages 中的 streaming buffer 项。
@@ -1397,7 +1195,10 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       (p) => p.req_id === req_id,
     );
     if (idx >= 0) {
-      session.pending_permissions = session.pending_permissions.toSpliced(idx, 1);
+      session.pending_permissions = session.pending_permissions.toSpliced(
+        idx,
+        1,
+      );
     }
     return true;
   } else if (event.ask_user_ack) {
@@ -1407,6 +1208,31 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       session.pending_ask_users = session.pending_ask_users.toSpliced(idx, 1);
     }
     return true;
+  } else if (event.rewound) {
+    // Clear any streaming buffer since history changed
+    streamingMessages[session.id] = [];
+    session.phase = "idle";
+    session.is_running = false;
+    // Reload messages from backend instead of using event payload
+    api
+      .getMessages(session.id)
+      .then((msgs) => loadSessionMessages(session.id, msgs))
+      .catch((e: Error) =>
+        console.error("Failed to reload messages after rewind:", e),
+      );
+    // Refresh checkpoints list after rewind
+    refreshCheckpoints(session.id);
+    showNotification("Session rewound", "info", 3000);
+    return true;
+  } else if (event.goal_updated) {
+    session.goal = {
+      description: event.goal_updated.description,
+      status: event.goal_updated.status,
+    };
+    return true;
+  } else if (event.goal_stopped) {
+    session.goal = null;
+    return true;
   }
   return false;
 }
@@ -1414,82 +1240,13 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
 function handleUserEvent(session: SessionState, event: UserEvent): boolean {
   if (event.message) {
     const msg = event.message;
-    const content =
-      msg.content
-        ?.map((b: TaggedContentBlock) => {
-          if (typeof b === "string") return b;
-          return b.type === "text" && b.text ? b.text : "";
-        })
-        .join("") ?? "";
-    const hasNonText =
-      Array.isArray(msg.content) &&
-      msg.content.some(
-        (b: TaggedContentBlock) => typeof b !== "string" && b.type !== "text",
-      );
-
     session.messages.push({
       id: msg.message_id,
       type: "user",
-      content,
-      content_blocks: hasNonText ? msg.content : undefined,
+      content: msg.content ?? [],
       created_at: new Date().toISOString(),
     });
     session.updated_at = new Date().toISOString();
-    return true;
-  }
-  return false;
-}
-
-function handleSystemEvent(session: SessionState, event: SystemEvent): boolean {
-  if (event.connected) {
-    showNotification("Connected", "success", 2000);
-    return true;
-  } else if (event.connection_lost) {
-    showNotification("Connection lost", "warn", 3000);
-    return true;
-  } else if (event.shutdown) {
-    if (event.shutdown.error) {
-      showNotification(`Session error: ${event.shutdown.error}`, "error", 5000);
-    } else {
-      showNotification("Session ended", "info", 2000);
-    }
-    session.phase = "closed";
-    session.is_running = false;
-    streamingMessages[session.id] = [];
-    return true;
-  } else if (event.session_switched) {
-    return true;
-  } else if (event.title_updated) {
-    if (event.title_updated.session_id !== session.id) return false;
-    const idx = sessionState.sessions.findIndex((s) => s.id === session.id);
-    if (idx >= 0) {
-      sessionState.sessions[idx] = {
-        ...sessionState.sessions[idx],
-        alias: event.title_updated.title,
-      };
-    }
-    return true;
-  } else if (event.rewound) {
-    if (event.rewound.session_id !== session.id) return false;
-    // Clear any streaming buffer since history changed
-    streamingMessages[session.id] = [];
-    session.phase = "idle";
-    session.is_running = false;
-    loadSessionMessages(session.id, event.rewound.messages);
-    // Refresh checkpoints list after rewind
-    refreshCheckpoints(session.id);
-    showNotification("Session rewound", "info", 3000);
-    return true;
-  } else if (event.goal_updated) {
-    if (event.goal_updated.session_id !== session.id) return false;
-    session.goal = {
-      description: event.goal_updated.description,
-      status: event.goal_updated.status,
-    };
-    return true;
-  } else if (event.goal_stopped) {
-    if (event.goal_stopped.session_id !== session.id) return false;
-    session.goal = null;
     return true;
   }
   return false;

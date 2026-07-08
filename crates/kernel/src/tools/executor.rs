@@ -121,6 +121,33 @@ fn content_blocks_to_text(blocks: &[crate::types::ToolOutputBlock]) -> String {
         .concat()
 }
 
+/// Handle a panicked tool task by creating a synthetic error result.
+fn handle_tool_panic(
+    e: &tokio::task::JoinError,
+    max_tool_output_length: usize,
+    results: &mut Vec<ToolExecutionResult>,
+) {
+    tracing::error!("Tool task panicked: {}", e);
+    let panic_output = crate::types::ToolOutput::error(format!("Tool task panicked: {e}"));
+    let (event, message) = build_tool_result(
+        "panic",
+        "unknown",
+        &panic_output,
+        0,
+        crate::types::MessageId::new(),
+        max_tool_output_length,
+    );
+    log_and_push_result(
+        results,
+        ToolExecutionResult {
+            tool_call_id: "panic".to_string(),
+            message_id: crate::types::MessageId::new(),
+            message,
+            event,
+        },
+    );
+}
+
 /// Log result and push to results vector
 fn log_and_push_result(results: &mut Vec<ToolExecutionResult>, result: ToolExecutionResult) {
     if let ToolEvent::End {
@@ -178,6 +205,7 @@ pub struct ToolExecParams<'a> {
 ///
 /// Returns both the execution results and any files that were tracked for checkpointing.
 pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExecutionResult> {
+    let max_tool_output_length = params.max_tool_output_length;
     let tool_count = params.tool_calls.len();
     tracing::info!("Executing {} tool(s) in parallel", tool_count);
 
@@ -204,7 +232,6 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
         let working_dir = params.working_dir.to_path_buf();
         let turn_for_task = params.turn.clone();
         let skills_for_task: Vec<Arc<crate::skill::Skill>> = params.skills.to_vec();
-        let max_tool_output_length = params.max_tool_output_length;
 
         join_set.spawn(
             async move {
@@ -256,25 +283,29 @@ pub async fn execute_tools_parallel(params: &ToolExecParams<'_>) -> Vec<ToolExec
                     tracing::info!("Tool execution cancelled, aborting {} remaining tasks", join_set.len());
                     join_set.abort_all();
                     // Drain any tasks that completed before/during abort
-                    while let Some(Ok(r)) = join_set.join_next().await {
-                        log_and_push_result(&mut results, r);
+                    while let Some(result) = join_set.join_next().await {
+                        match result {
+                            Ok(r) => log_and_push_result(&mut results, r),
+                            Err(e) => handle_tool_panic(&e, max_tool_output_length, &mut results),
+                        }
                     }
                     break;
                 }
                 result = join_set.join_next() => {
                     match result {
-                        Some(Ok(r)) => {
-                            log_and_push_result(&mut results, r);
-                        }
-                        Some(Err(e)) => tracing::warn!("Tool task panicked: {}", e),
+                        Some(Ok(r)) => log_and_push_result(&mut results, r),
+                        Some(Err(e)) => handle_tool_panic(&e, max_tool_output_length, &mut results),
                         None => break,
                     }
                 }
             }
         }
     } else {
-        while let Some(Ok(result)) = join_set.join_next().await {
-            log_and_push_result(&mut results, result);
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(r) => log_and_push_result(&mut results, r),
+                Err(e) => handle_tool_panic(&e, max_tool_output_length, &mut results),
+            }
         }
     }
 

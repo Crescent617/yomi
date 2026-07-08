@@ -81,8 +81,6 @@ pub const FAIL_TOOL: &str = "fail_tool";
 pub const CLEAR_TOOL_CALL: &str = "clear_tool_call";
 /// Attribute for appending tool call delta.
 pub const APPEND_TOOL_CALL_DELTA: &str = "append_tool_call_delta";
-/// Attribute for initializing a subagent state on a tool message.
-/// Payload: `parent_tool_id\x00subagent_session_id\x00description`
 pub const INIT_SUBAGENT: &str = "init_subagent";
 /// Attribute for updating a subagent state with a new event.
 /// Payload: serialized `SubagentEvent` (JSON).
@@ -196,3 +194,15 @@ pub const SKILLS: &str = "skills";
 
 /// Attribute for ticking/updating animation frame.
 pub const TICK: &str = "tick";
+
+// =============================================================================
+// Protocol
+// =============================================================================
+
+/// Field separator for composite payloads sent via `Attribute::Custom`.
+///
+/// ⚠️  This is a *string* protocol — each payload encodes multiple fields as
+/// `field1\x00field2\x00...`. It is fragile (fields cannot contain `\x00`) and
+/// should be replaced by structured types (e.g. JSON or a typed enum) in the
+/// future. See <https://github.com/Crescent617/yomi/issues/PROTOCOL-REFACTOR>.
+pub const FIELD_SEP: &str = "\x00";

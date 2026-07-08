@@ -32,9 +32,11 @@ struct ActiveAgent {
     handle: JoinHandle<()>,
     cancel_token: crate::agent::CancelToken,
     state: Mutex<AgentState>,
+    permission_state: Option<crate::permission::PermissionState>,
 }
 
 impl Conductor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent_shared: Arc<AgentShared>,
         agent_config: AgentConfig,
@@ -155,6 +157,25 @@ impl Conductor {
 
     pub fn active_count(&self) -> usize {
         self.active.len()
+    }
+
+    /// Update the permission level for a live session (real-time).
+    /// Returns `true` if the session is currently active and the level was updated.
+    pub fn set_permission_level(&self, sid: &SessionId, level: crate::permission::Level) -> bool {
+        if let Some(agent) = self.active.get(sid) {
+            if let Some(ref ps) = agent.permission_state {
+                tokio::spawn({
+                    let ps = ps.clone();
+                    let sid = sid.clone();
+                    async move {
+                        ps.set_auto_approve_level(level).await;
+                        tracing::info!("Permission level updated in-memory for {}", sid.0);
+                    }
+                });
+                return true;
+            }
+        }
+        false
     }
 
     async fn handle_input(&self, sid: SessionId, input: AgentInput) {
@@ -350,6 +371,7 @@ impl Conductor {
                 handle,
                 cancel_token,
                 state: Mutex::new(AgentState::Idle),
+                permission_state: shared.permission_state.clone(),
             },
         );
     }

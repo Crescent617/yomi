@@ -64,7 +64,7 @@ pub async fn restore_session(
     let coord = state.kernel.clone();
     let sid = SessionId::from(session_id);
     coord
-        .restore_session(&sid, Vec::new())
+        .restore_session(&sid)
         .await
         .map_err(GuiError::kernel)?;
     Ok(())

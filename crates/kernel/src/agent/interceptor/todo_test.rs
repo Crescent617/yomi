@@ -143,7 +143,8 @@ async fn test_completed_todos_filtered() {
     let mut content = vec![ContentBlock::Text {
         text: "hello".into(),
     }];
-    let history = history_with_user_msgs(4);
+    // default interval = 3; 2 user msgs → current = 3rd → trigger
+    let history = history_with_user_msgs(2);
     interceptor.intercept(&mut content, &ctx(&history)).await;
     let text = extract_text(&content);
     assert!(text.contains('B'));
@@ -162,7 +163,8 @@ async fn test_reminder_appended_to_last_text_block() {
     let mut content = vec![ContentBlock::Text {
         text: "hello".into(),
     }];
-    let history = history_with_user_msgs(4);
+    // default interval = 3; 2 user msgs → current = 3rd → trigger
+    let history = history_with_user_msgs(2);
     interceptor.intercept(&mut content, &ctx(&history)).await;
     assert_eq!(content.len(), 1);
     let text = extract_text(&content);
@@ -180,7 +182,8 @@ async fn test_reminder_creates_new_block_when_no_text() {
     .await;
     let interceptor = TodoReminderInterceptor::new(store);
     let mut content: Vec<ContentBlock> = vec![];
-    let history = history_with_user_msgs(4);
+    // default interval = 3; 2 user msgs → current = 3rd → trigger
+    let history = history_with_user_msgs(2);
     interceptor.intercept(&mut content, &ctx(&history)).await;
     assert_eq!(content.len(), 1);
     assert!(extract_text(&content).contains("pending todos"));
@@ -198,7 +201,8 @@ async fn test_system_reminder_tags_present() {
     let mut content = vec![ContentBlock::Text {
         text: "hello".into(),
     }];
-    let history = history_with_user_msgs(4);
+    // default interval = 3; 2 user msgs → current = 3rd → trigger
+    let history = history_with_user_msgs(2);
     interceptor.intercept(&mut content, &ctx(&history)).await;
     let text = extract_text(&content);
     assert!(text.contains(SYSTEM_REMINDER_START));

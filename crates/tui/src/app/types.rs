@@ -15,6 +15,16 @@ use kernel::types::ContentBlock;
 use std::sync::Arc;
 use tuirealm::{application::Application, terminal::CrosstermTerminalAdapter};
 
+// =============================================================================
+// Timing Constants
+// =============================================================================
+
+/// Frame budget: cap processing time to avoid UI stalls (~120 FPS)
+pub const FRAME_BUDGET_MS: u64 = 8;
+
+/// Subscribe timeout before retry (milliseconds)
+pub const SUBSCRIBE_TIMEOUT_MS: u64 = 5000;
+
 /// Result type returned by TUI
 pub struct TuiResult {
     /// Input history entries collected during this session

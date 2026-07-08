@@ -152,7 +152,6 @@ When to use:
 Guidelines:
 - Include clear, actionable task descriptions
 - Mark task as `in_progress` by action `update` BEFORE starting work on them
-- Only have one `in_progress` task at a time to maintain focus
 - Mark task as `completed` by action `update` IMMEDIATELY after finishing
 - Skip for trivial single-step tasks"
     }

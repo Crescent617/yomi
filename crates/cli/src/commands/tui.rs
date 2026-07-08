@@ -204,7 +204,6 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             input_history.clone(),
             is_launch,
             initial_message.take(),
-            config.auto_approve,
         )
         .await?;
 

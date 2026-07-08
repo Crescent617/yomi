@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { getActiveSession, getDisplayMessages } from "../../state.svelte";
+  import {
+    getActiveSession,
+    getDisplayMessages,
+    textFromBlocks,
+    hasText,
+    findThinking,
+  } from "../../state.svelte";
   import { ArrowDown } from "lucide-svelte";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
-  import SystemBubble from "./SystemBubble.svelte";
   import ErrorBubble from "./ErrorBubble.svelte";
   import ActionGroup from "./ActionGroup.svelte";
   import TextBlock from "./TextBlock.svelte";
@@ -38,10 +43,13 @@
     const last = msgs[msgs.length - 1];
     const parts: string[] = [last.id];
     if (last.type !== "tool") {
-      parts.push(last.content.length.toString());
+      parts.push(textFromBlocks(last.content).length.toString());
     }
-    if (last.type === "assistant" && last.thinking) {
-      parts.push(last.thinking.content.length.toString());
+    if (last.type === "assistant") {
+      const thinking = findThinking(last.content);
+      if (thinking) {
+        parts.push(thinking.content.length.toString());
+      }
     }
     if (last.type === "assistant" && last.tool_calls) {
       for (const t of last.tool_calls) {
@@ -49,7 +57,7 @@
       }
     }
     if (last.type === "tool") {
-      parts.push((last.output ?? "").length.toString());
+      parts.push(textFromBlocks(last.result).length.toString());
       parts.push(last.status);
     }
     return parts.join("|");
@@ -127,13 +135,13 @@
       }
 
       // BotMessage
-      const hasText = msg.content?.trim();
-      const hasThinking = msg.thinking;
+      const hasTextContent = hasText(msg.content);
+      const hasThinking = findThinking(msg.content) !== null;
       const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
 
       if (hasThinking || hasToolCalls) {
         group.push(msg);
-        if (hasText) flush();
+        if (hasTextContent) flush();
       } else {
         flush();
         items.push({
@@ -179,8 +187,6 @@
                   <UserBubble message={msg} session_id={activeSession.id} />
                 {:else if msg.type === "error"}
                   <ErrorBubble message={msg} />
-                {:else if msg.type === "system"}
-                  <SystemBubble message={msg} />
                 {:else if msg.type === "assistant"}
                   <AssistantBubble
                     message={msg}
@@ -203,10 +209,10 @@
                   isLatest={index === lastActionGroupIndex}
                 />
                 {#each item.messages as m (m.id)}
-                  {#if m.type !== "tool" && m.content?.trim()}
+                  {#if m.type === "assistant" && hasText(m.content)}
                     <div class="w-full space-y-1 mt-3">
                       <TextBlock
-                        content={m.content}
+                        content={textFromBlocks(m.content)}
                         isStreaming={item.isStreaming}
                       />
                     </div>

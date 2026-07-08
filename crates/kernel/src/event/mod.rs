@@ -30,7 +30,6 @@ pub enum Event {
     Internal(InternalEvent),
     Model(ModelEvent),
     Tool(ToolEvent),
-    System(SystemEvent),
 }
 
 /// Control command from TUI to kernel
@@ -130,6 +129,12 @@ pub enum AgentEvent {
         max_attempts: u32,
         reason: String,
     },
+    /// Session rewound to a checkpoint
+    Rewound,
+    /// Goal state was updated (started, paused, resumed, completed, blocked)
+    GoalUpdated { description: String, status: String },
+    /// Goal was stopped and removed
+    GoalStopped,
 }
 
 /// Internal kernel events for persistence and state management.
@@ -275,32 +280,4 @@ pub enum ToolEvent {
         /// Whether this output represents an error
         is_error: bool,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", rename_all_fields = "snake_case")]
-pub enum SystemEvent {
-    /// Session rewound to a checkpoint
-    Rewound {
-        session_id: SessionId,
-        /// Updated messages after rewind (truncated history)
-        messages: Vec<std::sync::Arc<crate::types::Message>>,
-    },
-    /// Connection to daemon is active (initial connect or after recovery)
-    Connected { session_id: SessionId },
-    /// Connection to daemon was lost (reader/heartbeat detected an error)
-    ConnectionLost { session_id: SessionId },
-    /// Session title was updated (e.g. from first user message)
-    TitleUpdated {
-        session_id: SessionId,
-        title: String,
-    },
-    /// Goal state was updated (started, paused, resumed, completed, blocked)
-    GoalUpdated {
-        session_id: SessionId,
-        description: String,
-        status: String,
-    },
-    /// Goal was stopped and removed
-    GoalStopped { session_id: SessionId },
 }

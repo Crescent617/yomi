@@ -50,6 +50,7 @@ export function extractTarget(tool_name: string, args: string): string {
         return parsed.url ?? "";
       case "skill":
         return parsed.name ?? parsed.path ?? "";
+      case "agent":
       case "subagent":
         return parsed.description ?? "";
       default:
@@ -79,6 +80,7 @@ export function extraMeta(tool_name: string, args: string): string {
         if (mode !== "filename") extras.push(mode);
         break;
       }
+      case "agent":
       case "subagent": {
         const preset = parsed.preset || "general-purpose";
         if (preset !== "general-purpose") extras.push(preset);
@@ -135,7 +137,7 @@ export function parseWriteArgs(args: string): WriteArgs | null {
 
 export function diffLines(
   oldStr: string,
-  newStr: string
+  newStr: string,
 ): { type: "add" | "del" | "context"; text: string }[] {
   const oldLines = oldStr.split("\n");
   const newLines = newStr.split("\n");

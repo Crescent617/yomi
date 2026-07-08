@@ -1,7 +1,12 @@
 <script lang="ts">
   import { Loader2, CheckCircle2, Database, Zap } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
-  import { getDisplayMessages } from "../../state.svelte";
+  import {
+    getDisplayMessages,
+    textFromBlocks,
+    hasText,
+    findThinking,
+  } from "../../state.svelte";
   import { formatElapsed, formatTokens, utf8ByteLength } from "../../utils";
   import * as api from "../../api";
   import { onMount } from "svelte";
@@ -63,15 +68,21 @@
     // Fallback to client-side estimation
     let bytes = 0;
     for (const msg of displayMessages) {
-      if (msg.type !== "tool") {
+      if (msg.type === "user" || msg.type === "assistant") {
+        bytes += utf8ByteLength(textFromBlocks(msg.content));
+      }
+      if (msg.type === "error") {
         bytes += utf8ByteLength(msg.content);
       }
-      if (msg.type === "assistant" && msg.thinking) {
-        bytes += utf8ByteLength(msg.thinking.content);
+      if (msg.type === "assistant") {
+        const thinking = findThinking(msg.content);
+        if (thinking) {
+          bytes += utf8ByteLength(thinking.content);
+        }
       }
       if (msg.type === "tool") {
         bytes += utf8ByteLength(msg.arguments ?? "");
-        bytes += utf8ByteLength(msg.output ?? "");
+        bytes += utf8ByteLength(textFromBlocks(msg.result));
       }
     }
     return Math.round(bytes / 4);
@@ -88,9 +99,10 @@
       }
     }
     if (!lastAssistant || lastAssistant.type !== "assistant") return 0;
-    let bytes = utf8ByteLength(lastAssistant.content);
-    if (lastAssistant.thinking) {
-      bytes += utf8ByteLength(lastAssistant.thinking.content);
+    let bytes = utf8ByteLength(textFromBlocks(lastAssistant.content));
+    const thinking = findThinking(lastAssistant.content);
+    if (thinking) {
+      bytes += utf8ByteLength(thinking.content);
     }
     if (lastAssistant.tool_calls) {
       for (const tc of lastAssistant.tool_calls) {
@@ -117,7 +129,8 @@
         continue; // completed/failed, keep looking
       }
       if (msg.type === "assistant") {
-        if (msg.thinking || msg.content) return null; // generating text
+        const thinking = findThinking(msg.content);
+        if (thinking || hasText(msg.content)) return null; // generating text
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           return { tool_name: msg.tool_calls[msg.tool_calls.length - 1].name };
         }
@@ -138,10 +151,7 @@
       {#if session?.phase === "streaming"}
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
       {:else if session?.phase === "executing_tool"}
-        <Zap
-          size={12}
-          class="animate-breathe text-sky-500 shrink-0"
-        />
+        <Zap size={12} class="animate-breathe text-sky-500 shrink-0" />
       {:else if session?.phase === "compacting"}
         <Database size={12} class="animate-spin text-sky-500 shrink-0" />
       {:else if streamingTokens > 0}
@@ -191,7 +201,8 @@
 
 <style>
   @keyframes breathe {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 1;
       filter: drop-shadow(0 0 2px rgba(14, 165, 233, 0.4));
       transform: scale(1);

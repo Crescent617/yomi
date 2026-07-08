@@ -85,22 +85,27 @@ pub struct CheckpointMeta {
 /// Filesystem-based checkpoint store
 pub struct FilesystemCheckpointStore {
     base_dir: PathBuf,
+    data_dir: PathBuf, // stores the parent of base_dir to avoid unwrap()
     max_checkpoints: usize,
 }
 
 impl FilesystemCheckpointStore {
     /// Create new store with the given data directory and default `max_checkpoints` (5)
     pub fn new(data_dir: impl Into<PathBuf>) -> Self {
+        let data_dir = data_dir.into();
         Self {
-            base_dir: data_dir.into().join("checkpoints"),
+            base_dir: data_dir.join("checkpoints"),
+            data_dir,
             max_checkpoints: 5,
         }
     }
 
     /// Create new store with specified `max_checkpoints`
     pub fn with_max_checkpoints(data_dir: impl Into<PathBuf>, max: usize) -> Self {
+        let data_dir = data_dir.into();
         Self {
-            base_dir: data_dir.into().join("checkpoints"),
+            base_dir: data_dir.join("checkpoints"),
+            data_dir,
             max_checkpoints: max,
         }
     }
@@ -117,14 +122,14 @@ impl FilesystemCheckpointStore {
         self.session_dir(session_id).join(message_id)
     }
 
-    /// Get objects directory for a checkpoint
-    pub fn objects_dir(&self, session_id: &str, message_id: &str) -> PathBuf {
-        self.checkpoint_dir(session_id, message_id).join("objects")
-    }
-
     /// Get manifest path
     fn manifest_path(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("manifest.json")
+    }
+
+    /// Get paths to session files
+    fn sessions_dir(&self) -> PathBuf {
+        self.data_dir.join("sessions")
     }
 
     /// Load or create manifest
@@ -240,7 +245,7 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
             .map_err(|e| KernelError::io(format!("Failed to create checkpoint directory: {e}")))?;
 
         // Get paths to session files
-        let sessions_dir = self.base_dir.parent().unwrap().join("sessions");
+        let sessions_dir = self.sessions_dir();
         let messages_path = sessions_dir.join(format!("{session_id}.jsonl"));
         let file_states_path = sessions_dir
             .join("file_states")
@@ -402,7 +407,7 @@ impl crate::checkpoint::CheckpointStore for FilesystemCheckpointStore {
         let target_dir = self.checkpoint_dir(session_id, &target_cp.message_id);
 
         // Get paths to session files
-        let sessions_dir = self.base_dir.parent().unwrap().join("sessions");
+        let sessions_dir = self.sessions_dir();
         let messages_path = sessions_dir.join(format!("{session_id}.jsonl"));
         let file_states_path = sessions_dir
             .join("file_states")
