@@ -14,7 +14,6 @@
 
   const activeSession = $derived(getActiveSession());
 
-  let todoItems = $state<{ id: string; content: string; status: string }[]>([]);
   let expanded = $state(false);
   let loading = $state(false);
   let editingGoal = $state(false);
@@ -34,22 +33,6 @@
   let hasDragged = false;
 
   const goal = $derived(activeSession?.goal ?? null);
-
-  function loadTodos() {
-    const id = activeSession?.id;
-    if (!id) {
-      todoItems = [];
-      return;
-    }
-    api
-      .getTodos(id)
-      .then((result) => {
-        todoItems = result.todos ?? [];
-      })
-      .catch(() => {
-        todoItems = [];
-      });
-  }
 
   function loadGoal() {
     const id = activeSession?.id;
@@ -73,15 +56,12 @@
     const _ = activeSession?.id;
     expanded = false;
     editingGoal = false;
-    loadTodos();
     loadGoal();
   });
 
-  $effect(() => {
-    const _ = activeSession?.messages?.length;
-    loadTodos();
-  });
 
+
+  const todoItems = $derived(activeSession?.todos ?? []);
   const totalCount = $derived(todoItems.length);
   const completedCount = $derived(
     todoItems.filter((t) => t.status === "completed").length,

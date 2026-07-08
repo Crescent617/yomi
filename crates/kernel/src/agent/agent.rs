@@ -1,3 +1,5 @@
+mod tool_exec;
+
 use super::message_buffer::MessageBuffer;
 use super::{
     AgentError, AgentExecutionContext, AgentShared, AgentSpawnArgs, AgentState, CancelToken,
@@ -5,15 +7,13 @@ use super::{
 };
 use crate::comms::{EventSink, Mailbox};
 use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
-use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason, ToolEvent};
+use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::executor::{ToolExecParams, ToolExecutionResult};
 use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::{info, Instrument};
 
@@ -78,8 +78,6 @@ pub struct Agent {
     data_dir: std::path::PathBuf,
     /// Current turn (contains tracked files, shared with tools)
     current_turn: Option<Arc<super::turn::Turn>>,
-    /// Current skills list (available to tools)
-    skills: Vec<Arc<crate::skill::Skill>>,
     /// Maximum tool output length in bytes
     max_tool_output_length: usize,
 }
@@ -187,7 +185,6 @@ impl Agent {
             checkpoint_store,
             data_dir,
             current_turn: None,
-            skills: args.skills,
             max_tool_output_length: args.max_tool_output_length,
         }
     }
@@ -249,6 +246,16 @@ impl Agent {
 
     pub async fn start_loop(mut self) -> Result<(), AgentError> {
         let result = async move {
+
+            // On startup, check if there are pending tool calls in the loaded
+            // history (recovery after a mid-batch process kill).
+            if self.pending_tool_calls().is_some() {
+                tracing::info!("resuming interrupted tool execution from history");
+                // Ensure the turn is recreated so that tools can track file edits
+                // during the resumed batch (same user message as before the kill).
+                self.start_turn_if_needed().await;
+                self.context.transition_to(AgentState::ExecutingTool);
+            }
 
             loop {
                 let state = self.context.current_state();
@@ -1159,153 +1166,7 @@ impl Agent {
         Ok(())
     }
 
-    async fn handle_execute_tool(&mut self) -> Result<(), AgentError> {
-        // Early-out if cancelled before doing any work
-        if self.cancel_token.is_cancelled() {
-            return Err(AgentError::Cancelled("tool execution".into()));
-        }
-
-        let tool_calls: Vec<_> = self
-            .message_buffer
-            .messages()
-            .last()
-            .and_then(|m| m.tool_calls.clone())
-            .unwrap_or_default();
-
-        // Pre-generate MessageId for each tool call so Start/End events and
-        // the resulting Message all share the same identifier.
-        let mut tool_message_ids: BTreeMap<String, MessageId> = BTreeMap::new();
-        for call in &tool_calls {
-            tool_message_ids.insert(call.id.clone(), MessageId::new());
-        }
-
-        // First: Send Started event for ALL tool calls (before permission check)
-        for call in &tool_calls {
-            let args_str = serde_json::to_string(&call.arguments).ok();
-            let message_id = tool_message_ids[&call.id].clone();
-            self.emit(Event::Tool(ToolEvent::Start {
-                message_id,
-                tool_id: call.id.clone(),
-                tool_name: call.name.clone(),
-                arguments: args_str,
-            }));
-        }
-
-        // Check permissions for each tool call
-        let permission_result = crate::permission::check_tool_permissions(
-            &tool_calls,
-            self.permission_checker.as_deref(),
-        )
-        .await;
-
-        let mut approved_calls = permission_result.approved;
-        let mut denied_results: Vec<_> = permission_result
-            .denied
-            .into_iter()
-            .map(|(tool_call_id, error_msg)| {
-                let message_id = tool_message_ids[&tool_call_id].clone();
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|c| c.id == tool_call_id)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_default();
-                let output = crate::types::ToolOutput::error(error_msg.clone());
-                let (event, message) = crate::tools::executor::build_tool_result(
-                    &tool_call_id,
-                    &tool_name,
-                    &output,
-                    0,
-                    message_id.clone(),
-                    self.max_tool_output_length,
-                );
-                ToolExecutionResult {
-                    tool_call_id: tool_call_id.clone(),
-                    message_id,
-                    event,
-                    message,
-                }
-            })
-            .collect();
-
-        // === PreToolUse hooks ===
-        approved_calls = super::hooks::run_pre_tool_hooks(
-            &self.session_id.0,
-            &self.working_dir,
-            &self.hook_registry,
-            approved_calls,
-            &tool_message_ids,
-            &mut denied_results,
-        )
-        .await;
-
-        // Create runtime token for this tool execution batch
-        let cancel_token = self.create_runtime_token();
-
-        // Execute only approved calls
-        // Share current_turn with tools for file tracking
-        let turn_for_tools = self.current_turn.clone();
-        let results = if approved_calls.is_empty() {
-            Vec::new()
-        } else {
-            crate::tools::execute_tools_parallel(&ToolExecParams {
-                tool_calls: &approved_calls,
-                tool_registry: &self.tool_registry,
-                cancel_token: Some(&cancel_token),
-                parent_messages: Some(self.message_buffer.messages()),
-                working_dir: &self.working_dir,
-                session_id: &self.session_id,
-                message_ids: &tool_message_ids,
-                turn: turn_for_tools,
-                skills: &self.skills,
-                max_tool_output_length: self.max_tool_output_length,
-            })
-            .await
-        };
-
-        // Track files for checkpointing (via current_turn if exists)
-        // Note: In the new design, tools should call track_file via the turn directly
-        // For now, we track files here after tool execution completes
-
-        // === PostToolUse hooks ===
-        let (post_results, continue_session, post_contexts) = super::hooks::run_post_tool_hooks(
-            &self.session_id.0,
-            &self.working_dir,
-            &self.hook_registry,
-            results,
-            &tool_calls,
-        )
-        .await;
-
-        // Combine denied and executed results
-        let all_results: Vec<_> = denied_results.into_iter().chain(post_results).collect();
-
-        for result in all_results {
-            if self.cancel_token.is_cancelled() {
-                return Err(AgentError::Cancelled("tool execution".into()));
-            }
-            self.emit(Event::Tool(result.event));
-            self.push_message(result.message);
-        }
-
-        // Inject PostToolUse hook contexts as independent messages after all
-        // tool results. This keeps the tool call chain contiguous so
-        // `sanitize()` won't strip the chain.
-        for ctx_text in post_contexts {
-            let msg = Message::user(ctx_text);
-            self.push_user_message(msg);
-        }
-
-        if !continue_session {
-            tracing::info!("stopping after tool execution (hook requested)");
-            self.context.transition_to(AgentState::Idle);
-            return Ok(());
-        }
-
-        // PostToolUse says continue → always transition back to Streaming.
-        // The PreStop hook (goal check) runs at the end of streaming only.
-        self.context.transition_to(AgentState::Streaming);
-        Ok(())
-    }
+    // handle_execute_tool is defined in tool_exec.rs
 
     #[tracing::instrument(skip(self))]
     async fn handle_streaming_with_retry(&mut self) -> Result<(), AgentError> {

@@ -4,11 +4,12 @@ use crate::tools::executor::ToolExecutionResult;
 use crate::types::{Message, MessageId, ToolCall};
 use std::path::PathBuf;
 
-/// Run `PreToolUse` hooks over approved calls.
+/// Run `PreToolUse` hooks over a list of approved calls.
 ///
-/// `tool_message_ids` maps each `tool_call_id` to a pre-generated `MessageId`.
-/// `denied_results` receives blocked tool results, reusing the same `MessageId`
-/// so that `Start` and `End` events share a consistent identifier.
+/// Calls that are blocked by a hook are moved into `denied_results` (with the
+/// same pre-generated `MessageId` so `Start`/`End` events share one ID).
+/// Returns the subset of calls that remain approved, potentially with modified
+/// arguments when a hook rewrites the input.
 pub async fn run_pre_tool_hooks(
     session_id: &str,
     working_dir: &PathBuf,
@@ -20,7 +21,7 @@ pub async fn run_pre_tool_hooks(
     if hook_registry.is_empty() {
         return toolcalls;
     }
-    let mut pre_approved = Vec::new();
+    let mut approved = Vec::new();
     for call in toolcalls {
         let ctx = HookContext::pre_tool(
             session_id,
@@ -60,7 +61,7 @@ pub async fn run_pre_tool_hooks(
                             tool_id: call.id.clone(),
                             tool_name: call.name.clone(),
                             content_blocks: vec![crate::types::ToolOutputBlock::Text {
-                                text: final_reason.clone(),
+                                text: final_reason,
                             }],
                             elapsed_ms: 0,
                             is_error: true,
@@ -73,110 +74,94 @@ pub async fn run_pre_tool_hooks(
                     if let Some(new_args) = decision.updated_input {
                         modified.arguments = new_args;
                     }
-                    pre_approved.push(modified);
+                    approved.push(modified);
                 }
             },
-            _ => {
-                pre_approved.push(call);
-            }
+            _ => approved.push(call),
         }
     }
-    pre_approved
+    approved
 }
 
-/// Run `PostToolUse` hooks over executed results.
+/// Run the `PostToolUse` hook for a single tool result.
 ///
-/// Returns `(modified_results, continue_session, context_messages)`.
-/// `context_messages` are additional context strings that should be injected
-/// into the conversation as independent messages (aligned with Claude Code's
-/// `additionalContext` behaviour).
-/// If any hook sets `continue_session: false`, the overall result is `false`.
-pub async fn run_post_tool_hooks(
+/// Returns `(result, continue_session, context_messages)`.
+/// `context_messages` are additional strings to be injected as user messages
+/// (matching Claude Code's `additionalContext` behaviour).
+pub async fn run_post_tool_hook_single(
     session_id: &str,
     working_dir: &PathBuf,
     hook_registry: &HookRegistry,
-    results: Vec<ToolExecutionResult>,
-    tool_calls: &[ToolCall],
-) -> (Vec<ToolExecutionResult>, bool, Vec<String>) {
+    mut result: ToolExecutionResult,
+    tool_name: &str,
+) -> (ToolExecutionResult, bool, Vec<String>) {
     if hook_registry.is_empty() {
-        return (results, true, Vec::new());
+        return (result, true, Vec::new());
     }
-    let mut post_results = Vec::new();
+
+    let mut hook_tool_output = crate::types::ToolOutput::text(result.message.text_content());
+    hook_tool_output.is_error = matches!(result.event, ToolEvent::End { is_error: true, .. });
+
+    let ctx = HookContext::post_tool(
+        session_id,
+        tool_name,
+        &result.tool_call_id,
+        working_dir,
+        &hook_tool_output,
+    );
+    let (hook_result, hook_contexts) = hook_registry.run_post_tool(&ctx).await;
+
     let mut continue_session = true;
-    let mut contexts = Vec::new();
-    for mut result in results {
-        let tool_name = tool_calls
-            .iter()
-            .find(|c| c.id == result.tool_call_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
-        let mut hook_tool_output = crate::types::ToolOutput::text(result.message.text_content());
-        hook_tool_output.is_error = matches!(result.event, ToolEvent::End { is_error: true, .. });
-        let ctx = HookContext::post_tool(
-            session_id,
-            &tool_name,
-            &result.tool_call_id,
-            working_dir,
-            &hook_tool_output,
-        );
-        let (hook_result, hook_contexts) = hook_registry.run_post_tool(&ctx).await;
-        contexts.extend(hook_contexts);
-        if let HookResult::PostTool(decision) = hook_result {
-            if !decision.continue_session {
-                continue_session = false;
-            }
-            let mut modified = false;
-            let mut final_text = result.message.text_content();
 
-            if let Some(updated) = decision.updated_output {
-                final_text = updated;
-                modified = true;
-            }
-            if let Some(append) = decision.append_output {
-                if !final_text.is_empty() {
-                    final_text.push('\n');
-                }
-                final_text.push_str(&append);
-                modified = true;
-            }
-
-            if modified {
-                let message_id = result.message_id.clone();
-                result.message =
-                    Message::tool_result(message_id.clone(), &result.tool_call_id, &final_text);
-                result.event = match result.event {
-                    ToolEvent::End {
-                        message_id,
-                        tool_id,
-                        elapsed_ms,
-                        mut content_blocks,
-                        is_error,
-                        ..
-                    } => {
-                        if let Some(crate::types::ToolOutputBlock::Text {
-                            text: ref mut existing,
-                        }) = content_blocks.last_mut()
-                        {
-                            existing.clone_from(&final_text);
-                        } else {
-                            content_blocks.push(crate::types::ToolOutputBlock::Text {
-                                text: final_text.clone(),
-                            });
-                        }
-                        ToolEvent::End {
-                            message_id,
-                            tool_id,
-                            tool_name: tool_name.clone(),
-                            content_blocks,
-                            elapsed_ms,
-                            is_error,
-                        }
-                    }
-                    other @ (ToolEvent::Start { .. } | ToolEvent::Metadata { .. }) => other,
-                };
-            }
+    if let HookResult::PostTool(decision) = hook_result {
+        if !decision.continue_session {
+            continue_session = false;
         }
-        post_results.push(result);
+
+        let mut final_text = result.message.text_content();
+        let mut modified = false;
+
+        if let Some(updated) = decision.updated_output {
+            final_text = updated;
+            modified = true;
+        }
+        if let Some(append) = decision.append_output {
+            if !final_text.is_empty() {
+                final_text.push('\n');
+            }
+            final_text.push_str(&append);
+            modified = true;
+        }
+
+        if modified {
+            let message_id = result.message_id.clone();
+            result.message =
+                Message::tool_result(message_id.clone(), &result.tool_call_id, &final_text);
+            result.event = rewrite_end_event(result.event, tool_name, final_text);
+        }
     }
-    (post_results, continue_session, contexts)
+
+    (result, continue_session, hook_contexts)
+}
+
+/// Replace the text content of a `ToolEvent::End` with `new_text`.
+/// Other event variants are returned unchanged.
+fn rewrite_end_event(event: ToolEvent, tool_name: &str, new_text: String) -> ToolEvent {
+    match event {
+        ToolEvent::End {
+            message_id,
+            tool_id,
+            elapsed_ms,
+            is_error,
+            ..
+        } => ToolEvent::End {
+            message_id,
+            tool_id,
+            tool_name: tool_name.to_string(),
+            content_blocks: vec![crate::types::ToolOutputBlock::Text { text: new_text }],
+            elapsed_ms,
+            is_error,
+        },
+        other => other,
+    }
 }

@@ -133,13 +133,11 @@ async fn test_websearch_tool_live() {
 
     let ctx = ToolExecCtx {
         tool_call_id: "test_call_1",
-        parent_messages: None,
         cancel_token: Some(CancellationToken::new()),
         working_dir: std::env::current_dir().unwrap_or_default(),
         session_id: "test_session".to_string(),
         message_id: MessageId::new(),
         turn: None,
-        skills: vec![],
         max_tool_output_length: 40_000,
     };
 

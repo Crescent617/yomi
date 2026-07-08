@@ -305,6 +305,13 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 
         let agent_id = args["agent_id"].as_str().map(SessionId::from);
 
+        // TODO(#subagent-resume): When agent_id is not provided and this call
+        // is being re-executed after a crash (e.g. parent resumed with
+        // pending_tool_calls), look up the history message_store by
+        // ctx.tool_call_id to find a prior Role::Internal message whose
+        // metadata contains "subagent_session_id", then reuse that id
+        // instead of creating a new one.
+
         tracing::info!("spawning sub-agent (reuse: {})", agent_id.is_some());
 
         // Prevent recursive spawning
