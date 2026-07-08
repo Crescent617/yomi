@@ -42,23 +42,22 @@
     if (!msgs.length) return "";
     const last = msgs[msgs.length - 1];
     const parts: string[] = [last.id];
-    if (last.type !== "tool") {
-      parts.push(textFromBlocks(last.content).length.toString());
+    if (last.type !== "tool" && last.type !== "error") {
+      parts.push(`${textFromBlocks(last.content).length}`);
     }
     if (last.type === "assistant") {
       const thinking = findThinking(last.content);
       if (thinking) {
-        parts.push(thinking.content.length.toString());
+        parts.push(`${thinking.content.length}`);
       }
     }
     if (last.type === "assistant" && last.tool_calls) {
       for (const t of last.tool_calls) {
-        parts.push(t.id, t.arguments.length.toString());
+        parts.push(t.id, `${t.arguments?.length}`);
       }
     }
     if (last.type === "tool") {
-      parts.push(textFromBlocks(last.result).length.toString());
-      parts.push(last.status);
+      parts.push(`${textFromBlocks(last.result).length}`, last.status);
     }
     return parts.join("|");
   }

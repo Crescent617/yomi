@@ -70,7 +70,8 @@ export interface ToolCall {
 
 // ── Helper: extract plain text from content blocks ─────────────────────────
 
-export function textFromBlocks(blocks: TaggedContentBlock[]): string {
+export function textFromBlocks(blocks: TaggedContentBlock[] | unknown): string {
+  if (!Array.isArray(blocks)) return "";
   return blocks
     .filter(
       (b): b is TaggedContentBlock & { text: string } =>
@@ -80,13 +81,15 @@ export function textFromBlocks(blocks: TaggedContentBlock[]): string {
     .join("");
 }
 
-export function hasText(blocks: TaggedContentBlock[]): boolean {
+export function hasText(blocks: TaggedContentBlock[] | unknown): boolean {
+  if (!Array.isArray(blocks)) return false;
   return blocks.some((b) => b.type === "text" && b.text && b.text.length > 0);
 }
 
 export function findThinking(
-  blocks: TaggedContentBlock[],
+  blocks: TaggedContentBlock[] | unknown,
 ): { content: string; elapsed_ms: number } | null {
+  if (!Array.isArray(blocks)) return null;
   const block = blocks.find((b) => b.type === "thinking" && b.thinking);
   if (!block || !block.thinking) return null;
   return { content: block.thinking, elapsed_ms: 0 };
@@ -566,7 +569,7 @@ export function loadSessionMessages(
         parsedMessages.push({
           id: m.id,
           type: "user",
-          content: m.content,
+          content: m.content ?? [],
           created_at: m.created_at,
         });
         break;
@@ -575,11 +578,11 @@ export function loadSessionMessages(
         parsedMessages.push({
           id: m.id,
           type: "assistant",
-          content: m.content,
+          content: m.content ?? [],
           tool_calls: m.tool_calls?.map((tc) => ({
             id: tc.id,
             name: tc.name,
-            arguments: tc.arguments,
+            arguments: tc.arguments ?? "",
           })),
           token_usage: m.token_usage
             ? {
@@ -599,8 +602,8 @@ export function loadSessionMessages(
           tool_call_id: m.tool_call_id,
           tool_name: m.name,
           status: "completed",
-          arguments: m.args,
-          result: m.result,
+          arguments: m.args ?? "",
+          result: m.result ?? [],
           created_at: m.created_at,
           subagent_session_id: m.meta?.subagent_session_id,
         });
