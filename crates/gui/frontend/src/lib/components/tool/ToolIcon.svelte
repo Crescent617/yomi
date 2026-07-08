@@ -28,7 +28,7 @@
   } = $props();
 
   const cls = $derived(
-    `${className} ${isRunning ? "animate-pulse" : ""}`.trim()
+    `${className} ${isRunning ? "animate-pulse" : ""}`.trim(),
   );
 
   const name = toolName.toLowerCase();
@@ -54,7 +54,7 @@
   <Globe class={cls} />
 {:else if name === "websearch" || name === "web_search"}
   <Globe class={cls} />
-{:else if name === "subagent" || name === "sub_agent"}
+{:else if name === "agent" || name === "subagent" || name === "sub_agent"}
   <Bot class={cls} />
 {:else if name === "ask_user" || name === "ask"}
   <MessageSquare class={cls} />

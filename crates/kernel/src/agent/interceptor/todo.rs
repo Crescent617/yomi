@@ -1,4 +1,4 @@
-use super::{InterceptCtx, UserMessageInterceptor};
+use super::{InterceptCtx, UserMsgInterceptor};
 use crate::storage::todo::{TodoListData, TodoStatus, SYSTEM_REMINDER_END, SYSTEM_REMINDER_START};
 use crate::storage::TodoStore;
 use crate::types::{ContentBlock, Message, Role};
@@ -17,7 +17,7 @@ impl TodoReminderInterceptor {
     pub fn new(todo_storage: Arc<dyn TodoStore>) -> Self {
         Self {
             todo_storage,
-            interval: 5,
+            interval: 3,
         }
     }
 
@@ -41,7 +41,7 @@ impl TodoReminderInterceptor {
             if reminder.is_empty() {
                 reminder.push('\n');
                 reminder.push_str(SYSTEM_REMINDER_START);
-                reminder.push_str("\nReminder: you still have pending todos:");
+                reminder.push_str("\nReminder: There are pending todos, update them using the todo tool if needed.");
             }
             let icon = match todo.status {
                 TodoStatus::Pending => "(pending)",
@@ -91,7 +91,7 @@ impl TodoReminderInterceptor {
 }
 
 #[async_trait]
-impl UserMessageInterceptor for TodoReminderInterceptor {
+impl UserMsgInterceptor for TodoReminderInterceptor {
     async fn intercept(&self, content: &mut Vec<ContentBlock>, ctx: &InterceptCtx<'_>) {
         if self.interval == 0 {
             return;

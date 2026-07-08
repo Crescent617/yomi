@@ -75,6 +75,10 @@ impl Mailbox {
 
     /// 等待有新消息到达（可配合 select! 使用）
     pub async fn wait_for_mail(&self) {
+        // Fast path: if there's already mail, don't wait
+        if !self.is_empty() {
+            return;
+        }
         self.notify.notified().await;
     }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { textFromBlocks } from "../../state.svelte";
   import type { UserMessage } from "../../state.svelte";
   import { Marked } from "marked";
   import { resolveAssetUrl } from "../../utils";
@@ -11,7 +12,7 @@
   md.setOptions({ gfm: true, breaks: true });
 
   const rawRendered = $derived(
-    md.parse(message.content || "", { async: false }) as string,
+    md.parse(textFromBlocks(message.content), { async: false }) as string,
   );
 
   const allowedTags = new Set([
@@ -49,27 +50,45 @@
     "s",
   ]);
   const rendered = $derived(
-    rawRendered.replace(
-      /<(\/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g,
-      (match, slash, tag) => {
-        if (allowedTags.has(tag.toLowerCase())) return match;
+    rawRendered.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*[^>]*>/g, (match) => {
+      // Extract tag name
+      const tagMatch = match.match(/^<\/?([a-zA-Z][a-zA-Z0-9]*)/);
+      if (!tagMatch) return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const tag = tagMatch[1].toLowerCase();
+      if (!allowedTags.has(tag)) {
         return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      },
-    ),
+      }
+      // Sanitize dangerous attributes: javascript: URLs, event handlers, data URIs
+      return match
+        .replace(
+          /\s+(href|src|action|background|formaction|poster|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi,
+          (attrMatch, attrName) => {
+            const value = attrMatch
+              .split("=")
+              .slice(1)
+              .join("=")
+              .trim()
+              .replace(/^["']|["']$/g, "");
+            if (/^javascript:/i.test(value) || /^data:/i.test(value)) {
+              return ` ${attrName}="#"`;
+            }
+            return attrMatch;
+          },
+        )
+        .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+    }),
   );
 
   let expanded = $state(false);
 
   const isLong = $derived(
-    (message.content || "").split("\n").length > 5 ||
-      (message.content || "").length > 400 ||
-      (message.content || "").includes("```"),
+    textFromBlocks(message.content).split("\n").length > 5 ||
+      textFromBlocks(message.content).length > 400 ||
+      textFromBlocks(message.content).includes("```"),
   );
 
   const hasImages = $derived(
-    message.content_blocks?.some(
-      (b) => b.type === "image_url" && b.image_url?.url,
-    ) ?? false,
+    message.content.some((b) => b.type === "image_url" && b.image_url?.url),
   );
 </script>
 
@@ -80,7 +99,7 @@
     <!-- Images -->
     {#if hasImages}
       <div class="flex flex-wrap gap-2">
-        {#each message.content_blocks ?? [] as block (block.type + (block.image_url?.url ?? block.text ?? ""))}
+        {#each message.content as block (block.type + (block.image_url?.url ?? block.text ?? ""))}
           {#if block.type === "image_url" && block.image_url?.url}
             {#if block.image_url.url.startsWith("asset://")}
               {#await resolveAssetUrl(block.image_url.url)}
@@ -115,7 +134,7 @@
     {/if}
 
     <!-- Text content -->
-    {#if message.content?.trim()}
+    {#if textFromBlocks(message.content).trim()}
       <div class:truncate={isLong && !expanded}>
         {@html rendered}
       </div>

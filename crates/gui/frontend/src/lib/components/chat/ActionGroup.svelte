@@ -1,6 +1,7 @@
 <script lang="ts">
   import { XCircle, Wrench, Lightbulb } from "lucide-svelte";
   import type { Message } from "../../state.svelte";
+  import { textFromBlocks, findThinking } from "../../state.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "../tool/ToolBlock.svelte";
 
@@ -34,8 +35,11 @@
     let latestRunningTool: { tool_name: string } | null = null;
 
     for (const m of messages) {
-      if (m.type === "assistant" && m.thinking) {
-        thinkingCount++;
+      if (m.type === "assistant") {
+        const thinking = findThinking(m.content);
+        if (thinking) {
+          thinkingCount++;
+        }
       }
       if (m.type === "tool") {
         toolCount++;
@@ -116,11 +120,14 @@
   {#if expanded}
     <div class="p-2 space-y-2 border-t border-border/30 bg-muted/20 w-full">
       {#each messages as msg (msg.id)}
-        {#if msg.type === "assistant" && msg.thinking}
-          <ThinkingBlock
-            content={msg.thinking.content}
-            elapsed_ms={msg.thinking.elapsed_ms}
-          />
+        {#if msg.type === "assistant"}
+          {@const thinking = findThinking(msg.content)}
+          {#if thinking}
+            <ThinkingBlock
+              content={thinking.content}
+              elapsed_ms={thinking.elapsed_ms}
+            />
+          {/if}
         {/if}
         {#if msg.type === "tool"}
           <ToolBlock
@@ -129,7 +136,7 @@
               tool_name: msg.tool_name,
               status: msg.status,
               arguments: msg.arguments,
-              output: msg.output,
+              output: textFromBlocks(msg.result),
               elapsed_ms: msg.elapsed_ms,
               subagent_session_id: msg.subagent_session_id,
             }}

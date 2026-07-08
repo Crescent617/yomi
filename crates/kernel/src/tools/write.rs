@@ -86,16 +86,13 @@ impl Tool for WriteTool {
         // Check if file exists
         let file_exists = tokio::fs::try_exists(&path).await?;
 
-        // Check staleness for existing files (skip for append mode)
+        // Check read-first requirement for existing files (skip for append mode)
         if file_exists && !is_append {
             if let Some(ref store) = self.file_state_store {
                 if !store.has_recorded(&path) {
                     return Ok(ToolOutput::error(format!(
                         "File has not been read yet. Read it first before writing: {file_path_str}"
                     )));
-                }
-                if let Err(error) = self.check_staleness(&path).await {
-                    return Ok(ToolOutput::error(error));
                 }
             }
         }
@@ -114,9 +111,23 @@ impl Tool for WriteTool {
             (true, false) => "updated",
         };
 
-        // Track file for checkpoint before modification
         // Write file: acquire lock to serialize concurrent tool calls
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
+
+        // Re-check staleness under lock to catch concurrent modifications.
+        // If the file has disappeared since the exists-check above, treat it as a conflict.
+        if file_exists && !is_append {
+            if let Some(ref store) = self.file_state_store {
+                let Some(mtime) = get_mtime(&path).await else {
+                    return Ok(ToolOutput::error(format!(
+                        "File is no longer accessible (deleted or permission denied): {file_path_str}"
+                    )));
+                };
+                if let Err(error) = store.check_staleness(&path, mtime) {
+                    return Ok(ToolOutput::error(error));
+                }
+            }
+        }
 
         // Track file for checkpoint before modification (under lock to avoid stale backup)
         ctx.track_edit(&path).await;
@@ -124,6 +135,7 @@ impl Tool for WriteTool {
         if is_append {
             let mut file = tokio::fs::OpenOptions::new()
                 .append(true)
+                .create(true)
                 .open(&path)
                 .await?;
             file.write_all(content.as_bytes()).await?;

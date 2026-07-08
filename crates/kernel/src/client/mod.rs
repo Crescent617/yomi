@@ -1,5 +1,5 @@
 use crate::checkpoint::RewindTarget;
-use crate::event::{Command, Event};
+use crate::event::Command;
 use crate::goal::GoalState;
 use crate::kernel::CreateSessionInput;
 use crate::kernel::Kernel;
@@ -7,8 +7,7 @@ use crate::notification::Notification;
 use crate::permission::Level;
 use crate::transport::{recv_frame, send_frame, ReadHalf, SocketAddr, Stream, WriteHalf};
 use crate::types::{
-    ContentBlock, EventId, KernelError, Message, MessageId, Project, ProjectId, Result,
-    SessionError, SessionId,
+    ContentBlock, KernelError, MessageId, Project, ProjectId, Result, SessionError, SessionId,
 };
 use crate::wire::{Envelope, ReqMethod, RequestIdGenerator, RespBody, RpcError, WireMsg};
 use async_trait::async_trait;
@@ -63,11 +62,7 @@ pub trait KernelApi: Send + Sync {
 
     // ── Session ──────────────────────────────────────────────────────────
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        tool_blocklist: Vec<String>,
-    ) -> Result<SessionId>;
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId>;
     async fn fork_session(
         &self,
         parent: &SessionId,
@@ -108,7 +103,10 @@ pub trait KernelApi: Send + Sync {
     async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()>;
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
-    async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>>;
+    async fn list_messages(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SessionMessage>>;
     async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse>;
     async fn subscribe_session_events(
         &self,
@@ -211,12 +209,8 @@ impl KernelApi for Kernel {
         Self::create_session(self, input).await
     }
 
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        tool_blocklist: Vec<String>,
-    ) -> Result<SessionId> {
-        Self::restore_session(self, id, tool_blocklist).await
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
+        Self::restore_session(self, id).await
     }
 
     async fn fork_session(
@@ -319,8 +313,11 @@ impl KernelApi for Kernel {
         Self::delete_session(self, session_id).await
     }
 
-    async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
-        Self::get_session_messages(self, session_id).await
+    async fn list_messages(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SessionMessage>> {
+        Self::list_messages(self, session_id).await
     }
 
     async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse> {
@@ -607,20 +604,17 @@ impl RemoteKernel {
                 }
             }
             // Notify all local event subscribers that the connection is
-            // dead, then drop the senders so receivers become Closed.
+            // dead by dropping the senders so receivers become Closed.
             // This forces the UI to re-subscribe (and re-establish the
             // server-side forwarding task) instead of hanging forever
             // on an empty channel.
             let keys: Vec<String> = event_routers.iter().map(|e| e.key().clone()).collect();
             for key in &keys {
                 if let Some((_, tx)) = event_routers.remove(key) {
-                    let _ = tx.send(Envelope {
+                    let _ = notification_tx.send(Notification::ConnectionLost {
                         session_id: SessionId::from(key.clone()),
-                        event_id: EventId::new(),
-                        event: Event::System(crate::event::SystemEvent::ConnectionLost {
-                            session_id: SessionId::from(key.clone()),
-                        }),
                     });
+                    drop(tx);
                 }
             }
         })
@@ -989,15 +983,10 @@ impl KernelApi for RemoteKernel {
         Ok(SessionId::from(sid))
     }
 
-    async fn restore_session(
-        &self,
-        id: &SessionId,
-        tool_blocklist: Vec<String>,
-    ) -> Result<SessionId> {
+    async fn restore_session(&self, id: &SessionId) -> Result<SessionId> {
         let result = self
             .call(ReqMethod::RestoreSession {
                 session_id: id.0.to_string(),
-                tool_blocklist,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -1199,13 +1188,16 @@ impl KernelApi for RemoteKernel {
         Ok(())
     }
 
-    async fn get_session_messages(&self, session_id: &SessionId) -> Result<Vec<Message>> {
+    async fn list_messages(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SessionMessage>> {
         let result = self
-            .call(ReqMethod::GetSessionMessages {
+            .call(ReqMethod::ListMessages {
                 session_id: session_id.0.to_string(),
             })
             .await?;
-        let messages: Vec<Message> = serde_json::from_value(result)?;
+        let messages: Vec<crate::types::SessionMessage> = serde_json::from_value(result)?;
         Ok(messages)
     }
 

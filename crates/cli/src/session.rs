@@ -33,7 +33,7 @@ async fn send_with_retry(
                     "Session {} missing on daemon, attempting restore...",
                     session_id.0
                 );
-                match kernel.restore_session(session_id, Vec::new()).await {
+                match kernel.restore_session(session_id).await {
                     Ok(_) => {
                         tracing::info!("Session restored successfully");
                         restored = true;
@@ -122,7 +122,7 @@ pub async fn resolve_session(
             let session_id = SessionId::from(id.clone());
             println!("Restoring session: {}", session_id.0);
 
-            match kernel.restore_session(&session_id, Vec::new()).await {
+            match kernel.restore_session(&session_id).await {
                 Ok(_) => Ok(session_id),
                 Err(e) => {
                     println!("Failed to restore session: {e}");
@@ -144,7 +144,7 @@ pub async fn resolve_session(
                 let session_id = SessionId::from(entry.session_id);
                 println!("Restoring previous session: {}", session_id.0);
 
-                match kernel.restore_session(&session_id, Vec::new()).await {
+                match kernel.restore_session(&session_id).await {
                     Ok(_) => Ok(session_id),
                     Err(e) => {
                         println!("Failed to restore session: {e}");
@@ -211,7 +211,6 @@ pub async fn resolve_session(
 }
 
 /// Run a single session lifecycle
-#[allow(clippy::too_many_arguments)]
 pub async fn run_session_loop(
     kernel: Arc<dyn KernelApi>,
     session_id: SessionId,
@@ -220,7 +219,6 @@ pub async fn run_session_loop(
     input_history: Vec<String>,
     is_launch: bool,
     initial_message: Option<String>,
-    auto_approve: Level,
 ) -> Result<SessionResult> {
     const MAX_RETRIES: u32 = 10;
 
@@ -248,7 +246,6 @@ pub async fn run_session_loop(
     let session_id_for_input = session_id.clone();
     let app_storage_for_save = app_storage.clone();
     let working_dir_for_save = ctx.working_dir.clone();
-    let _auto_approve_for_restore = auto_approve;
     let input_handle = tokio::spawn(async move {
         let mut has_saved = false;
         while let Some(blocks) = input_rx.recv().await {
@@ -280,7 +277,7 @@ pub async fn run_session_loop(
     // Spawn control command handling task
     let coord_for_ctrl = kernel.clone();
     let session_id_for_ctrl = session_id.clone();
-    tokio::spawn(async move {
+    let ctrl_handle = tokio::spawn(async move {
         while let Some(cmd) = ctrl_rx.recv().await {
             match cmd {
                 Command::Cancel => {
@@ -410,10 +407,18 @@ pub async fn run_session_loop(
         tracing::warn!("Input forwarding task did not exit in time");
     }
 
+    // Wait for the control task to finish (ctrl_tx dropped by run_tui)
+    if tokio::time::timeout(std::time::Duration::from_secs(5), ctrl_handle)
+        .await
+        .is_err()
+    {
+        tracing::warn!("Control task did not exit in time");
+    }
+
     // Only record session if the session has actual messages in storage.
     // If we can't reach storage (e.g. daemon disconnected), conservatively
     // keep the session rather than risk deleting data.
-    match kernel.get_session_messages(&session_id).await {
+    match kernel.list_messages(&session_id).await {
         Ok(msgs) if msgs.is_empty() => {
             if let Err(e) = kernel.delete_session(&session_id).await {
                 tracing::warn!("Failed to delete empty session: {}", e);

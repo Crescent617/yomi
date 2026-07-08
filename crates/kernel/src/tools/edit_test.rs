@@ -1,7 +1,7 @@
 use super::*;
 
 use std::io::Write;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 #[tokio::test]
 async fn test_edit_tool_basic() {
@@ -303,4 +303,83 @@ async fn test_edit_fullwidth_quotes() {
 
     let new_content = tokio::fs::read_to_string(temp_file.path()).await.unwrap();
     assert_eq!(new_content, "print'goodbye\"earth'");
+}
+
+#[tokio::test]
+async fn test_edit_stale_check_under_lock() {
+    // 验证 lock-in stale check 能 catch 外部修改（store 未被更新的场景）
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path().canonicalize().unwrap();
+
+    let file_path = base_path.join("test.txt");
+    tokio::fs::write(&file_path, "hello\nworld").await.unwrap();
+
+    let store = Arc::new(FileStateStore::new());
+    let mtime = get_mtime(&file_path).await.unwrap();
+    store.record(file_path.clone(), mtime).await;
+
+    // 外部修改文件（mtime 改变，但 store 未被更新）
+    // sleep 1.1s 以确保文件系统 mtime 分辨率（秒级）能区分前后两次写入
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    tokio::fs::write(&file_path, "modified\ncontent")
+        .await
+        .unwrap();
+
+    let tool = EditTool::new(store);
+    let args = serde_json::json!({
+        "path": "test.txt",
+        "old_str": "hello\nworld",
+        "new_str": "goodbye\nearth"
+    });
+
+    let ctx = ToolExecCtx::new("test_tool_call", &base_path, "test-session");
+    let result = tool.exec(args, ctx).await.unwrap();
+
+    assert!(result.is_error);
+    assert!(result.error_text().contains("modified since it was read"));
+}
+
+#[tokio::test]
+async fn test_concurrent_edit_overlapping_old_str() {
+    // 两个并发 edit 调同一个文件，重叠 old_str
+    // 锁串行化后，第二个 edit 的 old_str 已不在文件里 → 失败
+    let temp_dir = TempDir::new().unwrap();
+    let base_path = temp_dir.path().canonicalize().unwrap();
+
+    let file_path = base_path.join("test.txt");
+    tokio::fs::write(&file_path, "hello world").await.unwrap();
+
+    let store = Arc::new(FileStateStore::new());
+    let mtime = get_mtime(&file_path).await.unwrap();
+    store.record(file_path.clone(), mtime).await;
+
+    let tool1 = EditTool::new(Arc::clone(&store));
+    let tool2 = EditTool::new(Arc::clone(&store));
+
+    let args1 = serde_json::json!({
+        "path": "test.txt",
+        "old_str": "hello",
+        "new_str": "goodbye"
+    });
+
+    let args2 = serde_json::json!({
+        "path": "test.txt",
+        "old_str": "hello",
+        "new_str": "hi"
+    });
+
+    let ctx1 = ToolExecCtx::new("test1", &base_path, "test-session");
+    let ctx2 = ToolExecCtx::new("test2", &base_path, "test-session");
+
+    let (r1, r2) = tokio::join!(tool1.exec(args1, ctx1), tool2.exec(args2, ctx2));
+
+    let result1 = r1.unwrap();
+    let result2 = r2.unwrap();
+
+    let exactly_one =
+        (result1.success() && result2.is_error) || (result1.is_error && result2.success());
+    assert!(exactly_one, "Expected one success and one failure");
+
+    let content = tokio::fs::read_to_string(&file_path).await.unwrap();
+    assert!(content.contains("goodbye") || content.contains("hi"));
 }

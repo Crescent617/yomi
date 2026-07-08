@@ -336,7 +336,7 @@ pub struct AgentShared {
     /// Data directory for file backup storage
     pub data_dir: std::path::PathBuf,
     /// Optional user message interceptor for injecting reminders/context
-    pub message_interceptor: Option<Arc<dyn super::UserMessageInterceptor>>,
+    pub message_interceptor: Option<Arc<dyn super::UserMsgInterceptor>>,
     /// Hook registry for lifecycle event handlers
     pub hook_registry: Option<Arc<crate::hooks::HookRegistry>>,
     /// Channel manager for external platform integrations (Telegram, Feishu, etc.)
@@ -441,7 +441,7 @@ impl AgentShared {
     #[must_use]
     pub fn with_message_interceptor(
         mut self,
-        interceptor: Arc<dyn super::UserMessageInterceptor>,
+        interceptor: Arc<dyn super::UserMsgInterceptor>,
     ) -> Self {
         self.message_interceptor = Some(interceptor);
         self

@@ -92,11 +92,13 @@ impl Agent {
         let session_id = SessionId::from(args.session_id.clone());
         let enable_subagent =
             args.enable_subagent && !session_id.starts_with(crate::types::SUB_PREFIX);
-        let event_bus = shared
-            .event_bus
-            .as_ref()
-            .expect("event_bus must be configured")
-            .handle(session_id.clone());
+        let event_bus = shared.event_bus.as_ref().map_or_else(
+            || {
+                // No event bus configured: use a no-op fallback to avoid panic
+                Arc::new(crate::comms::EventBus::new()).handle(session_id.clone())
+            },
+            |eb| eb.handle(session_id.clone()),
+        );
 
         let session_id_for_hook = session_id.clone();
         let event_bus_for_hook = event_bus.clone();
@@ -570,10 +572,7 @@ impl Agent {
             },
         ));
 
-        self.emit(Event::System(crate::event::SystemEvent::Rewound {
-            session_id: self.session_id.clone(),
-            messages: updated_messages,
-        }));
+        self.emit(Event::Agent(crate::event::AgentEvent::Rewound));
 
         if let Err(e) = result_tx.try_send(Ok(())) {
             tracing::warn!("Failed to send rewind success result: {:?}", e);
@@ -1148,8 +1147,7 @@ impl Agent {
         if let Some(ref store) = self.shared.goal_store {
             if let Ok(Some(goal)) = store.load(&self.session_id).await {
                 if !matches!(goal.status, crate::goal::GoalStatus::Active) {
-                    self.emit(Event::System(crate::event::SystemEvent::GoalUpdated {
-                        session_id: self.session_id.clone(),
+                    self.emit(Event::Agent(crate::event::AgentEvent::GoalUpdated {
                         description: goal.description.clone(),
                         status: goal.status.as_str().to_string(),
                     }));

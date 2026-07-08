@@ -234,20 +234,29 @@ Rules:
 
         if let Some(ref store) = self.file_state_store {
             // Simple edits don't require read-first check
-            if !is_simple_edit {
-                if !store.has_recorded(&path) {
-                    return Ok(ToolOutput::error(format!(
-                        "File has not been read yet. Read it first before editing: {path_str}"
-                    )));
-                }
-                if let Err(error) = self.check_staleness(&path).await {
-                    return Ok(ToolOutput::error(error));
-                }
+            if !is_simple_edit && !store.has_recorded(&path) {
+                return Ok(ToolOutput::error(format!(
+                    "File has not been read yet. Read it first before editing: {path_str}"
+                )));
             }
         }
 
         // Acquire lock to serialize concurrent tool calls
         let _guard = g_lock_timeout(path.to_string_lossy(), DEFAULT_LOCK_TIMEOUT).await?;
+        // Re-check staleness under lock to catch concurrent modifications.
+        // If the file has disappeared since the exists-check above, treat it as a conflict.
+        if let Some(ref store) = self.file_state_store {
+            if !is_simple_edit {
+                let Some(mtime) = get_mtime(&path).await else {
+                    return Ok(ToolOutput::error(format!(
+                        "File is no longer accessible (deleted or permission denied): {path_str}"
+                    )));
+                };
+                if let Err(error) = store.check_staleness(&path, mtime) {
+                    return Ok(ToolOutput::error(error));
+                }
+            }
+        }
 
         // Track file for checkpoint before modification (under lock to avoid stale backup)
         ctx.track_edit(&path).await;

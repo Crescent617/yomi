@@ -18,6 +18,9 @@ pub enum Notification {
         session_id: SessionId,
         title: String,
     },
+    ConnectionLost {
+        session_id: SessionId,
+    },
 }
 
 /// Broadcast bus for notifications.

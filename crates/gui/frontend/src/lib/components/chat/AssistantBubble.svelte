@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { textFromBlocks, hasText } from "../../state.svelte";
   import type { BotMessage } from "../../state.svelte";
   import TextBlock from "./TextBlock.svelte";
 
@@ -9,7 +10,7 @@
 </script>
 
 <div class="w-full space-y-2">
-  {#if message.content}
-    <TextBlock content={message.content} {isStreaming} />
+  {#if hasText(message.content)}
+    <TextBlock content={textFromBlocks(message.content)} {isStreaming} />
   {/if}
 </div>

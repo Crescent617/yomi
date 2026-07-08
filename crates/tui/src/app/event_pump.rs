@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use kernel::client::KernelApi;
 use kernel::comms::EventBusSubscriber;
-use kernel::event::{AgentEvent, AgentStatus, Event, ModelEvent, SystemEvent, ToolEvent};
+use kernel::event::{AgentEvent, AgentStatus, Event, ModelEvent, ToolEvent};
 use kernel::permission::Level;
 use kernel::types::SessionId;
 
@@ -20,6 +20,8 @@ pub enum TaggedEvent {
         session_id: String,
         event: Event,
     },
+    Connected,
+    ConnectionLost,
 }
 
 /// Transparent event pump that hides connection churn from the TUI.
@@ -61,11 +63,7 @@ impl EventPump {
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
             if crate::daemon_mode() {
-                if let Err(e) =
-                    tx.try_send(TaggedEvent::Main(Event::System(SystemEvent::Connected {
-                        session_id: sid.clone(),
-                    })))
-                {
+                if let Err(e) = tx.try_send(TaggedEvent::Connected) {
                     tracing::warn!("EventPump failed to send initial connected notification: {e}");
                 }
             }
@@ -77,11 +75,7 @@ impl EventPump {
                         Some(new_rx) => {
                             tracing::info!("EventPump re-subscribed to {}", sid.0);
                             // Notify TUI that connection is back.
-                            if let Err(e) = tx.try_send(TaggedEvent::Main(Event::System(
-                                SystemEvent::Connected {
-                                    session_id: sid.clone(),
-                                },
-                            ))) {
+                            if let Err(e) = tx.try_send(TaggedEvent::Connected) {
                                 tracing::warn!(
                                     "EventPump failed to send connected notification: {e}"
                                 );
@@ -179,6 +173,9 @@ impl EventPump {
                             }
                             None => {
                                 tracing::warn!("Subscriber closed, will resubscribe");
+                                if let Err(e) = tx.try_send(TaggedEvent::ConnectionLost) {
+                                    tracing::warn!("EventPump failed to send connection lost notification: {e}");
+                                }
                                 current_rx = None;
                             }
                         }
@@ -218,7 +215,7 @@ impl EventPump {
                             "Session {} missing on daemon, attempting restore…",
                             session_id.0
                         );
-                        match kernel.restore_session(session_id, Vec::new()).await {
+                        match kernel.restore_session(session_id).await {
                             Ok(_) => {
                                 // Session restored — immediately retry subscribe.
                                 continue;
@@ -236,11 +233,14 @@ impl EventPump {
                     }
                 }
                 Err(_) => {
-                    tracing::debug!("Subscribe timed out (5s), will retry");
+                    tracing::debug!(
+                        "Subscribe timed out ({}ms), will retry",
+                        crate::app::types::SUBSCRIBE_TIMEOUT_MS
+                    );
                 }
             }
             retries += 1;
-            let delay_ms = std::cmp::min(100 * (1_u64 << retries), 5000);
+            let delay_ms = std::cmp::min(100 * (1_u64 << retries.min(63)), 5000);
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
     }

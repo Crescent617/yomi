@@ -1,4 +1,4 @@
-use kernel::event::{Event, SystemEvent, UserEvent};
+use kernel::event::{Event, UserEvent};
 use kernel::goal::GoalState;
 use kernel::permission::Level;
 use kernel::tools::AskUserResponse;
@@ -62,7 +62,7 @@ pub async fn subscribe(
         Ok(rx) => rx,
         Err(_) => {
             coord
-                .restore_session(&sid, Vec::new())
+                .restore_session(&sid)
                 .await
                 .map_err(GuiError::kernel)?;
             coord
@@ -81,19 +81,6 @@ pub async fn subscribe(
             let event_id = envelope.event_id.to_string();
             let event = envelope.event;
             let mut event_value = serde_json::to_value(&event).unwrap_or_default();
-
-            if let Event::System(SystemEvent::Rewound { ref messages, .. }) = event {
-                if let Some(msgs) = event_value
-                    .pointer_mut("/system/rewound/messages")
-                    .and_then(|v| v.as_array_mut())
-                {
-                    let converted: Vec<serde_json::Value> = messages
-                        .iter()
-                        .map(|m| serde_json::to_value(m).unwrap_or_default())
-                        .collect();
-                    *msgs = converted;
-                }
-            }
 
             if let Event::User(UserEvent::Message { ref content, .. }) = event {
                 if let Some(blocks) = event_value
@@ -150,10 +137,7 @@ pub async fn get_messages(
 ) -> Result<Vec<serde_json::Value>, GuiError> {
     let coord = state.kernel.clone();
     let sid = SessionId::from(session_id);
-    let messages = coord
-        .get_session_messages(&sid)
-        .await
-        .map_err(GuiError::kernel)?;
+    let messages = coord.list_messages(&sid).await.map_err(GuiError::kernel)?;
     let values: Vec<_> = messages
         .into_iter()
         .map(serde_json::to_value)

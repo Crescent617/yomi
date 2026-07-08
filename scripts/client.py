@@ -10,7 +10,7 @@ Usage examples:
     python3 yomi_client.py list_sessions
     python3 yomi_client.py create_session
     python3 yomi_client.py send_message <session_id> "hello world"
-    python3 yomi_client.py get_session_messages <session_id>
+    python3 yomi_client.py list_messages <session_id>
 """
 import argparse
 import json
@@ -119,8 +119,8 @@ class Client:
     def list_sessions(self, project_id: str | None = None, limit: int = 50) -> dict:
         return self.request("list_sessions", project_id=project_id, before=None, limit=limit)
 
-    def get_session_messages(self, session_id: str) -> dict:
-        return self.request("get_session_messages", session_id=session_id)
+    def list_messages(self, session_id: str) -> dict:
+        return self.request("list_messages", session_id=session_id)
 
     def get_session_status(self, session_id: str) -> dict:
         return self.request("get_session_status", session_id=session_id)
@@ -145,7 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description="Yomi kernel IPC client")
     parser.add_argument("command", choices=[
         "hello", "list_projects", "create_project", "get_project",
-        "create_session", "list_sessions", "get_session_messages",
+        "create_session", "list_sessions", "list_messages",
         "get_session_status", "send_message", "subscribe", "interactive"
     ])
     parser.add_argument("args", nargs="*", help="positional arguments for the command")
@@ -181,11 +181,11 @@ def main():
             limit = int(args.args[0]) if args.args else 50
             pretty_print(client.list_sessions(limit=limit))
 
-        elif args.command == "get_session_messages":
+        elif args.command == "list_messages":
             if not args.args:
-                print("Usage: get_session_messages <session_id>", file=sys.stderr)
+                print("Usage: list_messages <session_id>", file=sys.stderr)
                 sys.exit(1)
-            pretty_print(client.get_session_messages(args.args[0]))
+            pretty_print(client.list_messages(args.args[0]))
 
         elif args.command == "get_session_status":
             if not args.args:

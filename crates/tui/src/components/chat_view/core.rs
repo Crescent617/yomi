@@ -231,11 +231,6 @@ impl ChatView {
         Self::default()
     }
 
-    /// Get all messages (used for checkpoint picker)
-    pub fn get_messages(&self) -> &[HistoryMessage] {
-        &self.messages
-    }
-
     /// Invalidate cache for a specific message by index.
     fn invalidate_msg_cache(&mut self, idx: usize) {
         if idx < self.msg_cache.len() {
@@ -1576,36 +1571,30 @@ impl ChatViewComponent {
         }
     }
 
-    /// Initialize history from kernel messages (for session resume)
-    pub fn init_history(&mut self, messages: &[kernel::types::Message]) {
+    /// Initialize history from `SessionMessage` (unified rendering path)
+    pub fn init_history(&mut self, messages: &[kernel::types::SessionMessage]) {
         for msg in messages {
             self.add_message_to_history(msg);
         }
     }
 
-    /// Initialize history from Arc<Messages> (used for rewind - avoids cloning)
-    pub fn init_history_arc(&mut self, messages: &[std::sync::Arc<kernel::types::Message>]) {
-        for msg in messages {
-            self.add_message_to_history(msg.as_ref());
-        }
-    }
-
     /// Helper to add a single message to history
-    fn add_message_to_history(&mut self, msg: &kernel::types::Message) {
-        match msg.role {
-            kernel::types::Role::User => {
-                if !msg.content.is_empty() {
-                    self.component.add_user_message(msg.content.clone());
+    fn add_message_to_history(&mut self, msg: &kernel::types::SessionMessage) {
+        use kernel::types::SessionMessage;
+        match msg {
+            SessionMessage::User(user_msg) => {
+                if !user_msg.content.is_empty() {
+                    self.component.add_user_message(user_msg.content.clone());
                 }
             }
-            kernel::types::Role::Assistant => {
-                let content = msg.text_content();
-                let thinking = msg.thinking_content();
+            SessionMessage::Assistant(assistant_msg) => {
+                let content = assistant_msg.text_content();
+                let thinking = assistant_msg.thinking_content();
                 self.component
                     .add_assistant_message(content, thinking, None);
 
                 // Handle tool calls
-                if let Some(ref tool_calls) = msg.tool_calls {
+                if let Some(ref tool_calls) = assistant_msg.tool_calls {
                     for call in tool_calls {
                         let args = serde_json::to_string(&call.arguments).ok();
                         self.component
@@ -1613,17 +1602,14 @@ impl ChatViewComponent {
                     }
                 }
             }
-            kernel::types::Role::Tool => {
-                if let Some(ref tool_call_id) = msg.tool_call_id {
-                    let output = msg.text_content();
-                    // For tool messages, we need to find the corresponding tool in history
-                    // and mark it as completed. Since we don't have elapsed_ms, use 0.
-                    // Content blocks are not available during history init, pass empty vec.
-                    self.component
-                        .complete_tool(tool_call_id, output, 0, Vec::new());
-                }
+            SessionMessage::Tool(tool_msg) => {
+                let output = tool_msg.text_content();
+                // For tool messages, we need to find the corresponding tool in history
+                // and mark it as completed. Since we don't have elapsed_ms, use 0.
+                // Content blocks are not available during history init, pass empty vec.
+                self.component
+                    .complete_tool(&tool_msg.tool_call_id, output, 0, Vec::new());
             }
-            kernel::types::Role::System | kernel::types::Role::Internal => {}
         }
     }
 }
@@ -1643,15 +1629,9 @@ impl Component for ChatViewComponent {
             Attribute::Custom(attr::INIT_HISTORY) => {
                 if let AttrValue::Payload(PropPayload::Any(payload)) = value {
                     let any = payload.as_any();
-                    // Try Vec<Message> first (for session resume)
-                    if let Some(messages) = any.downcast_ref::<Vec<kernel::types::Message>>() {
-                        self.init_history(messages);
-                    }
-                    // Try Vec<Arc<Message>> (for rewind - avoids cloning)
-                    else if let Some(messages) =
-                        any.downcast_ref::<Vec<std::sync::Arc<kernel::types::Message>>>()
+                    if let Some(messages) = any.downcast_ref::<Vec<kernel::types::SessionMessage>>()
                     {
-                        self.init_history_arc(messages);
+                        self.init_history(messages);
                     }
                 }
             }

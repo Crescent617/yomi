@@ -47,7 +47,7 @@ pub use cron::{
     CreateCronJobInput, CronAction, CronError, CronJob, CronJobId, CronJobStatus, CronSchedule,
     CronScheduler, CronStore, CronWorker, SqliteCronStore, UpdateCronJobInput,
 };
-pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, SystemEvent, ToolEvent, UserEvent};
+pub use event::{AgentEvent, ContentChunk, Event, ModelEvent, ToolEvent, UserEvent};
 pub use kernel::CreateSessionInput;
 pub use kernel::Kernel;
 pub use permission::{Checker, Level, ToolLevelResolver};

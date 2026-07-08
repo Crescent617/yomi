@@ -79,7 +79,7 @@ impl Model {
 
         let session_id = SessionId::from(self.session_id.clone());
 
-        let messages = match self.kernel.get_session_messages(&session_id).await {
+        let messages = match self.kernel.list_messages(&session_id).await {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::warn!("Failed to load session messages: {}", e);
@@ -92,18 +92,7 @@ impl Model {
             self.init_ctx_usage(0, context_window)?;
         } else {
             // Calculate initial token usage from messages
-            let initial_tokens: u32 = messages
-                .iter()
-                .filter_map(|m| m.token_usage.map(|u| u.total_tokens))
-                .next_back()
-                .unwrap_or_else(|| {
-                    // Estimate tokens from all messages if no usage data
-                    use kernel::utils::tokens;
-                    messages
-                        .iter()
-                        .map(|m| tokens::estimate_tokens(&m.text_content()))
-                        .sum::<usize>() as u32
-                });
+            let initial_tokens = crate::app::calc_token_usage(&messages);
 
             // Initialize StatusBar with calculated tokens
             self.init_ctx_usage(initial_tokens, context_window)?;

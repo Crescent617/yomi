@@ -132,7 +132,7 @@ impl Model {
         // Clear streaming UI
         let _ = self.app.attr(
             &Id::ChatView,
-            Attribute::Custom(attr::CANCEL_STREAMING),
+            Attribute::Custom(attr::STOP_STREAMING),
             AttrValue::Flag(true),
         );
     }

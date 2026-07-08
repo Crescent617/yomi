@@ -15,27 +15,38 @@
   <!-- Edit tool: diff view -->
   {#if editArgs}
     <div class="text-xs">
-      <div class="font-medium mb-1 opacity-70 dark:opacity-50 flex items-center gap-1.5">
+      <div
+        class="font-medium mb-1 opacity-70 dark:opacity-50 flex items-center gap-1.5"
+      >
         <FileEdit class="w-3.5 h-3.5" />
         <span class="font-mono">{editArgs.path}</span>
       </div>
-      <div class="rounded border border-black/5 dark:border-white/10 overflow-hidden font-mono text-[11px] leading-relaxed">
+      <div
+        class="rounded border border-black/5 dark:border-white/10 bg-black/5 dark:bg-white/5 overflow-hidden font-mono text-[11px] leading-relaxed"
+      >
         {#each diffLines(editArgs.old_str, editArgs.new_str) as line, i (i)}
-          <div class="flex
+          <div
+            class="flex
             {line.type === 'add' ? 'bg-green-50/60 dark:bg-green-950/20' : ''}
             {line.type === 'del' ? 'bg-red-50/60 dark:bg-red-950/20' : ''}"
           >
-            <span class="shrink-0 w-5 text-right pr-1 select-none
+            <span
+              class="shrink-0 w-5 text-right pr-1 select-none
               {line.type === 'add' ? 'text-green-600 dark:text-green-400' : ''}
               {line.type === 'del' ? 'text-red-600 dark:text-red-400' : ''}
-              {line.type === 'context' ? 'text-gray-400 dark:text-gray-500' : ''}"
+              {line.type === 'context'
+                ? 'text-gray-400 dark:text-gray-500'
+                : ''}"
             >
-              {line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' '}
+              {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
             </span>
-            <span class="whitespace-pre-wrap flex-1 min-w-0
+            <span
+              class="whitespace-pre-wrap flex-1 min-w-0
               {line.type === 'add' ? 'text-green-700 dark:text-green-300' : ''}
               {line.type === 'del' ? 'text-red-700 dark:text-red-300' : ''}
-              {line.type === 'context' ? 'text-foreground/80 dark:text-foreground/70' : ''}"
+              {line.type === 'context'
+                ? 'text-foreground/80 dark:text-foreground/70'
+                : ''}"
             >
               {line.text}
             </span>
@@ -44,10 +55,12 @@
       </div>
     </div>
 
-  <!-- Write tool: content view -->
+    <!-- Write tool: content view -->
   {:else if writeArgs}
     <div class="text-xs">
-      <div class="font-medium mb-1 opacity-70 dark:opacity-50 flex items-center gap-1.5">
+      <div
+        class="font-medium mb-1 opacity-70 dark:opacity-50 flex items-center gap-1.5"
+      >
         <FileText class="w-3.5 h-3.5" />
         <span class="font-mono">{writeArgs.file_path}</span>
       </div>
@@ -55,7 +68,7 @@
         class="bg-black/5 dark:bg-white/5 rounded px-2.5 py-2 whitespace-pre-wrap overflow-x-auto text-[11px] leading-relaxed font-mono text-foreground/90 dark:text-foreground/80">{writeArgs.content}</pre>
     </div>
 
-  <!-- Other tools: raw JSON -->
+    <!-- Other tools: raw JSON -->
   {:else if tool.arguments}
     <div class="text-xs opacity-60 dark:opacity-50">
       <div class="font-medium mb-0.5">Arguments:</div>
@@ -73,9 +86,7 @@
 
   {#if tool.output}
     <div class="text-xs">
-      <div class="font-medium mb-0.5 opacity-70 dark:opacity-50">
-        Output:
-      </div>
+      <div class="font-medium mb-0.5 opacity-70 dark:opacity-50">Output:</div>
       <pre
         class="bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap overflow-x-auto">{tool.output}</pre>
     </div>

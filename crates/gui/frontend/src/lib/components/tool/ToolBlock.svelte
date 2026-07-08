@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronUp,
-    ArrowUpRight,
-    Bot,
-  } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, ArrowUpRight, Bot } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
   import {
     statusColor,

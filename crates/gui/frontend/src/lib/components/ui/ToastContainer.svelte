@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { fly, fade } from "svelte/transition";
+  import { flip } from "svelte/animate";
   import { toasts, removeToast } from "../../toast.svelte";
   import {
     X,
@@ -34,12 +36,15 @@
 </script>
 
 <div
-  class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none"
+  class="fixed top-4 right-4 z-[100] flex flex-col gap-2 w-full max-w-xs pointer-events-none"
 >
   {#each toasts as toast (toast.id)}
     {@const Icon = iconMap[toast.type]}
     <div
-      class="pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 shadow-lg transition-all duration-300 {colorMap[
+      in:fly={{ x: 80, duration: 300, opacity: 0 }}
+      out:fade={{ duration: 200 }}
+      animate:flip={{ duration: 250 }}
+      class="pointer-events-auto flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 shadow-lg {colorMap[
         toast.type
       ]}"
     >

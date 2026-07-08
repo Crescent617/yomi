@@ -61,17 +61,11 @@ impl KernelServer {
                     self.kernel.create_session(input).await.map(|sid| sid.0),
                 )
             }
-            ReqMethod::RestoreSession {
-                session_id,
-                tool_blocklist,
-            } => {
+            ReqMethod::RestoreSession { session_id } => {
                 let sid = SessionId::from(session_id);
                 rpc_body(
                     "restore_session_failed",
-                    self.kernel
-                        .restore_session(&sid, tool_blocklist)
-                        .await
-                        .map(|sid| sid.0),
+                    self.kernel.restore_session(&sid).await.map(|sid| sid.0),
                 )
             }
             ReqMethod::ForkSession {
@@ -195,10 +189,10 @@ impl KernelServer {
                     result: serde_json::Value::Null,
                 }
             }
-            ReqMethod::GetSessionMessages { session_id } => rpc_body(
-                "get_messages_failed",
+            ReqMethod::ListMessages { session_id } => rpc_body(
+                "list_messages_failed",
                 self.kernel
-                    .get_session_messages(&SessionId::from(session_id))
+                    .list_messages(&SessionId::from(session_id))
                     .await,
             ),
             ReqMethod::GetSession { session_id } => rpc_body(

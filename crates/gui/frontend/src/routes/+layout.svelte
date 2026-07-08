@@ -23,7 +23,9 @@
     startThemeListener();
     const unlistenEvent = listen(
       "kernel:event",
-      (e: { payload: { session_id: string; event_id?: string; event: unknown } }) => {
+      (e: {
+        payload: { session_id: string; event_id?: string; event: unknown };
+      }) => {
         const { session_id, event_id, event } = e.payload;
         const session = getSession(session_id);
         if (session) {

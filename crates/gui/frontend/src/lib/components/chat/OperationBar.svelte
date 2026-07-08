@@ -2,7 +2,11 @@
   import { Copy, Undo } from "lucide-svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import type { Message } from "../../state.svelte";
-  import { showNotification, getSession } from "../../state.svelte";
+  import {
+    textFromBlocks,
+    showNotification,
+    getSession,
+  } from "../../state.svelte";
   import * as api from "../../api";
 
   let {
@@ -54,7 +58,11 @@
   async function copyText() {
     if (message.type === "tool") return;
     try {
-      await navigator.clipboard.writeText(message.content || "");
+      const text =
+        message.type === "error"
+          ? message.content
+          : textFromBlocks(message.content);
+      await navigator.clipboard.writeText(text);
       showNotification("Text copied", "success", 2000);
     } catch {
       showNotification("Failed to copy text", "error", 2000);

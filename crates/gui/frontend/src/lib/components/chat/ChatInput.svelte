@@ -21,6 +21,7 @@
     getActiveSession,
     showNotification,
     refreshSessions,
+    textFromBlocks,
   } from "../../state.svelte";
   import { SLASH_COMMANDS } from "../../commands";
   import type { FileEntry } from "../../fs/provider";
@@ -166,7 +167,7 @@
     if (!session) return [];
     const userMsgs = session.messages
       .filter((m) => m.type === "user")
-      .map((m) => m.content)
+      .map((m) => textFromBlocks(m.content))
       .filter((c) => c.trim());
     // Deduplicate and reverse (newest first)
     const seen = new Set<string>();
@@ -198,7 +199,7 @@
   }
 
   function queueInput() {
-    if (submitting) return;
+    if (isSending) return;
     const session = activeSession;
     if (!session || !content.trim()) return;
     session.queued_input = {
@@ -437,8 +438,8 @@
   }
 
   async function handleSubmit() {
-    if (submitting || !content.trim() || !sessionState.activeSessionId) return;
-    submitting = true;
+    if (isSending || !content.trim() || !sessionState.activeSessionId) return;
+    isSending = true;
     try {
       const session_id = sessionState.activeSessionId;
       const baseText = content.trim();
@@ -493,7 +494,7 @@
         }
       }
     } finally {
-      submitting = false;
+      isSending = false;
     }
   }
 
@@ -572,7 +573,7 @@
 
   // ── file attachments (any type, paths appended to prompt) ──
   let fileAttachments = $state<string[]>([]);
-  let submitting = $state(false);
+  let isSending = $state(false);
 
   async function attachFiles() {
     try {
@@ -996,7 +997,7 @@
           onclick={handleSubmit}
           disabled={!content.trim() ||
             !sessionState.activeSessionId ||
-            submitting}
+            isSending}
           class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
         >
           <Send size={16} />
