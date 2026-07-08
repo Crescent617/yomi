@@ -78,8 +78,7 @@ pub use tools::task::{
     TASK_UPDATE_TOOL_NAME,
 };
 pub use tools::{
-    execute_tools_parallel, EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool,
-    SubagentTool, WriteTool,
+    EditTool, GlobTool, GrepTool, ReadTool, ShellTool, SkillTool, SubagentTool, WriteTool,
 };
 pub use tools::{Tool, ToolRegistry};
 pub use types::*;

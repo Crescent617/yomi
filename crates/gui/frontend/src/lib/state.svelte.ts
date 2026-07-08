@@ -203,6 +203,7 @@ export interface SessionState {
   streaming_tool_name?: string;
   git_info?: GitInfo | null;
   goal?: { description: string; status: string } | null;
+  todos?: { id: string; content: string; status: string }[];
   browserUrl?: string;
 }
 
@@ -349,12 +350,16 @@ export function refreshSessions() {
             queued_input: null,
             updated_at: s.created_at,
             permission_level: s.auto_approve_level,
+            goal: null,
+            todos: [],
           });
         } else {
           current.alias = s.title ?? current.alias;
           current.updated_at = s.created_at ?? current.updated_at;
           current.permission_level =
             s.auto_approve_level ?? current.permission_level;
+          current.goal ??= null;
+          current.todos ??= [];
         }
       }
     })
@@ -397,6 +402,8 @@ export function loadPinnedSessions() {
             queued_input: null,
             updated_at: p.updated_at,
             is_pinned: true,
+            goal: null,
+            todos: [],
           };
           sessionState.sessions.push(session);
         } else {
@@ -404,6 +411,8 @@ export function loadPinnedSessions() {
           session.alias = p.title ?? session.alias ?? "Untitled";
           session.updated_at = p.updated_at ?? session.updated_at;
           session.project_id = p.project_id ?? session.project_id;
+          session.goal ??= null;
+          session.todos ??= [];
         }
       }
     })
@@ -463,9 +472,17 @@ export async function loadSessionData(sessionId: string) {
     queued_input: null,
     updated_at: new Date().toISOString(),
     permission_level: info.auto_approve_level || undefined,
+    goal: null,
+    todos: [],
   };
   upsertSession(session);
-  const msgs = await api.getMessages(sessionId);
+  const [msgs, goalResult, todosResult] = await Promise.all([
+    api.getMessages(sessionId),
+    api.getGoal(sessionId).catch(() => null),
+    api.getTodos(sessionId).catch(() => ({ todos: [] })),
+  ]);
+  session.goal = goalResult;
+  session.todos = todosResult.todos;
   loadSessionMessages(sessionId, msgs);
   return session;
 }
@@ -949,6 +966,14 @@ function maybeRefreshGitInfo(session: SessionState) {
     });
 }
 
+function maybeRefreshTodos(session: SessionState, toolName: string) {
+  if (toolName === "todo") {
+    api.getTodos(session.id)
+      .then((r) => { session.todos = r.todos; })
+      .catch(() => {});
+  }
+}
+
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
     const start = event.start;
@@ -1009,6 +1034,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       msg.status = end.is_error ? "failed" : "completed";
       msg.elapsed_ms = end.elapsed_ms;
       msg.result = end.content_blocks ?? [];
+      maybeRefreshTodos(session, end.tool_name);
       maybeRefreshGitInfo(session);
       return true;
     }
@@ -1026,6 +1052,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     };
     buf.push(toolMsg);
     streamingMessages[session.id] = buf;
+    maybeRefreshTodos(session, end.tool_name);
     maybeRefreshGitInfo(session);
     return true;
   }

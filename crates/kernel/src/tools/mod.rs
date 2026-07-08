@@ -30,7 +30,7 @@ pub mod send_message;
 pub use helper::{FileStateStore, DEFAULT_MAX_TOOL_OUTPUT_LENGTH, MAX_FILE_SIZE};
 
 // Re-export from executor directly
-pub use executor::{execute_tools_parallel, ToolExecutionResult};
+pub use executor::{build_tool_result, ToolExecutionResult};
 
 pub use ask_user::{AskOption, AskQuestion, AskUserResponse, AskUserTool, ASK_USER_TOOL_NAME};
 pub use edit::{EditTool, EDIT_TOOL_NAME};
@@ -57,8 +57,6 @@ pub const ASYNC_LAUNCH_GUIDE: &str = "After launching, end your current turn imm
 pub struct ToolExecCtx<'a> {
     /// The ID of this tool call
     pub tool_call_id: &'a str,
-    /// Parent agent's message history (for context inheritance)
-    pub parent_messages: Option<&'a [Arc<crate::types::Message>]>,
     /// Runtime cancel token for checking cancellation requests (tokio native)
     pub cancel_token: Option<tokio_util::sync::CancellationToken>,
     /// Working directory for file-based operations
@@ -68,17 +66,15 @@ pub struct ToolExecCtx<'a> {
     /// Pre-generated `MessageId` for the tool result message, allowing progress
     /// events and the final result to share a consistent identifier.
     pub message_id: crate::types::MessageId,
-    /// Current turn for file tracking and checkpointing
-    /// Tools use this to track modified files
+    /// Current turn for file tracking and checkpointing.
+    /// Tools call `ctx.track_edit()` before modifying a file.
     pub turn: Option<std::sync::Arc<crate::agent::Turn>>,
-    /// Skills available to this agent (for tools like `SubagentTool` that need to pass them on)
-    pub skills: Vec<Arc<crate::skill::Skill>>,
     /// Maximum tool output length in bytes
     pub max_tool_output_length: usize,
 }
 
 impl<'a> ToolExecCtx<'a> {
-    /// Create a new context with just the tool call ID and `session_id`
+    /// Create a minimal context with just the IDs and working directory.
     pub fn new(
         tool_call_id: &'a str,
         working_dir: impl Into<std::path::PathBuf>,
@@ -86,57 +82,18 @@ impl<'a> ToolExecCtx<'a> {
     ) -> Self {
         Self {
             tool_call_id,
-            parent_messages: None,
             cancel_token: None,
             working_dir: working_dir.into(),
             session_id: session_id.into(),
             message_id: crate::types::MessageId::default(),
             turn: None,
-            skills: Vec::new(),
             max_tool_output_length: 40_000,
         }
-    }
-
-    /// Create a context with tool call ID, parent messages, runtime token, working directory and `session_id`
-    /// This is a convenience constructor for the common case where both
-    /// `parent_messages` and `cancel_token` are available
-    pub fn with_parent_ctx(
-        tool_call_id: &'a str,
-        parent_messages: Option<&'a [Arc<crate::types::Message>]>,
-        cancel_token: Option<tokio_util::sync::CancellationToken>,
-        working_dir: impl Into<std::path::PathBuf>,
-        session_id: impl Into<String>,
-        message_id: crate::types::MessageId,
-    ) -> Self {
-        Self {
-            tool_call_id,
-            parent_messages,
-            cancel_token,
-            working_dir: working_dir.into(),
-            session_id: session_id.into(),
-            message_id,
-            turn: None,
-            skills: Vec::new(),
-            max_tool_output_length: 40_000,
-        }
-    }
-
-    #[must_use]
-    pub fn with_parent_messages(mut self, messages: &'a [Arc<crate::types::Message>]) -> Self {
-        self.parent_messages = Some(messages);
-        self
     }
 
     #[must_use]
     pub fn with_cancel_token(mut self, token: Option<tokio_util::sync::CancellationToken>) -> Self {
         self.cancel_token = token;
-        self
-    }
-
-    /// Set available skills for tools that need to spawn sub-agents
-    #[must_use]
-    pub fn with_skills(mut self, skills: Vec<Arc<crate::skill::Skill>>) -> Self {
-        self.skills = skills;
         self
     }
 
@@ -156,8 +113,8 @@ impl<'a> ToolExecCtx<'a> {
         }
     }
 
-    /// Track a file edit (backup current state BEFORE modifying)
-    /// Must be called BEFORE file is modified
+    /// Track a file edit (backup current state BEFORE modifying).
+    /// Must be called BEFORE the file is modified.
     pub async fn track_edit(&self, path: &std::path::Path) {
         if let Some(ref turn) = self.turn {
             if let Err(e) = turn.track_file(path).await {

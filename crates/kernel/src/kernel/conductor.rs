@@ -116,16 +116,29 @@ impl Conductor {
                         }
                         Event::Tool(crate::event::ToolEvent::Metadata { message_id, tool_id, metadata }) => {
                             if let Some(ref store) = self.agent_shared.message_store {
-                                let placeholder = crate::types::Message {
-                                    id: message_id,
+                                let placeholder = Arc::new(crate::types::Message {
+                                    id: message_id.clone(),
                                     role: crate::types::Role::Internal,
                                     content: vec![],
                                     tool_call_id: Some(tool_id),
                                     metadata: Some(metadata),
                                     ..Default::default()
-                                };
-                                if let Err(e) = store.append(&sid.0, &[placeholder]).await {
-                                    tracing::warn!("Failed to persist tool metadata for session={sid}: {e}");
+                                });
+                                // Emit MessageAdded so the event buffer is cleared,
+                                // and let the MessageAdded handler handle persistence.
+                                let envelope = crate::event::Envelope::new(
+                                    sid.clone(),
+                                    crate::event::Event::Internal(
+                                        crate::event::InternalEvent::MessageAdded {
+                                            message: Arc::clone(&placeholder),
+                                        },
+                                    ),
+                                );
+                                if let Err(e) = self.event_bus.publish(sid.clone(), envelope) {
+                                    tracing::warn!("Failed to publish metadata MessageAdded for session={sid}: {e}, falling back to direct persist");
+                                    if let Err(e2) = store.append(&sid.0, &[(*placeholder).clone()]).await {
+                                        tracing::warn!("Failed to persist tool metadata for session={sid}: {e2}");
+                                    }
                                 }
                             }
                         }
