@@ -1,6 +1,6 @@
-use crate::event::{Event, InternalEvent};
+use crate::event::{ContentChunk, Event, InternalEvent, ModelEvent};
 use crate::server::event_buffer::EventBuffer;
-use crate::types::{EventId, SessionId};
+use crate::types::{EventId, MessageId, SessionId};
 use crate::wire::Envelope;
 
 fn make_event(sid: &str, event: Event) -> Envelope {
@@ -190,4 +190,226 @@ fn test_per_session_isolation() {
     assert!(buf.get_after(&sid1, None).is_empty());
     assert_eq!(buf.get_after(&sid2, None).len(), 1);
     assert_eq!(buf.get_after(&sid2, None)[0].event_id, id2);
+}
+
+fn text_chunk(sid: &str, mid: &MessageId, text: &str) -> Envelope {
+    make_event(
+        sid,
+        Event::Model(ModelEvent::Chunk {
+            message_id: mid.clone(),
+            content: ContentChunk::Text(text.to_string()),
+        }),
+    )
+}
+
+fn thinking_chunk(sid: &str, mid: &MessageId, text: &str, sig: Option<&str>) -> Envelope {
+    make_event(
+        sid,
+        Event::Model(ModelEvent::Chunk {
+            message_id: mid.clone(),
+            content: ContentChunk::Thinking {
+                thinking: text.to_string(),
+                signature: sig.map(str::to_string),
+            },
+        }),
+    )
+}
+
+fn tool_delta(sid: &str, mid: &MessageId, tool_id: &str, delta: &str) -> Envelope {
+    make_event(
+        sid,
+        Event::Model(ModelEvent::ToolCallDelta {
+            message_id: mid.clone(),
+            tool_id: tool_id.to_string(),
+            tool_name: "test_tool".to_string(),
+            arguments_delta: delta.to_string(),
+        }),
+    )
+}
+
+#[test]
+fn test_merge_text_chunks() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(text_chunk("sess_test", &mid, "Hello"));
+    let e2 = text_chunk("sess_test", &mid, ", world");
+    let id2 = e2.event_id.clone();
+    buf.push(e2);
+
+    let all = buf.get_after(&sid, None);
+    assert_eq!(all.len(), 1, "consecutive text chunks should merge");
+    // merged event keeps the newest event_id
+    assert_eq!(all[0].event_id, id2);
+    match &all[0].event {
+        Event::Model(ModelEvent::Chunk {
+            content: ContentChunk::Text(t),
+            ..
+        }) => assert_eq!(t, "Hello, world"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_thinking_chunks() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(thinking_chunk("sess_test", &mid, "think ", None));
+    buf.push(thinking_chunk("sess_test", &mid, "harder", Some("sig")));
+
+    let all = buf.get_after(&sid, None);
+    assert_eq!(all.len(), 1);
+    match &all[0].event {
+        Event::Model(ModelEvent::Chunk {
+            content:
+                ContentChunk::Thinking {
+                    thinking,
+                    signature,
+                },
+            ..
+        }) => {
+            assert_eq!(thinking, "think harder");
+            assert_eq!(signature.as_deref(), Some("sig"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn test_no_merge_text_and_thinking() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(text_chunk("sess_test", &mid, "a"));
+    buf.push(thinking_chunk("sess_test", &mid, "b", None));
+
+    assert_eq!(buf.get_after(&sid, None).len(), 2);
+}
+
+#[test]
+fn test_no_merge_different_message_id() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+
+    buf.push(text_chunk("sess_test", &MessageId::new(), "a"));
+    buf.push(text_chunk("sess_test", &MessageId::new(), "b"));
+
+    assert_eq!(buf.get_after(&sid, None).len(), 2);
+}
+
+#[test]
+fn test_merge_tool_call_deltas() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(tool_delta("sess_test", &mid, "tool_1", "{\"pa"));
+    buf.push(tool_delta("sess_test", &mid, "tool_1", "th\":"));
+    buf.push(tool_delta("sess_test", &mid, "tool_1", "\"x\"}"));
+
+    let all = buf.get_after(&sid, None);
+    assert_eq!(all.len(), 1, "consecutive tool deltas should merge");
+    match &all[0].event {
+        Event::Model(ModelEvent::ToolCallDelta {
+            arguments_delta, ..
+        }) => assert_eq!(arguments_delta, "{\"path\":\"x\"}"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn test_no_merge_different_tool_id() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(tool_delta("sess_test", &mid, "tool_1", "a"));
+    buf.push(tool_delta("sess_test", &mid, "tool_2", "b"));
+
+    assert_eq!(buf.get_after(&sid, None).len(), 2);
+}
+
+#[test]
+fn test_no_merge_when_not_consecutive() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(text_chunk("sess_test", &mid, "a"));
+    buf.push(tool_delta("sess_test", &mid, "tool_1", "x"));
+    buf.push(text_chunk("sess_test", &mid, "b"));
+
+    // text / delta / text -> nothing merges across the interleaving event
+    assert_eq!(buf.get_after(&sid, None).len(), 3);
+}
+
+#[test]
+fn test_get_after_merged_event_id_is_exclusive() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(text_chunk("sess_test", &mid, "a"));
+    let e2 = text_chunk("sess_test", &mid, "b");
+    let id2 = e2.event_id.clone();
+    buf.push(e2);
+
+    // A client that already saw the latest id gets nothing on replay.
+    assert!(buf.get_after(&sid, Some(&id2)).is_empty());
+}
+
+#[test]
+fn test_get_after_intermediate_chunk_id() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    buf.push(text_chunk("sess_test", &mid, "a"));
+    let e2 = text_chunk("sess_test", &mid, "b");
+    let id2 = e2.event_id.clone();
+    buf.push(e2);
+    buf.push(text_chunk("sess_test", &mid, "c"));
+    buf.push(text_chunk("sess_test", &mid, "d"));
+
+    // The buffer keeps raw events, so a client resuming from an intermediate
+    // chunk id gets exactly the remainder — merged into one event.
+    let after = buf.get_after(&sid, Some(&id2));
+    assert_eq!(after.len(), 1);
+    match &after[0].event {
+        Event::Model(ModelEvent::Chunk {
+            content: ContentChunk::Text(t),
+            ..
+        }) => assert_eq!(t, "cd"),
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn test_buffer_stores_raw_events() {
+    let buf = EventBuffer::new(10);
+    let sid = SessionId::from("sess_test");
+    let mid = MessageId::new();
+
+    let mut ids = Vec::new();
+    for s in ["a", "b", "c"] {
+        let e = text_chunk("sess_test", &mid, s);
+        ids.push(e.event_id.clone());
+        buf.push(e);
+    }
+
+    // Every raw event id remains addressable for resume.
+    assert_eq!(buf.get_after(&sid, Some(&ids[2])).len(), 0);
+    let after_b = buf.get_after(&sid, Some(&ids[1]));
+    assert_eq!(after_b.len(), 1);
+    match &after_b[0].event {
+        Event::Model(ModelEvent::Chunk {
+            content: ContentChunk::Text(t),
+            ..
+        }) => assert_eq!(t, "c"),
+        other => panic!("unexpected event: {other:?}"),
+    }
 }

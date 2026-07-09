@@ -329,6 +329,48 @@ async fn test_list_expired_includes_orphan_subagents() {
 }
 
 #[tokio::test]
+async fn test_list_ids_by_project() {
+    let store = create_test_store().await;
+    let pid = crate::types::ProjectId::from("proj-1".to_string());
+    let other_pid = crate::types::ProjectId::from("proj-2".to_string());
+
+    // Two sessions in project 1
+    let s1 = SessionId::new();
+    store
+        .create(&s1, Some(&pid), Some("/p1"), None, None, None)
+        .await
+        .unwrap();
+    let s2 = SessionId::new();
+    store
+        .create(&s2, Some(&pid), Some("/p1"), None, None, None)
+        .await
+        .unwrap();
+    // Subagent child of s1 (inherits project via parent linkage)
+    let sub = SessionId::new_subagent();
+    store
+        .create(&sub, None, None, None, Some(&s1), None)
+        .await
+        .unwrap();
+    // Session in another project
+    let other = SessionId::new();
+    store
+        .create(&other, Some(&other_pid), Some("/p2"), None, None, None)
+        .await
+        .unwrap();
+
+    let ids = store.list_ids_by_project(&pid).await.unwrap();
+    let id_strs: Vec<String> = ids.iter().map(|s| s.0.to_string()).collect();
+    assert!(id_strs.contains(&s1.0.to_string()));
+    assert!(id_strs.contains(&s2.0.to_string()));
+    assert!(
+        id_strs.contains(&sub.0.to_string()),
+        "subagent child included"
+    );
+    assert!(!id_strs.contains(&other.0.to_string()));
+    assert_eq!(ids.len(), 3);
+}
+
+#[tokio::test]
 async fn test_list_expired_respects_pinned() {
     let store = create_test_store().await;
 

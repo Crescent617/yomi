@@ -36,13 +36,17 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null),
             ),
-            ReqMethod::DeleteProject { project_id } => rpc_body(
-                "delete_project_failed",
-                self.kernel
-                    .delete_project(&ProjectId::from(project_id))
-                    .await
-                    .map(|()| serde_json::Value::Null),
-            ),
+            ReqMethod::DeleteProject { project_id } => {
+                let pid = ProjectId::from(project_id);
+                let result = self.kernel.delete_project(&pid).await;
+                if let Ok(report) = &result {
+                    // Drop buffered events of deleted sessions
+                    for sid in &report.sessions {
+                        self.event_buffer.remove(sid);
+                    }
+                }
+                rpc_body("delete_project_failed", result)
+            }
 
             // ── Session ──────────────────────────────────────────────────
             ReqMethod::CreateSession {

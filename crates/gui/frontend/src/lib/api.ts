@@ -92,7 +92,16 @@ export async function renameProject(
   return invokeCmd("rename_project", { project_id: project_id, name });
 }
 
-export async function deleteProject(project_id: string): Promise<void> {
+export interface DeleteProjectResult {
+  sessions_deleted: number;
+  bytes_reclaimed: number;
+}
+
+/** Deletes the project AND all its sessions (incl. subagents) with their
+ *  resources. Caller must confirm with the user first. */
+export async function deleteProject(
+  project_id: string,
+): Promise<DeleteProjectResult> {
   return invokeCmd("delete_project", { project_id: project_id });
 }
 

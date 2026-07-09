@@ -6,13 +6,16 @@ mod test_helpers {
     pub fn default_model(provider: ModelProvider) -> String {
         match provider {
             ModelProvider::OpenAI => "gpt-4".to_string(),
+            ModelProvider::OpenAIResponse => "gpt-5".to_string(),
             ModelProvider::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
         }
     }
 
     pub fn default_endpoint(provider: ModelProvider) -> String {
         match provider {
-            ModelProvider::OpenAI => "https://api.openai.com/v1".to_string(),
+            ModelProvider::OpenAI | ModelProvider::OpenAIResponse => {
+                "https://api.openai.com/v1".to_string()
+            }
             ModelProvider::Anthropic => "https://api.anthropic.com".to_string(),
         }
     }
@@ -45,12 +48,51 @@ fn test_provider_parse() {
         ModelProvider::OpenAI
     );
     assert!("unknown".parse::<ModelProvider>().is_err());
+    assert_eq!(
+        "openai_response".parse::<ModelProvider>().unwrap(),
+        ModelProvider::OpenAIResponse
+    );
+    assert_eq!(
+        "openai-response".parse::<ModelProvider>().unwrap(),
+        ModelProvider::OpenAIResponse
+    );
+    assert_eq!(
+        "OpenAI-Response".parse::<ModelProvider>().unwrap(),
+        ModelProvider::OpenAIResponse
+    );
 }
 
 #[test]
 fn test_provider_display() {
     assert_eq!(ModelProvider::OpenAI.to_string(), "openai");
     assert_eq!(ModelProvider::Anthropic.to_string(), "anthropic");
+    assert_eq!(ModelProvider::OpenAIResponse.to_string(), "openai_response");
+}
+
+#[test]
+fn test_provider_serde_roundtrip() {
+    for provider in [
+        ModelProvider::OpenAI,
+        ModelProvider::Anthropic,
+        ModelProvider::OpenAIResponse,
+    ] {
+        let json = serde_json::to_string(&provider).unwrap();
+        let parsed: ModelProvider = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, provider);
+    }
+    // Explicit wire format checks
+    assert_eq!(
+        serde_json::to_string(&ModelProvider::OpenAI).unwrap(),
+        "\"openai\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ModelProvider::Anthropic).unwrap(),
+        "\"anthropic\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ModelProvider::OpenAIResponse).unwrap(),
+        "\"openai_response\""
+    );
 }
 
 #[test]
