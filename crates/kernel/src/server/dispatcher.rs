@@ -478,6 +478,28 @@ impl KernelServer {
                     },
                 },
             },
+            ReqMethod::GetModelUsage { days } => match self.kernel.get_model_usage(days).await {
+                Ok(usage) => ok_body(usage),
+                Err(e) => RespBody::Err {
+                    error: RpcError {
+                        code: "get_model_usage_failed".to_string(),
+                        message: e.to_string(),
+                        detail: None,
+                    },
+                },
+            },
+            ReqMethod::GetModelUsageSince { start } => {
+                match self.kernel.get_model_usage_since(start).await {
+                    Ok(usage) => ok_body(usage),
+                    Err(e) => RespBody::Err {
+                        error: RpcError {
+                            code: "get_model_usage_since_failed".to_string(),
+                            message: e.to_string(),
+                            detail: None,
+                        },
+                    },
+                }
+            }
 
             // ── Channel ────────────────────────────────────────────────────
             ReqMethod::ListChannels => {

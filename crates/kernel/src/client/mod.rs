@@ -144,6 +144,11 @@ pub trait KernelApi: Send + Sync {
     // ── Usage ──────────────────────────────────────────────────────────
     async fn get_usage_summary(&self, days: i64) -> Result<crate::storage::usage::UsageSummary>;
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>>;
+    async fn get_model_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::ModelUsage>>;
+    async fn get_model_usage_since(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::storage::usage::ModelUsage>>;
 
     // ── Cron Job ─────────────────────────────────────────────────────────
     //
@@ -418,6 +423,17 @@ impl KernelApi for Kernel {
 
     async fn get_daily_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::DailyUsage>> {
         Self::get_daily_usage(self, days).await
+    }
+
+    async fn get_model_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::ModelUsage>> {
+        Self::get_model_usage(self, days).await
+    }
+
+    async fn get_model_usage_since(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::storage::usage::ModelUsage>> {
+        Self::get_model_usage_since(self, start).await
     }
 
     async fn create_cron_job(
@@ -1376,6 +1392,21 @@ impl KernelApi for RemoteKernel {
         let result = self.call(ReqMethod::GetDailyUsage { days }).await?;
         let daily: Vec<crate::storage::usage::DailyUsage> = serde_json::from_value(result)?;
         Ok(daily)
+    }
+
+    async fn get_model_usage(&self, days: i64) -> Result<Vec<crate::storage::usage::ModelUsage>> {
+        let result = self.call(ReqMethod::GetModelUsage { days }).await?;
+        let usage: Vec<crate::storage::usage::ModelUsage> = serde_json::from_value(result)?;
+        Ok(usage)
+    }
+
+    async fn get_model_usage_since(
+        &self,
+        start: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::storage::usage::ModelUsage>> {
+        let result = self.call(ReqMethod::GetModelUsageSince { start }).await?;
+        let usage: Vec<crate::storage::usage::ModelUsage> = serde_json::from_value(result)?;
+        Ok(usage)
     }
 
     async fn create_cron_job(

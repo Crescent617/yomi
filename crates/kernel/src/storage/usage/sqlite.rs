@@ -60,25 +60,7 @@ impl UsageStore for SqliteUsageStore {
              WHERE 1=1",
         );
 
-        builder.push(" AND created_at >= ");
-        builder.push_bind(start);
-        builder.push(" AND created_at <= ");
-        builder.push_bind(end);
-
-        if let Some(f) = filter {
-            if let Some(model) = &f.model {
-                builder.push(" AND model = ");
-                builder.push_bind(model);
-            }
-            if let Some(provider) = &f.provider {
-                builder.push(" AND provider = ");
-                builder.push_bind(provider);
-            }
-            if let Some(usage_type) = f.usage_type {
-                builder.push(" AND usage_type = ");
-                builder.push_bind(usage_type.as_str());
-            }
-        }
+        push_summary_filters(&mut builder, start, end, filter);
 
         let row = builder
             .build_query_as::<SummaryRow>()
@@ -112,25 +94,7 @@ impl UsageStore for SqliteUsageStore {
              WHERE 1=1",
         );
 
-        builder.push(" AND created_at >= ");
-        builder.push_bind(start);
-        builder.push(" AND created_at <= ");
-        builder.push_bind(end);
-
-        if let Some(f) = filter {
-            if let Some(model) = &f.model {
-                builder.push(" AND model = ");
-                builder.push_bind(model);
-            }
-            if let Some(provider) = &f.provider {
-                builder.push(" AND provider = ");
-                builder.push_bind(provider);
-            }
-            if let Some(usage_type) = f.usage_type {
-                builder.push(" AND usage_type = ");
-                builder.push_bind(usage_type.as_str());
-            }
-        }
+        push_summary_filters(&mut builder, start, end, filter);
 
         builder.push(
             " GROUP BY date(created_at, 'localtime') ORDER BY date(created_at, 'localtime') ASC",
@@ -158,11 +122,93 @@ impl UsageStore for SqliteUsageStore {
             })
             .collect())
     }
+
+    async fn by_model_summary(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        filter: Option<&super::UsageFilter>,
+    ) -> Result<Vec<super::ModelUsage>> {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT
+                model,
+                provider,
+                COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+                COUNT(*) as request_count
+             FROM token_usage
+             WHERE 1=1",
+        );
+
+        push_summary_filters(&mut builder, start, end, filter);
+
+        builder
+            .push(" GROUP BY model, provider ORDER BY SUM(prompt_tokens + completion_tokens) DESC");
+
+        let rows = builder
+            .build_query_as::<ModelRow>()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to get model summary: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| super::ModelUsage {
+                model: r.model,
+                provider: r.provider,
+                prompt_tokens: r.prompt_tokens as u64,
+                completion_tokens: r.completion_tokens as u64,
+                cached_tokens: r.cached_tokens as u64,
+                request_count: r.request_count as u64,
+            })
+            .collect())
+    }
+}
+
+/// Push the shared WHERE clauses (time range + optional filter) onto a
+/// summary-query builder that already ends with `WHERE 1=1`.
+fn push_summary_filters(
+    builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    filter: Option<&super::UsageFilter>,
+) {
+    builder.push(" AND created_at >= ");
+    builder.push_bind(start);
+    builder.push(" AND created_at <= ");
+    builder.push_bind(end);
+
+    if let Some(f) = filter {
+        if let Some(model) = &f.model {
+            builder.push(" AND model = ");
+            builder.push_bind(model);
+        }
+        if let Some(provider) = &f.provider {
+            builder.push(" AND provider = ");
+            builder.push_bind(provider);
+        }
+        if let Some(usage_type) = f.usage_type {
+            builder.push(" AND usage_type = ");
+            builder.push_bind(usage_type.as_str());
+        }
+    }
 }
 
 /// Internal row type for summary queries
 #[derive(sqlx::FromRow)]
 struct SummaryRow {
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cached_tokens: i64,
+    request_count: i64,
+}
+
+/// Internal row type for per-model summary queries
+#[derive(sqlx::FromRow)]
+struct ModelRow {
+    model: String,
+    provider: String,
     prompt_tokens: i64,
     completion_tokens: i64,
     cached_tokens: i64,

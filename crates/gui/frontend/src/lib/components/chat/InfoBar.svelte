@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, CheckCircle2, Database, Zap } from "lucide-svelte";
+  import { Loader2, Check, Database, Zap } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import {
     getDisplayMessages,
@@ -181,7 +181,7 @@
       {:else if session?.phase === "compacting"}
         <Database size={12} class="animate-spin text-sky-500 shrink-0" />
       {:else if streamingTokens > 0}
-        <CheckCircle2 size={12} class="text-green-500 shrink-0" />
+        <Check size={12} class="text-green-500 shrink-0" />
       {/if}
 
       {#if streamingTokens > 0}

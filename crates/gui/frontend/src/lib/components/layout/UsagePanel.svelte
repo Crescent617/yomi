@@ -2,6 +2,8 @@
   import { onMount, tick } from "svelte";
   import * as echarts from "echarts";
   import * as api from "../../api";
+  import type { ModelInfo, ModelUsage } from "../../api";
+  import { getActiveSession } from "../../state.svelte";
   import {
     ArrowUpRight,
     ArrowDownLeft,
@@ -46,6 +48,9 @@
     request_count: number;
   } | null>(null);
   let daily = $state<DayData[]>([]);
+  let todayUsage = $state<ModelUsage[]>([]);
+  let allModelUsage = $state<ModelUsage[]>([]);
+  let configuredModels = $state<ModelInfo[]>([]);
   let loading = $state(true);
 
   let chartDiv: HTMLDivElement | null = $state(null);
@@ -147,6 +152,59 @@
     );
   });
 
+  // ── today / per-model stats ──
+
+  const activeSession = $derived(getActiveSession());
+
+  /** model_id of the active session's model (falls back to default model) */
+  const currentModelId = $derived.by(() => {
+    const key = activeSession?.model_key;
+    if (key) {
+      const m = configuredModels.find((m) => m.name === key);
+      if (m) return m.model_id;
+    }
+    return config?.model ?? null;
+  });
+
+  const modelTotal = (u: ModelUsage) => u.prompt_tokens + u.completion_tokens;
+
+  const todayTotals = $derived.by(() =>
+    todayUsage.reduce(
+      (acc, u) => ({
+        prompt_tokens: acc.prompt_tokens + u.prompt_tokens,
+        completion_tokens: acc.completion_tokens + u.completion_tokens,
+        cached_tokens: acc.cached_tokens + u.cached_tokens,
+        request_count: acc.request_count + u.request_count,
+      }),
+      {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cached_tokens: 0,
+        request_count: 0,
+      },
+    ),
+  );
+
+  const todayGrandTotal = $derived(
+    todayTotals.prompt_tokens + todayTotals.completion_tokens,
+  );
+
+  /** per-model usage over the full range, keyed by `model_id:provider` */
+  const usageRangeByModel = $derived.by(() => {
+    const map = new Map<string, ModelUsage>();
+    for (const u of allModelUsage)
+      map.set(modelUsageKey(u.model, u.provider), u);
+    return map;
+  });
+
+  const todayLabel = $derived(
+    new Date().toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    }),
+  );
+
   // ── helpers ──
 
   function formatNumber(n: number): string {
@@ -161,6 +219,20 @@
   }): string {
     if (d.prompt_tokens === 0) return "0%";
     return `${Math.round((d.cached_tokens / d.prompt_tokens) * 100)}%`;
+  }
+
+  function cacheRateClass(d: {
+    prompt_tokens: number;
+    cached_tokens: number;
+  }): string {
+    return d.prompt_tokens > 0 && d.cached_tokens / d.prompt_tokens > 0.5
+      ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+      : "bg-muted text-muted-foreground";
+  }
+
+  /** Join key matching the backend `GROUP BY model, provider` */
+  function modelUsageKey(model: string, provider: string): string {
+    return `${model}:${provider}`;
   }
 
   function formatDateLabel(d: string): string {
@@ -417,23 +489,26 @@
     console.log("[UsagePanel] loadData start");
     loading = true;
     try {
-      const cfg = await api.getConfig();
-      console.log("[UsagePanel] config ok", cfg);
+      const [cfg, sum, d, today, allModels, modelsRes] = await Promise.all([
+        api.getConfig(),
+        api.getUsageSummary(),
+        api.getDailyUsage(DAYS_RANGE),
+        api.getTodayModelUsage(),
+        api.getModelUsage(DAYS_RANGE),
+        api.getModels(),
+      ]);
       config = cfg;
-
-      const sum = await api.getUsageSummary();
-      console.log("[UsagePanel] summary ok", sum);
       summary = {
         ...sum,
         total_tokens: sum.prompt_tokens + sum.completion_tokens,
       };
-
-      const d = await api.getDailyUsage(DAYS_RANGE);
-      console.log("[UsagePanel] daily ok", d?.length ?? 0, "days");
       daily = (d ?? []).map((day) => ({
         ...day,
         total_tokens: day.prompt_tokens + day.completion_tokens,
       }));
+      todayUsage = today ?? [];
+      allModelUsage = allModels ?? [];
+      configuredModels = modelsRes?.models ?? [];
     } catch (e: unknown) {
       console.error(
         "[UsagePanel] loadData failed:",
@@ -484,27 +559,134 @@
       </div>
     {:else}
       <div class="flex-1 py-6 space-y-6">
-        <!-- Summary Cards -->
-        {#if filteredSummary}
-          <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
-            <!-- Model tag -->
-            <div
-              class="rounded-xl border border-border bg-card p-3 space-y-1 col-span-2 lg:col-span-1"
+        <!-- Today (hero panel) -->
+        <div
+          class="rounded-xl border border-primary/40 bg-primary/5 p-4 space-y-3"
+        >
+          <div class="flex items-center gap-2">
+            <span class="relative flex h-2 w-2">
+              <span
+                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60"
+              ></span>
+              <span
+                class="relative inline-flex rounded-full h-2 w-2 bg-green-500"
+              ></span>
+            </span>
+            <span class="text-sm font-semibold">Today</span>
+            <span class="text-xs text-muted-foreground ml-auto"
+              >{todayLabel}</span
             >
+          </div>
+
+          {#if todayGrandTotal === 0}
+            <div class="py-4 text-center text-sm text-muted-foreground">
+              No activity yet today
+            </div>
+          {:else}
+            <div class="flex flex-col md:flex-row gap-4 md:gap-6">
+              <!-- Left: day totals -->
+              <div class="md:w-1/3 md:min-w-0 space-y-3">
+                <div>
+                  <div class="text-3xl font-bold font-mono leading-none">
+                    {formatNumber(todayGrandTotal)}
+                  </div>
+                  <div class="text-xs text-muted-foreground mt-1">
+                    tokens today
+                  </div>
+                </div>
+                <div class="flex gap-x-4 gap-y-2 flex-wrap text-xs">
+                  <div>
+                    <span class="font-mono font-medium text-foreground"
+                      >{formatNumber(todayTotals.request_count)}</span
+                    >
+                    <span class="text-muted-foreground"> req</span>
+                  </div>
+                  <div>
+                    <span class="font-mono font-medium text-foreground"
+                      >{formatNumber(todayTotals.prompt_tokens)}</span
+                    >
+                    <span class="text-muted-foreground">
+                      in ({cacheRate(todayTotals)} cached)</span
+                    >
+                  </div>
+                  <div>
+                    <span class="font-mono font-medium text-foreground"
+                      >{formatNumber(todayTotals.completion_tokens)}</span
+                    >
+                    <span class="text-muted-foreground"> out</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: per-model rows -->
               <div
-                class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                class="flex-1 min-w-0 space-y-2.5 md:border-l md:border-primary/20 md:pl-6 flex flex-col justify-center"
               >
-                <Cpu class="w-3.5 h-3.5" />
-                Model
-              </div>
-              <div class="text-sm font-semibold truncate" title={config.model}>
-                {config.model}
-              </div>
-              <div class="text-[10px] text-muted-foreground">
-                {config.provider}
+                {#each todayUsage as usage, i (modelUsageKey(usage.model, usage.provider))}
+                  {@const total = modelTotal(usage)}
+                  {@const pct =
+                    todayGrandTotal > 0
+                      ? Math.round((total / todayGrandTotal) * 100)
+                      : 0}
+                  {@const isCurrent = usage.model === currentModelId}
+                  <div class="space-y-1">
+                    <div class="flex items-center gap-2 text-xs">
+                      {#if i === 0}
+                        <span
+                          class="w-1.5 h-1.5 rounded-full bg-primary shrink-0"
+                        ></span>
+                      {:else}
+                        <span
+                          class="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 shrink-0"
+                        ></span>
+                      {/if}
+                      <span
+                        class="font-medium truncate text-foreground"
+                        title={`${usage.model} (${usage.provider})`}
+                        >{usage.model}</span
+                      >
+                      {#if isCurrent}
+                        <span
+                          class="px-1 py-px rounded text-[9px] font-medium bg-primary/15 text-primary shrink-0"
+                          >current</span
+                        >
+                      {/if}
+                      <span
+                        class="ml-auto font-mono text-muted-foreground shrink-0"
+                        >{formatNumber(total)} · {pct}%</span
+                      >
+                    </div>
+                    <div
+                      class="h-1.5 rounded-full bg-background/60 overflow-hidden"
+                    >
+                      <div
+                        class="h-full rounded-full transition-all {isCurrent
+                          ? 'bg-primary'
+                          : 'bg-muted-foreground/40'}"
+                        style="width: {pct}%"
+                      ></div>
+                    </div>
+                    <div
+                      class="text-[10px] text-muted-foreground flex items-center gap-3"
+                    >
+                      <span>{formatNumber(usage.request_count)} req</span>
+                      <span>{cacheRate(usage)} cache</span>
+                      <span class="font-mono"
+                        >{formatNumber(usage.prompt_tokens)} in / {formatNumber(
+                          usage.completion_tokens,
+                        )} out</span
+                      >
+                    </div>
+                  </div>
+                {/each}
               </div>
             </div>
+          {/if}
+        </div>
 
+        <!-- Summary Cards -->
+        {#if filteredSummary}
+          <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             <div class="rounded-xl border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -587,7 +769,7 @@
                 {activeDays} active · {daily.length} days
               </span>
             </div>
-            <div class="flex justify-end overflow-x-auto">
+            <div class="flex overflow-x-auto [justify-content:safe_center]">
               <div bind:this={chartDiv} style="height: 128px;"></div>
             </div>
           </div>
@@ -764,10 +946,9 @@
                       >
                       <td class="px-4 py-2 text-right">
                         <span
-                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {day.prompt_tokens >
-                            0 && day.cached_tokens / day.prompt_tokens > 0.5
-                            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                            : 'bg-muted text-muted-foreground'}"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {cacheRateClass(
+                            day,
+                          )}"
                         >
                           {cacheRate(day)}
                         </span>
@@ -790,31 +971,116 @@
           </div>
         {/if}
 
-        <!-- Model Info -->
-        <div class="rounded-xl border border-border bg-card p-4">
-          <div class="flex items-center gap-2 mb-3">
-            <Cpu class="w-4 h-4 text-muted-foreground" />
-            <span class="text-sm font-medium">Model</span>
-          </div>
-          <div
-            class="flex items-center justify-between py-2 border-b border-border"
-          >
-            <span class="text-sm text-muted-foreground">Provider</span>
-            <span class="text-sm font-medium">{config.provider}</span>
-          </div>
-          <div
-            class="flex items-center justify-between py-2 border-b border-border"
-          >
-            <span class="text-sm text-muted-foreground">Model</span>
-            <span class="text-sm font-medium">{config.model}</span>
-          </div>
-          <div class="flex items-center justify-between py-2">
-            <span class="text-sm text-muted-foreground">Context Window</span>
-            <span class="text-sm font-medium"
-              >{formatNumber(config.context_window)}</span
+        <!-- Models (all configured + totals) -->
+        {#if configuredModels.length > 0}
+          <div class="rounded-xl border border-border bg-card overflow-hidden">
+            <div
+              class="flex items-center gap-2 px-4 py-3 border-b border-border"
             >
+              <Cpu class="w-4 h-4 text-muted-foreground" />
+              <span class="text-sm font-medium">Models</span>
+              <span class="text-xs text-muted-foreground ml-auto"
+                >{configuredModels.length} configured · totals over {DAYS_RANGE}
+                days</span
+              >
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border bg-muted/30">
+                    <th
+                      class="text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Name</th
+                    >
+                    <th
+                      class="text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Model ID</th
+                    >
+                    <th
+                      class="text-left px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Provider</th
+                    >
+                    <th
+                      class="text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Context</th
+                    >
+                    <th
+                      class="text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Requests</th
+                    >
+                    <th
+                      class="text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Tokens</th
+                    >
+                    <th
+                      class="text-right px-4 py-2 text-xs font-medium text-muted-foreground"
+                      >Cache</th
+                    >
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each configuredModels as m, i (m.name)}
+                    {@const usage = usageRangeByModel.get(
+                      modelUsageKey(m.model_id, m.provider),
+                    )}
+                    {@const total = usage ? modelTotal(usage) : 0}
+                    <tr
+                      class="border-b border-border last:border-0 {i % 2 === 0
+                        ? 'bg-background'
+                        : 'bg-muted/20'} hover:bg-muted/40 transition-colors"
+                    >
+                      <td class="px-4 py-2 whitespace-nowrap">
+                        <div class="flex items-center gap-1.5">
+                          <span class="font-medium">{m.name}</span>
+                          {#if m.model_id === config?.model}
+                            <span
+                              class="px-1 py-px rounded text-[9px] font-medium bg-secondary text-muted-foreground"
+                              >default</span
+                            >
+                          {/if}
+                          {#if m.model_id === currentModelId}
+                            <span
+                              class="px-1 py-px rounded text-[9px] font-medium bg-primary/15 text-primary"
+                              >current</span
+                            >
+                          {/if}
+                        </div>
+                      </td>
+                      <td class="px-4 py-2 font-mono text-xs">{m.model_id}</td>
+                      <td class="px-4 py-2 text-xs text-muted-foreground"
+                        >{m.provider}</td
+                      >
+                      <td class="px-4 py-2 text-right font-mono text-xs"
+                        >{formatNumber(m.context_window)}</td
+                      >
+                      <td class="px-4 py-2 text-right font-mono text-xs">
+                        {usage ? formatNumber(usage.request_count) : "—"}
+                      </td>
+                      <td
+                        class="px-4 py-2 text-right font-mono text-xs font-medium"
+                      >
+                        {usage ? formatNumber(total) : "—"}
+                      </td>
+                      <td class="px-4 py-2 text-right text-xs">
+                        {#if usage}
+                          <span
+                            class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {cacheRateClass(
+                              usage,
+                            )}"
+                          >
+                            {cacheRate(usage)}
+                          </span>
+                        {:else}
+                          <span class="text-muted-foreground">—</span>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        {/if}
       </div>
     {/if}
   </div>

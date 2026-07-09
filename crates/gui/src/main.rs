@@ -93,6 +93,8 @@ pub fn run() {
             commands::system::get_config,
             commands::system::get_usage_summary,
             commands::system::get_daily_usage,
+            commands::system::get_model_usage,
+            commands::system::get_today_model_usage,
             commands::system::get_models,
             commands::system::get_session_model,
             commands::system::set_session_model,
