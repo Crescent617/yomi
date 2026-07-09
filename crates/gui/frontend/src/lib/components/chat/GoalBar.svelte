@@ -23,6 +23,7 @@
 
   let el: HTMLDivElement;
   let handleEl: HTMLDivElement;
+  let panelEl: HTMLDivElement | undefined;
 
   let posX = $state(0);
   let posY = $state(0);
@@ -204,22 +205,34 @@
 
   function clampToParent(nextX: number, nextY: number): [number, number] {
     if (!el || !el.parentElement) return [nextX, nextY];
-    const eRect = el.getBoundingClientRect();
+    const barRect = el.getBoundingClientRect();
+    let rectLeft = barRect.left;
+    let rectTop = barRect.top;
+    let rectRight = barRect.right;
+    let rectBottom = barRect.bottom;
+    // 展开时把面板也算进边界，保证整个组件不拖出父容器
+    if (expanded && panelEl) {
+      const pr = panelEl.getBoundingClientRect();
+      rectLeft = Math.min(rectLeft, pr.left);
+      rectTop = Math.min(rectTop, pr.top);
+      rectRight = Math.max(rectRight, pr.right);
+      rectBottom = Math.max(rectBottom, pr.bottom);
+    }
     const pRect = el.parentElement.getBoundingClientRect();
 
-    const newLeft = eRect.left + (nextX - posX);
-    const newTop = eRect.top + (nextY - posY);
-    const newRight = newLeft + eRect.width;
-    const newBottom = newTop + eRect.height;
+    const newLeft = rectLeft + (nextX - posX);
+    const newTop = rectTop + (nextY - posY);
+    const newRight = newLeft + (rectRight - rectLeft);
+    const newBottom = newTop + (rectBottom - rectTop);
 
     let clampedX = nextX;
     let clampedY = nextY;
 
-    if (newLeft < pRect.left) clampedX = posX + (pRect.left - eRect.left);
-    if (newTop < pRect.top) clampedY = posY + (pRect.top - eRect.top);
-    if (newRight > pRect.right) clampedX = posX + (pRect.right - eRect.right);
+    if (newLeft < pRect.left) clampedX = posX + (pRect.left - rectLeft);
+    if (newTop < pRect.top) clampedY = posY + (pRect.top - rectTop);
+    if (newRight > pRect.right) clampedX = posX + (pRect.right - rectRight);
     if (newBottom > pRect.bottom)
-      clampedY = posY + (pRect.bottom - eRect.bottom);
+      clampedY = posY + (pRect.bottom - rectBottom);
 
     return [clampedX, clampedY];
   }
@@ -426,9 +439,16 @@
     class="absolute left-1/2 top-2 z-50 select-none"
     style="transform: translateX(-50%) translate({posX}px, {posY}px)"
   >
-    <div class="flex flex-col items-center gap-1">
-      {#if expanded && expandDirection === 'up'}
-        {@render panel()}
+    <div class="relative flex flex-col items-center">
+      {#if expanded}
+        <div
+          bind:this={panelEl}
+          class="absolute left-1/2 -translate-x-1/2 {expandDirection === 'up'
+            ? 'bottom-full mb-1'
+            : 'top-full mt-1'}"
+        >
+          {@render panel()}
+        </div>
       {/if}
       <div
         bind:this={handleEl}
@@ -524,9 +544,6 @@
           </div>
         {/if}
       </div>
-      {#if expanded && expandDirection === 'down'}
-        {@render panel()}
-      {/if}
     </div>
   </div>
 {/if}
