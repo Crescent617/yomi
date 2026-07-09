@@ -406,6 +406,63 @@ async fn test_gc_days_minimum_enforced() {
 }
 
 #[tokio::test]
+async fn test_purge_sessions_ignores_age_and_pin() {
+    let (_tmp, storage) = setup().await;
+
+    // A *recent* and *pinned* session: run() would never touch it, but
+    // purge_sessions must delete it (caller decides what to delete).
+    let id = create_full_session(&storage, false).await;
+    sqlx::query("INSERT INTO pinned_sessions (session_id) VALUES (?)")
+        .bind(&*id.0)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+
+    // token_usage row must survive
+    sqlx::query(
+        "INSERT INTO token_usage (id, session_id, prompt_tokens, completion_tokens, total_tokens, usage_type, created_at)
+         VALUES ('u1', ?, 1, 2, 3, 'normal', datetime('now'))",
+    )
+    .bind(&*id.0)
+    .execute(storage.pool())
+    .await
+    .unwrap();
+
+    let report = storage
+        .gc()
+        .purge_sessions(std::slice::from_ref(&id))
+        .await
+        .unwrap();
+
+    assert_eq!(report.sessions.len(), 1);
+    assert_eq!(report.files_deleted, 4);
+    assert_eq!(report.checkpoint_dirs_deleted, 1);
+    assert_eq!(report.channel_mappings_deleted, 1);
+    assert!(report.errors.is_empty());
+
+    assert!(storage.session_store().get(&id).await.unwrap().is_none());
+    for p in session_paths(&storage, &id) {
+        assert!(!p.exists(), "should be deleted: {}", p.display());
+    }
+    let usage_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM token_usage")
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    assert_eq!(usage_count, 1, "token_usage must never be deleted");
+}
+
+#[tokio::test]
+async fn test_purge_sessions_empty_list_is_noop() {
+    let (_tmp, storage) = setup().await;
+    let id = create_full_session(&storage, false).await;
+
+    let report = storage.gc().purge_sessions(&[]).await.unwrap();
+    assert!(report.sessions.is_empty());
+    assert_eq!(report.files_deleted, 0);
+    assert!(storage.session_store().get(&id).await.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn test_gc_works_with_real_checkpoint_store() {
     let (_tmp, storage) = setup().await;
 

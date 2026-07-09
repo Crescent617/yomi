@@ -58,7 +58,9 @@ pub trait KernelApi: Send + Sync {
     ) -> Result<Project>;
     async fn get_project(&self, id: &ProjectId) -> Result<Option<Project>>;
     async fn rename_project(&self, id: &ProjectId, name: String) -> Result<()>;
-    async fn delete_project(&self, id: &ProjectId) -> Result<()>;
+    /// Delete a project and all its sessions (incl. subagents) with their
+    /// resources. Returns a report of what was removed.
+    async fn delete_project(&self, id: &ProjectId) -> Result<crate::storage::GcReport>;
 
     // ── Session ──────────────────────────────────────────────────────────
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId>;
@@ -207,7 +209,7 @@ impl KernelApi for Kernel {
         Self::rename_project(self, id, name).await
     }
 
-    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
+    async fn delete_project(&self, id: &ProjectId) -> Result<crate::storage::GcReport> {
         Self::delete_project(self, id).await
     }
 
@@ -985,12 +987,14 @@ impl KernelApi for RemoteKernel {
         Ok(())
     }
 
-    async fn delete_project(&self, id: &ProjectId) -> Result<()> {
-        self.call(ReqMethod::DeleteProject {
-            project_id: id.0.to_string(),
-        })
-        .await?;
-        Ok(())
+    async fn delete_project(&self, id: &ProjectId) -> Result<crate::storage::GcReport> {
+        let result = self
+            .call(ReqMethod::DeleteProject {
+                project_id: id.0.to_string(),
+            })
+            .await?;
+        let report: crate::storage::GcReport = serde_json::from_value(result)?;
+        Ok(report)
     }
 
     async fn create_session(&self, input: CreateSessionInput) -> Result<SessionId> {

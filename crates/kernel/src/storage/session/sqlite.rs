@@ -296,6 +296,33 @@ impl SessionStore for SqliteSessionStore {
         }
         Ok(deleted)
     }
+
+    async fn list_ids_by_project(
+        &self,
+        project_id: &crate::types::ProjectId,
+    ) -> Result<Vec<SessionId>> {
+        // Sessions of the project, plus subagent children whose parent
+        // belongs to the project (children inherit project_id on fork, but be
+        // defensive and match via parent_id as well).
+        let rows = sqlx::query(
+            "SELECT id FROM sessions WHERE project_id = ?
+             UNION
+             SELECT child.id FROM sessions AS child
+             JOIN sessions AS parent ON child.parent_id = parent.id
+             WHERE parent.project_id = ?",
+        )
+        .bind(&*project_id.0)
+        .bind(&*project_id.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to list sessions by project: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
+            .map(SessionId::from)
+            .collect())
+    }
 }
 
 /// Internal row type for SQL mapping

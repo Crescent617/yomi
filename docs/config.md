@@ -51,6 +51,32 @@ data_dir = "~/.yomi"
 skill_folders = ["~/.yomi/skills"]
 ```
 
+### Provider 类型
+
+| provider | 说明 |
+|---|---|
+| `openai` | OpenAI Chat Completions API（`/chat/completions`），兼容 Kimi 等 OpenAI 协议服务 |
+| `openai_response` | OpenAI Responses API（`/responses`），适用于 GPT-5 / o 系列推理模型（也接受 `openai-response` 写法） |
+| `anthropic` | Anthropic Messages API（`/messages`） |
+
+`openai_response` 示例：
+
+```toml
+[[models]]
+name = "gpt5"
+provider = "openai_response"
+model_id = "gpt-5"
+endpoint = "https://api.openai.com/v1"  # 可省略，默认此值
+api_key = "sk-..."
+context_window = 272000
+
+[models.thinking]
+enabled = true
+effort = "medium"  # low | medium | high，映射到 reasoning.effort
+```
+
+> 注意：`thinking.enabled = true` 时不发送 `temperature`（推理模型不支持该参数）。
+
 ## 环境变量
 
 支持 `YOMI_` 前缀的通用变量和 provider 特定变量。

@@ -100,6 +100,13 @@ pub trait SessionStore: Send + Sync {
 
     /// Delete sessions by ID in batches. Returns the number of rows deleted.
     async fn delete_batch(&self, ids: &[SessionId]) -> Result<u64>;
+
+    /// List all session IDs belonging to a project, including subagent
+    /// children of those sessions (used by project cascade deletion).
+    async fn list_ids_by_project(
+        &self,
+        project_id: &crate::types::ProjectId,
+    ) -> Result<Vec<SessionId>>;
 }
 
 pub(crate) use crate::storage::storage_err;

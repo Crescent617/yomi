@@ -268,7 +268,7 @@
           "provider": {
             "description": "Model provider.",
             "type": "string",
-            "enum": ["openai", "anthropic"],
+            "enum": ["openai", "anthropic", "openai_response"],
             "default": "openai"
           },
           "model_id": {

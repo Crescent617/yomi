@@ -8,9 +8,11 @@ use thiserror::Error;
 
 pub mod anthropic;
 pub mod openai;
+pub mod openai_response;
 
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
+pub use openai_response::OpenAIResponseProvider;
 
 /// Global shared HTTP client for all providers.
 static HTTP_CLIENT: std::sync::LazyLock<std::sync::Arc<reqwest::Client>> =

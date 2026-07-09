@@ -12,6 +12,7 @@
     PinOff,
   } from "lucide-svelte";
   import * as api from "../../api";
+  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import {
     sessionState,
     projectState,
@@ -40,6 +41,7 @@
   let renamingProjectId = $state<string | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let renameValue = $state("");
+  let deletingProject = $state<{ id: string; name: string } | null>(null);
 
   onMount(() => {
     if (projectState.projects.length === 0) {
@@ -183,16 +185,64 @@
     }
   }
 
-  async function deleteProject(id: string) {
+  function requestDeleteProject(id: string) {
     showMenu = null;
-    if (getSessions(id).length > 0) {
-      showNotification("Cannot delete project with sessions", "error");
-      return;
-    }
+    const project = projectState.projects.find((p) => p.id === id);
+    deletingProject = { id, name: project?.name ?? id.slice(0, 8) };
+  }
+
+  async function confirmDeleteProject() {
+    if (!deletingProject) return;
+    const { id } = deletingProject;
+    deletingProject = null;
     try {
-      await api.deleteProject(id);
+      // Unsubscribe from event streams of this project's sessions first
+      const projectSessions = sessionState.sessions.filter(
+        (s) => s.project_id === id,
+      );
+      for (const s of projectSessions) {
+        try {
+          await api.unsubscribe(s.id);
+        } catch {
+          // best-effort; the session may not be subscribed
+        }
+      }
+
+      const result = await api.deleteProject(id);
+
+      // Prune local state: project, its sessions, pinned meta, cursors
+      const removedIds = new Set(projectSessions.map((s) => s.id));
       projectState.projects = projectState.projects.filter((p) => p.id !== id);
-      showNotification("Project deleted", "success");
+      sessionState.sessions = sessionState.sessions.filter(
+        (s) => s.project_id !== id,
+      );
+      for (const sid of Object.keys(pinnedSessionMeta)) {
+        if (removedIds.has(sid)) delete pinnedSessionMeta[sid];
+      }
+      delete sessionCursors[id];
+      loadPinnedSessions();
+      if (
+        sessionState.activeSessionId &&
+        removedIds.has(sessionState.activeSessionId)
+      ) {
+        setActiveSession(null);
+      }
+
+      showNotification(
+        result.sessions_deleted > 0
+          ? `Project deleted (${result.sessions_deleted} sessions removed)`
+          : "Project deleted",
+        "success",
+      );
+
+      // Re-fetch from backend as the source of truth (the optimistic prune
+      // above only covers sessions already loaded in the frontend).
+      api
+        .listProjects()
+        .then((list) => {
+          projectState.projects = list.map((p) => ({ ...p }));
+        })
+        .catch(console.error);
     } catch (e: unknown) {
       console.error(
         "Failed to delete project:",
@@ -577,7 +627,7 @@
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
                     onclick={(e: Event) => {
                       e.stopPropagation();
-                      deleteProject(project.id);
+                      requestDeleteProject(project.id);
                     }}
                   >
                     <Trash2 size={12} /> Delete
@@ -729,3 +779,12 @@
     {/if}
   </div>
 </div>
+
+<ConfirmDialog
+  open={deletingProject !== null}
+  title="Delete project"
+  message={`Delete project "${deletingProject?.name ?? ""}" and ALL its sessions?\n\nThis permanently removes every session in this project (including subagent sessions), their message history, todos, checkpoints and related data. Files in the project directory itself are not touched.\n\nThis cannot be undone.`}
+  confirmText="Delete project"
+  onConfirm={confirmDeleteProject}
+  onCancel={() => (deletingProject = null)}
+/>

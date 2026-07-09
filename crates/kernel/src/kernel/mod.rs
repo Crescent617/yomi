@@ -37,6 +37,8 @@ pub struct Kernel {
     agent_shared: Arc<AgentShared>,
     input_bus: Arc<InputBus>,
     conductor: Arc<Conductor>,
+    /// Full storage set (for gc / cascade deletion)
+    storage: StorageSet,
     /// Default agent configuration for new sessions.
     agent_config: AgentConfig,
     /// Read-only model registry (`BTreeMap` for ordering), built from Config.models
@@ -246,6 +248,7 @@ impl Kernel {
             agent_shared,
             input_bus,
             conductor,
+            storage: storage.clone(),
             agent_config,
             models: models_map,
             project_store,
@@ -361,17 +364,34 @@ impl Kernel {
         self.pinned_session_store().list_with_details().await
     }
 
-    /// Delete a project (only if it has no sessions)
-    pub async fn delete_project(&self, id: &ProjectId) -> Result<()> {
-        let (sessions, _) = self.session_store().await.list(Some(id), None, 1).await?;
-        if !sessions.is_empty() {
-            return Err(SessionError::Other(format!(
-                "Project {} has sessions, remove or reassign them first",
-                id.0
-            ))
-            .into());
+    /// Delete a project **and all its sessions** (including subagent children)
+    /// with their resources: message history, todos, goals, file states,
+    /// checkpoints and channel mappings. `token_usage` rows are kept.
+    ///
+    /// Running agents of affected sessions are cancelled (best-effort) before
+    /// deletion. Returns a [`crate::storage::GcReport`] describing what was
+    /// removed.
+    pub async fn delete_project(&self, id: &ProjectId) -> Result<crate::storage::GcReport> {
+        let session_ids = self.session_store().await.list_ids_by_project(id).await?;
+
+        // Best-effort: cancel any running agent so it stops writing to
+        // storage while we delete underneath it.
+        for sid in &session_ids {
+            self.cancel(sid);
         }
-        self.project_store.delete(id).await
+
+        let report = self.storage.gc().purge_sessions(&session_ids).await?;
+        self.project_store.delete(id).await?;
+
+        tracing::info!(
+            project_id = %id.0,
+            sessions = report.sessions.len(),
+            files = report.files_deleted,
+            checkpoints = report.checkpoint_dirs_deleted,
+            bytes = report.bytes_reclaimed,
+            "project deleted (cascade)"
+        );
+        Ok(report)
     }
 
     // ── Model API ────────────────────────────────────────────────────────

@@ -52,7 +52,7 @@ pub use kernel::CreateSessionInput;
 pub use kernel::Kernel;
 pub use permission::{Checker, Level, ToolLevelResolver};
 pub use prompt::SystemPromptBuilder;
-pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider};
+pub use provider::{AnthropicProvider, NoKeyProvider, OpenAIProvider, OpenAIResponseProvider};
 pub use provider::{
     HttpError, ModelConfig, ModelStream, ModelStreamItem, Provider, RetryingProvider,
     ThinkingConfig, ToolCallRequest,
@@ -123,6 +123,7 @@ pub fn create_provider_for_model(model: &ModelConfig) -> Result<Arc<dyn Provider
     }
     match model.provider {
         ModelProvider::OpenAI => Ok(Arc::new(OpenAIProvider::new()?)),
+        ModelProvider::OpenAIResponse => Ok(Arc::new(OpenAIResponseProvider::new()?)),
         ModelProvider::Anthropic => Ok(Arc::new(AnthropicProvider::new()?)),
     }
 }

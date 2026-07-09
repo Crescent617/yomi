@@ -55,7 +55,7 @@ impl Default for GcOptions {
 }
 
 /// Report of what a gc run deleted (or would delete, in dry-run mode)
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct GcReport {
     /// Collected session IDs (includes subagent sessions)
     pub sessions: Vec<SessionId>,
@@ -129,18 +129,54 @@ impl GarbageCollector {
             return Ok(report);
         }
 
-        // ── Phase 2: delete DB rows (before files) ───────────────────
+        // ── Phase 2+3: delete DB rows then files ─────────────────────
+        self.purge_into(&victims, &mut report).await?;
+
+        // ── Phase 4: orphan sweep ────────────────────────────────────
+        if opts.sweep_orphans {
+            self.sweep_orphans(&mut report, false).await;
+        }
+
+        // ── Phase 5: vacuum ──────────────────────────────────────────
+        if opts.vacuum {
+            if let Err(e) = self.vacuum().await {
+                report.errors.push(format!("vacuum: {e}"));
+            }
+        }
+
+        report.sessions = victims;
+        Ok(report)
+    }
+
+    /// Purge the given sessions and all their resources (DB rows, data files,
+    /// checkpoint directories, channel mappings). Unlike [`Self::run`], this
+    /// ignores age/pin status — the caller decides *what* to delete.
+    ///
+    /// Used by project cascade deletion. `token_usage` rows are never touched.
+    pub async fn purge_sessions(&self, ids: &[SessionId]) -> Result<GcReport> {
+        let mut report = GcReport {
+            subagent_sessions: ids.iter().filter(|id| id.is_subagent()).count() as u64,
+            ..GcReport::default()
+        };
+        self.purge_into(ids, &mut report).await?;
+        report.sessions = ids.to_vec();
+        Ok(report)
+    }
+
+    /// Delete DB rows (before files) and then per-session files for `victims`.
+    async fn purge_into(&self, victims: &[SessionId], report: &mut GcReport) -> Result<()> {
+        // DB rows first: a crash mid-way leaves orphan files (recoverable by
+        // the orphan sweep) rather than dangling DB rows.
         if !victims.is_empty() {
-            self.storage.session_store().delete_batch(&victims).await?;
+            self.storage.session_store().delete_batch(victims).await?;
             report.channel_mappings_deleted = self
                 .storage
                 .channel_store()
-                .delete_by_sessions(&victims)
+                .delete_by_sessions(victims)
                 .await?;
         }
 
-        // ── Phase 3: delete files ────────────────────────────────────
-        for id in &victims {
+        for id in victims {
             for path in self.session_files(id.as_str()) {
                 match remove_file_sized(&path).await {
                     Ok(Some(size)) => {
@@ -164,21 +200,7 @@ impl GarbageCollector {
                 }
             }
         }
-
-        // ── Phase 4: orphan sweep ────────────────────────────────────
-        if opts.sweep_orphans {
-            self.sweep_orphans(&mut report, false).await;
-        }
-
-        // ── Phase 5: vacuum ──────────────────────────────────────────
-        if opts.vacuum {
-            if let Err(e) = self.vacuum().await {
-                report.errors.push(format!("vacuum: {e}"));
-            }
-        }
-
-        report.sessions = victims;
-        Ok(report)
+        Ok(())
     }
 
     /// Per-session data files (messages, todos, goals, file states)

@@ -83,6 +83,9 @@ pub enum ModelProvider {
     #[default]
     OpenAI,
     Anthropic,
+    /// `OpenAI` Responses API (`/v1/responses`), for GPT-5 / o-series reasoning models
+    #[serde(rename = "openai_response")]
+    OpenAIResponse,
 }
 
 impl ModelProvider {
@@ -90,7 +93,7 @@ impl ModelProvider {
     #[inline]
     pub const fn standard_api_key_env(&self) -> &'static str {
         match self {
-            Self::OpenAI => env_names::OPENAI_API_KEY,
+            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_KEY,
             Self::Anthropic => env_names::ANTHROPIC_API_KEY,
         }
     }
@@ -99,7 +102,7 @@ impl ModelProvider {
     #[inline]
     pub const fn standard_model_env(&self) -> &'static str {
         match self {
-            Self::OpenAI => env_names::OPENAI_API_MODEL,
+            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_MODEL,
             Self::Anthropic => env_names::ANTHROPIC_MODEL,
         }
     }
@@ -108,7 +111,7 @@ impl ModelProvider {
     #[inline]
     pub const fn standard_api_base_env(&self) -> &'static str {
         match self {
-            Self::OpenAI => env_names::OPENAI_API_BASE,
+            Self::OpenAI | Self::OpenAIResponse => env_names::OPENAI_API_BASE,
             Self::Anthropic => env_names::ANTHROPIC_BASE_URL,
         }
     }
@@ -123,11 +126,13 @@ impl std::str::FromStr for ModelProvider {
         match s.as_bytes() {
             b"openai" | b"OPENAI" | b"OpenAI" => Ok(Self::OpenAI),
             b"anthropic" | b"ANTHROPIC" | b"Anthropic" => Ok(Self::Anthropic),
+            b"openai_response" | b"openai-response" => Ok(Self::OpenAIResponse),
             _ => {
                 // Slow path: lowercase and compare
                 match s.to_lowercase().as_str() {
                     "openai" => Ok(Self::OpenAI),
                     "anthropic" => Ok(Self::Anthropic),
+                    "openai_response" | "openai-response" => Ok(Self::OpenAIResponse),
                     _ => Err(format!("Unknown provider: {s}")),
                 }
             }
@@ -141,6 +146,7 @@ impl std::fmt::Display for ModelProvider {
         match self {
             Self::OpenAI => f.write_str("openai"),
             Self::Anthropic => f.write_str("anthropic"),
+            Self::OpenAIResponse => f.write_str("openai_response"),
         }
     }
 }

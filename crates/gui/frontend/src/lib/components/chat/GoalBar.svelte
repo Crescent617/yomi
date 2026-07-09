@@ -26,11 +26,37 @@
 
   let posX = $state(0);
   let posY = $state(0);
-  let startX = 0,
-    startY = 0;
+  let expandDirection = $state<"down" | "up">("down");
+
+  function updateExpandDirection() {
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const centerY = rect.top + rect.height / 2;
+    expandDirection = centerY < window.innerHeight / 2 ? "down" : "up";
+  }
+
+  function onDocumentPointerDown(e: PointerEvent) {
+    if (!expanded || !el) return;
+    const target = e.target as Node;
+    if (!el.contains(target)) {
+      expanded = false;
+    }
+  }
+
+  $effect(() => {
+    if (expanded) {
+      document.addEventListener("pointerdown", onDocumentPointerDown);
+    } else {
+      document.removeEventListener("pointerdown", onDocumentPointerDown);
+    }
+    return () => {
+      document.removeEventListener("pointerdown", onDocumentPointerDown);
+    };
+  });
+  let hasDragged = false;
+  let startX = 0, startY = 0;
   let dragStartPosX = 0,
     dragStartPosY = 0;
-  let hasDragged = false;
 
   const goal = $derived(activeSession?.goal ?? null);
 
@@ -200,6 +226,7 @@
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
+    e.preventDefault();
     handleEl.setPointerCapture(e.pointerId);
     startX = e.clientX;
     startY = e.clientY;
@@ -231,10 +258,167 @@
     if (!hasDragged) {
       const target = e.target as HTMLElement;
       if (target.closest("[data-action-btn]")) return;
+      updateExpandDirection();
       expanded = !expanded;
     }
   }
 </script>
+
+{#snippet panel()}
+  <div
+    class="bg-background border border-border rounded-xl shadow-lg overflow-hidden w-96 max-w-[85vw]"
+  >
+    <!-- Goal Card -->
+    {#if hasActiveGoal}
+      <div class="p-3.5 border-b border-border">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-1.5">
+            <Target size={14} class="text-primary" />
+            <span
+              class="text-xs font-semibold text-foreground uppercase tracking-wide"
+              >Goal</span
+            >
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span
+              class="text-[10px] px-1.5 py-0.5 rounded-full border font-medium uppercase {statusBadgeClass(
+                goal!.status,
+              )}"
+            >
+              {goal!.status}
+            </span>
+          </div>
+        </div>
+
+        {#if editingGoal}
+          <div class="space-y-2">
+            <textarea
+              bind:value={editGoalText}
+              class="w-full text-sm bg-muted rounded-lg px-2.5 py-2 border border-border focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+              rows={3}
+              onkeydown={(e: KeyboardEvent) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submitEditGoal();
+                }
+                if (e.key === "Escape") cancelEditGoal();
+              }}
+            ></textarea>
+            <div class="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onclick={cancelEditGoal}
+                class="px-2 py-1 text-xs rounded-md border border-border hover:bg-secondary transition-colors text-muted-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onclick={submitEditGoal}
+                class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        {:else}
+          <p class="text-sm text-foreground leading-relaxed mb-2.5">
+            {goal!.description}
+          </p>
+          {#if goal!.status !== "completed"}
+            <div class="flex items-center gap-1.5">
+              {#if goal!.status === "active"}
+                <button
+                  type="button"
+                  disabled={loading}
+                  onclick={handlePauseGoal}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Pause goal auto-continue"
+                >
+                  <Pause size={12} />
+                  Pause
+                </button>
+              {:else if goal!.status === "paused"}
+                <button
+                  type="button"
+                  disabled={loading}
+                  onclick={handleResumeGoal}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-green-500/30 hover:bg-green-500/10 transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Resume goal"
+                >
+                  <Play size={12} />
+                  Resume
+                </button>
+              {/if}
+              <button
+                type="button"
+                disabled={loading}
+                onclick={startEditGoal}
+                class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Edit goal description"
+              >
+                <Pencil size={12} />
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={loading}
+                onclick={handleStopGoal}
+                class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-red-500/30 hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Stop and clear goal"
+              >
+                <Square size={12} />
+                Stop
+              </button>
+            </div>
+          {/if}
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Todo List -->
+    {#if hasTodos}
+      <div class="max-h-64 overflow-y-auto p-3 space-y-1">
+        {#each todoItems as item (item.id)}
+          <div
+            class="flex items-start gap-2 text-sm rounded-lg px-2 py-1.5 hover:bg-secondary/40 transition-colors"
+          >
+            <div
+              class="mt-0.5 shrink-0 w-4 h-4 rounded border {item.status ===
+              'completed'
+                ? 'bg-green-500 border-green-500'
+                : item.status === 'in_progress'
+                  ? 'border-amber-500'
+                  : 'border-muted-foreground'} flex items-center justify-center"
+            >
+              {#if item.status === "completed"}
+                <svg
+                  class="w-3 h-3 text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  stroke-width="3"
+                  ><path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M5 13l4 4L19 7"
+                  /></svg
+                >
+              {/if}
+            </div>
+            <span
+              class={item.status === "completed"
+                ? "line-through text-muted-foreground"
+                : item.status === "in_progress"
+                  ? "text-amber-500"
+                  : ""}>{item.content}</span
+            >
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 {#if shouldShow}
   <div
@@ -243,6 +427,9 @@
     style="transform: translateX(-50%) translate({posX}px, {posY}px)"
   >
     <div class="flex flex-col items-center gap-1">
+      {#if expanded && expandDirection === 'up'}
+        {@render panel()}
+      {/if}
       <div
         bind:this={handleEl}
         onpointerdown={onPointerDown}
@@ -255,7 +442,7 @@
           <div class="flex items-center gap-1.5 shrink-0">
             <Target size={13} class="text-primary shrink-0" />
             <span
-              class="truncate max-w-[160px] text-foreground font-medium"
+              class="truncate max-w-[280px] text-foreground font-medium"
               title={goal!.description}
             >
               {goal!.description}
@@ -317,7 +504,7 @@
               >{completedCount}/{totalCount}</span
             >
             {#if inProgressItem}
-              <div class="flex items-center gap-1 max-w-[120px]">
+              <div class="flex items-center gap-1 max-w-[200px]">
                 <Clock
                   size={12}
                   class="text-amber-500 shrink-0 animate-pulse"
@@ -337,161 +524,8 @@
           </div>
         {/if}
       </div>
-
-      {#if expanded}
-        <div
-          class="bg-background border border-border rounded-xl shadow-lg overflow-hidden w-80 max-w-[85vw]"
-        >
-          <!-- Goal Card -->
-          {#if hasActiveGoal}
-            <div class="p-3.5 border-b border-border">
-              <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-1.5">
-                  <Target size={14} class="text-primary" />
-                  <span
-                    class="text-xs font-semibold text-foreground uppercase tracking-wide"
-                    >Goal</span
-                  >
-                </div>
-                <div class="flex items-center gap-1.5">
-                  <span
-                    class="text-[10px] px-1.5 py-0.5 rounded-full border font-medium uppercase {statusBadgeClass(
-                      goal!.status,
-                    )}"
-                  >
-                    {goal!.status}
-                  </span>
-                </div>
-              </div>
-
-              {#if editingGoal}
-                <div class="space-y-2">
-                  <textarea
-                    bind:value={editGoalText}
-                    class="w-full text-sm bg-muted rounded-lg px-2.5 py-2 border border-border focus:outline-none focus:ring-1 focus:ring-ring resize-none"
-                    rows={3}
-                    onkeydown={(e: KeyboardEvent) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        submitEditGoal();
-                      }
-                      if (e.key === "Escape") cancelEditGoal();
-                    }}
-                  ></textarea>
-                  <div class="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onclick={cancelEditGoal}
-                      class="px-2 py-1 text-xs rounded-md border border-border hover:bg-secondary transition-colors text-muted-foreground"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onclick={submitEditGoal}
-                      class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              {:else}
-                <p class="text-sm text-foreground leading-relaxed mb-2.5">
-                  {goal!.description}
-                </p>
-                {#if goal!.status !== "completed"}
-                  <div class="flex items-center gap-1.5">
-                    {#if goal!.status === "active"}
-                      <button
-                        type="button"
-                        disabled={loading}
-                        onclick={handlePauseGoal}
-                        class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Pause goal auto-continue"
-                      >
-                        <Pause size={12} />
-                        Pause
-                      </button>
-                    {:else if goal!.status === "paused"}
-                      <button
-                        type="button"
-                        disabled={loading}
-                        onclick={handleResumeGoal}
-                        class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-green-500/30 hover:bg-green-500/10 transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Resume goal"
-                      >
-                        <Play size={12} />
-                        Resume
-                      </button>
-                    {/if}
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onclick={startEditGoal}
-                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Edit goal description"
-                    >
-                      <Pencil size={12} />
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onclick={handleStopGoal}
-                      class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-red-500/30 hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Stop and clear goal"
-                    >
-                      <Square size={12} />
-                      Stop
-                    </button>
-                  </div>
-                {/if}
-              {/if}
-            </div>
-          {/if}
-
-          <!-- Todo List -->
-          {#if hasTodos}
-            <div class="max-h-64 overflow-y-auto p-3 space-y-1">
-              {#each todoItems as item (item.id)}
-                <div
-                  class="flex items-start gap-2 text-sm rounded-lg px-2 py-1.5 hover:bg-secondary/40 transition-colors"
-                >
-                  <div
-                    class="mt-0.5 shrink-0 w-4 h-4 rounded border {item.status ===
-                    'completed'
-                      ? 'bg-green-500 border-green-500'
-                      : item.status === 'in_progress'
-                        ? 'border-amber-500'
-                        : 'border-muted-foreground'} flex items-center justify-center"
-                  >
-                    {#if item.status === "completed"}
-                      <svg
-                        class="w-3 h-3 text-white"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        stroke-width="3"
-                        ><path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M5 13l4 4L19 7"
-                        /></svg
-                      >
-                    {/if}
-                  </div>
-                  <span
-                    class={item.status === "completed"
-                      ? "line-through text-muted-foreground"
-                      : item.status === "in_progress"
-                        ? "text-amber-500"
-                        : ""}>{item.content}</span
-                  >
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+      {#if expanded && expandDirection === 'down'}
+        {@render panel()}
       {/if}
     </div>
   </div>

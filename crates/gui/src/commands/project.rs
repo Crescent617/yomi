@@ -52,15 +52,26 @@ pub async fn rename_project(
     Ok(())
 }
 
+/// Summary of a cascade project deletion, for frontend display
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct DeleteProjectResult {
+    pub sessions_deleted: usize,
+    pub bytes_reclaimed: u64,
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_project(
     state: State<'_, AppState>,
     project_id: String,
-) -> Result<(), GuiError> {
+) -> Result<DeleteProjectResult, GuiError> {
     let coord = state.kernel.clone();
-    coord
+    let report = coord
         .delete_project(&ProjectId::from(project_id))
         .await
         .map_err(GuiError::kernel)?;
-    Ok(())
+    Ok(DeleteProjectResult {
+        sessions_deleted: report.sessions.len(),
+        bytes_reclaimed: report.bytes_reclaimed,
+    })
 }
