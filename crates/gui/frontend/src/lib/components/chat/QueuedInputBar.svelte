@@ -31,7 +31,7 @@
 
   function handleCancel() {
     session.queued_input = null;
-    showNotification("Queued message cancelled", "info", 2000);
+    showNotification("Queued message cancelled", "info");
   }
 </script>
 

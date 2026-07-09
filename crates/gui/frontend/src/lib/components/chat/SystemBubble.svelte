@@ -6,7 +6,8 @@
 
   let expanded = $state(false);
 
-  const content = (message as any).content as string;
+  const content =
+    message.type === "error" ? (message as { content: string }).content : "";
   const isShort = content.length < 100 && !content.includes("\n");
 </script>
 

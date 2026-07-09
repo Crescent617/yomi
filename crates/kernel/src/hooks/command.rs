@@ -77,7 +77,13 @@ impl HookHandler for CommandHookHandler {
             .current_dir(&ctx.cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .env("GIT_PAGER", "cat")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_SEQUENCE_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("PAGER", "cat")
+            .env("EDITOR", "true");
 
         let mut child = cmd
             .spawn()

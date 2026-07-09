@@ -17,6 +17,7 @@ pub struct SessionInfo {
     pub working_dir: Option<String>,
     pub project_id: Option<crate::types::ProjectId>,
     pub auto_approve_level: Option<String>,
+    pub model_key: Option<String>,
 }
 
 impl SessionInfo {
@@ -39,7 +40,7 @@ impl SessionInfo {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Create a new session with the given ID, optional `project_id`, optional working directory,
-    /// optional `auto_approve_level`, and optional `parent_id`
+    /// optional `auto_approve_level`, optional `parent_id`, and optional `model_key`
     async fn create(
         &self,
         id: &SessionId,
@@ -47,10 +48,14 @@ pub trait SessionStore: Send + Sync {
         working_dir: Option<&str>,
         auto_approve_level: Option<&str>,
         parent_id: Option<&SessionId>,
+        model_key: Option<&str>,
     ) -> Result<()>;
 
-    /// Fork a session, copying its metadata (including `auto_approve_level`)
+    /// Fork a session, copying its metadata (including `auto_approve_level` and `model_key`)
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId>;
+
+    /// Update session `model_key`
+    async fn update_model_key(&self, id: &SessionId, key: &str) -> Result<u64>;
 
     /// Get session metadata by ID
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>>;

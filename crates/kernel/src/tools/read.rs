@@ -180,8 +180,18 @@ impl Tool for ReadTool {
             )));
         }
 
+        let metadata = tokio::fs::metadata(&path).await?;
+
+        // Allow only regular files to avoid blocking reads on special files
+        // (character devices, FIFOs, sockets, directories, block devices, etc.).
+        if !metadata.file_type().is_file() {
+            return Ok(ToolOutput::error(format!(
+                "Not a regular file: {path_str}. Only regular files can be read."
+            )));
+        }
+
         // Check file size
-        let file_size = tokio::fs::metadata(&path).await?.len();
+        let file_size = metadata.len();
         if file_size > MAX_FILE_SIZE {
             return Ok(ToolOutput::error(format!(
                 "File is too large to read: {path_str}"

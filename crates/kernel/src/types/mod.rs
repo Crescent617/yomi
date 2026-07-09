@@ -138,6 +138,7 @@ pub struct SessionResponse {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub auto_approve_level: Option<String>,
+    pub model_key: Option<String>,
 }
 
 impl Default for SessionResponse {
@@ -153,6 +154,7 @@ impl Default for SessionResponse {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             auto_approve_level: None,
+            model_key: None,
         }
     }
 }

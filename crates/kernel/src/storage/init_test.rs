@@ -12,7 +12,7 @@ async fn test_storage_set_open() {
     let session_id = SessionId::new();
     storage
         .session_store()
-        .create(&session_id, None, None, None, None)
+        .create(&session_id, None, None, None, None, None)
         .await
         .unwrap();
     storage

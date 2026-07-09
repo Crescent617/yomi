@@ -129,8 +129,9 @@ pub enum AgentEvent {
         max_attempts: u32,
         reason: String,
     },
-    /// Session rewound to a checkpoint
-    Rewound,
+    /// Messages for a session have been replaced (e.g. after /undo or /clear).
+    /// UI should reload messages from store.
+    MessageReplaced { session_id: SessionId },
     /// Goal state was updated (started, paused, resumed, completed, blocked)
     GoalUpdated { description: String, status: String },
     /// Goal was stopped and removed

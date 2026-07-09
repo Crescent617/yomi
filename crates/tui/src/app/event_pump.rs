@@ -46,6 +46,25 @@ impl Drop for EventPump {
     }
 }
 
+/// Try to send a droppable (informational) event without backpressure.
+///
+/// If the channel is full the event is dropped with a warning; this must only
+/// be used for events the UI can afford to lose (e.g. subagent progress).
+/// Returns `false` if the channel is closed and the caller should stop.
+fn try_send_droppable(tx: &mpsc::Sender<TaggedEvent>, event: TaggedEvent, what: &str) -> bool {
+    match tx.try_send(event) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!("EventPump channel full, dropping {what}");
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            tracing::warn!("EventPump channel closed, cannot send {what}");
+            false
+        }
+    }
+}
+
 impl EventPump {
     pub fn spawn(
         initial_rx: EventBusSubscriber,
@@ -55,16 +74,19 @@ impl EventPump {
     ) -> (Self, mpsc::Receiver<TaggedEvent>) {
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_for_task = cancel.clone();
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, rx) = mpsc::channel(4096);
 
         tokio::spawn(async move {
             let sid = SessionId::from(session_id);
             let mut current_rx = Some(initial_rx);
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
+            // Connection-state transitions must not be dropped, so use the
+            // backpressured `send` rather than `try_send`.
             if crate::daemon_mode() {
-                if let Err(e) = tx.try_send(TaggedEvent::Connected) {
+                if let Err(e) = tx.send(TaggedEvent::Connected).await {
                     tracing::warn!("EventPump failed to send initial connected notification: {e}");
+                    return;
                 }
             }
 
@@ -74,11 +96,12 @@ impl EventPump {
                     match Self::resubscribe(&kernel, &sid, _auto_approve, &cancel_for_task).await {
                         Some(new_rx) => {
                             tracing::info!("EventPump re-subscribed to {}", sid.0);
-                            // Notify TUI that connection is back.
-                            if let Err(e) = tx.try_send(TaggedEvent::Connected) {
+                            // Notify TUI that connection is back (must not be dropped).
+                            if let Err(e) = tx.send(TaggedEvent::Connected).await {
                                 tracing::warn!(
                                     "EventPump failed to send connected notification: {e}"
                                 );
+                                break 'outer;
                             }
                             current_rx = Some(new_rx);
                         }
@@ -137,12 +160,12 @@ impl EventPump {
                                                                                 ..
                                                                             })
                                                                         );
-                                                                        if let Err(e) = tx_clone.try_send(TaggedEvent::Subagent {
+                                                                        // Subagent events are informational; safe to drop when full.
+                                                                        if !try_send_droppable(&tx_clone, TaggedEvent::Subagent {
                                                                             parent_tool_id: parent_tool_id.clone(),
                                                                             session_id: sub_sid.0.to_string(),
                                                                             event: ev,
-                                                                        }) {
-                                                                            tracing::warn!("Subagent event pump mpsc closed: {e}");
+                                                                        }, "subagent event") {
                                                                             break;
                                                                         }
                                                                         if is_stopped {
@@ -166,6 +189,9 @@ impl EventPump {
                                     }
                                 }
 
+                                // Main session events must never be silently dropped:
+                                // losing e.g. ModelEvent::End or a tool result corrupts
+                                // the visible transcript. Use backpressured send.
                                 if let Err(e) = tx.send(TaggedEvent::Main(event)).await {
                                     tracing::warn!("EventPump mpsc closed: {e}");
                                     break 'outer;
@@ -173,8 +199,10 @@ impl EventPump {
                             }
                             None => {
                                 tracing::warn!("Subscriber closed, will resubscribe");
-                                if let Err(e) = tx.try_send(TaggedEvent::ConnectionLost) {
+                                // Connection-state transitions must not be dropped.
+                                if let Err(e) = tx.send(TaggedEvent::ConnectionLost).await {
                                     tracing::warn!("EventPump failed to send connection lost notification: {e}");
+                                    break 'outer;
                                 }
                                 current_rx = None;
                             }
@@ -240,7 +268,7 @@ impl EventPump {
                 }
             }
             retries += 1;
-            let delay_ms = std::cmp::min(100 * (1_u64 << retries.min(63)), 5000);
+            let delay_ms = std::cmp::min(100 * (1_u64 << retries.min(6)), 5000);
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
     }

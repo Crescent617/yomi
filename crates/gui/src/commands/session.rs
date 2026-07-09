@@ -40,6 +40,7 @@ pub async fn create_session(
     project_id: Option<String>,
     working_dir: Option<String>,
     auto_approve_level: String,
+    model_key: Option<String>,
 ) -> Result<String, GuiError> {
     let coord = state.kernel.clone();
     let level = parse_level(&auto_approve_level)?;
@@ -48,6 +49,7 @@ pub async fn create_session(
         working_dir: working_dir.map(std::path::PathBuf::from),
         auto_approve_level: level,
         tool_blocklist: vec![],
+        model_key,
     };
     let session_id = coord
         .create_session(input)
@@ -156,6 +158,14 @@ pub async fn list_pinned_sessions(
         .await
         .map_err(GuiError::kernel)?;
     Ok(result)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clear_session(state: State<'_, AppState>, session_id: String) -> Result<(), GuiError> {
+    let coord = state.kernel.clone();
+    let sid = SessionId::from(session_id);
+    coord.clear_session(&sid).await.map_err(GuiError::kernel)?;
+    Ok(())
 }
 
 fn parse_level(s: &str) -> Result<Level, GuiError> {

@@ -6,7 +6,7 @@ use super::{
     InterceptCtx,
 };
 use crate::comms::{EventSink, Mailbox};
-use crate::compactor::{CompactionError, DEFAULT_CONTEXT_WINDOW};
+use crate::compactor::CompactionError;
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
@@ -80,6 +80,10 @@ pub struct Agent {
     current_turn: Option<Arc<super::turn::Turn>>,
     /// Maximum tool output length in bytes
     max_tool_output_length: usize,
+    /// Cached provider for the current model (resolved each turn)
+    current_provider: Option<Arc<dyn crate::provider::Provider>>,
+    /// Cached model config for the current model (resolved each turn)
+    current_model_config: Option<Arc<crate::provider::ModelConfig>>,
 }
 
 impl Agent {
@@ -186,6 +190,8 @@ impl Agent {
             data_dir,
             current_turn: None,
             max_tool_output_length: args.max_tool_output_length,
+            current_provider: None,
+            current_model_config: None,
         }
     }
 
@@ -249,13 +255,14 @@ impl Agent {
 
             // On startup, check if there are pending tool calls in the loaded
             // history (recovery after a mid-batch process kill).
-            if self.pending_tool_calls().is_some() {
-                tracing::info!("resuming interrupted tool execution from history");
-                // Ensure the turn is recreated so that tools can track file edits
-                // during the resumed batch (same user message as before the kill).
-                self.start_turn_if_needed().await;
-                self.context.transition_to(AgentState::ExecutingTool);
-            }
+            // TODO: 先注释掉这个功能，想清楚再加回来，目前不完备，比如cancel之后其实不需要这个行为
+            // if self.pending_tool_calls().is_some() {
+            //     tracing::info!("resuming interrupted tool execution from history");
+            //     // Ensure the turn is recreated so that tools can track file edits
+            //     // during the resumed batch (same user message as before the kill).
+            //     self.start_turn_if_needed().await;
+            //     self.context.transition_to(AgentState::ExecutingTool);
+            // }
 
             loop {
                 let state = self.context.current_state();
@@ -579,12 +586,31 @@ impl Agent {
             },
         ));
 
-        self.emit(Event::Agent(crate::event::AgentEvent::Rewound));
-
         if let Err(e) = result_tx.try_send(Ok(())) {
             tracing::warn!("Failed to send rewind success result: {:?}", e);
         }
         Ok(())
+    }
+
+    /// Resolve the current provider and model config for this session from the session store.
+    /// Caches the result in `current_provider` and `current_model_config`.
+    async fn resolve_model(
+        &mut self,
+    ) -> Result<
+        (
+            Arc<dyn crate::provider::Provider>,
+            Arc<crate::provider::ModelConfig>,
+        ),
+        AgentError,
+    > {
+        let (provider, model_config) = self
+            .shared
+            .resolve_model(&self.session_id)
+            .await
+            .map_err(|e| AgentError::Other(format!("Model resolution failed: {e}")))?;
+        self.current_provider = Some(Arc::clone(&provider));
+        self.current_model_config = Some(Arc::clone(&model_config));
+        Ok((provider, model_config))
     }
 
     async fn handle_input(&mut self, input: AgentInput) -> Result<(), AgentError> {
@@ -698,8 +724,11 @@ impl Agent {
     }
 
     async fn handle_streaming(&mut self) -> Result<(), AgentError> {
+        // Resolve current model for this session (cached in self.current_provider / current_model_config)
+        let (provider, model_config) = self.resolve_model().await?;
+
         // 1. Check and run compaction if needed (at the very beginning)
-        if self.maybe_compact_messages().await {
+        if self.maybe_compact_messages(&model_config).await {
             tracing::info!("performed auto-compaction before streaming");
         }
 
@@ -730,8 +759,6 @@ impl Agent {
             crate::utils::asset::resolve_messages(&resolved_messages, &self.shared.data_dir).await;
 
         // Spawn provider request in a separate task to allow cancellation
-        let provider = self.shared.provider.clone();
-        let model_config = self.shared.model_config.clone();
         let stream_task = tokio::spawn(
             async move {
                 provider
@@ -861,10 +888,15 @@ impl Agent {
                             );
                             let total = usage.total_tokens();
                             state.handle_token_usage(usage);
-                            // Get context window from compactor or use default
-                            let context_window = self.shared.compactor.as_ref()
-                                .map_or(DEFAULT_CONTEXT_WINDOW, |c| c.context_window);
-                                                        self.emit(Event::Model(ModelEvent::TokenUsage {
+                            // Context window from the model resolved at stream start;
+                            // fall back to the default constant (should not happen).
+                            let context_window = self
+                                .current_model_config
+                                .as_ref()
+                                .map_or(crate::compactor::DEFAULT_CONTEXT_WINDOW, |c| {
+                                    c.context_window
+                                });
+                            self.emit(Event::Model(ModelEvent::TokenUsage {
                                 message_id: message_id.clone(),
                                 prompt_tokens: usage.prompt_tokens,
                                 completion_tokens: usage.completion_tokens,
@@ -873,15 +905,17 @@ impl Agent {
                             }));
                             // Record token usage
                             if let Some(store) = &self.shared.usage_store {
-                                let record = crate::storage::UsageRecord::new(
-                                    self.session_id.clone(),
-                                    usage,
-                                    self.shared.model_config.model_id.clone(),
-                                    self.shared.model_config.provider.to_string(),
-                                    crate::storage::UsageType::Normal,
-                                );
-                                if let Err(e) = store.record(&record).await {
-                                    tracing::warn!("Failed to record token usage: {}", e);
+                                if let Some(ref model_config) = self.current_model_config {
+                                    let record = crate::storage::UsageRecord::new(
+                                        self.session_id.clone(),
+                                        usage,
+                                        model_config.model_id.clone(),
+                                        model_config.provider.to_string(),
+                                        crate::storage::UsageType::Normal,
+                                    );
+                                    if let Err(e) = store.record(&record).await {
+                                        tracing::warn!("Failed to record token usage: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -907,39 +941,19 @@ impl Agent {
 
     /// Force compaction regardless of threshold.
     pub async fn force_compact(&mut self) -> Result<String, String> {
-        let compactor = self
-            .shared
-            .compactor
-            .as_ref()
-            .ok_or("No compactor configured")?;
-        let old_count = self.message_buffer.len();
-        let prev_state = self.context.current_state();
-        if !self.context.transition_to(AgentState::Compacting) {
-            tracing::warn!("Failed to transition to Compacting from {:?}", prev_state);
-        }
-        self.emit_compaction_event(true);
-
-        let result = compactor
-            .auto_compact(
-                self.message_buffer.messages(),
-                Arc::clone(&self.shared.provider),
-                &self.shared.model_config,
-                Some(self.cancel_token.runtime_token()),
-            )
-            .await;
-
-        if !self.context.transition_to(prev_state) {
-            tracing::warn!(
-                "Failed to transition back to {:?} from Compacting",
-                prev_state
-            );
-        }
-        self.emit_compaction_event(false);
-        self.handle_compaction_result(result, old_count).await
+        self.do_force_compact(false).await
     }
 
     /// Force full compaction (skip micro-compaction).
     pub async fn force_full_compact(&mut self) -> Result<String, String> {
+        self.do_force_compact(true).await
+    }
+
+    async fn do_force_compact(&mut self, full: bool) -> Result<String, String> {
+        let (provider, model_config) = self
+            .resolve_model()
+            .await
+            .map_err(|e| format!("Model resolution failed: {e}"))?;
         let compactor = self
             .shared
             .compactor
@@ -952,15 +966,26 @@ impl Agent {
         }
         self.emit_compaction_event(true);
 
-        let result = compactor
-            .full_compact(
-                self.message_buffer.messages(),
-                Arc::clone(&self.shared.provider),
-                &self.shared.model_config,
-                Some(self.cancel_token.runtime_token()),
-            )
-            .await
-            .map(Some);
+        let result = if full {
+            compactor
+                .full_compact(
+                    self.message_buffer.messages(),
+                    provider,
+                    &model_config,
+                    Some(self.cancel_token.runtime_token()),
+                )
+                .await
+                .map(Some)
+        } else {
+            compactor
+                .auto_compact(
+                    self.message_buffer.messages(),
+                    provider,
+                    &model_config,
+                    Some(self.cancel_token.runtime_token()),
+                )
+                .await
+        };
 
         if !self.context.transition_to(prev_state) {
             tracing::warn!(
@@ -969,7 +994,8 @@ impl Agent {
             );
         }
         self.emit_compaction_event(false);
-        self.handle_compaction_result(result, old_count).await
+        self.handle_compaction_result(result, old_count, &model_config)
+            .await
     }
 
     /// Handle compaction result, update state, and return user message.
@@ -978,12 +1004,13 @@ impl Agent {
         &mut self,
         result: Result<Option<crate::compactor::CompactionResult>, CompactionError>,
         old_count: usize,
+        model_config: &crate::provider::ModelConfig,
     ) -> Result<String, String> {
         let compact_result = match result {
             Ok(None) => Ok("No compaction needed".to_string()),
             Ok(Some(compaction_result)) => {
                 // Record compactor token usage
-                self.record_compactor_token_usage(compaction_result.token_usage)
+                self.record_compactor_token_usage(compaction_result.token_usage, model_config)
                     .await;
 
                 self.apply_compacted_messages(compaction_result.messages)
@@ -1034,7 +1061,11 @@ impl Agent {
     }
 
     /// Record compactor token usage
-    async fn record_compactor_token_usage(&self, usage: crate::provider::TokenUsage) {
+    async fn record_compactor_token_usage(
+        &self,
+        usage: crate::provider::TokenUsage,
+        model_config: &crate::provider::ModelConfig,
+    ) {
         if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
             return; // No usage to record
         }
@@ -1042,8 +1073,8 @@ impl Agent {
             let record = crate::storage::UsageRecord::new(
                 self.session_id.clone(),
                 usage,
-                self.shared.model_config.model_id.clone(),
-                self.shared.model_config.provider.to_string(),
+                model_config.model_id.clone(),
+                model_config.provider.to_string(),
                 crate::storage::UsageType::Compactor,
             );
             if let Err(e) = store.record(&record).await {
@@ -1075,11 +1106,15 @@ impl Agent {
 
     /// Check and run compaction if needed
     /// Returns true if compaction occurred (including full compaction)
-    async fn maybe_compact_messages(&mut self) -> bool {
+    async fn maybe_compact_messages(
+        &mut self,
+        model_config: &crate::provider::ModelConfig,
+    ) -> bool {
         let Some(compactor) = self.shared.compactor.as_ref() else {
             return false; // No compactor configured, skip
         };
-        let should_compact = compactor.should_compact(self.message_buffer.messages());
+        let should_compact =
+            compactor.should_compact(self.message_buffer.messages(), model_config.context_window);
         if !should_compact {
             return false;
         }

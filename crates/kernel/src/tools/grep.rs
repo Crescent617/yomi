@@ -192,6 +192,7 @@ impl GrepTool {
         let mut cmd = Command::new("rg");
         cmd.args(&args)
             .current_dir(working_dir)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

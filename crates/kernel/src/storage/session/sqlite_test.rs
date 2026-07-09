@@ -18,7 +18,10 @@ async fn test_create_and_get() {
     let store = create_test_store().await;
 
     let id = SessionId::new();
-    store.create(&id, None, None, None, None).await.unwrap();
+    store
+        .create(&id, None, None, None, None, None)
+        .await
+        .unwrap();
     let info = store.get(&id).await.unwrap().unwrap();
 
     assert_eq!(info.id.0, id.0);
@@ -31,7 +34,7 @@ async fn test_create_with_working_dir() {
 
     let id = SessionId::new();
     store
-        .create(&id, None, Some("/test/dir"), None, None)
+        .create(&id, None, Some("/test/dir"), None, None, None)
         .await
         .unwrap();
     let info = store.get(&id).await.unwrap().unwrap();
@@ -45,7 +48,7 @@ async fn test_fork() {
 
     let parent = SessionId::new();
     store
-        .create(&parent, None, Some("/parent/dir"), None, None)
+        .create(&parent, None, Some("/parent/dir"), None, None, None)
         .await
         .unwrap();
     let child = store.fork(&parent).await.unwrap();
@@ -60,9 +63,12 @@ async fn test_create_with_parent_id() {
     let store = create_test_store().await;
     let parent = SessionId::new();
     let child = SessionId::new();
-    store.create(&parent, None, None, None, None).await.unwrap();
     store
-        .create(&child, None, None, None, Some(&parent))
+        .create(&parent, None, None, None, None, None)
+        .await
+        .unwrap();
+    store
+        .create(&child, None, None, None, Some(&parent), None)
         .await
         .unwrap();
 
@@ -75,9 +81,15 @@ async fn test_list_ordering() {
     let store = create_test_store().await;
 
     let id1 = SessionId::new();
-    store.create(&id1, None, None, None, None).await.unwrap();
+    store
+        .create(&id1, None, None, None, None, None)
+        .await
+        .unwrap();
     let id2 = SessionId::new();
-    store.create(&id2, None, None, None, None).await.unwrap();
+    store
+        .create(&id2, None, None, None, None, None)
+        .await
+        .unwrap();
 
     // Update id1 to make it more recent
     store.update_message_count(&id1, 1).await.unwrap();
@@ -94,17 +106,17 @@ async fn test_list_filter_by_project_id() {
     let pid = crate::types::ProjectId::new();
     let id1 = SessionId::new();
     store
-        .create(&id1, Some(&pid), Some("/foo/bar"), None, None)
+        .create(&id1, Some(&pid), Some("/foo/bar"), None, None, None)
         .await
         .unwrap();
     let id2 = SessionId::new();
     store
-        .create(&id2, None, Some("/baz/qux"), None, None)
+        .create(&id2, None, Some("/baz/qux"), None, None, None)
         .await
         .unwrap();
     let id3 = SessionId::new();
     store
-        .create(&id3, Some(&pid), Some("/foo/bar"), None, None)
+        .create(&id3, Some(&pid), Some("/foo/bar"), None, None, None)
         .await
         .unwrap();
 
@@ -123,7 +135,10 @@ async fn test_list_limit_and_next_cursor() {
     let mut ids = Vec::new();
     for i in 0..5 {
         let id = SessionId::new();
-        store.create(&id, None, None, None, None).await.unwrap();
+        store
+            .create(&id, None, None, None, None, None)
+            .await
+            .unwrap();
         ids.push(id.clone());
         store
             .update_message_count(&ids[i], i as i64 + 1)
@@ -166,7 +181,7 @@ async fn test_cleanup_deletes_old_sessions() {
     // Create a session and manually set its updated_at to 10 days ago
     let old_id = SessionId::new();
     store
-        .create(&old_id, None, Some("/test"), None, None)
+        .create(&old_id, None, Some("/test"), None, None, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -178,7 +193,7 @@ async fn test_cleanup_deletes_old_sessions() {
     // Create a recent session
     let recent_id = SessionId::new();
     store
-        .create(&recent_id, None, Some("/test"), None, None)
+        .create(&recent_id, None, Some("/test"), None, None, None)
         .await
         .unwrap();
 
@@ -202,9 +217,15 @@ async fn test_cleanup_empty_when_no_old_sessions() {
 
     // Create only recent sessions
     let id1 = SessionId::new();
-    store.create(&id1, None, None, None, None).await.unwrap();
+    store
+        .create(&id1, None, None, None, None, None)
+        .await
+        .unwrap();
     let id2 = SessionId::new();
-    store.create(&id2, None, None, None, None).await.unwrap();
+    store
+        .create(&id2, None, None, None, None, None)
+        .await
+        .unwrap();
 
     // Cleanup sessions older than 30 days
     let deleted = store.cleanup(30).await.unwrap();
@@ -221,7 +242,7 @@ async fn test_cleanup_cascades_to_subagent_sessions() {
     // Create a parent session with an old updated_at
     let parent_id = SessionId::new();
     store
-        .create(&parent_id, None, Some("/test"), None, None)
+        .create(&parent_id, None, Some("/test"), None, None, None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -233,7 +254,7 @@ async fn test_cleanup_cascades_to_subagent_sessions() {
     // Create a child subagent session, also old
     let child_id = SessionId::new();
     store
-        .create(&child_id, None, None, None, Some(&parent_id))
+        .create(&child_id, None, None, None, Some(&parent_id), None)
         .await
         .unwrap();
     sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
@@ -245,7 +266,7 @@ async fn test_cleanup_cascades_to_subagent_sessions() {
     // Create a recent sibling session
     let recent_id = SessionId::new();
     store
-        .create(&recent_id, None, Some("/test"), None, None)
+        .create(&recent_id, None, Some("/test"), None, None, None)
         .await
         .unwrap();
 
@@ -270,13 +291,13 @@ async fn test_list_excludes_subagent_sessions() {
 
     let parent_id = SessionId::new();
     store
-        .create(&parent_id, None, None, None, None)
+        .create(&parent_id, None, None, None, None, None)
         .await
         .unwrap();
 
     let child_id = SessionId::new_subagent();
     store
-        .create(&child_id, None, None, None, Some(&parent_id))
+        .create(&child_id, None, None, None, Some(&parent_id), None)
         .await
         .unwrap();
 

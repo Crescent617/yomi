@@ -9,20 +9,51 @@
   } from "../../state.svelte";
   import { formatElapsed, formatTokens, utf8ByteLength } from "../../utils";
   import * as api from "../../api";
+  import type { ModelInfo } from "../../api";
   import { onMount } from "svelte";
 
   let { session }: { session: SessionState | null } = $props();
 
-  const displayMessages = $derived(getDisplayMessages(session?.id ?? ""));
-
-  let config = $state<{ model: string; context_window: number } | null>(null);
+  let models = $state<ModelInfo[]>([]);
+  let fallbackModelKey = $state<string | null>(null);
 
   onMount(() => {
     api
-      .getConfig()
-      .then((c) => (config = c))
+      .getModels()
+      .then((res) => {
+        models = res.models;
+      })
       .catch(() => {});
   });
+
+  // Sessions using the default model have model_key = null in the DB;
+  // resolve the effective model via get_session_model (which applies the
+  // default fallback on the backend).
+  $effect(() => {
+    const sid = session?.id;
+    if (!sid || session?.model_key) {
+      fallbackModelKey = null;
+      return;
+    }
+    api
+      .getSessionModel(sid)
+      .then((key) => {
+        // Discard stale responses if the session changed meanwhile
+        if (session?.id === sid) fallbackModelKey = key;
+      })
+      .catch(() => {
+        if (session?.id === sid) fallbackModelKey = null;
+      });
+  });
+
+  const modelKey = $derived(session?.model_key ?? fallbackModelKey);
+
+  const activeModel = $derived.by(() => {
+    if (!modelKey) return null;
+    return models.find((m) => m.name === modelKey) ?? null;
+  });
+
+  const displayMessages = $derived(getDisplayMessages(session?.id ?? ""));
 
   // ── Timer ──
   let startTime = $state<number | null>(null);
@@ -61,11 +92,9 @@
   // ── Total tokens: prefer backend real usage, fallback to estimation ──
   const total_tokens = $derived.by(() => {
     if (!session) return 0;
-    // Use backend-reported token usage (aligns with TUI status bar)
     if (session.token_usage?.total_tokens != null) {
       return session.token_usage.total_tokens;
     }
-    // Fallback to client-side estimation
     let bytes = 0;
     for (const msg of displayMessages) {
       if (msg.type === "user" || msg.type === "assistant") {
@@ -114,35 +143,32 @@
 
   // ── Current running tool ──
   const currentTool = $derived.by(() => {
-    // 优先使用直接从 tool_call_delta 来的状态（即使模型前面生成了文字）
     if (session?.streaming_tool_name) {
       return { tool_name: session.streaming_tool_name };
     }
-
     if (session?.phase !== "streaming" && session?.phase !== "executing_tool")
       return null;
-
     for (let i = displayMessages.length - 1; i >= 0; i--) {
       const msg = displayMessages[i];
       if (msg.type === "tool") {
         if (msg.status === "running") return { tool_name: msg.tool_name };
-        continue; // completed/failed, keep looking
+        continue;
       }
       if (msg.type === "assistant") {
         const thinking = findThinking(msg.content);
-        if (thinking || hasText(msg.content)) return null; // generating text
+        if (thinking || hasText(msg.content)) return null;
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           return { tool_name: msg.tool_calls[msg.tool_calls.length - 1].name };
         }
         return null;
       }
-      return null; // user/system/error
+      return null;
     }
     return null;
   });
 </script>
 
-{#if isRunning || session?.phase === "compacting" || streamingTokens > 0 || total_tokens > 0}
+{#if session}
   <div
     class="flex items-center justify-between px-3 py-1 text-xs border-b border-border bg-muted/30 min-h-7 font-mono"
   >
@@ -183,17 +209,20 @@
 
     <!-- Right: model + ctx -->
     <div class="flex items-center gap-2 shrink-0">
-      {#if config}
-        {@const pct = (total_tokens / config.context_window) * 100}
-        <span class="text-muted-foreground/60">{config.model}</span>
+      {#if activeModel}
+        {@const m = activeModel}
+        {@const pct = (total_tokens / m.context_window) * 100}
+        <span class="text-muted-foreground/60">{m.model_id}</span>
         <span class="text-muted-foreground/40">·</span>
         <span
           class="text-muted-foreground/60"
           class:text-amber-500={pct >= 70}
           class:text-red-500={pct >= 90}
         >
-          {pct.toFixed(1)}% ({(config.context_window / 1000).toFixed(0)}K)
+          {pct.toFixed(1)}% ({(m.context_window / 1000).toFixed(0)}K)
         </span>
+      {:else if modelKey}
+        <span class="text-muted-foreground/60">{modelKey}</span>
       {/if}
     </div>
   </div>

@@ -3,6 +3,7 @@ use crate::provider::{ModelConfig, ProviderError};
 use crate::skill::Skill;
 use crate::types::Message;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
@@ -11,7 +12,8 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AgentConfig {
-    pub model: ModelConfig,
+    /// Default model name for new sessions (points to a model in Config.models)
+    pub default_model: String,
     pub max_iterations: usize,
     pub enable_subagent: bool,
     pub system_prompt: String,
@@ -189,7 +191,7 @@ impl AgentSpawnArgs {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            model: ModelConfig::default(),
+            default_model: "default".to_string(),
             max_iterations: 100,
             enable_subagent: true,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -311,8 +313,10 @@ impl AgentExecutionContext {
 /// Shared resources across agents
 #[derive(Clone)]
 pub struct AgentShared {
-    pub provider: Arc<dyn crate::provider::Provider>,
-    pub model_config: Arc<ModelConfig>,
+    /// Model registry (key -> `ModelConfig`) for runtime resolution
+    pub models: Arc<BTreeMap<String, ModelConfig>>,
+    /// Default model key for new sessions
+    pub default_model: String,
     /// Task store for task tools (legacy)
     pub task_store: Option<Arc<crate::tools::task::TaskStore>>,
     /// Todo storage for todo list persistence
@@ -350,8 +354,8 @@ pub struct AgentShared {
 impl AgentShared {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        provider: Arc<dyn crate::provider::Provider>,
-        model_config: Arc<ModelConfig>,
+        models: Arc<BTreeMap<String, ModelConfig>>,
+        default_model: String,
         task_store: Option<Arc<crate::tools::task::TaskStore>>,
         todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         compactor: Option<crate::compactor::Compactor>,
@@ -364,8 +368,8 @@ impl AgentShared {
         checkpoint_store: Option<Arc<dyn crate::checkpoint::CheckpointStore>>,
     ) -> Self {
         Self::with_data_dir(
-            provider,
-            model_config,
+            models,
+            default_model,
             task_store,
             todo_storage,
             compactor,
@@ -382,8 +386,8 @@ impl AgentShared {
 
     #[allow(clippy::too_many_arguments)]
     pub fn with_data_dir(
-        provider: Arc<dyn crate::provider::Provider>,
-        model_config: Arc<ModelConfig>,
+        models: Arc<BTreeMap<String, ModelConfig>>,
+        default_model: String,
         task_store: Option<Arc<crate::tools::task::TaskStore>>,
         todo_storage: Option<Arc<dyn crate::storage::TodoStore>>,
         compactor: Option<crate::compactor::Compactor>,
@@ -397,8 +401,8 @@ impl AgentShared {
         data_dir: std::path::PathBuf,
     ) -> Self {
         Self {
-            provider,
-            model_config,
+            models,
+            default_model,
             task_store,
             todo_storage,
             compactor,
@@ -471,20 +475,6 @@ impl AgentShared {
         self
     }
 
-    /// Set the provider
-    #[must_use]
-    pub fn with_provider(mut self, provider: Arc<dyn crate::provider::Provider>) -> Self {
-        self.provider = provider;
-        self
-    }
-
-    /// Set the model config
-    #[must_use]
-    pub fn with_model_config(mut self, model_config: Arc<crate::provider::ModelConfig>) -> Self {
-        self.model_config = model_config;
-        self
-    }
-
     /// Set the event bus
     #[must_use]
     pub fn with_event_bus(mut self, event_bus: Arc<crate::comms::EventBus>) -> Self {
@@ -497,6 +487,66 @@ impl AgentShared {
     pub fn with_skill_folders(mut self, skill_folders: Vec<std::path::PathBuf>) -> Self {
         self.skill_folders = skill_folders;
         self
+    }
+
+    /// Resolve the current provider and model config for the given session.
+    /// Reads `model_key` from the session store, falls back to `default_model`
+    /// (also when the stored key no longer exists in the registry).
+    /// Errors only if even the fallback key is not found in the registry.
+    pub async fn resolve_model(
+        &self,
+        session_id: &crate::types::SessionId,
+    ) -> Result<(Arc<dyn crate::provider::Provider>, Arc<ModelConfig>), AgentError> {
+        let stored_key = match &self.session_store {
+            Some(store) => match store.get(session_id).await {
+                Ok(info) => info.and_then(|i| i.model_key),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read session {} from store while resolving model \
+                         (falling back to default_model '{}'): {}",
+                        session_id.0,
+                        self.default_model,
+                        e
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let mut key = stored_key.unwrap_or_else(|| self.default_model.clone());
+
+        // Stale model_key (e.g. model removed from config): fall back to default.
+        if !self.models.contains_key(&key) && key != self.default_model {
+            tracing::warn!(
+                "Session {} references unknown model '{}' — falling back to \
+                 default_model '{}'. Available: {:?}",
+                session_id.0,
+                key,
+                self.default_model,
+                self.models.keys().collect::<Vec<_>>()
+            );
+            key.clone_from(&self.default_model);
+        }
+
+        let model_config = self.models.get(&key).cloned().ok_or_else(|| {
+            tracing::error!(
+                "Model '{}' not found in registry for session {}. Available: {:?}",
+                key,
+                session_id.0,
+                self.models.keys().collect::<Vec<_>>()
+            );
+            AgentError::Other(format!(
+                "Model '{}' not found in registry. Available models: {}",
+                key,
+                self.models.keys().cloned().collect::<Vec<_>>().join(", ")
+            ))
+        })?;
+
+        let provider = crate::create_provider_for_model(&model_config).map_err(|e| {
+            AgentError::Other(format!("Failed to create provider for model '{key}': {e}"))
+        })?;
+        Ok((provider, Arc::new(model_config)))
     }
 }
 
@@ -534,13 +584,16 @@ pub enum AgentError {
     /// Agent was shut down by request
     #[error("Shutdown")]
     Shutdown,
+    /// Generic catch-all error
+    #[error("{0}")]
+    Other(String),
 }
 
 impl AgentError {
     pub fn is_retryable(&self) -> bool {
         use AgentError::{
-            Cancelled, MaxIterationsExceeded, NoPermissionChecker, PermissionCheckFailed, Provider,
-            Serialization, Shutdown, StreamTaskPanicked,
+            Cancelled, MaxIterationsExceeded, NoPermissionChecker, Other, PermissionCheckFailed,
+            Provider, Serialization, Shutdown, StreamTaskPanicked,
         };
         match self {
             // Delegate to ProviderError's retry logic
@@ -551,7 +604,8 @@ impl AgentError {
             | PermissionCheckFailed(_)
             | NoPermissionChecker
             | Serialization(_)
-            | Shutdown => false,
+            | Shutdown
+            | Other(_) => false,
             // Stream task panics might be transient
             StreamTaskPanicked(_) => true,
         }

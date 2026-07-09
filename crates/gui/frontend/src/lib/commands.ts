@@ -1,5 +1,6 @@
 // Re-exported from TUI — keep in sync with crates/tui/src/components/input/mod.rs
 export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
+  ["/clear", "Clear session context (messages, file state, todos)"],
   ["/new", "Create new session"],
   ["/goal", "<description> Start goal mode with optional description"],
   ["/goal:stop", "Stop goal mode"],

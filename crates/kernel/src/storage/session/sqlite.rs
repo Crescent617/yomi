@@ -29,13 +29,15 @@ impl SessionStore for SqliteSessionStore {
         working_dir: Option<&str>,
         auto_approve_level: Option<&str>,
         parent_id: Option<&SessionId>,
+        model_key: Option<&str>,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id) VALUES (?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, parent_id, model_key) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&*id.0)
             .bind(project_id.map(|p| &*p.0))
             .bind(working_dir)
             .bind(auto_approve_level)
             .bind(parent_id.map(|p| &*p.0))
+            .bind(model_key)
             .execute(&self.pool)
             .await
             .map_err(|e| storage_err(format!("failed to create session: {e}")))?;
@@ -45,8 +47,8 @@ impl SessionStore for SqliteSessionStore {
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            "INSERT INTO sessions (id, parent_id, project_id, working_dir, auto_approve_level)
-             SELECT ?, ?, project_id, working_dir, auto_approve_level FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, parent_id, project_id, working_dir, auto_approve_level, model_key)
+             SELECT ?, ?, project_id, working_dir, auto_approve_level, model_key FROM sessions WHERE id = ?",
         )
         .bind(&*new_id.0)
         .bind(&*parent_id.0)
@@ -58,9 +60,28 @@ impl SessionStore for SqliteSessionStore {
         Ok(new_id)
     }
 
+    async fn update_model_key(&self, id: &SessionId, key: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE sessions SET model_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(key)
+        .bind(&*id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to update session model key: {e}")))?;
+
+        tracing::info!(
+            "update_model_key: id={}, key={}, rows_affected={}",
+            id.0,
+            key,
+            result.rows_affected()
+        );
+        Ok(result.rows_affected())
+    }
+
     async fn get(&self, id: &SessionId) -> Result<Option<SessionInfo>> {
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
              FROM sessions WHERE id = ?",
         )
         .bind(&*id.0)
@@ -95,7 +116,7 @@ impl SessionStore for SqliteSessionStore {
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)> {
         let mut builder = sqlx::QueryBuilder::new(
-            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
              FROM sessions WHERE id NOT LIKE 'sub_%'",
         );
 
@@ -255,6 +276,7 @@ struct SessionRow {
     working_dir: Option<String>,
     project_id: Option<String>,
     auto_approve_level: Option<String>,
+    model_key: Option<String>,
 }
 
 impl From<SessionRow> for SessionInfo {
@@ -269,6 +291,7 @@ impl From<SessionRow> for SessionInfo {
             working_dir: row.working_dir,
             project_id: row.project_id.map(crate::types::ProjectId::from),
             auto_approve_level: row.auto_approve_level,
+            model_key: row.model_key,
         }
     }
 }

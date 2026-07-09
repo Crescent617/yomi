@@ -8,7 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 /// Current schema version - bump this when adding new migrations
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub const CURRENT_SCHEMA_VERSION: i64 = 13;
 
 /// A single database migration (can contain multiple SQL statements)
 struct Migration {
@@ -157,11 +157,15 @@ const MIGRATIONS: &[Migration] = &[
         name: "remove_agent_id_from_token_usage",
         sqls: &[r"ALTER TABLE token_usage DROP COLUMN agent_id;"],
     },
-    // 为了兼容考虑，得加
     Migration {
         version: 12,
         name: "add_agent_id_to_token_usage",
         sqls: &[r"ALTER TABLE token_usage ADD COLUMN agent_id TEXT;"],
+    },
+    Migration {
+        version: 13,
+        name: "add_session_model_key",
+        sqls: &[r"ALTER TABLE sessions ADD COLUMN model_key TEXT;"],
     },
 ];
 

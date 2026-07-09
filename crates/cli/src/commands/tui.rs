@@ -55,6 +55,10 @@ pub struct TuiArgs {
     /// Run with background daemon (external kernel)
     #[arg(long, visible_alias = "bg")]
     pub daemon: bool,
+
+    /// Model key to use for this session (overrides default model)
+    #[arg(short, long, value_name = "MODEL_KEY")]
+    pub model: Option<String>,
 }
 
 impl TuiArgs {
@@ -193,6 +197,7 @@ pub async fn run(args: TuiArgs) -> Result<()> {
             &app_storage,
             &working_dir,
             config.auto_approve,
+            args.model.clone(),
         )
         .await?;
 
@@ -250,9 +255,11 @@ async fn create_local_kernel(config: &Config) -> Result<Arc<kernel::Kernel>> {
 
 fn print_startup_info(config: &Config) {
     if *DEBUG_MODE {
-        println!("Provider: {}", config.agent.model.provider);
-        println!("Model: {}", config.agent.model.model_id);
-        println!("Endpoint: {}", config.agent.model.endpoint);
+        if let Some(model) = config.model() {
+            println!("Provider: {}", model.provider);
+            println!("Model: {}", model.model_id);
+            println!("Endpoint: {}", model.endpoint);
+        }
         let api_key = config.api_key();
         let key_preview = if api_key.len() > 8 {
             strs::truncate_with_suffix(api_key, 11, "...")

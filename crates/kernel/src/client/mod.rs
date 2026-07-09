@@ -103,6 +103,7 @@ pub trait KernelApi: Send + Sync {
     async fn update_goal(&self, session_id: &SessionId, description: String) -> Result<()>;
     async fn stop_goal(&self, session_id: &SessionId) -> Result<()>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
+    async fn clear_session(&self, session_id: &SessionId) -> Result<()>;
     async fn list_messages(
         &self,
         session_id: &SessionId,
@@ -171,6 +172,11 @@ pub trait KernelApi: Send + Sync {
     ) -> Result<bool>;
     async fn delete_cron_job(&self, id: &crate::cron::CronJobId) -> Result<bool>;
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()>;
+
+    // ── Model ──────────────────────────────────────────────────────────────
+    async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>>;
+    async fn get_session_model(&self, session_id: &SessionId) -> Result<String>;
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()>;
 }
 
 // ── LocalKernel (existing Kernel wrapped) ──────────────────────
@@ -313,6 +319,10 @@ impl KernelApi for Kernel {
         Self::delete_session(self, session_id).await
     }
 
+    async fn clear_session(&self, session_id: &SessionId) -> Result<()> {
+        Self::clear_session(self, session_id)
+    }
+
     async fn list_messages(
         &self,
         session_id: &SessionId,
@@ -444,6 +454,18 @@ impl KernelApi for Kernel {
 
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
         Self::trigger_cron_job(self, id).await
+    }
+
+    async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {
+        Self::list_models(self).await
+    }
+
+    async fn get_session_model(&self, session_id: &SessionId) -> Result<String> {
+        Ok(Self::get_session_model(self, session_id).await)
+    }
+
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
+        Self::set_session_model(self, session_id, key).await
     }
 }
 
@@ -977,6 +999,7 @@ impl KernelApi for RemoteKernel {
                 project_id: input.project_id.map(|p| p.0.to_string()),
                 working_dir: input.working_dir.map(|p| p.to_string_lossy().to_string()),
                 auto_approve_level: input.auto_approve_level,
+                model_key: input.model_key,
             })
             .await?;
         let sid: String = serde_json::from_value(result)?;
@@ -1188,6 +1211,14 @@ impl KernelApi for RemoteKernel {
         Ok(())
     }
 
+    async fn clear_session(&self, session_id: &SessionId) -> Result<()> {
+        self.call(ReqMethod::ClearSession {
+            session_id: session_id.0.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
     async fn list_messages(
         &self,
         session_id: &SessionId,
@@ -1347,6 +1378,10 @@ impl KernelApi for RemoteKernel {
         &self,
         input: crate::cron::CreateCronJobInput,
     ) -> Result<crate::cron::CronJobId> {
+        #[derive(serde::Deserialize)]
+        struct JobIdResponse {
+            job_id: String,
+        }
         let result = self
             .call(ReqMethod::CreateCronJob {
                 name: input.name,
@@ -1356,8 +1391,9 @@ impl KernelApi for RemoteKernel {
                 expires_at: input.expires_at,
             })
             .await?;
-        let job_id: String = serde_json::from_value(result)?;
-        Ok(crate::cron::CronJobId::from(job_id))
+        let resp: JobIdResponse = serde_json::from_value(result)
+            .map_err(|e| crate::types::KernelError::storage(format!("parse job_id: {e}")))?;
+        Ok(crate::cron::CronJobId::from(resp.job_id))
     }
 
     async fn list_cron_jobs(
@@ -1421,6 +1457,31 @@ impl KernelApi for RemoteKernel {
     async fn trigger_cron_job(&self, id: &crate::cron::CronJobId) -> Result<()> {
         self.call(ReqMethod::TriggerCronJob {
             job_id: id.0.to_string(),
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn list_models(&self) -> Result<Vec<crate::kernel::ModelInfo>> {
+        let result = self.call(ReqMethod::ListModels).await?;
+        let models: Vec<crate::kernel::ModelInfo> = serde_json::from_value(result)?;
+        Ok(models)
+    }
+
+    async fn get_session_model(&self, session_id: &SessionId) -> Result<String> {
+        let result = self
+            .call(ReqMethod::GetSessionModel {
+                session_id: session_id.0.to_string(),
+            })
+            .await?;
+        let key: String = serde_json::from_value(result)?;
+        Ok(key)
+    }
+
+    async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
+        self.call(ReqMethod::SetSessionModel {
+            session_id: session_id.0.to_string(),
+            key: key.to_string(),
         })
         .await?;
         Ok(())

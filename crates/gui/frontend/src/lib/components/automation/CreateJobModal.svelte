@@ -6,9 +6,10 @@
     createSession,
     listProjects,
     getCwd,
+    errorMessage,
   } from "../../api";
   import type { ProjectInfo } from "../../api";
-  import type { CronJob } from "../../automation.svelte";
+  import type { CronJob } from "../../api";
 
   interface Props {
     editingJob?: CronJob;
@@ -40,18 +41,6 @@
   let scheduleError = $state("");
   let saving = $state(false);
   let error = $state("");
-
-  function extractErrorMessage(e: unknown): string {
-    if (e instanceof Error) return e.message;
-    if (typeof e === "string") return e;
-    if (e && typeof e === "object" && "message" in e)
-      return String((e as Record<string, unknown>).message);
-    try {
-      return JSON.stringify(e);
-    } catch {
-      return String(e);
-    }
-  }
 
   function validateSchedule(s: string) {
     if (!s) {
@@ -120,7 +109,7 @@
           selected_project_id || undefined,
         );
       } catch (e: unknown) {
-        error = "Failed to create session: " + extractErrorMessage(e);
+        error = "Failed to create session: " + errorMessage(e);
         saving = false;
         return;
       }
@@ -138,10 +127,11 @@
     const payload: Record<string, unknown> = {
       name: name.trim(),
       schedule: schedule.trim(),
-      action,
+      action: JSON.stringify(action),
     };
 
-    const max_runsNum = max_runs ? parseInt(String(max_runs), 10) : undefined;
+    const max_runsNum =
+      max_runs !== "" ? parseInt(String(max_runs), 10) : undefined;
     if (max_runsNum !== undefined && !Number.isNaN(max_runsNum)) {
       payload.max_runs = max_runsNum;
     }
@@ -157,7 +147,7 @@
           payload as {
             name: string;
             schedule: string;
-            action: Record<string, unknown>;
+            action: string;
             max_runs?: number;
             expires_at?: string;
           },
@@ -165,7 +155,7 @@
       }
       onSaved();
     } catch (e: unknown) {
-      error = extractErrorMessage(e);
+      error = errorMessage(e);
     } finally {
       saving = false;
     }

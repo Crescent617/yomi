@@ -22,6 +22,7 @@
     getSession,
     showNotification,
     refreshCheckpoints,
+    createSessionState,
     activateSession as stateActivateSession,
   } from "../../state.svelte";
 
@@ -110,28 +111,24 @@
       for (const s of result.sessions) {
         const existing = sessionState.sessions.find((sess) => sess.id === s.id);
         if (!existing) {
-          sessionState.sessions.push({
-            id: s.id,
-            project_path: s.project_path ?? "",
-            project_id: s.project_id,
-            alias: s.title ?? "Untitled",
-            messages: [],
-            phase: "idle",
-            checkpoints: [],
-            tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-            active_tab_id: "chat",
-            pending_permissions: [],
-            pending_ask_users: [],
-            queued_input: null,
-            updated_at: s.updated_at ?? s.created_at,
-            permission_level: s.auto_approve_level ?? "caution",
-          });
+          sessionState.sessions.push(
+            createSessionState({
+              id: s.id,
+              project_path: s.project_path ?? "",
+              project_id: s.project_id,
+              alias: s.title ?? "Untitled",
+              updated_at: s.updated_at ?? s.created_at,
+              permission_level: s.auto_approve_level ?? "caution",
+              model_key: s.model_key,
+            }),
+          );
         } else {
           existing.alias = s.title ?? existing.alias ?? "Untitled";
           existing.permission_level =
             s.auto_approve_level ?? existing.permission_level;
           existing.updated_at =
             s.updated_at ?? s.created_at ?? existing.updated_at;
+          existing.model_key = s.model_key ?? existing.model_key;
         }
       }
       if (result.next_cursor) {
@@ -176,32 +173,32 @@
       delete pinnedSessionMeta[id];
       loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);
-      showNotification("Session deleted", "success", 2000);
+      showNotification("Session deleted", "success");
     } catch (e: unknown) {
       console.error(
         "Failed to delete session:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to delete session", "error", 3000);
+      showNotification("Failed to delete session", "error");
     }
   }
 
   async function deleteProject(id: string) {
     showMenu = null;
     if (getSessions(id).length > 0) {
-      showNotification("Cannot delete project with sessions", "error", 3000);
+      showNotification("Cannot delete project with sessions", "error");
       return;
     }
     try {
       await api.deleteProject(id);
       projectState.projects = projectState.projects.filter((p) => p.id !== id);
-      showNotification("Project deleted", "success", 2000);
+      showNotification("Project deleted", "success");
     } catch (e: unknown) {
       console.error(
         "Failed to delete project:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to delete project", "error", 3000);
+      showNotification("Failed to delete project", "error");
     }
   }
 
@@ -214,30 +211,24 @@
         project.dir,
         config?.auto_approve ?? "caution",
         project_id,
+        undefined,
       );
-      sessionState.sessions.push({
-        id,
-        project_path: project.dir,
-        project_id,
-        alias: "Untitled",
-        messages: [],
-        phase: "idle",
-        checkpoints: [],
-        tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-        active_tab_id: "chat",
-        pending_permissions: [],
-        pending_ask_users: [],
-        queued_input: null,
-        updated_at: new Date().toISOString(),
-        permission_level: config?.auto_approve ?? "caution",
-      });
+      sessionState.sessions.push(
+        createSessionState({
+          id,
+          project_path: project.dir,
+          project_id,
+          alias: "Untitled",
+          permission_level: config?.auto_approve ?? "caution",
+        }),
+      );
       await activateSession(id);
     } catch (e: unknown) {
       console.error(
         "Failed to create session:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to create session", "error", 3000);
+      showNotification("Failed to create session", "error");
     }
   }
 
@@ -251,13 +242,13 @@
       await api.renameProject(project_id, name);
       const p = projectState.projects.find((x) => x.id === project_id);
       if (p) p.name = name;
-      showNotification("Project renamed", "success", 2000);
+      showNotification("Project renamed", "success");
     } catch (e: unknown) {
       console.error(
         "Failed to rename project:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to rename project", "error", 3000);
+      showNotification("Failed to rename project", "error");
     }
     renamingProjectId = null;
   }
@@ -272,13 +263,13 @@
       await api.renameSession(session_id, name);
       const s = sessionState.sessions.find((x) => x.id === session_id);
       if (s) s.alias = name;
-      showNotification("Session renamed", "success", 2000);
+      showNotification("Session renamed", "success");
     } catch (e: unknown) {
       console.error(
         "Failed to rename session:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to rename session", "error", 3000);
+      showNotification("Failed to rename session", "error");
     }
     renamingSessionId = null;
   }
@@ -286,9 +277,9 @@
   async function copySessionId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
-      showNotification("Session ID copied", "success", 1500);
+      showNotification("Session ID copied", "success");
     } catch {
-      showNotification("Failed to copy", "error", 1500);
+      showNotification("Failed to copy", "error");
     }
   }
 
@@ -310,7 +301,7 @@
           "Failed to unpin session:",
           e instanceof Error ? e.message : e,
         );
-        showNotification("Failed to unpin session", "error", 3000);
+        showNotification("Failed to unpin session", "error");
       }
     } else {
       const now = new Date().toISOString();
@@ -325,7 +316,7 @@
           "Failed to pin session:",
           e instanceof Error ? e.message : e,
         );
-        showNotification("Failed to pin session", "error", 3000);
+        showNotification("Failed to pin session", "error");
       }
     }
   }

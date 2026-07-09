@@ -99,11 +99,11 @@ impl MascotAnimator {
 }
 
 /// Banner data for rendering (used by `ChatView`)
-/// Holds `working_dir`, other info comes from global config
 #[derive(Debug, Clone, Default)]
 pub struct BannerData {
     pub working_dir: String,
     pub tip: String,
+    pub model_name: String,
 }
 
 impl BannerData {
@@ -111,6 +111,7 @@ impl BannerData {
         Self {
             working_dir,
             tip: String::new(),
+            model_name: String::new(),
         }
     }
 
@@ -125,13 +126,15 @@ impl BannerData {
         };
 
         // Truncate model name if too long
-        let model_name = &config.agent.model.model_id;
+        let model_name = if self.model_name.is_empty() {
+            "-"
+        } else {
+            &self.model_name
+        };
         let model_str = if model_name.len() > 40 {
             truncate_by_width(model_name, 40, "...")
-        } else if model_name.is_empty() {
-            "-".to_string()
         } else {
-            model_name.clone()
+            model_name.to_string()
         };
 
         let auto_approve = config.auto_approve.to_string();
@@ -267,6 +270,11 @@ impl Component for Banner {
             Attribute::Custom(attr::WORKING_DIR) => {
                 if let AttrValue::String(dir) = value {
                     self.set_working_dir(dir);
+                }
+            }
+            Attribute::Custom(attr::MODEL_NAME) => {
+                if let AttrValue::String(name) = value {
+                    self.data.model_name = name;
                 }
             }
             _ => {

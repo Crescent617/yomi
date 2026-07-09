@@ -103,17 +103,21 @@ pub async fn resolve_session(
     app_storage: &AppStorage,
     working_dir: &Path,
     auto_approve_level: Level,
+    model_key: Option<String>,
 ) -> Result<SessionId> {
+    // All branches create at most one session, so this FnOnce closure can
+    // move `model_key` into the input without cloning.
+    let new_session_input = move || CreateSessionInput {
+        project_id: None,
+        working_dir: Some(working_dir.to_path_buf()),
+        auto_approve_level,
+        tool_blocklist: vec![],
+        model_key,
+    };
+
     // When not launching (e.g., creating new session mid-run), ignore --resume/--fork args
     if !is_launch {
-        let input = CreateSessionInput {
-            project_id: None,
-            working_dir: Some(working_dir.to_path_buf()),
-            auto_approve_level,
-
-            tool_blocklist: vec![],
-        };
-        return Ok(kernel.create_session(input).await?);
+        return Ok(kernel.create_session(new_session_input()).await?);
     }
 
     match session_arg {
@@ -127,14 +131,7 @@ pub async fn resolve_session(
                 Err(e) => {
                     println!("Failed to restore session: {e}");
                     println!("Starting new session instead");
-                    let input = CreateSessionInput {
-                        project_id: None,
-                        working_dir: Some(working_dir.to_path_buf()),
-                        auto_approve_level,
-
-                        tool_blocklist: vec![],
-                    };
-                    Ok(kernel.create_session(input).await?)
+                    Ok(kernel.create_session(new_session_input()).await?)
                 }
             }
         }
@@ -149,39 +146,17 @@ pub async fn resolve_session(
                     Err(e) => {
                         println!("Failed to restore session: {e}");
                         println!("Starting new session instead");
-                        let input = CreateSessionInput {
-                            project_id: None,
-                            working_dir: Some(working_dir.to_path_buf()),
-                            auto_approve_level,
-                            tool_blocklist: vec![],
-                        };
-                        Ok(kernel.create_session(input).await?)
+                        Ok(kernel.create_session(new_session_input()).await?)
                     }
                 }
             }
             None => {
                 println!("No previous session found, starting new session");
-                let input = CreateSessionInput {
-                    project_id: None,
-                    working_dir: Some(working_dir.to_path_buf()),
-                    auto_approve_level,
-
-                    tool_blocklist: vec![],
-                };
-                Ok(kernel.create_session(input).await?)
+                Ok(kernel.create_session(new_session_input()).await?)
             }
         },
         // No --session: create new session
-        SessionArg::New => {
-            let input = CreateSessionInput {
-                project_id: None,
-                working_dir: Some(working_dir.to_path_buf()),
-                auto_approve_level,
-
-                tool_blocklist: vec![],
-            };
-            Ok(kernel.create_session(input).await?)
-        }
+        SessionArg::New => Ok(kernel.create_session(new_session_input()).await?),
         // --fork (no value): fork last session for this directory
         SessionArg::ForkLast => match app_storage.load_session(working_dir).await? {
             Some(entry) => {
@@ -191,14 +166,7 @@ pub async fn resolve_session(
             }
             None => {
                 println!("No previous session found to fork, starting new session");
-                let input = CreateSessionInput {
-                    project_id: None,
-                    working_dir: Some(working_dir.to_path_buf()),
-                    auto_approve_level,
-
-                    tool_blocklist: vec![],
-                };
-                Ok(kernel.create_session(input).await?)
+                Ok(kernel.create_session(new_session_input()).await?)
             }
         },
         // --fork <id>: fork specific session

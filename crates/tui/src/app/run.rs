@@ -180,12 +180,42 @@ pub async fn run_tui(
         event_rx,
         input_tx,
         ctrl_tx,
-        kernel,
+        Arc::clone(&kernel),
         input_history,
         working_dir_path,
         initial_message,
-        session_id,
+        session_id.clone(),
     )?;
+
+    // Resolve the session's actual model (not the global default) so that
+    // banner, status bar, and token-usage calculations are accurate.
+    {
+        use kernel::types::SessionId;
+        let sid = SessionId::from(session_id);
+        let config = crate::config();
+        // Prefer the kernel API, which owns the model_key -> default_model
+        // fallback logic (works in daemon mode too).
+        let model_key = match kernel.get_session_model(&sid).await {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::warn!("Failed to get session model, using default: {e}");
+                config.agent.default_model.clone()
+            }
+        };
+        // Map the key to a local model config; if the key is unknown locally
+        // (e.g. remote daemon with a different config), fall back to the
+        // local default model so we never end up with ""/0 (NaN% in status bar).
+        let model_cfg = config
+            .models
+            .iter()
+            .find(|m| m.name == model_key)
+            .or_else(|| config.model());
+        if let Some(cfg) = model_cfg {
+            model.model_name.clone_from(&cfg.model_id);
+            model.context_window = cfg.context_window;
+        }
+    }
+
     model.init_status_bar()?;
     model.init_input_history()?;
     model.init_skills().await?;

@@ -106,8 +106,6 @@ fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
 pub struct Compactor {
     /// Ratio (0.0–1.0) of the context window at which compaction is triggered
     pub threshold_ratio: f32,
-    /// Total context window size
-    pub context_window: u32,
     /// Number of recent messages to preserve
     pub keep_recent: usize,
     /// Max tokens for summary
@@ -118,7 +116,6 @@ impl Default for Compactor {
     fn default() -> Self {
         Self {
             threshold_ratio: DEFAULT_THRESHOLD_RATIO,
-            context_window: DEFAULT_CONTEXT_WINDOW,
             keep_recent: KEEP_RECENT_MESSAGES,
             summary_max_tokens: SUMMARY_MAX_TOKENS,
         }
@@ -127,15 +124,9 @@ impl Default for Compactor {
 
 impl Compactor {
     /// Create a new compactor with custom settings
-    pub const fn new(
-        threshold_ratio: f32,
-        context_window: u32,
-        keep_recent: usize,
-        summary_max_tokens: u32,
-    ) -> Self {
+    pub const fn new(threshold_ratio: f32, keep_recent: usize, summary_max_tokens: u32) -> Self {
         Self {
             threshold_ratio,
-            context_window,
             keep_recent,
             summary_max_tokens,
         }
@@ -143,8 +134,8 @@ impl Compactor {
 
     /// Compute the absolute token threshold from the ratio and context window.
     #[allow(clippy::cast_precision_loss)]
-    pub fn threshold(&self) -> u32 {
-        (self.context_window as f32 * self.threshold_ratio) as u32
+    pub fn threshold(&self, context_window: u32) -> u32 {
+        (context_window as f32 * self.threshold_ratio) as u32
     }
 
     /// Calculate total tokens from message history
@@ -177,9 +168,9 @@ impl Compactor {
     }
 
     /// Check if compaction should be triggered
-    pub fn should_compact(&self, messages: &[Arc<Message>]) -> bool {
+    pub fn should_compact(&self, messages: &[Arc<Message>], context_window: u32) -> bool {
         let tokens = Self::calculate_tokens(messages);
-        tokens >= self.threshold()
+        tokens >= self.threshold(context_window)
     }
 
     /// Try micro-compaction: clear old tool results
@@ -286,14 +277,14 @@ impl Compactor {
         model_config: &ModelConfig,
         cancel_token: Option<CancellationToken>,
     ) -> Result<Option<CompactionResult>, CompactionError> {
-        if !self.should_compact(messages) {
+        if !self.should_compact(messages, model_config.context_window) {
             return Ok(None);
         }
 
         // Try micro-compaction first
         if let Some(after_micro) = self.micro_compact(messages) {
             // Check if micro-compaction was sufficient
-            if !self.should_compact(&after_micro) {
+            if !self.should_compact(&after_micro, model_config.context_window) {
                 return Ok(Some(CompactionResult::new(
                     after_micro,
                     crate::provider::TokenUsage::default(),

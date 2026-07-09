@@ -113,15 +113,15 @@ pub async fn init_kernel(
     Ok((kernel, config, config_file))
 }
 
-/// Create a provider from configuration.
-/// Returns `NoKeyProvider` when no API key is configured so the application can
-/// start and fail gracefully at message-send time rather than on boot.
-pub fn create_provider(config: &Config) -> Result<Arc<dyn Provider>> {
-    if !config.has_api_key() {
-        tracing::warn!("No API key configured — using NoKeyProvider");
+pub fn create_provider_for_model(model: &ModelConfig) -> Result<Arc<dyn Provider>> {
+    if !model.has_api_key() {
+        tracing::warn!(
+            "No API key for model '{}' — using NoKeyProvider",
+            model.model_id
+        );
         return Ok(Arc::new(NoKeyProvider));
     }
-    match config.agent.model.provider {
+    match model.provider {
         ModelProvider::OpenAI => Ok(Arc::new(OpenAIProvider::new()?)),
         ModelProvider::Anthropic => Ok(Arc::new(AnthropicProvider::new()?)),
     }
@@ -173,8 +173,6 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
     let storage = StorageSet::open_with_config(&config.data_dir, config)
         .await
         .map_err(|e| KernelError::storage(format!("Failed to open storage: {e}")))?;
-    let provider = create_provider(config)
-        .map_err(|e| KernelError::storage(format!("Failed to create provider: {e}")))?;
     let task_store = Arc::new(
         TaskStore::new(&config.data_dir)
             .await
@@ -206,7 +204,6 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
 
     let kernel = Kernel::new(
         &storage,
-        provider,
         agent_config,
         Some(task_store),
         Some(config.agent.compactor.clone()),
@@ -221,7 +218,8 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         } else {
             Some(storage.channel_store())
         },
-    );
+        config.models.clone(),
+    )?;
 
     Ok(kernel)
 }

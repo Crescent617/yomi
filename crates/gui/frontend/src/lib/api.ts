@@ -46,6 +46,18 @@ async function withTimeout<T>(
   return result as T;
 }
 
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  const recordE = e as Record<string, unknown>;
+  if (typeof recordE?.message === "string") return recordE.message;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
 // ── Project API ──────────────────────────────────────────────────────────
 
 export interface ProjectInfo {
@@ -94,6 +106,7 @@ export interface SessionInfo {
   title?: string;
   project_id?: string;
   auto_approve_level?: string;
+  model_key?: string;
 }
 
 export interface PinnedSessionDetail {
@@ -131,6 +144,7 @@ export async function listSessions(
         auto_approve_level: session.auto_approve_level
           ? String(session.auto_approve_level)
           : undefined,
+        model_key: session.model_key ? String(session.model_key) : undefined,
       };
     }),
     next_cursor: result.next_cursor,
@@ -175,11 +189,13 @@ export async function createSession(
   working_dir: string,
   level: string = "safe",
   project_id?: string,
+  model_key?: string,
 ): Promise<string> {
   return invokeCmd("create_session", {
     project_id: project_id,
     working_dir: working_dir,
     auto_approve_level: level,
+    model_key: model_key ?? null,
   });
 }
 
@@ -199,6 +215,10 @@ export async function forkSession(
 
 export async function deleteSession(session_id: string): Promise<void> {
   return invokeCmd("delete_session", { session_id: session_id });
+}
+
+export async function clearSession(session_id: string): Promise<void> {
+  return invokeCmd("clear_session", { session_id: session_id });
 }
 
 export async function shutdownSession(session_id: string): Promise<void> {
@@ -289,11 +309,24 @@ export async function getSession(session_id: string): Promise<{
   created_at: string;
   updated_at: string;
   auto_approve_level: string | null;
+  model_key: string | null;
 }> {
   return invokeCmd("get_session", { session_id: session_id });
 }
 
-export async function getCheckpoints(session_id: string): Promise<unknown[]> {
+export interface Checkpoint {
+  id: string;
+  session_id: string;
+  message_id: string;
+  sequence: number;
+  created_at: number;
+  files_changed: number;
+  summary: string;
+}
+
+export async function getCheckpoints(
+  session_id: string,
+): Promise<Checkpoint[]> {
   return invokeCmd("get_checkpoints", { session_id: session_id });
 }
 
@@ -513,19 +546,67 @@ export async function getGitInfo(path: string): Promise<GitInfo | null> {
   return promise;
 }
 
+// ─── Model API ──────────────────────────────────────────────────────
+
+export interface ModelInfo {
+  name: string;
+  model_id: string;
+  provider: string;
+  context_window: number;
+}
+
+export async function getModels(): Promise<{ models: ModelInfo[] }> {
+  return invokeCmd("get_models");
+}
+
+export async function getSessionModel(session_id: string): Promise<string> {
+  return invokeCmd("get_session_model", { session_id });
+}
+
+export async function setSessionModel(
+  session_id: string,
+  key: string,
+): Promise<void> {
+  return invokeCmd("set_session_model", { session_id, key });
+}
+
 // ─── Cron / Automation ──────────────────────────────────
+
+export interface CronAction {
+  type: string;
+  session_id?: string;
+  content?: string;
+  command?: string;
+  working_dir?: string;
+}
+
+export interface CronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  action: CronAction;
+  status: "active" | "paused" | "completed" | "failed";
+  created_at: string;
+  updated_at: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  run_count: number;
+  max_runs: number | null;
+  expires_at: string | null;
+  last_error: string | null;
+}
 
 export async function listCronJobs(
   status?: string,
   limit = 100,
-): Promise<unknown[]> {
+): Promise<CronJob[]> {
   return invokeCmd("list_cron_jobs", { status, limit });
 }
 
 export async function createCronJob(input: {
   name: string;
   schedule: string;
-  action: Record<string, unknown>;
+  action: string;
   max_runs?: number;
   expires_at?: string;
 }): Promise<string> {
@@ -537,7 +618,7 @@ export async function updateCronJob(
   input: {
     name?: string;
     schedule?: string;
-    action?: Record<string, unknown>;
+    action?: string;
     status?: string;
     max_runs?: number;
     expires_at?: string;

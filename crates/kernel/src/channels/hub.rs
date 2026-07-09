@@ -330,7 +330,9 @@ async fn handle_incoming_message(
     match cmd {
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
-                kernel.clear_session(&sid);
+                if let Err(e) = kernel.clear_session(&sid) {
+                    tracing::warn!("Failed to clear session {}: {}", sid.0, e);
+                }
             }
             Ok(Some("Context cleared.".to_string()))
         }
@@ -392,6 +394,7 @@ async fn get_or_create_session(
             working_dir: None,
             auto_approve_level: crate::permission::Level::Dangerous,
             tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
+            model_key: None,
         })
         .await?;
     store

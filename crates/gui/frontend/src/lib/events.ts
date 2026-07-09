@@ -1,0 +1,551 @@
+import * as api from "./api";
+import {
+  sessionState,
+  getSession,
+  showNotification,
+  streamingMessages,
+  type SessionState,
+  type Message,
+  type BotMessage,
+  type ToolMessage,
+  type ModelChunk,
+  type ToolEvent,
+  type AgentEvent,
+  type UserEvent,
+  type KernelEvent,
+} from "./state.svelte";
+import {
+  sendDesktopNotification,
+  refreshCheckpoints,
+  loadSessionMessages,
+} from "./session";
+
+// ── Event helpers ────────────────────────────────────────────────────────
+
+function findMessageById(
+  session: SessionState,
+  message_id: string,
+): Message | undefined {
+  const allMessages = [
+    ...session.messages,
+    ...(streamingMessages[session.id] ?? []),
+  ];
+  for (let i = allMessages.length - 1; i >= 0; i--) {
+    const msg = allMessages[i];
+    if (msg.id === message_id) return msg;
+  }
+  return undefined;
+}
+
+function maybeRefreshGitInfo(session: SessionState) {
+  if (!session.project_path || session.id !== sessionState.activeSessionId)
+    return;
+  const { id, project_path } = session;
+  api
+    .getGitInfo(project_path)
+    .then((info) => {
+      const current = getSession(id);
+      if (current && current.id === sessionState.activeSessionId) {
+        current.git_info = info;
+      }
+    })
+    .catch(() => {
+      const current = getSession(id);
+      if (current && current.id === sessionState.activeSessionId) {
+        current.git_info = null;
+      }
+    });
+}
+
+function maybeRefreshTodos(session: SessionState, toolName: string) {
+  if (toolName === "todo") {
+    api
+      .getTodos(session.id)
+      .then((r) => {
+        session.todos = r.todos;
+      })
+      .catch(() => {});
+  }
+}
+
+// ── Main event dispatcher ──────────────────────────────────────────────
+
+export function handleEvent(
+  session_id: string,
+  event_id: string | undefined,
+  rawEvent: unknown,
+) {
+  const session = getSession(session_id);
+  if (!session) return;
+
+  const ev = rawEvent as KernelEvent;
+  const isToolCalling = "model" in ev && ev.model.tool_call_delta != null;
+  if (!isToolCalling) {
+    session.streaming_tool_name = undefined;
+  }
+  if ("model" in ev) {
+    handleModelEvent(session, ev.model);
+  } else if ("agent" in ev) {
+    handleAgentEvent(session, ev.agent);
+  } else if ("tool" in ev) {
+    handleToolEvent(session, ev.tool);
+  } else if ("user" in ev) {
+    handleUserEvent(session, ev.user);
+  }
+}
+
+// ── Model events ───────────────────────────────────────────────────────
+
+function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
+  if (event.token_usage) {
+    const u = event.token_usage;
+    session.token_usage = {
+      prompt_tokens: u.prompt_tokens,
+      completion_tokens: u.completion_tokens,
+      total_tokens: u.total_tokens,
+    };
+    return true;
+  }
+
+  if (event.chunk) {
+    const chunk = event.chunk;
+    const content = chunk.content;
+
+    if (content?.text) {
+      const text = content.text;
+      const buf = streamingMessages[session.id] ?? [];
+      const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+      if (
+        lastMsg &&
+        lastMsg.type === "assistant" &&
+        lastMsg.id === chunk.message_id
+      ) {
+        const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+        if (
+          lastBlock &&
+          lastBlock.type === "text" &&
+          typeof lastBlock.text === "string"
+        ) {
+          lastBlock.text += text;
+        } else {
+          lastMsg.content.push({ type: "text", text });
+        }
+      } else {
+        buf.push({
+          id: chunk.message_id,
+          type: "assistant",
+          content: [{ type: "text", text }],
+          created_at: new Date().toISOString(),
+        });
+      }
+      streamingMessages[session.id] = buf;
+      return true;
+    } else if (content?.thinking) {
+      const buf = streamingMessages[session.id] ?? [];
+      const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+      const thinkingText = content.thinking.thinking ?? "";
+      if (
+        lastMsg &&
+        lastMsg.type === "assistant" &&
+        lastMsg.id === chunk.message_id
+      ) {
+        const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+        if (
+          lastBlock &&
+          lastBlock.type === "thinking" &&
+          typeof lastBlock.thinking === "string"
+        ) {
+          lastBlock.thinking += thinkingText;
+        } else {
+          lastMsg.content.push({
+            type: "thinking",
+            thinking: thinkingText,
+            signature: undefined,
+          });
+        }
+      } else {
+        buf.push({
+          id: chunk.message_id,
+          type: "assistant",
+          content: [
+            { type: "thinking", thinking: thinkingText, signature: undefined },
+          ],
+          created_at: new Date().toISOString(),
+        });
+      }
+      streamingMessages[session.id] = buf;
+      return true;
+    } else if (content?.redacted_thinking !== undefined) {
+      return true;
+    }
+    return true;
+  } else if (event.tool_call_delta) {
+    const delta = event.tool_call_delta;
+    if (delta.tool_name) {
+      session.streaming_tool_name = delta.tool_name;
+    }
+    const buf = streamingMessages[session.id] ?? [];
+    const lastMsg = buf.length > 0 ? buf[buf.length - 1] : null;
+    let botMsg: BotMessage;
+    if (
+      !lastMsg ||
+      lastMsg.type !== "assistant" ||
+      lastMsg.id !== delta.message_id
+    ) {
+      botMsg = {
+        id: delta.message_id,
+        type: "assistant",
+        content: [],
+        created_at: new Date().toISOString(),
+      };
+      buf.push(botMsg);
+    } else {
+      botMsg = lastMsg;
+    }
+    if (!botMsg.tool_calls) botMsg.tool_calls = [];
+    let toolCall = botMsg.tool_calls.find((t) => t.id === delta.tool_id);
+    if (!toolCall) {
+      toolCall = {
+        id: delta.tool_id,
+        name: delta.tool_name,
+        arguments: "",
+      };
+      botMsg.tool_calls.push(toolCall);
+    }
+    if (delta.arguments_delta) {
+      toolCall.arguments = (toolCall.arguments ?? "") + delta.arguments_delta;
+    }
+    streamingMessages[session.id] = buf;
+    return true;
+  } else if (event.compacting) {
+    const active = event.compacting.active;
+    if (!active) {
+      streamingMessages[session.id] = [];
+      api
+        .getMessages(session.id)
+        .then((msgs) => {
+          loadSessionMessages(session.id, msgs);
+        })
+        .catch((e: Error) =>
+          console.error("Failed to reload messages after compaction:", e),
+        );
+    }
+    return true;
+  } else if (event.error) {
+    const err = event.error;
+    showNotification(`Model error: ${err.error}`, "error");
+    return false;
+  } else if (event.request) {
+    return true;
+  } else if (event.fallback) {
+    const fb = event.fallback;
+    showNotification(`Fallback from ${fb.from} to ${fb.to}`, "info");
+    return true;
+  }
+  return false;
+}
+
+// ── Tool events ────────────────────────────────────────────────────────
+
+function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
+  if (event.start) {
+    const start = event.start;
+    const msg = findMessageById(session, start.message_id);
+    if (msg && msg.type === "tool") {
+      msg.status = "running";
+      if (start.arguments) msg.arguments = start.arguments;
+      return true;
+    }
+    const buf = streamingMessages[session.id] ?? [];
+    const toolMsg: ToolMessage = {
+      id: start.message_id,
+      type: "tool",
+      tool_call_id: start.tool_id,
+      tool_name: start.tool_name,
+      status: "running",
+      arguments: start.arguments ?? "",
+      result: [],
+      created_at: new Date().toISOString(),
+    };
+    buf.push(toolMsg);
+    streamingMessages[session.id] = buf;
+    return true;
+  } else if (event.metadata) {
+    const md = event.metadata;
+    const msg = findMessageById(session, md.message_id);
+    if (msg && msg.type === "tool") {
+      const sid = md.metadata["subagent_session_id"];
+      if (sid) {
+        msg.subagent_session_id = sid;
+      }
+      return true;
+    }
+    const buf = streamingMessages[session.id] ?? [];
+    const toolMsg: ToolMessage = {
+      id: md.message_id,
+      type: "tool",
+      tool_call_id: md.tool_id,
+      tool_name: "agent",
+      status: "running",
+      arguments: "",
+      result: [],
+      created_at: new Date().toISOString(),
+    };
+    const sid = md.metadata["subagent_session_id"];
+    if (sid) {
+      toolMsg.subagent_session_id = sid;
+    }
+    buf.push(toolMsg);
+    streamingMessages[session.id] = buf;
+    return true;
+  } else if (event.end) {
+    const end = event.end;
+    const msg = findMessageById(session, end.message_id);
+    if (msg && msg.type === "tool") {
+      msg.status = end.is_error ? "failed" : "completed";
+      msg.elapsed_ms = end.elapsed_ms;
+      msg.result = end.content_blocks ?? [];
+      maybeRefreshTodos(session, end.tool_name);
+      maybeRefreshGitInfo(session);
+      return true;
+    }
+    const buf = streamingMessages[session.id] ?? [];
+    const toolMsg: ToolMessage = {
+      id: end.message_id,
+      type: "tool",
+      tool_call_id: end.tool_id,
+      tool_name: end.tool_name,
+      status: end.is_error ? "failed" : "completed",
+      arguments: "",
+      result: end.content_blocks ?? [],
+      created_at: new Date().toISOString(),
+    };
+    buf.push(toolMsg);
+    streamingMessages[session.id] = buf;
+    maybeRefreshTodos(session, end.tool_name);
+    maybeRefreshGitInfo(session);
+    return true;
+  }
+  return false;
+}
+
+// ── Agent events ───────────────────────────────────────────────────────
+
+function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
+  if (event.state_changed) {
+    session.phase = event.state_changed.state;
+    session.is_running = session.phase !== "idle" && session.phase !== "closed";
+    return true;
+  }
+
+  if (event.lifecycle) {
+    const state = event.lifecycle.state;
+    if (state === "running") {
+      session.phase = "streaming";
+      session.is_running = true;
+      return true;
+    } else if (typeof state === "object" && state.stopped) {
+      session.phase = "idle";
+      session.is_running = false;
+      const buf = streamingMessages[session.id] ?? [];
+      if (buf.length > 0) {
+        const seen = new Set(session.messages.map((m) => m.id));
+        const deduped = buf.filter((m) => !seen.has(m.id));
+        if (deduped.length > 0) {
+          session.messages = [...session.messages, ...deduped];
+        }
+        streamingMessages[session.id] = [];
+      }
+      refreshCheckpoints(session.id);
+      if (session.queued_input) {
+        const { text, blocks } = session.queued_input;
+        session.queued_input = null;
+        if (blocks && blocks.length > 0) {
+          api
+            .sendMessageBlocks(session.id, blocks)
+            .catch((e: Error) =>
+              console.error("Failed to send queued message:", e),
+            );
+        } else {
+          api
+            .sendMessage(session.id, text)
+            .catch((e: Error) =>
+              console.error("Failed to send queued message:", e),
+            );
+        }
+      }
+      const stopReason = state.stopped.reason;
+      if ("cancelled" in stopReason) {
+        const op = stopReason.cancelled.operation;
+        const msg = op ? `Cancelled: ${op}` : "Cancelled";
+        session.messages = [
+          ...session.messages,
+          {
+            id: crypto.randomUUID(),
+            type: "error",
+            content: msg,
+            created_at: new Date().toISOString(),
+          },
+        ];
+        showNotification(msg, "warning");
+        sendDesktopNotification("Yomi", msg, session.id);
+        return true;
+      } else if ("failed" in stopReason) {
+        const errorMsg =
+          "Task failed: " + (stopReason.failed.error ?? "Unknown");
+        session.messages = [
+          ...session.messages,
+          {
+            id: crypto.randomUUID(),
+            type: "error",
+            content: errorMsg,
+            created_at: new Date().toISOString(),
+          },
+        ];
+        showNotification(errorMsg, "warning");
+        sendDesktopNotification("Yomi", errorMsg, session.id);
+        return true;
+      } else if ("max_iterations" in stopReason) {
+        const msg = `Max iterations reached (${stopReason.max_iterations.reached})`;
+        session.messages = [
+          ...session.messages,
+          {
+            id: crypto.randomUUID(),
+            type: "error",
+            content: msg,
+            created_at: new Date().toISOString(),
+          },
+        ];
+        showNotification(msg, "warning");
+        sendDesktopNotification("Yomi", msg, session.id);
+        return true;
+      }
+      sendDesktopNotification("Yomi", "Task completed", session.id);
+      return true;
+    }
+  } else if (event.error) {
+    const buf = streamingMessages[session.id] ?? [];
+    if (buf.length > 0) {
+      const seen = new Set(session.messages.map((m) => m.id));
+      const deduped = buf.filter((m) => !seen.has(m.id));
+      if (deduped.length > 0) {
+        session.messages = [...session.messages, ...deduped];
+      }
+      streamingMessages[session.id] = [];
+    }
+    const errorStr = event.error.error ?? "Unknown";
+    const errorMsg = "Agent error: " + errorStr;
+    session.messages = [
+      ...session.messages,
+      {
+        id: crypto.randomUUID(),
+        type: "error",
+        content: errorMsg,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    // Non-recoverable errors are NOT always followed by a Stopped::Failed
+    // lifecycle event (the kernel may recover to Idle), so surface both.
+    const level = event.error.is_recoverable ? "warning" : "error";
+    showNotification(errorMsg, level);
+    if (!event.error.is_recoverable) {
+      sendDesktopNotification("Yomi", errorMsg, session.id);
+    }
+    return true;
+  } else if (event.retrying) {
+    const retry = event.retrying;
+    const msg = `Agent retrying (${retry.attempt}/${retry.max_attempts})`;
+    session.messages = [
+      ...session.messages,
+      {
+        id: crypto.randomUUID(),
+        type: "error",
+        content: msg,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    showNotification(msg, "warning");
+    return true;
+  } else if (event.permission_request) {
+    const req = event.permission_request;
+    session.pending_permissions.push({
+      req_id: req.req_id,
+      session_id: req.session_id,
+      tool_name: req.tool_name,
+      tool_args: req.tool_args ?? "",
+      tool_level: req.tool_level ?? "safe",
+      reason: req.reason ?? "",
+    });
+    showNotification(`${req.tool_name} needs approval`, "warning");
+    return true;
+  } else if (event.ask_user_question) {
+    const req = event.ask_user_question;
+    session.pending_ask_users.push({
+      req_id: req.req_id,
+      session_id: req.session_id,
+      questions: req.questions,
+    });
+    showNotification("Agent has a question for you", "info");
+    sendDesktopNotification("Yomi", "Agent has a question for you", session.id);
+    return true;
+  } else if (event.permission_ack) {
+    const req_id = event.permission_ack.req_id;
+    const idx = session.pending_permissions.findIndex(
+      (p) => p.req_id === req_id,
+    );
+    if (idx >= 0) {
+      session.pending_permissions = session.pending_permissions.toSpliced(
+        idx,
+        1,
+      );
+    }
+    return true;
+  } else if (event.ask_user_ack) {
+    const req_id = event.ask_user_ack.req_id;
+    const idx = session.pending_ask_users.findIndex((a) => a.req_id === req_id);
+    if (idx >= 0) {
+      session.pending_ask_users = session.pending_ask_users.toSpliced(idx, 1);
+    }
+    return true;
+  } else if (event.message_replaced !== undefined) {
+    streamingMessages[session.id] = [];
+    session.phase = "idle";
+    session.is_running = false;
+    api
+      .getMessages(session.id)
+      .then((msgs) => loadSessionMessages(session.id, msgs))
+      .catch((e: Error) =>
+        console.error("Failed to reload messages after MessageReplaced:", e),
+      );
+    refreshCheckpoints(session.id);
+    showNotification("Session rewound", "info");
+    return true;
+  } else if (event.goal_updated) {
+    session.goal = {
+      description: event.goal_updated.description,
+      status: event.goal_updated.status,
+    };
+    return true;
+  } else if (event.goal_stopped !== undefined) {
+    session.goal = null;
+    return true;
+  }
+  return false;
+}
+
+// ── User events ────────────────────────────────────────────────────────
+
+function handleUserEvent(session: SessionState, event: UserEvent): boolean {
+  if (event.message) {
+    const msg = event.message;
+    session.messages.push({
+      id: msg.message_id,
+      type: "user",
+      content: msg.content ?? [],
+      created_at: new Date().toISOString(),
+    });
+    session.updated_at = new Date().toISOString();
+    return true;
+  }
+  return false;
+}

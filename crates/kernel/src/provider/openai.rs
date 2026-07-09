@@ -20,16 +20,14 @@ use tokio::time::timeout;
 const IDLE_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub struct OpenAIProvider {
-    client: Client,
+    client: Arc<Client>,
     name: String,
 }
 
 impl OpenAIProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(30))
-                .build()?,
+            client: crate::provider::http_client(),
             name: "openai".to_string(),
         })
     }

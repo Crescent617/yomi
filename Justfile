@@ -46,7 +46,7 @@ info *ARGS:
 gui-dev:
     cd crates/gui/frontend && npm install
     cd crates/gui && npm install
-    cd crates/gui && npx tauri dev
+    cd crates/gui && npx tauri dev --no-watch
 
 # Build GUI release bundle and fix DMG signature
 gui-build:

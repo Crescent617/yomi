@@ -18,7 +18,7 @@
         activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
       showNotification(
-        "Approval failed: " + (e instanceof Error ? e.message : ""),
+        "Approval failed: " + api.errorMessage(e),
         "error",
         3000,
       );
@@ -36,11 +36,7 @@
       activeSession.pending_permissions =
         activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
-      showNotification(
-        "Denial failed: " + (e instanceof Error ? e.message : ""),
-        "error",
-        3000,
-      );
+      showNotification("Denial failed: " + api.errorMessage(e), "error");
     }
   }
 

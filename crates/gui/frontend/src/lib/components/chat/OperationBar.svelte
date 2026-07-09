@@ -48,7 +48,7 @@
       await api.rewind(session_id, message.id);
     } catch (e) {
       showNotification(
-        "Failed to revert: " + (e instanceof Error ? e.message : ""),
+        "Failed to revert: " + api.errorMessage(e),
         "error",
         3000,
       );
@@ -63,9 +63,9 @@
           ? message.content
           : textFromBlocks(message.content);
       await navigator.clipboard.writeText(text);
-      showNotification("Text copied", "success", 2000);
+      showNotification("Text copied", "success");
     } catch {
-      showNotification("Failed to copy text", "error", 2000);
+      showNotification("Failed to copy text", "error");
     }
   }
 </script>
