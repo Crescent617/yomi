@@ -459,6 +459,23 @@ export async function getDailyUsage(days: number): Promise<
   return invokeCmd("get_daily_usage", { days });
 }
 
+export interface ModelUsage {
+  model: string;
+  provider: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  request_count: number;
+}
+
+export async function getModelUsage(days: number): Promise<ModelUsage[]> {
+  return invokeCmd("get_model_usage", { days });
+}
+
+export async function getTodayModelUsage(): Promise<ModelUsage[]> {
+  return invokeCmd("get_today_model_usage");
+}
+
 export async function getTodos(session_id: string): Promise<{
   todos: { id: string; content: string; status: string }[];
 }> {

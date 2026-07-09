@@ -125,6 +125,24 @@ impl DailyUsage {
     }
 }
 
+/// Per-model aggregated usage for a time range
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct ModelUsage {
+    pub model: String,
+    pub provider: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cached_tokens: u64,
+    pub request_count: u64,
+}
+
+impl ModelUsage {
+    /// Total tokens (prompt + completion)
+    pub const fn total_tokens(&self) -> u64 {
+        self.prompt_tokens + self.completion_tokens
+    }
+}
+
 /// Filter criteria for usage queries
 #[derive(Debug, Clone, Default)]
 pub struct UsageFilter {
@@ -157,6 +175,14 @@ pub trait UsageStore: Send + Sync {
         end: DateTime<Utc>,
         filter: Option<&UsageFilter>,
     ) -> Result<Vec<DailyUsage>>;
+
+    /// Get usage aggregated by model for a time range, optionally filtered
+    async fn by_model_summary(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        filter: Option<&UsageFilter>,
+    ) -> Result<Vec<ModelUsage>>;
 }
 
 /// Helper for storage errors

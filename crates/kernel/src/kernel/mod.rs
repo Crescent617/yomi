@@ -6,7 +6,7 @@ pub use conductor::Conductor;
 use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
 use crate::comms::InputBus;
 use crate::permission::Level;
-use crate::storage::usage::{DailyUsage, UsageSummary};
+use crate::storage::usage::{DailyUsage, ModelUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
 use crate::tools::AskUserResponse;
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
@@ -1098,6 +1098,20 @@ impl Kernel {
         self.usage_store()
             .await
             .daily_summary(start, now, None)
+            .await
+    }
+
+    /// Get usage aggregated by model for the last N days
+    pub async fn get_model_usage(&self, days: i64) -> Result<Vec<ModelUsage>> {
+        let start = Utc::now() - chrono::Duration::days(days);
+        self.get_model_usage_since(start).await
+    }
+
+    /// Get usage aggregated by model since `start` (UTC)
+    pub async fn get_model_usage_since(&self, start: DateTime<Utc>) -> Result<Vec<ModelUsage>> {
+        self.usage_store()
+            .await
+            .by_model_summary(start, Utc::now(), None)
             .await
     }
 

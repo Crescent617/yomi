@@ -25,7 +25,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 // 2-minute idle timeout to detect stalled connections
-const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const IDLE_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub struct OpenAIResponseProvider {
     client: Arc<Client>,
@@ -641,14 +641,21 @@ enum InputItem {
         /// JSON-encoded arguments string
         arguments: String,
     },
-    FunctionCallOutput { call_id: String, output: String },
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ContentPart {
-    InputText { text: String },
-    OutputText { text: String },
+    InputText {
+        text: String,
+    },
+    OutputText {
+        text: String,
+    },
     InputImage {
         image_url: String,
         #[serde(skip_serializing_if = "Option::is_none")]

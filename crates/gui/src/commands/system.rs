@@ -154,6 +154,38 @@ pub async fn get_daily_usage(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn get_model_usage(
+    state: State<'_, AppState>,
+    days: Option<i64>,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.kernel.clone();
+    let days = days.unwrap_or(365);
+    let usage = coord
+        .get_model_usage(days)
+        .await
+        .map_err(GuiError::kernel)?;
+    serde_json::to_value(usage).map_err(|e| GuiError::unknown(e.to_string()))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_today_model_usage(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, GuiError> {
+    let coord = state.kernel.clone();
+    // 本地时区今日零点 -> UTC，与 daily_summary 的 localtime 口径一致
+    let local_start = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
+        .ok_or_else(|| GuiError::unknown("failed to compute local midnight".to_string()))?;
+    let usage = coord
+        .get_model_usage_since(local_start.with_timezone(&chrono::Utc))
+        .await
+        .map_err(GuiError::kernel)?;
+    serde_json::to_value(usage).map_err(|e| GuiError::unknown(e.to_string()))
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_models(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
     let models = state.kernel.list_models().await.map_err(GuiError::kernel)?;
     Ok(serde_json::json!({ "models": models }))

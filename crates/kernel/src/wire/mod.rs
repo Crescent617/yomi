@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 10;
+pub const WIRE_PROTOCOL_VERSION: u32 = 11;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +154,12 @@ pub enum ReqMethod {
     },
     GetDailyUsage {
         days: i64,
+    },
+    GetModelUsage {
+        days: i64,
+    },
+    GetModelUsageSince {
+        start: chrono::DateTime<chrono::Utc>,
     },
 
     // ── Channel ────────────────────────────────────────────────────

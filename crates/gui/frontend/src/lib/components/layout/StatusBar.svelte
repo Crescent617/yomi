@@ -29,7 +29,7 @@
     {#if anyStreaming}
       <span class="flex items-center gap-1 text-primary">
         <Activity class="w-3 h-3 animate-pulse" />
-        <span class="truncate">
+        <span class="truncate animate-pulse">
           {streamingCount > 1 ? `${streamingCount} streaming` : "Streaming..."}
         </span>
       </span>

@@ -55,7 +55,8 @@
     };
   });
   let hasDragged = false;
-  let startX = 0, startY = 0;
+  let startX = 0,
+    startY = 0;
   let dragStartPosX = 0,
     dragStartPosY = 0;
 
@@ -231,8 +232,7 @@
     if (newLeft < pRect.left) clampedX = posX + (pRect.left - rectLeft);
     if (newTop < pRect.top) clampedY = posY + (pRect.top - rectTop);
     if (newRight > pRect.right) clampedX = posX + (pRect.right - rectRight);
-    if (newBottom > pRect.bottom)
-      clampedY = posY + (pRect.bottom - rectBottom);
+    if (newBottom > pRect.bottom) clampedY = posY + (pRect.bottom - rectBottom);
 
     return [clampedX, clampedY];
   }
