@@ -592,6 +592,134 @@ impl Model {
                     self.state.should_redraw = true;
                     None
                 }
+                Msg::CommandModels(key) => {
+                    if let Some(key) = key {
+                        // Direct switch: /models <key>
+                        return Some(Msg::ModelSelected(key));
+                    }
+                    let coord = Arc::clone(&self.kernel);
+                    let tx = self.cmd_tx.clone();
+                    let session_id = self.session_id.clone();
+                    tokio::spawn(async move {
+                        let sid = kernel::types::SessionId::from(session_id);
+                        let models = match coord.list_models().await {
+                            Ok(models) => models,
+                            Err(e) => {
+                                tracing::warn!("Failed to list models: {e}");
+                                Vec::new()
+                            }
+                        };
+                        let current = coord.get_session_model(&sid).await.unwrap_or_default();
+                        let items = super::types::model_picker_items(&models, &current);
+                        if let Err(e) = tx.send(Msg::ModelList(items)) {
+                            tracing::debug!("cmd channel closed, dropping model list: {e}");
+                        }
+                    });
+                    None
+                }
+                Msg::ModelList(items) => {
+                    if items.is_empty() {
+                        self.show_notification(&Notification::warn(
+                            "No models configured (check [[models]] in config.toml)",
+                            3000,
+                        ));
+                        return None;
+                    }
+                    if let Err(e) = self.app.attr(
+                        &Id::ModelPicker,
+                        Attribute::Custom(attr::PICKER_ITEMS),
+                        AttrValue::Payload(tuirealm::props::PropPayload::Any(Box::new(items))),
+                    ) {
+                        tracing::warn!("Failed to set model picker items: {}", e);
+                    }
+                    if let Err(e) = self.app.attr(
+                        &Id::ModelPicker,
+                        Attribute::Custom(attr::DIALOG_SHOW),
+                        AttrValue::Flag(true),
+                    ) {
+                        tracing::warn!("Failed to show model picker: {}", e);
+                    }
+                    self.set_focus(&Id::ModelPicker);
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::ModelSelected(key) => {
+                    // Hide picker and return focus to input box
+                    let _ = self.app.attr(
+                        &Id::ModelPicker,
+                        Attribute::Custom(attr::DIALOG_HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    self.set_focus(&Id::InputBox);
+
+                    let coord = Arc::clone(&self.kernel);
+                    let tx = self.cmd_tx.clone();
+                    let session_id = self.session_id.clone();
+                    tokio::spawn(async move {
+                        let sid = kernel::types::SessionId::from(session_id);
+                        match coord.set_session_model(&sid, &key).await {
+                            Ok(()) => {
+                                // Resolve display info from local config; fall back
+                                // gracefully if the key is unknown locally (e.g.
+                                // remote daemon with a different config).
+                                let config = crate::config();
+                                let (model_id, context_window) =
+                                    config.models.iter().find(|m| m.name == key).map_or_else(
+                                        || (key.clone(), 0),
+                                        |m| (m.model_id.clone(), m.context_window),
+                                    );
+                                let _ = tx.send(Msg::ModelSwitched {
+                                    key,
+                                    model_id,
+                                    context_window,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Msg::Notification(Notification::error(
+                                    format!("Failed to switch model: {e}"),
+                                    4000,
+                                )));
+                            }
+                        }
+                    });
+                    None
+                }
+                Msg::ModelSwitched {
+                    key,
+                    model_id,
+                    context_window,
+                } => {
+                    self.model_name.clone_from(&model_id);
+                    if context_window > 0 {
+                        self.context_window = context_window;
+                    }
+                    let _ = self.app.attr(
+                        &Id::StatusBar,
+                        Attribute::Custom(attr::SET_MODEL_NAME),
+                        AttrValue::String(model_id.clone()),
+                    );
+                    let _ = self.app.attr(
+                        &Id::Banner,
+                        Attribute::Custom(attr::MODEL_NAME),
+                        AttrValue::String(model_id),
+                    );
+                    self.show_notification(&Notification::success(
+                        format!("Switched to '{key}' (takes effect next turn)"),
+                        3000,
+                    ));
+                    self.state.should_redraw = true;
+                    None
+                }
+                Msg::CloseModelPicker => {
+                    let _ = self.app.attr(
+                        &Id::ModelPicker,
+                        Attribute::Custom(attr::DIALOG_HIDE),
+                        AttrValue::Flag(true),
+                    );
+                    self.set_focus(&Id::InputBox);
+                    self.state.should_redraw = true;
+                    None
+                }
                 Msg::CommandRewind => {
                     let coord = Arc::clone(&self.kernel);
                     let tx = self.cmd_tx.clone();

@@ -25,6 +25,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/yolo", "Toggle YOLO mode (auto-approve all tools)"),
     ("/browse", "Toggle browse mode"),
     ("/sessions", "Switch to another session"),
+    ("/models", "[key] Switch model for this session"),
     ("/rewind", "Restore conversation/file checkpoint"),
     ("/undo", "Undo last turn"),
     ("/compact", "Force message compaction"),

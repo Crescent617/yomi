@@ -28,6 +28,8 @@ enum Commands {
     Tui(tui::TuiArgs),
     /// Manage sessions
     Session(SessionArgs),
+    /// Garbage collect expired session data (dry-run by default)
+    Gc(commands::gc::GcArgs),
     /// Manage skills
     Skill(SkillArgs),
     /// Manage configuration
@@ -69,15 +71,6 @@ enum SessionsCommands {
         /// Session ID to stop (defaults to current directory's last session)
         #[arg(short, long)]
         session: Option<String>,
-    },
-    /// Cleanup old sessions and their data
-    Cleanup {
-        /// Delete sessions older than this many days
-        #[arg(long, default_value = "180")]
-        days: i64,
-        /// Actually delete data (dry-run by default)
-        #[arg(short, long)]
-        yes: bool,
     },
     /// Manage checkpoints for a session
     Checkpoint(SessionCheckpointArgs),
@@ -194,6 +187,7 @@ async fn main() -> Result<()> {
     match args.command {
         Some(Commands::Tui(tui_args)) => tui::run(tui_args).await,
         Some(Commands::Session(args)) => run_session(args).await,
+        Some(Commands::Gc(args)) => commands::gc::run(args).await,
         Some(Commands::Skill(args)) => run_skill(args).await,
         Some(Commands::Config(args)) => run_config(args).await,
         Some(Commands::Usage(args)) => run_usage(args).await,
@@ -214,9 +208,6 @@ async fn run_session(args: SessionArgs) -> Result<()> {
         }
         SessionsCommands::Stop { session } => {
             commands::session::stop::run(&args.global, session).await
-        }
-        SessionsCommands::Cleanup { days, yes } => {
-            commands::session::cleanup::run(args.global, days, yes).await
         }
         SessionsCommands::Checkpoint(cp_args) => run_session_checkpoint(cp_args).await,
     }

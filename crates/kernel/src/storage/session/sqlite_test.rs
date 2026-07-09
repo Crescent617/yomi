@@ -175,7 +175,7 @@ async fn test_list_limit_and_next_cursor() {
 }
 
 #[tokio::test]
-async fn test_cleanup_deletes_old_sessions() {
+async fn test_list_expired_and_delete_batch() {
     let store = create_test_store().await;
 
     // Create a session and manually set its updated_at to 10 days ago
@@ -197,10 +197,14 @@ async fn test_cleanup_deletes_old_sessions() {
         .await
         .unwrap();
 
-    // Cleanup sessions older than 7 days
-    let deleted = store.cleanup(7).await.unwrap();
-    assert_eq!(deleted.len(), 1);
-    assert_eq!(deleted[0].0, old_id.0);
+    // Expired: sessions older than 7 days
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+    let expired = store.list_expired(cutoff, true).await.unwrap();
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].0, old_id.0);
+
+    let deleted = store.delete_batch(&expired).await.unwrap();
+    assert_eq!(deleted, 1);
 
     // Verify old session is gone
     let old_session = store.get(&old_id).await.unwrap();
@@ -212,7 +216,7 @@ async fn test_cleanup_deletes_old_sessions() {
 }
 
 #[tokio::test]
-async fn test_cleanup_empty_when_no_old_sessions() {
+async fn test_list_expired_empty_when_no_old_sessions() {
     let store = create_test_store().await;
 
     // Create only recent sessions
@@ -227,16 +231,17 @@ async fn test_cleanup_empty_when_no_old_sessions() {
         .await
         .unwrap();
 
-    // Cleanup sessions older than 30 days
-    let deleted = store.cleanup(30).await.unwrap();
-    assert!(deleted.is_empty());
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let expired = store.list_expired(cutoff, true).await.unwrap();
+    assert!(expired.is_empty());
 
     // Verify all sessions still exist
     let (all, _) = store.list(None, None, 100).await.unwrap();
     assert_eq!(all.len(), 2);
 }
+
 #[tokio::test]
-async fn test_cleanup_cascades_to_subagent_sessions() {
+async fn test_list_expired_cascades_to_subagent_sessions() {
     let store = create_test_store().await;
 
     // Create a parent session with an old updated_at
@@ -251,15 +256,10 @@ async fn test_cleanup_cascades_to_subagent_sessions() {
         .await
         .unwrap();
 
-    // Create a child subagent session, also old
-    let child_id = SessionId::new();
+    // Create a child subagent session (recent - should still cascade with parent)
+    let child_id = SessionId::new_subagent();
     store
         .create(&child_id, None, None, None, Some(&parent_id), None)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
-        .bind(&*child_id.0)
-        .execute(&store.pool)
         .await
         .unwrap();
 
@@ -270,19 +270,94 @@ async fn test_cleanup_cascades_to_subagent_sessions() {
         .await
         .unwrap();
 
-    // Cleanup sessions older than 7 days
-    let deleted = store.cleanup(7).await.unwrap();
-    assert_eq!(deleted.len(), 2);
-    let deleted_ids: Vec<String> = deleted.iter().map(|s| s.0.to_string()).collect();
-    assert!(deleted_ids.contains(&parent_id.0.to_string()));
-    assert!(deleted_ids.contains(&child_id.0.to_string()));
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+    let expired = store.list_expired(cutoff, true).await.unwrap();
+    assert_eq!(expired.len(), 2);
+    let expired_ids: Vec<String> = expired.iter().map(|s| s.0.to_string()).collect();
+    assert!(expired_ids.contains(&parent_id.0.to_string()));
+    assert!(expired_ids.contains(&child_id.0.to_string()));
 
-    // Verify both old sessions are gone
+    let deleted = store.delete_batch(&expired).await.unwrap();
+    assert_eq!(deleted, 2);
+
+    // Verify both are gone
     assert!(store.get(&parent_id).await.unwrap().is_none());
     assert!(store.get(&child_id).await.unwrap().is_none());
 
     // Verify recent session still exists
     assert!(store.get(&recent_id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn test_list_expired_includes_orphan_subagents() {
+    let store = create_test_store().await;
+
+    // Orphan subagent: no parent, old
+    let orphan_id = SessionId::new_subagent();
+    store
+        .create(&orphan_id, None, None, None, None, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
+        .bind(&*orphan_id.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    // Subagent with a *live* parent: must NOT be collected even if old
+    let live_parent = SessionId::new();
+    store
+        .create(&live_parent, None, None, None, None, None)
+        .await
+        .unwrap();
+    let protected_child = SessionId::new_subagent();
+    store
+        .create(&protected_child, None, None, None, Some(&live_parent), None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
+        .bind(&*protected_child.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+    let expired = store.list_expired(cutoff, true).await.unwrap();
+    let expired_ids: Vec<String> = expired.iter().map(|s| s.0.to_string()).collect();
+    assert!(expired_ids.contains(&orphan_id.0.to_string()));
+    assert!(!expired_ids.contains(&protected_child.0.to_string()));
+}
+
+#[tokio::test]
+async fn test_list_expired_respects_pinned() {
+    let store = create_test_store().await;
+
+    let pinned_id = SessionId::new();
+    store
+        .create(&pinned_id, None, None, None, None, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-10 days') WHERE id = ?")
+        .bind(&*pinned_id.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO pinned_sessions (session_id) VALUES (?)")
+        .bind(&*pinned_id.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(7);
+
+    // keep_pinned = true: pinned session survives
+    let expired = store.list_expired(cutoff, true).await.unwrap();
+    assert!(expired.is_empty());
+
+    // keep_pinned = false: pinned session is collected
+    let expired = store.list_expired(cutoff, false).await.unwrap();
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].0, pinned_id.0);
 }
 
 #[tokio::test]

@@ -60,9 +60,17 @@
 
     return { toolCount, thinkingCount, runningCount, failedCount, activeLabel };
   });
+  const hasVisibleContent = $derived.by(() => {
+    for (const m of messages) {
+      if (m.type === "assistant" && findThinking(m.content)) return true;
+      if (m.type === "tool") return true;
+    }
+    return false;
+  });
 </script>
 
-<div
+{#if hasVisibleContent}
+  <div
   class="{expanded
     ? 'flex'
     : 'inline-flex'} flex-col rounded-lg border border-border/50 overflow-hidden"
@@ -146,6 +154,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
   @keyframes roll-in {

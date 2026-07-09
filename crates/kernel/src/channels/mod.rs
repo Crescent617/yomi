@@ -155,6 +155,10 @@ pub trait ChannelStore: Send + Sync {
 
     /// Delete a channel session mapping
     async fn delete_mapping(&self, channel_name: &str, mapping_key: &str) -> KernelResult<()>;
+
+    /// Delete all mappings belonging to the given sessions (used by gc).
+    /// Returns the number of rows deleted.
+    async fn delete_by_sessions(&self, session_ids: &[SessionId]) -> KernelResult<u64>;
 }
 
 // ── Platform adapter trait ─────────────────────────────────────────

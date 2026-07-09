@@ -24,6 +24,7 @@
 //! ```
 
 pub mod file_state;
+pub mod gc;
 pub mod jsonl_store;
 pub mod message;
 pub mod pinned_session;
@@ -41,6 +42,7 @@ pub(crate) mod migrations;
 
 // Re-export common types for convenience
 pub use file_state::{FileState, FileStateStore, JsonlFileStateStore};
+pub use gc::{GarbageCollector, GcOptions, GcReport};
 pub use message::{JsonlMessageStore, MessageStore};
 pub use pinned_session::{
     PinnedSessionDetail, PinnedSessionInfo, PinnedSessionStore, SqlitePinnedSessionStore,

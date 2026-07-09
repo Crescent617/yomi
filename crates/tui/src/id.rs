@@ -11,6 +11,7 @@ pub enum Id {
     Dialog,           // Select dialog for permission confirmation
     HistoryPicker,    // Fuzzy finder for input history (C-r)
     SessionPicker,    // Fuzzy finder for session switching (/sessions)
+    ModelPicker,      // Fuzzy finder for model switching (/models)
     CheckpointPicker, // Fuzzy finder for checkpoint rewind (/rewind)
     HelpDialog,       // Help dialog for keyboard shortcuts
     TodoList,         // Floating todo list panel

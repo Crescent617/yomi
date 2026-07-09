@@ -291,6 +291,19 @@ impl Model {
             vec![Sub::new(EventClause::Any, SubClause::Always)],
         )?;
 
+        // Mount model picker component (hidden by default, for /models command)
+        let model_picker = FuzzyPickerComponent::new(
+            PickerConfig::new("Switch Model").with_placeholder("Search models..."),
+        )
+        .with_callbacks(crate::msg::Msg::ModelSelected, || {
+            crate::msg::Msg::CloseModelPicker
+        });
+        app.mount(
+            Id::ModelPicker,
+            Box::new(model_picker),
+            vec![Sub::new(EventClause::Any, SubClause::Always)],
+        )?;
+
         // Mount checkpoint picker component (hidden by default, for /rewind command)
         let checkpoint_picker =
             FuzzyPickerComponent::new(PickerConfig::new("Rewind to Checkpoint").with_placeholder(
