@@ -138,6 +138,7 @@ export function createSessionState(
 
 export function setActiveSession(id: string | null) {
   const prevId = sessionState.activeSessionId;
+  if (id === prevId) return;
   if (prevId && id !== prevId) {
     api.unsubscribe(prevId).catch(() => {});
     const prevSession = getSession(prevId);
@@ -146,6 +147,7 @@ export function setActiveSession(id: string | null) {
     }
   }
   if (id) {
+    streamingMessages[id] = [];
     api.subscribe(id, null).catch(() => {});
     const nextSession = getSession(id);
     if (nextSession) {
