@@ -12,6 +12,22 @@ pub mod openai;
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
 
+/// Global shared HTTP client for all providers.
+static HTTP_CLIENT: std::sync::LazyLock<std::sync::Arc<reqwest::Client>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_mins(2))
+                .build()
+                .expect("failed to build global HTTP client"),
+        )
+    });
+
+/// Get the global shared HTTP client used by all providers.
+pub fn http_client() -> std::sync::Arc<reqwest::Client> {
+    std::sync::Arc::clone(&HTTP_CLIENT)
+}
+
 /// Stream of model events
 pub type ModelStream =
     Pin<Box<dyn futures::Stream<Item = Result<ModelStreamItem, ProviderError>> + Send>>;
@@ -109,6 +125,8 @@ impl Default for ThinkingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelConfig {
+    /// 模型的唯一标识名（如 "`claude_sonnet"、"gpt4o`"）
+    pub name: String,
     pub provider: crate::config::ModelProvider,
     pub model_id: String,
     pub endpoint: String,
@@ -120,11 +138,14 @@ pub struct ModelConfig {
     pub thinking: ThinkingConfig,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub headers: HashMap<String, String>,
+    /// 该模型对应的上下文窗口大小
+    pub context_window: u32,
 }
 
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
+            name: "default".to_string(),
             provider: crate::config::ModelProvider::default(),
             model_id: String::new(),
             endpoint: String::new(),
@@ -135,7 +156,16 @@ impl Default for ModelConfig {
             sse_timeout_secs: 30,
             thinking: ThinkingConfig::default(),
             headers: HashMap::new(),
+            context_window: 131_072, // 128k
         }
+    }
+}
+
+impl ModelConfig {
+    /// 检查 API key 是否配置
+    #[inline]
+    pub const fn has_api_key(&self) -> bool {
+        !self.api_key.is_empty()
     }
 }
 
@@ -157,7 +187,7 @@ impl HttpError {
 #[derive(Error, Debug, Clone)]
 pub enum ProviderError {
     /// HTTP error with status code (retryable based on code)
-    #[error("HTTP error: {0}")]
+    #[error("{0}")]
     Http(#[from] HttpError),
 
     /// Request building or sending failed

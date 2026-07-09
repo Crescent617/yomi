@@ -75,7 +75,7 @@ impl Model {
     /// back to a session that is currently compacting shows the correct indicator.
     pub async fn init_session_messages(&mut self) -> Result<()> {
         use kernel::types::SessionId;
-        let context_window = crate::config().agent.compactor.context_window;
+        let context_window = self.context_window;
 
         let session_id = SessionId::from(self.session_id.clone());
 
@@ -149,13 +149,24 @@ impl Model {
             AttrValue::Number(level_val),
         )?;
 
-        // Set model name
-        let model_name = crate::config().agent.model.model_id.clone();
+        // Set model name (resolved from the session's model_key, not global config default)
+        let model_name = if self.model_name.is_empty() {
+            "-"
+        } else {
+            &self.model_name
+        };
         self.app.attr(
             &Id::StatusBar,
             Attribute::Custom(attr::SET_MODEL_NAME),
-            AttrValue::String(model_name),
+            AttrValue::String(model_name.to_string()),
         )?;
+
+        // Sync banner model name as well
+        let _ = self.app.attr(
+            &Id::Banner,
+            Attribute::Custom(attr::MODEL_NAME),
+            AttrValue::String(model_name.to_string()),
+        );
 
         Ok(())
     }

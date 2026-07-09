@@ -3,42 +3,10 @@ import {
   deleteCronJob,
   triggerCronJob,
   updateCronJob,
+  errorMessage,
+  type CronJob,
 } from "./api";
 import { sendDesktopNotification } from "./state.svelte";
-
-export interface CronJob {
-  id: string;
-  name: string;
-  schedule: string;
-  action: {
-    type: string;
-    session_id?: string;
-    content?: string;
-    command?: string;
-    working_dir?: string;
-  };
-  status: "active" | "paused" | "completed" | "failed";
-  created_at: string;
-  updated_at: string;
-  next_run_at: string | null;
-  last_run_at: string | null;
-  run_count: number;
-  max_runs: number | null;
-  expires_at: string | null;
-  last_error: string | null;
-}
-
-function extractErrorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e)
-    return String((e as Record<string, unknown>).message);
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
-}
 
 export class AutomationStore {
   jobs = $state<CronJob[]>([]);
@@ -56,13 +24,13 @@ export class AutomationStore {
     this.loading = true;
     this.error = null;
     try {
-      const raw = await listCronJobs(undefined, 100);
-      this.jobs = (raw as CronJob[]).sort(
+      const jobs = await listCronJobs(undefined, 100);
+      this.jobs = jobs.sort(
         (a, b) =>
           new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
     } catch (e: unknown) {
-      this.error = extractErrorMessage(e);
+      this.error = errorMessage(e);
     } finally {
       this.loading = false;
     }
@@ -74,7 +42,7 @@ export class AutomationStore {
       this.jobs = this.jobs.filter((j) => j.id !== job_id);
       if (this.selectedJobId === job_id) this.selectedJobId = null;
     } catch (e: unknown) {
-      this.error = extractErrorMessage(e);
+      this.error = errorMessage(e);
     }
   }
 
@@ -84,7 +52,7 @@ export class AutomationStore {
       await updateCronJob(job.id, { status: newStatus });
       await this.load();
     } catch (e: unknown) {
-      this.error = extractErrorMessage(e);
+      this.error = errorMessage(e);
     }
   }
 
@@ -100,7 +68,7 @@ export class AutomationStore {
         session_id,
       );
     } catch (e: unknown) {
-      this.error = extractErrorMessage(e);
+      this.error = errorMessage(e);
       const job = this.jobs.find((j) => j.id === job_id);
       const session_id = job?.action?.session_id;
       sendDesktopNotification(

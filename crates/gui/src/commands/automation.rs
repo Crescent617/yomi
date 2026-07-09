@@ -29,14 +29,14 @@ pub async fn create_cron_job(
     state: State<'_, AppState>,
     name: String,
     schedule: String,
-    action: serde_json::Value,
+    action: String,
     max_runs: Option<u32>,
     expires_at: Option<String>,
 ) -> Result<String, GuiError> {
     kernel::cron::CronSchedule::parse(&schedule)
         .map_err(|e| GuiError::unknown(format!("invalid schedule: {e}")))?;
 
-    let action: CronAction = serde_json::from_value(action)
+    let action: CronAction = serde_json::from_str(&action)
         .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?;
 
     let expires_at = match expires_at {
@@ -72,7 +72,7 @@ pub async fn update_cron_job(
     job_id: String,
     name: Option<String>,
     schedule: Option<String>,
-    action: Option<serde_json::Value>,
+    action: Option<String>,
     status: Option<String>,
     max_runs: Option<u32>,
     expires_at: Option<String>,
@@ -87,9 +87,9 @@ pub async fn update_cron_job(
         None => None,
     };
 
-    let action_parsed = match action {
-        Some(v) => Some(
-            serde_json::from_value::<CronAction>(v)
+    let action = match action {
+        Some(s) => Some(
+            serde_json::from_str::<CronAction>(&s)
                 .map_err(|e| GuiError::unknown(format!("invalid action: {e}")))?,
         ),
         None => None,
@@ -107,7 +107,7 @@ pub async fn update_cron_job(
     let input = UpdateCronJobInput {
         name,
         schedule,
-        action: action_parsed,
+        action,
         status: status_parsed,
         max_runs,
         expires_at: expires_at_parsed,

@@ -17,16 +17,14 @@ use tokio::time::timeout;
 const IDLE_TIMEOUT: Duration = Duration::from_mins(2);
 
 pub struct AnthropicProvider {
-    client: Client,
+    client: Arc<Client>,
     name: String,
 }
 
 impl AnthropicProvider {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            client: Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .build()?,
+            client: crate::provider::http_client(),
             name: "anthropic".to_string(),
         })
     }

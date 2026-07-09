@@ -6,13 +6,21 @@ pub use conductor::Conductor;
 use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
 use crate::comms::InputBus;
 use crate::permission::Level;
-use crate::provider::Provider;
 use crate::storage::usage::{DailyUsage, UsageSummary};
 use crate::storage::{MessageStore, ProjectStore, SessionStore, StorageSet, UsageStore};
 use crate::tools::AskUserResponse;
 use crate::types::{KernelError, Project, ProjectId, Result, SessionError, SessionId};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+
+/// Model info for GUI/API listing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelInfo {
+    pub name: String,
+    pub model_id: String,
+    pub provider: String,
+    pub context_window: u32,
+}
 
 /// Input for creating a new session
 #[derive(Debug, Clone)]
@@ -21,6 +29,8 @@ pub struct CreateSessionInput {
     pub working_dir: Option<std::path::PathBuf>,
     pub auto_approve_level: Level,
     pub tool_blocklist: Vec<String>,
+    /// Initial model key for this session (defaults to `agent.default_model`)
+    pub model_key: Option<String>,
 }
 
 pub struct Kernel {
@@ -29,6 +39,8 @@ pub struct Kernel {
     conductor: Arc<Conductor>,
     /// Default agent configuration for new sessions.
     agent_config: AgentConfig,
+    /// Read-only model registry (`BTreeMap` for ordering), built from Config.models
+    models: Arc<std::collections::BTreeMap<String, crate::provider::ModelConfig>>,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
@@ -124,10 +136,15 @@ impl Kernel {
         self.notification_bus.clone()
     }
 
+    /// Create a new kernel.
+    ///
+    /// # Errors
+    /// Returns a config error when two `[[models]]` entries share the same `name`
+    /// (note: `name` defaults to `"default"` when omitted, so multiple unnamed
+    /// entries collide).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: &StorageSet,
-        provider: Arc<dyn Provider>,
         agent_config: AgentConfig,
         task_store: Option<Arc<crate::tools::task::TaskStore>>,
         compactor: Option<crate::compactor::Compactor>,
@@ -135,7 +152,8 @@ impl Kernel {
         hook_registry: Option<crate::hooks::HookRegistry>,
         enable_cron: bool,
         channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
-    ) -> Arc<Self> {
+        models: Vec<crate::provider::ModelConfig>,
+    ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
         let todo_storage = storage.todo_store();
@@ -148,9 +166,34 @@ impl Kernel {
         let project_store = storage.project_store();
         let pinned_session_store = storage.pinned_session_store();
         let goal_store = storage.goal_store();
+
+        // Build model registry (BTreeMap for ordering); reject duplicate names
+        // instead of silently letting the last entry win.
+        let mut models_map = std::collections::BTreeMap::new();
+        for m in models {
+            if let Some(prev) = models_map.insert(m.name.clone(), m) {
+                return Err(KernelError::Config(format!(
+                    "Duplicate model name '{}' in [[models]] (model_id '{}' would be \
+                     shadowed). Give each model a unique `name` — note that `name` \
+                     defaults to \"default\" when omitted.",
+                    prev.name, prev.model_id
+                )));
+            }
+        }
+        let models_map: Arc<std::collections::BTreeMap<String, crate::provider::ModelConfig>> =
+            Arc::new(models_map);
+
+        if !models_map.contains_key(&agent_config.default_model) {
+            tracing::warn!(
+                "default_model '{}' not found in models; sessions without a valid \
+                 model_key will fail to resolve a model",
+                agent_config.default_model
+            );
+        }
+
         let agent_shared = AgentShared::with_data_dir(
-            provider,
-            Arc::new(agent_config.model.clone()),
+            Arc::clone(&models_map),
+            agent_config.default_model.clone(),
             task_store,
             Some(todo_storage),
             compactor,
@@ -199,18 +242,19 @@ impl Kernel {
             None
         };
 
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             agent_shared,
             input_bus,
             conductor,
             agent_config,
+            models: models_map,
             project_store,
             pinned_session_store,
             cron_store,
             channel_manager,
             notification_bus,
             shutdown: tokio_util::sync::CancellationToken::new(),
-        })
+        }))
     }
 
     pub fn start(&self) {
@@ -330,6 +374,51 @@ impl Kernel {
         self.project_store.delete(id).await
     }
 
+    // ── Model API ────────────────────────────────────────────────────────
+
+    /// List all available models (sorted by name)
+    pub async fn list_models(&self) -> Result<Vec<ModelInfo>> {
+        Ok(self
+            .models
+            .values()
+            .map(|m| ModelInfo {
+                name: m.name.clone(),
+                model_id: m.model_id.clone(),
+                provider: m.provider.to_string(),
+                context_window: m.context_window,
+            })
+            .collect())
+    }
+
+    /// Get the current model name for a session (falls back to `default_model`)
+    pub async fn get_session_model(&self, session_id: &SessionId) -> String {
+        match self.session_store().await.get(session_id).await {
+            Ok(Some(info)) => info
+                .model_key
+                .unwrap_or_else(|| self.agent_config.default_model.clone()),
+            _ => self.agent_config.default_model.clone(),
+        }
+    }
+
+    /// Set the model for a session (persisted to database)
+    pub async fn set_session_model(&self, session_id: &SessionId, key: &str) -> Result<()> {
+        if !self.models.contains_key(key) {
+            return Err(SessionError::Other(format!("Model '{key}' not found in config")).into());
+        }
+        let rows_affected = self
+            .session_store()
+            .await
+            .update_model_key(session_id, key)
+            .await?;
+        if rows_affected == 0 {
+            return Err(SessionError::NotFound {
+                session_id: session_id.0.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     // ── Session API ──────────────────────────────────────────────────────
 
     /// Create a new session with the given input.
@@ -353,6 +442,10 @@ impl Kernel {
         };
 
         let id = SessionId::new();
+        let model_key = input
+            .model_key
+            .unwrap_or_else(|| self.agent_config.default_model.clone());
+
         self.session_store()
             .await
             .create(
@@ -361,6 +454,7 @@ impl Kernel {
                 working_dir.as_deref(),
                 Some(input.auto_approve_level.as_str()),
                 None,
+                Some(&model_key),
             )
             .await?;
 
@@ -588,6 +682,7 @@ impl Kernel {
             created_at: info.created_at,
             updated_at: info.updated_at,
             auto_approve_level: info.auto_approve_level,
+            model_key: info.model_key,
         })
     }
 
@@ -670,13 +765,14 @@ impl Kernel {
 
     /// Clear the session's agent context (messages, file state, todos, persisted history).
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
-    pub fn clear_session(&self, session_id: &SessionId) {
-        if let Err(e) = self
-            .input_bus
+    pub fn clear_session(&self, session_id: &SessionId) -> Result<()> {
+        self.input_bus
             .publish(session_id.clone(), AgentInput::Clear)
-        {
-            tracing::warn!("Failed to publish clear input: {}", e);
-        }
+            .map_err(|e| {
+                KernelError::Session(SessionError::Other(format!(
+                    "Failed to publish clear input: {e}"
+                )))
+            })
     }
 
     #[tracing::instrument(skip(self), fields(session_id = %session_id.0))]
@@ -1159,8 +1255,15 @@ impl crate::cron::CronExecutor for Kernel {
                     .arg(command)
                     .current_dir(working_dir.as_deref().unwrap_or("."))
                     .kill_on_drop(true)
+                    .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
+                    .env("GIT_PAGER", "cat")
+                    .env("GIT_EDITOR", "true")
+                    .env("GIT_SEQUENCE_EDITOR", "true")
+                    .env("GIT_TERMINAL_PROMPT", "0")
+                    .env("PAGER", "cat")
+                    .env("EDITOR", "true")
                     .output()
                     .await
                     .map_err(CronError::Io)?;

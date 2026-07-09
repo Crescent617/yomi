@@ -70,13 +70,16 @@ impl Model {
                 // User message from kernel (render after kernel accepts it)
                 Event::User(kernel::event::UserEvent::Message { content, .. }) => {
                     let blocks_json = serde_json::to_string(&content).unwrap_or_default();
-                    let _ = self.app.attr(
+                    if let Err(e) = self.app.attr(
                         &Id::ChatView,
                         Attribute::Custom(attr::ADD_USER_MESSAGE),
                         AttrValue::String(blocks_json),
-                    );
-                    self.scroll_chat_to_bottom();
-                    self.state.should_redraw = true;
+                    ) {
+                        tracing::error!("Failed to add user message to ChatView: {}", e);
+                    } else {
+                        self.scroll_chat_to_bottom();
+                        self.state.should_redraw = true;
+                    }
                 }
                 Event::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                     self.state.is_streaming = true;
@@ -132,6 +135,14 @@ impl Model {
                     context_window,
                     ..
                 }) => {
+                    // Keep the cached context window in sync with what the
+                    // kernel reports (the session model may have been switched
+                    // elsewhere, e.g. via the GUI; there is no dedicated
+                    // model-changed event carrying the model name yet, so
+                    // `model_name` may still go stale until restart).
+                    if context_window > 0 {
+                        self.context_window = context_window;
+                    }
                     // Update context window usage in status bar
                     let usage_str = format!("{total_tokens}\x00{context_window}");
                     if let Err(e) = self.app.attr(
@@ -381,12 +392,13 @@ impl Model {
                     ));
                     self.state.should_redraw = true;
                 }
-                // Rewind completed - reload messages from backend
-                Event::Agent(kernel::event::AgentEvent::Rewound) => {
+                // Messages were replaced wholesale (rewind/undo, /clear, or
+                // compaction) — reload the full history from the kernel.
+                Event::Agent(kernel::event::AgentEvent::MessageReplaced { .. }) => {
                     let sid = kernel::types::SessionId::from(self.session_id.clone());
                     match self.kernel.list_messages(&sid).await {
                         Ok(session_messages) => {
-                            let context_window = crate::config().agent.compactor.context_window;
+                            let context_window = self.context_window;
                             let total_tokens = crate::app::calc_token_usage(&session_messages);
 
                             let _ = self.app.attr(
@@ -411,20 +423,24 @@ impl Model {
                                 Attribute::Custom(attr::SET_CTX_USAGE),
                                 AttrValue::String(usage_str),
                             );
+
+                            // User-visible confirmation (replaces the old
+                            // AgentEvent::Rewound "Rewound to checkpoint" toast).
+                            // MessageReplaced also fires for /clear and compaction,
+                            // so use wording that is accurate for all cases.
+                            self.show_notification(
+                                &crate::components::info_bar::Notification::success(
+                                    "Conversation history updated",
+                                    3000,
+                                ),
+                            );
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to reload messages after rewind: {e}");
+                            tracing::warn!("Failed to reload messages after MessageReplaced: {e}");
                         }
                     }
-
-                    self.show_notification(&crate::components::info_bar::Notification::success(
-                        "Rewound to checkpoint",
-                        3000,
-                    ));
                     self.state.should_redraw = true;
                 }
-                // Note: StateChanged is currently ignored to avoid UI noise
-                // Could be shown in status bar for debugging if needed
                 Event::Agent(kernel::event::AgentEvent::AskUserQuestion {
                     req_id,
                     session_id,

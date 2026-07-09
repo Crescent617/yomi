@@ -113,6 +113,13 @@ impl Conductor {
                                     tracing::warn!("Failed to replace messages for session={sid}: {e}");
                                 }
                             }
+                            let _ = self.event_bus.publish(
+                                sid.clone(),
+                                crate::event::Envelope::new(
+                                    sid.clone(),
+                                    crate::event::Event::Agent(crate::event::AgentEvent::MessageReplaced { session_id: sid.clone() }),
+                                ),
+                            );
                         }
                         Event::Tool(crate::event::ToolEvent::Metadata { message_id, tool_id, metadata }) => {
                             if let Some(ref store) = self.agent_shared.message_store {

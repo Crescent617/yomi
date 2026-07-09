@@ -1,7 +1,6 @@
 #[allow(clippy::module_inception)]
 mod agent;
 mod cancel;
-mod compaction;
 mod hooks;
 mod interceptor;
 mod message_buffer;
@@ -9,7 +8,6 @@ mod stream_collector;
 mod turn;
 mod types;
 
-pub use compaction::CompactionManager;
 pub use turn::Turn;
 
 pub use agent::{Agent, AgentInput};

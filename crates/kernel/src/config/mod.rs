@@ -52,6 +52,8 @@ pub mod env_names {
 
     /// Context window size for the model (e.g., 131072, 200000, 128k, 200k)
     pub const CONTEXT_WINDOW: &str = env_name!("CONTEXT_WINDOW");
+    /// Default model name to activate for new sessions
+    pub const DEFAULT_MODEL: &str = env_name!("DEFAULT_MODEL");
     /// Compaction threshold as a ratio of the context window (0.0–1.0, default: 0.8)
     pub const COMPACTOR_RATIO: &str = env_name!("COMPACTOR_RATIO");
     /// Maximum number of checkpoints to retain per session (default: 5)
@@ -175,53 +177,9 @@ pub struct Config {
     /// External platform channels (Telegram, Feishu, etc.)
     #[serde(default)]
     pub channels: Vec<crate::channels::ChannelConfig>,
-}
-
-impl Config {
-    /// Get model configuration (convenience accessor)
-    #[inline]
-    pub fn model(&self) -> &ModelConfig {
-        &self.agent.model
-    }
-
-    /// Finalize configuration by computing and filling in default values.
-    /// Call this after all configuration sources are loaded.
-    pub fn finalize(&mut self) {
-        // Expand ~ in data_dir if not already done
-        self.data_dir = expand_tilde(self.data_dir.to_string_lossy());
-
-        // Fill log_dir default if not set
-        if self.log_dir.is_none() {
-            self.log_dir = Some(self.data_dir.join("logs"));
-        }
-
-        // Fill skill_folders default if not set
-        if self.skill_folders.is_none() {
-            self.skill_folders = Some(
-                default_skill_folders(&self.data_dir)
-                    .into_iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect(),
-            );
-        }
-    }
-
-    /// Get the log directory (defaults to `data_dir/logs`)
-    pub fn log_dir(&self) -> PathBuf {
-        self.log_dir
-            .clone()
-            .unwrap_or_else(|| self.data_dir.join("logs"))
-    }
-
-    /// Get the skill folders.
-    ///
-    /// # Panics
-    /// Panics if `finalize` was not called (`skill_folders` is `None`).
-    pub fn skill_folders(&self) -> &[String] {
-        self.skill_folders
-            .as_ref()
-            .expect("Config::finalize must be called before using skill_folders")
-    }
+    /// Multi-model configuration array (TOML: `[[models]]`), at least one element
+    #[serde(default)]
+    pub models: Vec<ModelConfig>,
 }
 
 impl Default for Config {
@@ -237,6 +195,7 @@ impl Default for Config {
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
             channels: Vec::new(),
+            models: vec![ModelConfig::default()],
         }
     }
 }
@@ -281,56 +240,142 @@ impl Config {
         self.load_from_env();
     }
 
+    /// Get model configuration for the current default model.
+    /// Returns `None` if `finalize()` has not been called or the default model is missing.
+    #[inline]
+    pub fn model(&self) -> Option<&ModelConfig> {
+        self.models
+            .iter()
+            .find(|m| m.name == self.agent.default_model)
+    }
+
+    /// Finalize configuration by computing and filling in default values.
+    /// Call this after all configuration sources are loaded.
+    pub fn finalize(&mut self) {
+        // Expand ~ in data_dir if not already done
+        self.data_dir = expand_tilde(self.data_dir.to_string_lossy());
+
+        // Fill log_dir default if not set
+        if self.log_dir.is_none() {
+            self.log_dir = Some(self.data_dir.join("logs"));
+        }
+
+        // Fill skill_folders default if not set
+        if self.skill_folders.is_none() {
+            self.skill_folders = Some(
+                default_skill_folders(&self.data_dir)
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect(),
+            );
+        }
+
+        // Ensure models array is non-empty (use default model if empty)
+        if self.models.is_empty() {
+            self.models.push(ModelConfig::default());
+        }
+
+        // Ensure default_model points to a valid model in the array
+        if !self
+            .models
+            .iter()
+            .any(|m| m.name == self.agent.default_model)
+        {
+            self.agent.default_model = self.models[0].name.clone();
+        }
+    }
+
+    /// Get the log directory (defaults to `data_dir/logs`)
+    pub fn log_dir(&self) -> PathBuf {
+        self.log_dir
+            .clone()
+            .unwrap_or_else(|| self.data_dir.join("logs"))
+    }
+
+    /// Get the skill folders.
+    ///
+    /// # Panics
+    /// Panics if `finalize` was not called (`skill_folders` is `None`).
+    pub fn skill_folders(&self) -> &[String] {
+        self.skill_folders
+            .as_ref()
+            .expect("Config::finalize must be called before using skill_folders")
+    }
+
     /// Internal: Load all environment variables into config
     fn load_from_env(&mut self) {
+        // Ensure models is non-empty before accessing entries
+        if self.models.is_empty() {
+            tracing::warn!(
+                "Config `models` array is empty — adding a default model. \
+                 Please update your config.toml to use the `[[models]]` array format."
+            );
+            self.models.push(ModelConfig::default());
+        }
+
+        // Default model name override — applied first so the single-model env vars
+        // below target the correct entry.
+        if let Some(key) = env_var(env_names::DEFAULT_MODEL) {
+            self.agent.default_model = key;
+        }
+
+        // Single-model env vars apply to the entry named by `agent.default_model`,
+        // falling back to models[0] when no entry matches.
+        let default_idx = self
+            .models
+            .iter()
+            .position(|m| m.name == self.agent.default_model)
+            .unwrap_or(0);
+        let default_model = &mut self.models[default_idx];
+
         // Provider selection (may affect subsequent provider-specific lookups)
         if let Some(provider) = env_var(env_names::PROVIDER) {
             if let Ok(p) = provider.parse() {
-                self.agent.model.provider = p;
+                default_model.provider = p;
             }
         }
 
-        let provider = self.agent.model.provider;
+        let provider = default_model.provider;
 
         // API Key: YOMI_ generic > provider-specific standard
         if let Some(key) = env_first(&[env_names::API_KEY, provider.standard_api_key_env()]) {
-            self.agent.model.api_key = key;
+            default_model.api_key = key;
         }
 
         // Model: YOMI_ generic > provider-specific standard
         if let Some(model) = env_first(&[env_names::MODEL, provider.standard_model_env()]) {
-            self.agent.model.model_id = model;
+            default_model.model_id = model;
         }
 
         // Endpoint: YOMI_ generic > provider-specific standard
         if let Some(endpoint) = env_first(&[env_names::API_BASE, provider.standard_api_base_env()])
         {
-            self.agent.model.endpoint = endpoint;
+            default_model.endpoint = endpoint;
         }
 
         // Numeric settings
         // Max tokens (supports formats like "4096", "4k", "8k")
         if let Some(max_tokens) = env_var(env_names::MAX_TOKENS) {
             if let Some(tokens) = parse_number_with_unit(&max_tokens) {
-                self.agent.model.max_tokens = Some(tokens);
+                default_model.max_tokens = Some(tokens);
             }
         }
         if let Some(temp) = env_parse::<f32>(env_names::TEMPERATURE) {
-            self.agent.model.temperature = Some(temp);
+            default_model.temperature = Some(temp);
         }
         if let Some(iters) = env_parse::<usize>(env_names::MAX_ITERATIONS) {
             self.agent.max_iterations = iters;
         }
         if let Some(budget) = env_parse::<u32>(env_names::THINKING_BUDGET) {
-            self.agent.model.thinking.budget_tokens = budget;
+            default_model.thinking.budget_tokens = budget;
         }
 
         // Boolean settings
         if let Some(enabled) = env_bool_opt(env_names::THINKING) {
-            self.agent.model.thinking.enabled = enabled;
+            default_model.thinking.enabled = enabled;
         }
         if let Some(effort) = env_var(env_names::THINKING_EFFORT) {
-            self.agent.model.thinking.effort = Some(effort);
+            default_model.thinking.effort = Some(effort);
         }
 
         // Enable sub-agents (default true unless explicitly set to "false")
@@ -363,7 +408,7 @@ impl Config {
         // Context window size (supports formats like "131072", "128k", "200k", "200000")
         if let Some(context_window) = env_var(env_names::CONTEXT_WINDOW) {
             if let Some(tokens) = parse_number_with_unit(&context_window) {
-                self.agent.compactor.context_window = tokens;
+                default_model.context_window = tokens;
             }
         }
 
@@ -397,16 +442,16 @@ impl Config {
         }
     }
 
-    /// Get the API key for the current provider
+    /// Get the API key for the current default model
     #[inline]
     pub fn api_key(&self) -> &str {
-        &self.agent.model.api_key
+        self.model().map(|m| m.api_key.as_str()).unwrap_or_default()
     }
 
-    /// Check if API key is configured
+    /// Check if API key is configured for the default model
     #[inline]
-    pub const fn has_api_key(&self) -> bool {
-        !self.agent.model.api_key.is_empty()
+    pub fn has_api_key(&self) -> bool {
+        self.model().is_some_and(|m| !m.api_key.is_empty())
     }
 
     /// Set the data directory

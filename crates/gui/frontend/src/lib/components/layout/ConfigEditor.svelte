@@ -38,7 +38,7 @@
       dirty = false;
     } catch (e: unknown) {
       console.error("Failed to load config:", e);
-      showNotification("Failed to load config", "error", 3000);
+      showNotification("Failed to load config", "error");
     } finally {
       loading = false;
     }
@@ -48,11 +48,11 @@
     loading = true;
     try {
       await load();
-      showNotification("Config refreshed", "success", 2000);
+      showNotification("Config refreshed", "success");
     } catch (e: unknown) {
       console.error("Failed to refresh config:", e);
       showNotification(
-        `Failed to refresh: ${e instanceof Error ? e.message : ""}`,
+        `Failed to refresh: ${api.errorMessage(e)}`,
         "error",
         4000,
       );
@@ -79,11 +79,7 @@
       full_config = c?.full_config ?? "";
     } catch (e: unknown) {
       console.error("Failed to save config:", e);
-      showNotification(
-        `Failed to save: ${e instanceof Error ? e.message : ""}`,
-        "error",
-        4000,
-      );
+      showNotification(`Failed to save: ${api.errorMessage(e)}`, "error");
     } finally {
       saving = false;
     }

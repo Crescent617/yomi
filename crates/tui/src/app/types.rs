@@ -145,6 +145,10 @@ pub struct Model {
     pub(crate) cmd_rx: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     /// Transparent event pump that hides broadcast churn and auto-reconnects.
     pub(crate) _event_pump: super::event_pump::EventPump,
+    /// Display name of the model for this session (resolved from session store, not global config).
+    pub(crate) model_name: String,
+    /// Context window size for the current session's model (resolved from session store).
+    pub(crate) context_window: u32,
 }
 
 /// Format a session ID for display, truncating long IDs with ellipsis.

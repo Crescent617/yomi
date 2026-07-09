@@ -2,37 +2,53 @@
 
 支持 TOML 配置文件和环境变量两种配置方式。
 
+## Schema 验证
+
+配置文件支持 JSON Schema 验证，可在 `config.toml` 文件顶部添加 schema 指令：
+
+```toml
+#:schema https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json
+```
+
+或使用本地相对路径：
+
+```toml
+#:schema ./config-schema.json
+```
+
+VS Code 用户可安装 [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml) 扩展以获得自动补全和校验支持。
+
 ## 配置文件
 
 默认从 `~/.yomi/config.toml` 读取，或通过 `--config` 指定路径。
 
 ```toml
-provider = "anthropic"
+#:schema https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json
 
-[model]
-api_key = "sk-..."
+[[models]]
+name = "default"
+provider = "anthropic"
 model_id = "claude-3-5-sonnet-20241022"
 endpoint = "https://api.anthropic.com"
+api_key = "sk-..."
 max_tokens = 4096
 temperature = 0.7
 
-[model.thinking]
+[models.thinking]
 enabled = true
 budget_tokens = 16000
 
 [agent]
+default_model = "default"
 max_iterations = 100
 enable_subagent = true
 
 [agent.compactor]
 threshold_ratio = 0.8
 
-yolo = false
 auto_approve = "safe"  # safe | caution | dangerous
 data_dir = "~/.yomi"
 skill_folders = ["~/.yomi/skills"]
-plugin_dirs = ["~/.claude/plugins"]
-load_claude_plugins = true
 ```
 
 ## 环境变量

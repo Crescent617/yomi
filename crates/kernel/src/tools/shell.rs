@@ -186,6 +186,12 @@ impl ShellTool {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env("GIT_PAGER", "cat")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_SEQUENCE_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("PAGER", "cat")
+            .env("EDITOR", "true")
             .kill_on_drop(true)
             .output();
 
@@ -292,6 +298,12 @@ impl ShellTool {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env("GIT_PAGER", "cat")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_SEQUENCE_EDITOR", "true")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("PAGER", "cat")
+            .env("EDITOR", "true")
             .kill_on_drop(true)
             .spawn()?;
 

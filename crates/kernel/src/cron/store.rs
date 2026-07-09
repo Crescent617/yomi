@@ -201,15 +201,25 @@ struct CronJobRow {
 
 impl From<CronJobRow> for CronJob {
     fn from(row: CronJobRow) -> Self {
-        let action: CronAction = serde_json::from_str(&row.action).unwrap_or_else(|e| {
-            tracing::error!("Failed to deserialize cron action: {}", e);
-            CronAction::Internal {
-                endpoint: "error".to_string(),
-                payload: serde_json::json!({"error": e.to_string()}),
-            }
-        });
+        let mut status = row.status.parse().unwrap_or(CronJobStatus::Failed);
+        let mut last_error = row.last_error;
 
-        let status = row.status.parse().unwrap_or(CronJobStatus::Failed);
+        let action: CronAction = match serde_json::from_str(&row.action) {
+            Ok(action) => action,
+            Err(e) => {
+                tracing::warn!(
+                    cron_job_id = %row.id,
+                    "Failed to deserialize cron action: {}. Marking job as failed.",
+                    e
+                );
+                status = CronJobStatus::Failed;
+                last_error = Some(format!("Malformed action: {e}"));
+                CronAction::Internal {
+                    endpoint: "error".to_string(),
+                    payload: serde_json::json!({"error": e.to_string()}),
+                }
+            }
+        };
 
         Self {
             id: CronJobId::from(row.id),
@@ -224,7 +234,7 @@ impl From<CronJobRow> for CronJob {
             run_count: row.run_count as u32,
             max_runs: row.max_runs.map(|v| v as u32),
             expires_at: row.expires_at.and_then(|s| parse_datetime(&s)),
-            last_error: row.last_error,
+            last_error,
         }
     }
 }

@@ -83,9 +83,15 @@ pub async fn get_config(_state: State<'_, AppState>) -> Result<serde_json::Value
     config.apply_env_overrides();
     config.finalize();
 
-    let model = config.agent.model.model_id.clone();
-    let context_window = config.agent.compactor.context_window;
-    let provider = config.agent.model.provider.to_string();
+    // `finalize()` is supposed to guarantee a valid default model; if it's
+    // still missing, surface a real error instead of silently returning
+    // empty model/provider and context_window = 0.
+    let default_model = config.model().ok_or_else(|| {
+        GuiError::unknown("invalid config: default_model does not match any entry in [models]")
+    })?;
+    let model = default_model.model_id.clone();
+    let context_window = default_model.context_window;
+    let provider = default_model.provider.to_string();
 
     let auto_approve = config.auto_approve.to_string().to_lowercase();
     let full_config = toml::to_string_pretty(&config)
@@ -145,6 +151,39 @@ pub async fn get_daily_usage(
         })
         .collect();
     Ok(serde_json::Value::Array(items))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_models(state: State<'_, AppState>) -> Result<serde_json::Value, GuiError> {
+    let models = state.kernel.list_models().await.map_err(GuiError::kernel)?;
+    Ok(serde_json::json!({ "models": models }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_session_model(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<String, GuiError> {
+    let sid = kernel::SessionId::from(session_id);
+    state
+        .kernel
+        .get_session_model(&sid)
+        .await
+        .map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_session_model(
+    state: State<'_, AppState>,
+    session_id: String,
+    key: String,
+) -> Result<(), GuiError> {
+    let sid = kernel::SessionId::from(session_id);
+    state
+        .kernel
+        .set_session_model(&sid, &key)
+        .await
+        .map_err(GuiError::kernel)
 }
 
 #[tauri::command(rename_all = "snake_case")]

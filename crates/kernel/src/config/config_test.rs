@@ -88,7 +88,7 @@ fn test_config_serialization_roundtrip() {
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
     // Verify key fields are preserved
-    assert_eq!(parsed.agent.model.provider, config.agent.model.provider);
+    assert_eq!(parsed.models[0].provider, config.models[0].provider);
     assert_eq!(parsed.data_dir, config.data_dir);
     assert_eq!(parsed.hooks.len(), 1);
     assert_eq!(parsed.hooks[0].name, "test-hook");
@@ -99,14 +99,10 @@ fn test_config_serialization_roundtrip() {
 #[test]
 fn test_config_model_headers_roundtrip() {
     let mut config = Config::default();
-    config
-        .agent
-        .model
+    config.models[0]
         .headers
         .insert("X-Custom-Key".to_string(), "my-value".to_string());
-    config
-        .agent
-        .model
+    config.models[0]
         .headers
         .insert("Authorization".to_string(), "Bearer override".to_string());
 
@@ -114,11 +110,11 @@ fn test_config_model_headers_roundtrip() {
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
     assert_eq!(
-        parsed.agent.model.headers.get("X-Custom-Key"),
+        parsed.models[0].headers.get("X-Custom-Key"),
         Some(&"my-value".to_string())
     );
     assert_eq!(
-        parsed.agent.model.headers.get("Authorization"),
+        parsed.models[0].headers.get("Authorization"),
         Some(&"Bearer override".to_string())
     );
 }
@@ -126,23 +122,24 @@ fn test_config_model_headers_roundtrip() {
 #[test]
 fn test_config_model_headers_from_toml() {
     let toml = r#"
-[agent.model]
+[[models]]
+name = "default"
 provider = "openai"
 model_id = "gpt-4"
 endpoint = "https://api.example.com/v1"
 api_key = "sk-test"
 
-[agent.model.headers]
+[models.headers]
 "X-Custom-Key" = "my-value"
 "Authorization" = "Bearer override"
 "#;
     let parsed: Config = toml::from_str(toml).unwrap();
     assert_eq!(
-        parsed.agent.model.headers.get("X-Custom-Key"),
+        parsed.models[0].headers.get("X-Custom-Key"),
         Some(&"my-value".to_string())
     );
     assert_eq!(
-        parsed.agent.model.headers.get("Authorization"),
+        parsed.models[0].headers.get("Authorization"),
         Some(&"Bearer override".to_string())
     );
 }
@@ -150,8 +147,8 @@ api_key = "sk-test"
 #[test]
 fn test_config_model_accessor() {
     let config = Config::default();
-    assert_eq!(config.model().provider, config.agent.model.provider);
-    assert_eq!(config.model().model_id, config.agent.model.model_id);
+    assert_eq!(config.model().unwrap().provider, config.models[0].provider);
+    assert_eq!(config.model().unwrap().model_id, config.models[0].model_id);
 }
 
 #[test]

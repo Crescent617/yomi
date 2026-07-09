@@ -59,8 +59,6 @@
     loadGoal();
   });
 
-
-
   const todoItems = $derived(activeSession?.todos ?? []);
   const totalCount = $derived(todoItems.length);
   const completedCount = $derived(

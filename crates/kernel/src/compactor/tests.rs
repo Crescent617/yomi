@@ -28,7 +28,7 @@ fn test_calculate_tokens_with_usage() {
 fn test_micro_compact() {
     use std::sync::Arc;
 
-    let compactor = Compactor::new(0.5, 200, 2, 1000); // threshold=100, keep last 2 messages
+    let compactor = Compactor::new(0.5, 2, 1000); // threshold=100 (when context_window=200), keep last 2 messages
     let messages: Vec<Arc<Message>> = vec![
         Arc::new(Message::user("Task 1")),
         Arc::new(Message::tool_result(

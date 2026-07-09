@@ -83,6 +83,8 @@ impl Model {
             cmd_tx,
             cmd_rx,
             _event_pump: event_pump,
+            model_name: String::new(),
+            context_window: 0,
         })
     }
 

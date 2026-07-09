@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 9;
+pub const WIRE_PROTOCOL_VERSION: u32 = 10;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +39,7 @@ pub enum ReqMethod {
         project_id: Option<String>,
         working_dir: Option<String>,
         auto_approve_level: Level,
+        model_key: Option<String>,
     },
     RestoreSession {
         session_id: String,
@@ -110,6 +111,9 @@ pub enum ReqMethod {
     DeleteSession {
         session_id: String,
     },
+    ClearSession {
+        session_id: String,
+    },
 
     // ── Cron Job ─────────────────────────────────────────────────────────
     CreateCronJob {
@@ -154,6 +158,16 @@ pub enum ReqMethod {
 
     // ── Channel ────────────────────────────────────────────────────
     ListChannels,
+
+    // ── Model ────────────────────────────────────────────────────────
+    ListModels,
+    GetSessionModel {
+        session_id: String,
+    },
+    SetSessionModel {
+        session_id: String,
+        key: String,
+    },
 }
 
 /// Response body — tagged union, no serde magic.

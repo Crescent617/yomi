@@ -378,27 +378,42 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             }
         }
 
-        // Persist subagent session to database only when creating a new session
+        // Persist subagent session to database only when creating a new session.
+        // Store failures are non-fatal: warn and continue so the subagent can still run.
         if !is_reuse {
             if let Some(ref store) = self.shared.session_store {
-                let (parent_level, parent_wd, parent_project) = match store
-                    .get(&self.parent_session_id)
-                    .await
-                {
-                    Ok(Some(info)) => (info.auto_approve_level, info.working_dir, info.project_id),
-                    Ok(None) => (None, None, None),
+                let parent = match store.get(&self.parent_session_id).await {
+                    Ok(Some(info)) => Some(info),
+                    Ok(None) => {
+                        tracing::warn!(
+                            "parent session {} not found; creating subagent session without \
+                             inherited metadata",
+                            self.parent_session_id.0
+                        );
+                        None
+                    }
                     Err(e) => {
                         tracing::warn!("failed to get parent session metadata: {}", e);
-                        (None, None, None)
+                        None
                     }
                 };
+                let (project_id, working_dir, auto_approve_level, model_key) =
+                    parent.map_or((None, None, None, None), |p| {
+                        (
+                            p.project_id,
+                            p.working_dir,
+                            p.auto_approve_level,
+                            p.model_key,
+                        )
+                    });
                 if let Err(e) = store
                     .create(
                         &session_id,
-                        parent_project.as_ref(),
-                        parent_wd.as_deref(),
-                        parent_level.as_deref(),
+                        project_id.as_ref(),
+                        working_dir.as_deref(),
+                        auto_approve_level.as_deref(),
                         Some(&self.parent_session_id),
+                        model_key.as_deref(),
                     )
                     .await
                 {

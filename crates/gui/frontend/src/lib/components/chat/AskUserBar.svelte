@@ -44,7 +44,7 @@
       customInputs = {};
     } catch (e: unknown) {
       showNotification(
-        "Response failed: " + (e instanceof Error ? e.message : ""),
+        "Response failed: " + api.errorMessage(e),
         "error",
         3000,
       );

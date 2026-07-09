@@ -181,6 +181,8 @@ pub const TOGGLE_TODOS: &str = "toggle_todos";
 pub const HISTORY: &str = "history";
 /// Attribute for setting the working directory display.
 pub const WORKING_DIR: &str = "working_dir";
+/// Attribute for setting model name display on banner.
+pub const MODEL_NAME: &str = "model_name";
 /// Attribute for setting input content.
 pub const INPUT_CONTENT: &str = "input_content";
 /// Attribute for pasting clipboard text at the current cursor position.

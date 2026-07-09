@@ -32,7 +32,7 @@ where
 {
     /// 创建总线。
     pub fn new() -> Arc<Self> {
-        let (event_tx, event_rx) = mpsc::channel::<(K, T)>(256);
+        let (event_tx, event_rx) = mpsc::channel::<(K, T)>(10_000);
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command<T, K>>(CMD_CHAN_SIZE);
 
         let forwarder = tokio::spawn(run_forwarder(event_rx, cmd_rx));

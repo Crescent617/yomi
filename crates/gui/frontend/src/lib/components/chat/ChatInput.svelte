@@ -15,7 +15,7 @@
     type PermissionLevel,
   } from "../../permission";
   import * as api from "../../api";
-  import type { TaggedContentBlock } from "../../types";
+  import { buildContentBlocks } from "../../types";
   import {
     sessionState,
     getActiveSession,
@@ -30,6 +30,8 @@
   import { createFilePicker } from "$lib/filePicker.svelte";
 
   import FilePicker from "../filePicker/FilePicker.svelte";
+
+  import ModelSelector from "./ModelSelector.svelte";
 
   let content = $state("");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -206,7 +208,7 @@
       text: content.trim(),
       blocks:
         inlineImages.length > 0
-          ? buildContentBlocks(content.trim())
+          ? buildContentBlocks(content.trim(), inlineImages)
           : undefined,
     };
     content = "";
@@ -215,14 +217,18 @@
     autoResize();
   }
 
+  function openHistoryPicker() {
+    showHistory = true;
+    selectedHistoryIdx = 0;
+    content = "";
+    autoResize();
+  }
+
   function acceptCommand(cmd: string) {
     if (cmd === "/history") {
-      showHistory = true;
-      selectedHistoryIdx = 0;
-      content = "";
+      openHistoryPicker();
       showCommands = false;
       textareaRef?.focus();
-      requestAnimationFrame(autoResize);
       return;
     }
     content = cmd + " ";
@@ -269,7 +275,11 @@
       switch (cmd) {
         case "/cancel":
           await api.cancelSession(session_id);
-          showNotification("Session cancelled", "info", 3000);
+          showNotification("Session cancelled", "info");
+          break;
+        case "/clear":
+          await api.clearSession(session_id);
+          showNotification("Session context cleared", "info");
           break;
         case "/yolo":
           await api.setPermissionLevel(session_id, "dangerous");
@@ -281,33 +291,27 @@
           break;
         case "/undo":
           {
-            const checkpoints = (await api.getCheckpoints(
-              session_id,
-            )) as Array<{ message_id?: string }>;
-            if (!Array.isArray(checkpoints) || checkpoints.length < 1) {
-              showNotification("No checkpoint to undo", "error", 3000);
+            const checkpoints = await api.getCheckpoints(session_id);
+            if (checkpoints.length < 1) {
+              showNotification("No checkpoint to undo", "error");
               return false;
             }
             const target = checkpoints[checkpoints.length - 1];
-            if (!target?.message_id) {
-              showNotification("No checkpoint to undo", "error", 3000);
-              return false;
-            }
-            await api.rewind(session_id, target.message_id as string);
-            showNotification("Undo last turn", "info", 3000);
+            await api.rewind(session_id, target.message_id);
+            showNotification("Undo last turn", "info");
           }
           break;
         case "/safe":
           await api.setPermissionLevel(session_id, "safe");
-          showNotification("Permission level set to Safe", "info", 3000);
+          showNotification("Permission level set to Safe", "info");
           break;
         case "/caution":
           await api.setPermissionLevel(session_id, "caution");
-          showNotification("Permission level set to Caution", "info", 3000);
+          showNotification("Permission level set to Caution", "info");
           break;
         case "/compact":
           await api.compactSession(session_id);
-          showNotification("Session compaction requested", "info", 3000);
+          showNotification("Session compaction requested", "info");
           break;
         case "/steer":
           {
@@ -320,7 +324,7 @@
               );
               return false;
             }
-            const blocks = buildContentBlocks(steerText);
+            const blocks = buildContentBlocks(steerText, inlineImages);
             await api.sendSteer(session_id, blocks);
             clearInlineImages();
             showNotification(
@@ -339,7 +343,7 @@
                 sessionState.sessions.find((s) => s.id === parent_id)
                   ?.permission_level ?? "safe",
               );
-              showNotification(`Forked session: ${newId}`, "success", 3000);
+              showNotification(`Forked session: ${newId}`, "success");
               // Refresh sessions list so new fork appears in sidebar
               refreshSessions();
             } catch (e) {
@@ -356,7 +360,7 @@
           {
             try {
               await api.continueSession(session_id);
-              showNotification("Agent continuing...", "info", 3000);
+              showNotification("Agent continuing...", "info");
             } catch (e) {
               showNotification(
                 `Continue failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -417,12 +421,7 @@
           }
           break;
         case "/history":
-          {
-            showHistory = true;
-            selectedHistoryIdx = 0;
-            content = "";
-            autoResize();
-          }
+          openHistoryPicker();
           break;
         default:
           // Unknown command — treat as normal message
@@ -430,9 +429,9 @@
       }
       return true;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "";
+      const msg = api.errorMessage(e);
       console.error(`Failed to execute command ${cmd}:`, msg);
-      showNotification(`Command failed: ${msg}`, "error", 5000);
+      showNotification(`Command failed: ${msg}`, "error");
       return false;
     }
   }
@@ -473,7 +472,7 @@
       if (inlineImages.length > 0) {
         // Message with inline images: build content blocks
         try {
-          const blocks = buildContentBlocks(text);
+          const blocks = buildContentBlocks(text, inlineImages);
           await api.sendMessageBlocks(session_id, blocks);
           clearInlineImages();
         } catch (e: unknown) {
@@ -481,7 +480,7 @@
             "Failed to send message with images:",
             e instanceof Error ? e.message : e,
           );
-          showNotification("Failed to send message", "error", 3000);
+          showNotification("Failed to send message", "error");
         }
       } else {
         try {
@@ -515,13 +514,13 @@
     try {
       await api.setPermissionLevel(session_id, level);
       session.permission_level = level;
-      showNotification(`Permission level: ${level}`, "info", 2000);
+      showNotification(`Permission level: ${level}`, "info");
     } catch (e: unknown) {
       console.error(
         "Failed to set permission level:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to set permission level", "error", 3000);
+      showNotification("Failed to set permission level", "error");
     }
   }
 
@@ -558,7 +557,7 @@
 
   async function handleClipboardImage(file: File) {
     if (!file.type.startsWith("image/")) {
-      showNotification("Only image files are supported", "error", 3000);
+      showNotification("Only image files are supported", "error");
       return;
     }
     try {
@@ -567,7 +566,7 @@
       textareaRef?.focus();
     } catch (e) {
       console.error("Failed to read image:", e);
-      showNotification("Failed to read image", "error", 3000);
+      showNotification("Failed to read image", "error");
     }
   }
 
@@ -607,31 +606,6 @@
         }
       }
     }
-  }
-
-  function buildContentBlocks(text: string): TaggedContentBlock[] {
-    const blocks: TaggedContentBlock[] = [];
-
-    // First add all inline images
-    for (const img of inlineImages) {
-      blocks.push({
-        type: "image_url",
-        image_url: { url: img.url, detail: "auto" },
-      });
-    }
-
-    // Then add text block if there's any text
-    const trimmed = text.trim();
-    if (trimmed) {
-      blocks.push({ type: "text", text: trimmed });
-    }
-
-    // If absolutely nothing, add empty text block
-    if (blocks.length === 0) {
-      blocks.push({ type: "text", text: "" });
-    }
-
-    return blocks;
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -760,10 +734,7 @@
       e.preventDefault();
       const text = content.trim();
       if (text === "/history" || text.startsWith("/history ")) {
-        showHistory = true;
-        selectedHistoryIdx = 0;
-        content = "";
-        autoResize();
+        openHistoryPicker();
         return;
       }
       if (isStreaming) {
@@ -1057,6 +1028,7 @@
           </button>
         {/each}
       </div>
+      <ModelSelector session_id={activeSession.id} />
     </div>
   {/if}
 </div>

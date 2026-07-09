@@ -1,0 +1,348 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/Crescent617/yomi/main/docs/config-schema.json",
+  "title": "Yomi Config",
+  "description": "Configuration schema for the Yomi agent system.",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "description": "Agent behavior and execution settings.",
+      "type": "object",
+      "properties": {
+        "default_model": {
+          "description": "Default model name for new sessions (points to a model in Config.models).",
+          "type": "string",
+          "default": "default"
+        },
+        "max_iterations": {
+          "description": "Maximum number of iterations per agent session.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 100
+        },
+        "enable_subagent": {
+          "description": "Allow the agent to spawn sub-agents.",
+          "type": "boolean",
+          "default": true
+        },
+        "system_prompt": {
+          "description": "Custom system prompt override. If omitted, the built-in default prompt is used.",
+          "type": "string"
+        },
+        "tool_blocklist": {
+          "description": "Regex patterns for tools that should be disabled.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "compactor": {
+          "description": "Context compaction settings for managing long conversations.",
+          "type": "object",
+          "properties": {
+            "threshold_ratio": {
+              "description": "Ratio (0.0–1.0) of the context window at which compaction is triggered.",
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "default": 0.8
+            },
+            "keep_recent": {
+              "description": "Number of recent messages to preserve during compaction.",
+              "type": "integer",
+              "minimum": 0,
+              "default": 6
+            },
+            "summary_max_tokens": {
+              "description": "Max tokens allocated for generating a summary during full compaction.",
+              "type": "integer",
+              "minimum": 1,
+              "default": 8192
+            }
+          },
+          "additionalProperties": false
+        },
+        "allow_command_hooks": {
+          "description": "Allow command hooks to execute. Disabled by default for security.",
+          "type": "boolean",
+          "default": false
+        },
+        "max_tool_output_length": {
+          "description": "Maximum tool output length in bytes.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 40000
+        }
+      },
+      "additionalProperties": false
+    },
+    "auto_approve": {
+      "description": "Auto-approve threshold for tool permissions.",
+      "type": "string",
+      "enum": ["safe", "caution", "dangerous"],
+      "default": "safe"
+    },
+    "data_dir": {
+      "description": "Data directory for persistent storage. Supports ~ expansion.",
+      "type": "string"
+    },
+    "log_dir": {
+      "description": "Log directory. Defaults to <data_dir>/logs if omitted.",
+      "type": ["string", "null"]
+    },
+    "skill_folders": {
+      "description": "List of skill folder paths. Defaults to standard locations if omitted.",
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "hooks": {
+      "description": "Global user-level lifecycle hooks.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Unique hook name.",
+            "type": "string"
+          },
+          "event": {
+            "description": "Lifecycle event that triggers the hook.",
+            "type": "string",
+            "enum": ["pre_tool_use", "post_tool_use", "pre_stop"]
+          },
+          "matcher": {
+            "description": "Regex pattern for matching tool names or conditions.",
+            "type": "string"
+          },
+          "type": {
+            "description": "Handler type. 'command' or empty for command hooks.",
+            "type": "string",
+            "default": ""
+          },
+          "command": {
+            "description": "Shell command to execute (always run through sh -c / cmd /C).",
+            "type": "string"
+          },
+          "timeout": {
+            "description": "Command timeout in seconds.",
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          }
+        },
+        "required": ["name", "event", "matcher", "command"],
+        "additionalProperties": false
+      },
+      "default": []
+    },
+    "features": {
+      "description": "Experimental feature flags.",
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "description": "Enable PreToolUse / PostToolUse lifecycle hooks.",
+          "type": "boolean",
+          "default": false
+        },
+        "allow_command_hooks": {
+          "description": "Allow command hooks (sh -c / cmd /C) to execute.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "max_checkpoints": {
+      "description": "Maximum number of checkpoints to retain per session.",
+      "type": "integer",
+      "minimum": 1,
+      "default": 5
+    },
+    "channels": {
+      "description": "External platform channels (Telegram, Feishu, etc.).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Channel name.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether the channel is enabled.",
+            "type": "boolean",
+            "default": false
+          },
+          "platform": {
+            "description": "Platform-specific configuration.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "description": "Platform type.",
+                "type": "string",
+                "enum": ["telegram", "feishu"]
+              },
+              "token": {
+                "description": "Telegram bot token.",
+                "type": "string"
+              },
+              "app_id": {
+                "description": "Feishu app ID.",
+                "type": "string"
+              },
+              "app_secret": {
+                "description": "Feishu app secret.",
+                "type": "string"
+              }
+            },
+            "required": ["type"],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": { "type": { "const": "telegram" } },
+                  "required": ["type"]
+                },
+                "then": { "required": ["token"] }
+              },
+              {
+                "if": {
+                  "properties": { "type": { "const": "feishu" } },
+                  "required": ["type"]
+                },
+                "then": { "required": ["app_id", "app_secret"] }
+              }
+            ]
+          },
+          "allowed_chats": {
+            "description": "Chat IDs that are allowed to access this channel. Empty means allow all.",
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "allowed_users": {
+            "description": "User IDs that are allowed to access this channel. Empty means allow all.",
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "blocked_chats": {
+            "description": "Chat IDs that are blocked.",
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "blocked_users": {
+            "description": "User IDs that are blocked.",
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "require_mention": {
+            "description": "Whether the bot must be mentioned to respond.",
+            "type": "boolean",
+            "default": true
+          },
+          "auto_approve_level": {
+            "description": "Auto-approve level for this channel.",
+            "type": "string",
+            "enum": ["safe", "caution", "dangerous"],
+            "default": "safe"
+          }
+        },
+        "required": ["name", "platform"],
+        "additionalProperties": false
+      }
+    },
+    "models": {
+      "description": "Multi-model configuration array. At least one model is required.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Unique model identifier used in the config (e.g., 'claude_sonnet', 'gpt4o').",
+            "type": "string",
+            "default": "default"
+          },
+          "provider": {
+            "description": "Model provider.",
+            "type": "string",
+            "enum": ["openai", "anthropic"],
+            "default": "openai"
+          },
+          "model_id": {
+            "description": "Actual model ID sent to the API (e.g., 'gpt-4o', 'claude-3-5-sonnet-20241022').",
+            "type": "string"
+          },
+          "endpoint": {
+            "description": "API base URL / endpoint.",
+            "type": "string"
+          },
+          "api_key": {
+            "description": "API key for the provider.",
+            "type": "string"
+          },
+          "max_tokens": {
+            "description": "Maximum tokens per response.",
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "temperature": {
+            "description": "Sampling temperature (0.0–2.0).",
+            "type": ["number", "null"],
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          "fallback_model_id": {
+            "description": "Fallback model ID to use if this model is unavailable.",
+            "type": ["string", "null"]
+          },
+          "sse_timeout_secs": {
+            "description": "SSE streaming timeout in seconds.",
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "thinking": {
+            "description": "Thinking / reasoning configuration for supported models.",
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "description": "Enable extended thinking mode.",
+                "type": "boolean",
+                "default": false
+              },
+              "budget_tokens": {
+                "description": "Token budget for thinking.",
+                "type": "integer",
+                "minimum": 1,
+                "default": 2048
+              },
+              "effort": {
+                "description": "Reasoning effort level (low/medium/high) for OpenAI o1/o3 models.",
+                "type": ["string", "null"]
+              }
+            },
+            "additionalProperties": false
+          },
+          "headers": {
+            "description": "Extra HTTP headers to send with API requests.",
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "default": {}
+          },
+          "context_window": {
+            "description": "Context window size for this model.",
+            "type": "integer",
+            "minimum": 1,
+            "default": 131072
+          }
+        },
+        "required": ["name", "provider", "model_id", "endpoint", "api_key"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

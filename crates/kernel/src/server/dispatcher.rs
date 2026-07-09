@@ -49,12 +49,14 @@ impl KernelServer {
                 project_id,
                 working_dir,
                 auto_approve_level,
+                model_key,
             } => {
                 let input = CreateSessionInput {
                     project_id: project_id.map(ProjectId::from),
                     working_dir: working_dir.map(std::path::PathBuf::from),
                     auto_approve_level,
                     tool_blocklist: Vec::new(),
+                    model_key,
                 };
                 rpc_body(
                     "create_session_failed",
@@ -210,6 +212,15 @@ impl KernelServer {
                     self.event_buffer.remove(&sid);
                 }
                 rpc_body("delete_failed", result)
+            }
+            ReqMethod::ClearSession { session_id } => {
+                let sid = SessionId::from(session_id);
+                rpc_body(
+                    "clear_session_failed",
+                    self.kernel
+                        .clear_session(&sid)
+                        .map(|()| serde_json::Value::Null),
+                )
             }
             ReqMethod::ListSessions {
                 project_id,
@@ -468,6 +479,26 @@ impl KernelServer {
             ReqMethod::ListChannels => {
                 let channels = self.kernel.list_channels();
                 ok_body(channels)
+            }
+
+            // ── Model ──────────────────────────────────────────────────────
+            ReqMethod::ListModels => {
+                rpc_body("list_models_failed", self.kernel.list_models().await)
+            }
+            ReqMethod::GetSessionModel { session_id } => {
+                let sid = SessionId::from(session_id);
+                let key = self.kernel.get_session_model(&sid).await;
+                ok_body(key)
+            }
+            ReqMethod::SetSessionModel { session_id, key } => {
+                let sid = SessionId::from(session_id);
+                rpc_body(
+                    "set_session_model_failed",
+                    self.kernel
+                        .set_session_model(&sid, &key)
+                        .await
+                        .map(|()| serde_json::Value::Null),
+                )
             }
 
             ReqMethod::Hello => ok_body(ProtoResponse {

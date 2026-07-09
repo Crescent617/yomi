@@ -13,6 +13,7 @@
     streamingMessages,
     syncSessionStatus,
     refreshCheckpoints,
+    createSessionState,
   } from "../../state.svelte";
   import * as api from "../../api";
   import { collapseHome } from "../../utils";
@@ -26,6 +27,7 @@
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
+  import ModelSelector from "./ModelSelector.svelte";
   import {
     ArrowLeft,
     ChevronDown,
@@ -58,7 +60,7 @@
 
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
-  import type { TaggedContentBlock } from "../../types";
+  import { buildContentBlocks } from "../../types";
 
   let {
     rightPanelCollapsed,
@@ -116,6 +118,8 @@
   );
 
   // ── home inline images (clipboard paste) ──
+  let modelSelectorRef: ReturnType<typeof ModelSelector> | undefined = $state();
+
   interface HomeInlineImage {
     id: number;
     url: string;
@@ -166,24 +170,6 @@
         }
       }
     }
-  }
-
-  function buildHomeContentBlocks(text: string): TaggedContentBlock[] {
-    const blocks: TaggedContentBlock[] = [];
-    for (const img of homeInlineImages) {
-      blocks.push({
-        type: "image_url",
-        image_url: { url: img.url, detail: "auto" },
-      });
-    }
-    const trimmed = text.trim();
-    if (trimmed) {
-      blocks.push({ type: "text", text: trimmed });
-    }
-    if (blocks.length === 0) {
-      blocks.push({ type: "text", text: "" });
-    }
-    return blocks;
   }
 
   async function attachHomeFiles() {
@@ -298,14 +284,14 @@
     let working_dir: string;
 
     if (selectedProjectId === "") {
-      showNotification("Please select a project", "error", 3000);
+      showNotification("Please select a project", "error");
       return;
     }
 
     if (selectedProjectId === "new") {
       const dir = newProjectPath.trim();
       if (!dir) {
-        showNotification("Project path is required", "error", 3000);
+        showNotification("Project path is required", "error");
         return;
       }
       submitting = true;
@@ -329,7 +315,7 @@
           e instanceof Error ? e.message : e,
         );
         showNotification(
-          "Failed to create project: " + (e instanceof Error ? e.message : ""),
+          "Failed to create project: " + api.errorMessage(e),
           "error",
           5000,
         );
@@ -341,7 +327,7 @@
         (p) => p.id === selectedProjectId,
       );
       if (!project) {
-        showNotification("Please select a project", "error", 3000);
+        showNotification("Please select a project", "error");
         return;
       }
       project_id = project.id;
@@ -350,28 +336,27 @@
     }
 
     try {
-      const id = await api.createSession(working_dir, level, project_id);
+      const id = await api.createSession(
+        working_dir,
+        level,
+        project_id,
+        // getActiveModel() returns "" until models load — don't persist that
+        modelSelectorRef?.getActiveModel() || undefined,
+      );
       const result = await api.listSessions(project_id, undefined, 20);
       for (const s of result.sessions) {
         if (!sessionState.sessions.find((sess) => sess.id === s.id)) {
-          sessionState.sessions.push({
-            id: s.id,
-            project_path: s.project_path ?? "",
-            project_id: s.project_id,
-            alias: s.title ?? "Untitled",
-            messages: [],
-            phase: "idle",
-            is_running: false,
-            checkpoints: [],
-            tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
-            active_tab_id: "chat",
-            pending_permissions: [],
-            pending_ask_users: [],
-            queued_input: null,
-            updated_at: s.updated_at ?? s.created_at,
-            permission_level: s.auto_approve_level ?? level ?? "caution",
-            goal: null,
-          });
+          sessionState.sessions.push(
+            createSessionState({
+              id: s.id,
+              project_path: s.project_path ?? "",
+              project_id: s.project_id,
+              alias: s.title ?? "Untitled",
+              updated_at: s.updated_at ?? s.created_at,
+              permission_level: s.auto_approve_level ?? level ?? "caution",
+              model_key: s.model_key,
+            }),
+          );
         }
       }
       const sessionInfo = await api.getSession(id);
@@ -427,7 +412,7 @@
         }
         console.log("Goal mode activated — agent will work autonomously");
       } else if (hasImages) {
-        const blocks = buildHomeContentBlocks(text);
+        const blocks = buildContentBlocks(text, homeInlineImages);
         await api.sendMessageBlocks(id, blocks);
       } else {
         await api.sendMessage(id, text);
@@ -507,13 +492,13 @@
     try {
       await api.renameSession(activeSession.id, name);
       activeSession.alias = name;
-      showNotification("Session renamed", "success", 2000);
+      showNotification("Session renamed", "success");
     } catch (e: unknown) {
       console.error(
         "Failed to rename session:",
         e instanceof Error ? e.message : e,
       );
-      showNotification("Failed to rename session", "error", 3000);
+      showNotification("Failed to rename session", "error");
     } finally {
       editingTitle = false;
     }
@@ -1195,6 +1180,7 @@
                     </button>
                   {/each}
                 </div>
+                <ModelSelector bind:this={modelSelectorRef} />
               </div>
 
               <button
@@ -1314,7 +1300,7 @@
                         "Failed to send steer:",
                         e instanceof Error ? e.message : e,
                       );
-                      showNotification("Failed to send steer", "error", 3000);
+                      showNotification("Failed to send steer", "error");
                     });
                 }}
               />
