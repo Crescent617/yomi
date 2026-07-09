@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use comfy_table::{ContentArrangement, Table};
 
 pub mod cancel;
-pub mod cleanup;
 pub mod stop;
 
 /// Resolve a session ID from CLI arg or the current directory's last session.

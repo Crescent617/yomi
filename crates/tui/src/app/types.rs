@@ -165,3 +165,34 @@ pub fn format_short_id(id: &str) -> String {
         id.to_string()
     }
 }
+
+/// Build picker items for the model switcher (/models).
+///
+/// The current model is marked with `●` and sorted first; the rest keep the
+/// order returned by `list_models` (alphabetical by key).
+pub fn model_picker_items(
+    models: &[kernel::kernel::ModelInfo],
+    current: &str,
+) -> Vec<crate::components::PickerItem> {
+    use crate::components::PickerItem;
+
+    let mut items: Vec<PickerItem> = Vec::with_capacity(models.len());
+    for m in models {
+        let is_current = m.name == current;
+        let marker = if is_current { "●" } else { " " };
+        let label = format!("{marker} {}", m.name);
+        let ctx_k = m.context_window / 1000;
+        let meta = format!("{} · {} · {}k ctx", m.provider, m.model_id, ctx_k);
+        let item = PickerItem::new(m.name.clone(), label).with_meta(meta);
+        if is_current {
+            items.insert(0, item);
+        } else {
+            items.push(item);
+        }
+    }
+    items
+}
+
+#[cfg(test)]
+#[path = "types_test.rs"]
+mod tests;

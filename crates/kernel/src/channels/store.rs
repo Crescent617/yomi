@@ -116,6 +116,28 @@ impl ChannelStore for SqliteChannelStore {
 
         Ok(())
     }
+
+    async fn delete_by_sessions(&self, session_ids: &[SessionId]) -> Result<u64> {
+        const CHUNK_SIZE: usize = 100;
+
+        let mut deleted = 0u64;
+        for chunk in session_ids.chunks(CHUNK_SIZE) {
+            let mut builder = sqlx::QueryBuilder::new(
+                "DELETE FROM channel_session_mappings WHERE session_id IN (",
+            );
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.as_str());
+            }
+            separated.push_unseparated(")");
+
+            let result = builder.build().execute(&self.pool).await.map_err(|e| {
+                storage_err(format!("Failed to delete channel mappings by session: {e}"))
+            })?;
+            deleted += result.rows_affected();
+        }
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]

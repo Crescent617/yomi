@@ -112,6 +112,18 @@ pub enum Msg {
     // Async command results
     SessionList(Vec<PickerItem>),
     CheckpointList(Vec<Checkpoint>),
+
+    // Model picker (/models)
+    CommandModels(Option<String>), // /models [key] - show picker or switch directly
+    ModelList(Vec<PickerItem>),    // Async model list result
+    ModelSelected(String),         // User selected a model key
+    CloseModelPicker,              // Close model picker without selection
+    ModelSwitched {
+        // set_session_model succeeded; update UI
+        key: String,
+        model_id: String,
+        context_window: u32,
+    },
 }
 
 /// Target for rewinding (mirrors `kernel::checkpoint::RewindTarget`)

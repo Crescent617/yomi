@@ -199,68 +199,102 @@ impl SessionStore for SqliteSessionStore {
         Ok(result.rows_affected())
     }
 
-    async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>> {
-        const CHUNK_SIZE: usize = 100;
+    async fn list_expired(
+        &self,
+        cutoff: DateTime<Utc>,
+        keep_pinned: bool,
+    ) -> Result<Vec<SessionId>> {
+        // NOTE: sessions.updated_at is stored as sqlite text 'YYYY-MM-DD HH:MM:SS'
+        // (datetime('now')), while chrono DateTime binds as RFC3339 with a 'T'
+        // separator, which breaks lexicographic comparison. Format explicitly.
+        let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
 
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(days);
-
-        let rows = sqlx::query(
-            "SELECT id FROM sessions WHERE updated_at < ? ORDER BY updated_at DESC LIMIT 10000",
-        )
-        .bind(cutoff)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to query old sessions: {e}")))?;
-
-        if rows.is_empty() {
-            return Ok(Vec::new());
+        // Phase 1: regular (non-subagent) expired sessions
+        let mut builder = sqlx::QueryBuilder::new("SELECT id FROM sessions WHERE updated_at < ");
+        builder.push_bind(&cutoff_str);
+        builder.push(" AND id NOT LIKE 'sub_%'");
+        if keep_pinned {
+            builder.push(" AND id NOT IN (SELECT session_id FROM pinned_sessions)");
         }
+        builder.push(" ORDER BY updated_at ASC LIMIT 10000");
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| storage_err(format!("failed to query expired sessions: {e}")))?;
 
         let mut ids: Vec<String> = rows
             .into_iter()
-            .map(|r| r.try_get::<String, _>("id").unwrap_or_default())
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
             .collect();
 
-        // Also collect child subagent sessions whose parent is being deleted,
-        // so they don't become orphaned by ON DELETE SET NULL.
-        let child_rows = sqlx::query(
-            "SELECT child.id FROM sessions AS child
-             WHERE child.id LIKE 'sub_%'
-             AND EXISTS (
-                 SELECT 1 FROM sessions AS parent
-                 WHERE parent.id = child.parent_id
-                 AND parent.updated_at < ?
-             )",
-        )
-        .bind(cutoff)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| storage_err(format!("failed to query child sessions: {e}")))?;
-
-        for r in child_rows {
-            let id = r.try_get::<String, _>("id").unwrap_or_default();
-            if !ids.contains(&id) {
-                ids.push(id);
+        // Phase 2: child subagent sessions of the expired parents (chunked IN)
+        let parents: Vec<String> = ids.clone();
+        for chunk in parents.chunks(100) {
+            let mut b = sqlx::QueryBuilder::new(
+                "SELECT id FROM sessions WHERE id LIKE 'sub_%' AND parent_id IN (",
+            );
+            let mut sep = b.separated(", ");
+            for id in chunk {
+                sep.push_bind(id);
+            }
+            sep.push_unseparated(")");
+            let child_rows = b
+                .build()
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| storage_err(format!("failed to query child sessions: {e}")))?;
+            for r in child_rows {
+                if let Ok(id) = r.try_get::<String, _>("id") {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
             }
         }
 
-        // Delete in chunks to avoid too many parameters
+        // Phase 3: orphaned subagent sessions (parent already gone via ON DELETE
+        // SET NULL) that are themselves expired.
+        let orphan_rows = sqlx::query(
+            "SELECT id FROM sessions
+             WHERE id LIKE 'sub_%' AND parent_id IS NULL AND updated_at < ?",
+        )
+        .bind(&cutoff_str)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to query orphan subagent sessions: {e}")))?;
+        for r in orphan_rows {
+            if let Ok(id) = r.try_get::<String, _>("id") {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+
+        Ok(ids.into_iter().map(SessionId::from).collect())
+    }
+
+    async fn delete_batch(&self, ids: &[SessionId]) -> Result<u64> {
+        const CHUNK_SIZE: usize = 100;
+
+        let mut deleted = 0u64;
         for chunk in ids.chunks(CHUNK_SIZE) {
             let mut builder = sqlx::QueryBuilder::new("DELETE FROM sessions WHERE id IN (");
             let mut separated = builder.separated(", ");
             for id in chunk {
-                separated.push_bind(id);
+                separated.push_bind(&*id.0);
             }
             separated.push_unseparated(")");
 
-            builder
+            let result = builder
                 .build()
                 .execute(&self.pool)
                 .await
-                .map_err(|e| storage_err(format!("failed to delete old sessions: {e}")))?;
+                .map_err(|e| storage_err(format!("failed to delete sessions: {e}")))?;
+            deleted += result.rows_affected();
         }
-
-        Ok(ids.into_iter().map(SessionId::from).collect())
+        Ok(deleted)
     }
 }
 

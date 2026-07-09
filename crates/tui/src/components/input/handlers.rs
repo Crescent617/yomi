@@ -95,6 +95,10 @@ impl InputComponent {
             "/yolo" => Some(Msg::CommandYolo),
             "/browse" => Some(Msg::CommandBrowse),
             "/sessions" => Some(Msg::CommandSessions),
+            "/models" | "/model" => {
+                let key = parts.get(1).map(|s| (*s).to_string());
+                Some(Msg::CommandModels(key))
+            }
             "/compact" => Some(Msg::CommandCompact),
             "/rewind" => Some(Msg::CommandRewind),
             "/undo" => Some(Msg::CommandUndo),
@@ -531,3 +535,7 @@ impl InputComponent {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "handlers_test.rs"]
+mod tests;

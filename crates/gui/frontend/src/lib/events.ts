@@ -518,7 +518,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         console.error("Failed to reload messages after MessageReplaced:", e),
       );
     refreshCheckpoints(session.id);
-    showNotification("Session rewound", "info");
+    showNotification("Session message replaced", "info");
     return true;
   } else if (event.goal_updated) {
     session.goal = {

@@ -21,6 +21,7 @@ pub(crate) const OVERLAY_COMPONENTS: &[Id] = &[
     Id::Dialog,
     Id::HistoryPicker,
     Id::SessionPicker,
+    Id::ModelPicker,
     Id::CheckpointPicker,
     Id::HelpDialog,
     Id::TodoList,

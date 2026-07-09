@@ -16,8 +16,7 @@ use std::sync::Arc;
 /// It handles all setup including database migrations.
 #[derive(Clone)]
 pub struct StorageSet {
-    /// `SQLite` pool shared across `SQLite`-based stores (kept for `Clone`)
-    #[allow(dead_code)]
+    /// `SQLite` pool shared across `SQLite`-based stores
     pool: SqlitePool,
     /// Base directory for file-based storage
     data_dir: PathBuf,
@@ -263,6 +262,16 @@ impl StorageSet {
     /// Get the channel store
     pub fn channel_store(&self) -> Arc<dyn crate::channels::ChannelStore> {
         self.channel_store.clone()
+    }
+
+    /// `SQLite` pool for gc-internal queries
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    /// Create a garbage collector for expired session resources
+    pub fn gc(&self) -> super::gc::GarbageCollector {
+        super::gc::GarbageCollector::new(self.clone())
     }
     ///
     /// File state stores are per-session, so this returns a new instance each time

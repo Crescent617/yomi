@@ -83,10 +83,23 @@ pub trait SessionStore: Send + Sync {
     /// Update session `auto_approve_level`
     async fn update_auto_approve_level(&self, id: &SessionId, level: &str) -> Result<u64>;
 
-    /// Delete sessions older than the given number of days
+    /// List expired session IDs: `updated_at` older than `cutoff`.
     ///
-    /// Returns the IDs of deleted sessions
-    async fn cleanup(&self, days: i64) -> Result<Vec<SessionId>>;
+    /// The returned set includes:
+    /// - regular (non-subagent) expired sessions
+    /// - child subagent sessions of those expired parents (regardless of own age)
+    /// - orphaned subagent sessions (`parent_id IS NULL`) that are themselves expired
+    ///
+    /// Subagent sessions whose parent is still alive are never returned.
+    /// When `keep_pinned` is true, pinned sessions (and their children) are excluded.
+    async fn list_expired(
+        &self,
+        cutoff: DateTime<Utc>,
+        keep_pinned: bool,
+    ) -> Result<Vec<SessionId>>;
+
+    /// Delete sessions by ID in batches. Returns the number of rows deleted.
+    async fn delete_batch(&self, ids: &[SessionId]) -> Result<u64>;
 }
 
 pub(crate) use crate::storage::storage_err;
