@@ -303,7 +303,10 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             SubAgentMode::Async
         };
 
-        let agent_id = args["agent_id"].as_str().map(SessionId::from);
+        let agent_id = args["agent_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(SessionId::from);
 
         // TODO(#subagent-resume): When agent_id is not provided and this call
         // is being re-executed after a crash (e.g. parent resumed with

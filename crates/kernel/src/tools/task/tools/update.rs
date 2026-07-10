@@ -177,7 +177,7 @@ impl Tool for TaskUpdateTool {
             let mut new_blocks = existing.blocks.clone();
             let block_ids: Vec<String> = add_blocks
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
                 .collect();
 
             for block_id in block_ids {
@@ -197,7 +197,7 @@ impl Tool for TaskUpdateTool {
             let mut new_blocked_by = existing.blocked_by.clone();
             let blocker_ids: Vec<String> = add_blocked_by
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
                 .collect();
 
             for blocker_id in blocker_ids {
