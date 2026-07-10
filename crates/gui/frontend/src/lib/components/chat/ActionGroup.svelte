@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { XCircle, Wrench, Lightbulb } from "lucide-svelte";
+  import { XCircle, Wrench, Lightbulb, Bot, Pencil } from "lucide-svelte";
   import type { Message } from "../../state.svelte";
   import { textFromBlocks, findThinking } from "../../state.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
@@ -27,6 +27,8 @@
 
   const stats = $derived.by(() => {
     let toolCount = 0;
+    let subagentCount = 0;
+    let editWriteCount = 0;
     let thinkingCount = 0;
     let runningCount = 0;
     let failedCount = 0;
@@ -42,7 +44,13 @@
         }
       }
       if (m.type === "tool") {
-        toolCount++;
+        if (m.subagent_session_id) {
+          subagentCount++;
+        } else if (m.tool_name === "write" || m.tool_name === "edit") {
+          editWriteCount++;
+        } else {
+          toolCount++;
+        }
         if (m.status === "running") {
           runningCount++;
           latestRunningTool = m;
@@ -58,7 +66,14 @@
       activeLabel = "thinking";
     }
 
-    return { toolCount, thinkingCount, runningCount, failedCount, activeLabel };
+    const badges = [
+      { icon: Lightbulb, count: thinkingCount, label: "thinking" },
+      { icon: Bot, count: subagentCount, label: "subagent" },
+      { icon: Pencil, count: editWriteCount, label: "edit/write" },
+      { icon: Wrench, count: toolCount, label: "tool" },
+    ].filter((b) => b.count > 0);
+
+    return { badges, thinkingCount, runningCount, failedCount, activeLabel };
   });
   const hasVisibleContent = $derived.by(() => {
     for (const m of messages) {
@@ -87,34 +102,28 @@
       {#if stats.runningCount > 0 || (isStreaming && stats.thinkingCount > 0)}
         <span class="relative flex size-2 shrink-0">
           <span
-            class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"
+            class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-75"
           ></span>
-          <span class="relative inline-flex rounded-full size-2 bg-amber-500"
+          <span class="relative inline-flex rounded-full size-2 bg-warning"
           ></span>
         </span>
       {:else if stats.failedCount > 0}
-        <XCircle class="size-4 text-red-500 shrink-0" />
+        <XCircle class="size-4 text-error shrink-0" />
       {/if}
 
       <!-- 标题 -->
       <span
         class="font-medium text-foreground shrink-0 inline-flex items-center gap-1.5"
       >
-        {#if stats.toolCount > 0}
-          <Wrench class="size-3.5 text-muted-foreground" />
-          {#key stats.toolCount}
-            <span class="roll-num inline-block">{stats.toolCount}</span>
+        {#each stats.badges as badge, i (badge.label)}
+          {#if i > 0}
+            <span class="text-muted-foreground/40">·</span>
+          {/if}
+          <badge.icon class="size-3.5 text-muted-foreground" />
+          {#key badge.count}
+            <span class="roll-num inline-block">{badge.count}</span>
           {/key}
-        {/if}
-        {#if stats.toolCount > 0 && stats.thinkingCount > 0}
-          <span class="text-muted-foreground/40">·</span>
-        {/if}
-        {#if stats.thinkingCount > 0}
-          <Lightbulb class="size-3.5 text-muted-foreground" />
-          {#key stats.thinkingCount}
-            <span class="roll-num inline-block">{stats.thinkingCount}</span>
-          {/key}
-        {/if}
+        {/each}
       </span>
 
       {#if stats.activeLabel}

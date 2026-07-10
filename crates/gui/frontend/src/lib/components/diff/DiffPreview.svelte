@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { FileDiff } from "../../diff/types";
-  import { X } from "lucide-svelte";
+  import Modal from "../ui/Modal.svelte";
 
   let {
     diffs: diffsProp,
@@ -38,9 +38,13 @@
     appliedMap[hunkId] = !isHunkApplied(hunkId);
   }
 
+  function close() {
+    open = false;
+  }
+
   function handleApproveAll() {
     onApprove();
-    open = false;
+    close();
   }
 
   function handleApproveSelected() {
@@ -49,12 +53,12 @@
       hunks: d.hunks.filter((h) => isHunkApplied(h.id)),
     }));
     onPartial(filtered);
-    open = false;
+    close();
   }
 
   function handleReject() {
     onReject();
-    open = false;
+    close();
   }
 
   function stats(diff: FileDiff) {
@@ -69,275 +73,244 @@
     );
     return { added, removed };
   }
-
-  function close() {
-    open = false;
-  }
 </script>
 
-{#if open}
+<Modal {open} size="xl" fitContent onClose={close}>
+  {#snippet header()}
+    <h2 class="text-lg font-semibold text-foreground">
+      Diff Preview — {diffsProp.length} file{diffsProp.length > 1 ? "s" : ""}
+    </h2>
+  {/snippet}
+
+  <!-- File tabs -->
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) close();
-    }}
-    role="presentation"
+    class="flex items-center gap-1 border-b border-border overflow-x-auto px-2 shrink-0"
   >
-    <div
-      class="bg-background rounded-xl shadow-xl max-w-4xl w-[90vw] h-[80vh] flex flex-col mx-4"
-    >
-      <!-- Header -->
-      <div
-        class="px-6 py-4 border-b border-border flex items-center justify-between"
+    {#each diffsProp as diff, i (diff.path)}
+      {@const s = stats(diff)}
+      <button
+        class="px-3 py-1.5 text-xs rounded-t-lg transition-colors {i ===
+        activeFileIndex
+          ? 'bg-primary/10 text-primary border-b-2 border-primary'
+          : 'text-muted-foreground hover:bg-secondary'}"
+        onclick={() => (activeFileIndex = i)}
       >
-        <h2 class="text-lg font-semibold">
-          Diff Preview — {diffsProp.length} file{diffsProp.length > 1
-            ? "s"
-            : ""}
-        </h2>
-        <button
-          onclick={close}
-          class="p-1 rounded-lg hover:bg-secondary transition-colors"
-        >
-          <X size={18} />
-        </button>
-      </div>
+        {diff.path.split("/").pop()}
+        <span class="text-success ml-1">+{s.added}</span>
+        <span class="text-error">-{s.removed}</span>
+      </button>
+    {/each}
+  </div>
 
-      <!-- File tabs -->
-      <div
-        class="flex items-center gap-1 border-b border-border mt-4 overflow-x-auto px-2"
+  <!-- View toggle -->
+  <div
+    class="flex items-center justify-between px-2 py-1 border-b border-border shrink-0"
+  >
+    <span class="text-xs text-muted-foreground">{activeFile?.path}</span>
+    <div class="flex gap-1">
+      <button
+        class="text-xs px-2 py-1 rounded {viewMode === 'unified'
+          ? 'bg-secondary'
+          : ''}"
+        onclick={() => (viewMode = "unified")}
       >
-        {#each diffsProp as diff, i (diff.path)}
-          {@const s = stats(diff)}
-          <button
-            class="px-3 py-1.5 text-xs rounded-t-lg transition-colors {i ===
-            activeFileIndex
-              ? 'bg-primary/10 text-primary border-b-2 border-primary'
-              : 'text-muted-foreground hover:bg-secondary'}"
-            onclick={() => (activeFileIndex = i)}
-          >
-            {diff.path.split("/").pop()}
-            <span class="text-green-600 ml-1">+{s.added}</span>
-            <span class="text-red-600">-{s.removed}</span>
-          </button>
-        {/each}
-      </div>
-
-      <!-- View toggle -->
-      <div
-        class="flex items-center justify-between px-2 py-1 border-b border-border"
+        Unified
+      </button>
+      <button
+        class="text-xs px-2 py-1 rounded {viewMode === 'split'
+          ? 'bg-secondary'
+          : ''}"
+        onclick={() => (viewMode = "split")}
       >
-        <span class="text-xs text-muted-foreground">{activeFile?.path}</span>
-        <div class="flex gap-1">
-          <button
-            class="text-xs px-2 py-1 rounded {viewMode === 'unified'
-              ? 'bg-secondary'
-              : ''}"
-            onclick={() => (viewMode = "unified")}
-          >
-            Unified
-          </button>
-          <button
-            class="text-xs px-2 py-1 rounded {viewMode === 'split'
-              ? 'bg-secondary'
-              : ''}"
-            onclick={() => (viewMode = "split")}
-          >
-            Split
-          </button>
-        </div>
-      </div>
+        Split
+      </button>
+    </div>
+  </div>
 
-      <!-- Diff content -->
-      <div class="flex-1 overflow-auto font-mono text-xs">
-        {#if activeFile}
-          {#if viewMode === "unified"}
-            {#each activeFile.hunks as hunk (hunk.id)}
+  <!-- Diff content -->
+  <div class="flex-1 min-h-0 overflow-auto font-mono text-xs">
+    {#if activeFile}
+      {#if viewMode === "unified"}
+        {#each activeFile.hunks as hunk (hunk.id)}
+          <div
+            class="border-l-2 {isHunkApplied(hunk.id)
+              ? 'border-primary'
+              : 'border-muted'} my-2"
+          >
+            <!-- Hunk header -->
+            <div
+              class="flex items-center gap-2 px-2 py-1 bg-muted/50 sticky top-0"
+            >
+              <input
+                type="checkbox"
+                checked={isHunkApplied(hunk.id)}
+                onclick={() => toggleHunk(hunk.id)}
+                class="rounded"
+              />
+              <span class="text-muted-foreground">
+                @@ -{hunk.old_start},{hunk.old_lines} +{hunk.new_start},{hunk.new_lines}
+                @@
+              </span>
+            </div>
+
+            <!-- Lines -->
+            {#each hunk.lines as line, lineIdx (`${line.old_line_num}-${line.new_line_num}-${lineIdx}`)}
               <div
-                class="border-l-2 {isHunkApplied(hunk.id)
-                  ? 'border-primary'
-                  : 'border-muted'} my-2"
+                class="flex items-start gap-2 px-2 py-0.5 {line.type === 'add'
+                  ? 'bg-success/10'
+                  : line.type === 'remove'
+                    ? 'bg-error/10'
+                    : ''}"
               >
-                <!-- Hunk header -->
-                <div
-                  class="flex items-center gap-2 px-2 py-1 bg-muted/50 sticky top-0"
+                <span
+                  class="w-8 text-right text-muted-foreground select-none shrink-0"
                 >
-                  <input
-                    type="checkbox"
-                    checked={isHunkApplied(hunk.id)}
-                    onclick={() => toggleHunk(hunk.id)}
-                    class="rounded"
-                  />
-                  <span class="text-muted-foreground">
-                    @@ -{hunk.old_start},{hunk.old_lines} +{hunk.new_start},{hunk.new_lines}
-                    @@
-                  </span>
-                </div>
-
-                <!-- Lines -->
-                {#each hunk.lines as line, lineIdx (`${line.old_line_num}-${line.new_line_num}-${lineIdx}`)}
+                  {line.old_line_num ?? ""}
+                </span>
+                <span
+                  class="w-8 text-right text-muted-foreground select-none shrink-0"
+                >
+                  {line.new_line_num ?? ""}
+                </span>
+                <span
+                  class="w-4 shrink-0 select-none {line.type === 'add'
+                    ? 'text-success'
+                    : line.type === 'remove'
+                      ? 'text-error'
+                      : 'text-muted-foreground'}"
+                >
+                  {line.type === "add"
+                    ? "+"
+                    : line.type === "remove"
+                      ? "-"
+                      : " "}
+                </span>
+                <span class="flex-1 break-all">
+                  {#if line.intra_line_segments}
+                    {#each line.intra_line_segments as seg, segIdx (segIdx)}
+                      <span
+                        class={seg.type === "add"
+                          ? "bg-success/30"
+                          : seg.type === "remove"
+                            ? "bg-error/30 line-through"
+                            : ""}
+                      >
+                        {seg.text}
+                      </span>
+                    {/each}
+                  {:else}
+                    {line.content}
+                  {/if}
+                </span>
+              </div>
+            {/each}
+          </div>
+        {/each}
+      {:else}
+        <!-- Split view -->
+        <div class="flex">
+          <div class="flex-1 border-r border-border">
+            <div
+              class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1"
+            >
+              Old
+            </div>
+            {#each activeFile.hunks as hunk (hunk.id)}
+              {#each hunk.lines as line, lineIdx (`old-${line.old_line_num}-${lineIdx}`)}
+                {#if line.type !== "add"}
                   <div
                     class="flex items-start gap-2 px-2 py-0.5 {line.type ===
-                    'add'
-                      ? 'bg-emerald-500/10'
-                      : line.type === 'remove'
-                        ? 'bg-red-500/10'
-                        : ''}"
+                    'remove'
+                      ? 'bg-error/10'
+                      : ''}"
                   >
                     <span
                       class="w-8 text-right text-muted-foreground select-none shrink-0"
+                      >{line.old_line_num ?? ""}</span
                     >
-                      {line.old_line_num ?? ""}
-                    </span>
+                    <span
+                      class="w-4 shrink-0 select-none {line.type === 'remove'
+                        ? 'text-error'
+                        : 'text-muted-foreground'}">-</span
+                    >
+                    <span class="flex-1 break-all">{line.content}</span>
+                  </div>
+                {/if}
+              {/each}
+            {/each}
+          </div>
+          <div class="flex-1">
+            <div
+              class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1"
+            >
+              New
+            </div>
+            {#each activeFile.hunks as hunk (hunk.id)}
+              {#each hunk.lines as line, lineIdx (`new-${line.new_line_num}-${lineIdx}`)}
+                {#if line.type !== "remove"}
+                  <div
+                    class="flex items-start gap-2 px-2 py-0.5 {line.type ===
+                    'add'
+                      ? 'bg-success/10'
+                      : ''}"
+                  >
                     <span
                       class="w-8 text-right text-muted-foreground select-none shrink-0"
+                      >{line.new_line_num ?? ""}</span
                     >
-                      {line.new_line_num ?? ""}
-                    </span>
                     <span
                       class="w-4 shrink-0 select-none {line.type === 'add'
-                        ? 'text-emerald-600'
-                        : line.type === 'remove'
-                          ? 'text-red-600'
-                          : 'text-muted-foreground'}"
+                        ? 'text-success'
+                        : 'text-muted-foreground'}">+</span
                     >
-                      {line.type === "add"
-                        ? "+"
-                        : line.type === "remove"
-                          ? "-"
-                          : " "}
-                    </span>
                     <span class="flex-1 break-all">
                       {#if line.intra_line_segments}
                         {#each line.intra_line_segments as seg, segIdx (segIdx)}
                           <span
-                            class={seg.type === "add"
-                              ? "bg-emerald-500/30"
-                              : seg.type === "remove"
-                                ? "bg-red-500/30 line-through"
-                                : ""}
+                            class={seg.type === "add" ? "bg-success/30" : ""}
+                            >{seg.text}</span
                           >
-                            {seg.text}
-                          </span>
                         {/each}
                       {:else}
                         {line.content}
                       {/if}
                     </span>
                   </div>
-                {/each}
-              </div>
+                {/if}
+              {/each}
             {/each}
-          {:else}
-            <!-- Split view -->
-            <div class="flex">
-              <div class="flex-1 border-r border-border">
-                <div
-                  class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1"
-                >
-                  Old
-                </div>
-                {#each activeFile.hunks as hunk (hunk.id)}
-                  {#each hunk.lines as line, lineIdx (`old-${line.old_line_num}-${lineIdx}`)}
-                    {#if line.type !== "add"}
-                      <div
-                        class="flex items-start gap-2 px-2 py-0.5 {line.type ===
-                        'remove'
-                          ? 'bg-red-500/10'
-                          : ''}"
-                      >
-                        <span
-                          class="w-8 text-right text-muted-foreground select-none shrink-0"
-                          >{line.old_line_num ?? ""}</span
-                        >
-                        <span
-                          class="w-4 shrink-0 select-none {line.type ===
-                          'remove'
-                            ? 'text-red-600'
-                            : 'text-muted-foreground'}">-</span
-                        >
-                        <span class="flex-1 break-all">{line.content}</span>
-                      </div>
-                    {/if}
-                  {/each}
-                {/each}
-              </div>
-              <div class="flex-1">
-                <div
-                  class="sticky top-0 bg-muted/80 text-xs text-muted-foreground px-2 py-1"
-                >
-                  New
-                </div>
-                {#each activeFile.hunks as hunk (hunk.id)}
-                  {#each hunk.lines as line, lineIdx (`new-${line.new_line_num}-${lineIdx}`)}
-                    {#if line.type !== "remove"}
-                      <div
-                        class="flex items-start gap-2 px-2 py-0.5 {line.type ===
-                        'add'
-                          ? 'bg-emerald-500/10'
-                          : ''}"
-                      >
-                        <span
-                          class="w-8 text-right text-muted-foreground select-none shrink-0"
-                          >{line.new_line_num ?? ""}</span
-                        >
-                        <span
-                          class="w-4 shrink-0 select-none {line.type === 'add'
-                            ? 'text-emerald-600'
-                            : 'text-muted-foreground'}">+</span
-                        >
-                        <span class="flex-1 break-all">
-                          {#if line.intra_line_segments}
-                            {#each line.intra_line_segments as seg, segIdx (segIdx)}
-                              <span
-                                class={seg.type === "add"
-                                  ? "bg-emerald-500/30"
-                                  : ""}>{seg.text}</span
-                              >
-                            {/each}
-                          {:else}
-                            {line.content}
-                          {/if}
-                        </span>
-                      </div>
-                    {/if}
-                  {/each}
-                {/each}
-              </div>
-            </div>
-          {/if}
-        {/if}
-      </div>
+          </div>
+        </div>
+      {/if}
+    {/if}
+  </div>
 
-      <!-- Action bar -->
-      <div
-        class="flex items-center justify-between border-t border-border pt-3 px-2 pb-3"
-      >
-        <div class="text-xs text-muted-foreground">
-          {activeFile?.hunks.filter((h) => isHunkApplied(h.id)).length ?? 0} / {activeFile
-            ?.hunks.length ?? 0} hunks applied
-        </div>
-        <div class="flex gap-2">
-          <button
-            class="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm transition-colors"
-            onclick={handleReject}
-          >
-            Reject All
-          </button>
-          <button
-            class="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm transition-colors"
-            onclick={handleApproveSelected}
-          >
-            Approve Selected
-          </button>
-          <button
-            class="px-4 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 text-sm transition-colors"
-            onclick={handleApproveAll}
-          >
-            Approve All
-          </button>
-        </div>
+  {#snippet footer()}
+    <div class="flex items-center justify-between w-full">
+      <div class="text-xs text-muted-foreground">
+        {activeFile?.hunks.filter((h) => isHunkApplied(h.id)).length ?? 0} / {activeFile
+          ?.hunks.length ?? 0} hunks applied
+      </div>
+      <div class="flex gap-2">
+        <button
+          class="px-4 py-2 rounded-lg border border-border hover:bg-secondary text-sm text-foreground transition-colors"
+          onclick={handleReject}
+        >
+          Reject All
+        </button>
+        <button
+          class="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 text-sm transition-colors"
+          onclick={handleApproveSelected}
+        >
+          Approve Selected
+        </button>
+        <button
+          class="px-4 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 text-sm transition-colors"
+          onclick={handleApproveAll}
+        >
+          Approve All
+        </button>
       </div>
     </div>
-  </div>
-{/if}
+  {/snippet}
+</Modal>

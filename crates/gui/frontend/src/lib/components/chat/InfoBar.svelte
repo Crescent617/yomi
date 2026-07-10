@@ -177,11 +177,11 @@
       {#if session?.phase === "streaming"}
         <Loader2 size={12} class="animate-spin text-primary shrink-0" />
       {:else if session?.phase === "executing_tool"}
-        <Zap size={12} class="animate-breathe text-sky-500 shrink-0" />
+        <Zap size={12} class="animate-breathe text-info shrink-0" />
       {:else if session?.phase === "compacting"}
-        <Database size={12} class="animate-spin text-sky-500 shrink-0" />
+        <Database size={12} class="animate-spin text-info shrink-0" />
       {:else if streamingTokens > 0}
-        <Check size={12} class="text-green-500 shrink-0" />
+        <Check size={12} class="text-success shrink-0" />
       {/if}
 
       {#if streamingTokens > 0}
@@ -197,11 +197,11 @@
       {/if}
 
       {#if currentTool}
-        <span class="text-sky-500 font-medium truncate"
+        <span class="text-info font-medium truncate italic"
           >· calling {currentTool.tool_name}</span
         >
       {:else if session?.phase === "streaming"}
-        <span class="text-muted-foreground/70 shrink-0">· generating</span>
+        <span class="text-muted-foreground/70 shrink-0 italic">· generating</span>
       {:else if session?.phase === "compacting"}
         <span class="text-muted-foreground/70 shrink-0">· compacting</span>
       {/if}
@@ -216,8 +216,8 @@
         <span class="text-muted-foreground/40">·</span>
         <span
           class="text-muted-foreground/60"
-          class:text-amber-500={pct >= 70}
-          class:text-red-500={pct >= 90}
+          class:text-warning={pct >= 70}
+          class:text-error={pct >= 90}
         >
           {pct.toFixed(1)}% ({(m.context_window / 1000).toFixed(0)}K)
         </span>

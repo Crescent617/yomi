@@ -870,15 +870,15 @@
             >
               <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
               {#if g.added_lines > 0}{#key g.added_lines}<span
-                    class="roll-num text-green-700/80 dark:text-green-400/80"
+                    class="roll-num text-success/80"
                     >+{g.added_lines}</span
                   >{/key}{/if}
               {#if g.deleted_lines > 0}{#key g.deleted_lines}<span
-                    class="roll-num text-red-700/80 dark:text-red-400/80"
+                    class="roll-num text-error/80"
                     >-{g.deleted_lines}</span
                   >{/key}{/if}
               {#if g.untracked > 0}{#key g.untracked}<span
-                    class="roll-num text-slate-500 dark:text-slate-400"
+                    class="roll-num text-muted-foreground"
                     >?{g.untracked}</span
                   >{/key}{/if}
             </span>

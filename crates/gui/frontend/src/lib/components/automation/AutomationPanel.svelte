@@ -60,13 +60,13 @@
   function statusColor(status: string): string {
     switch (status) {
       case "active":
-        return "text-green-600";
+        return "text-success";
       case "paused":
-        return "text-yellow-500";
+        return "text-warning";
       case "completed":
-        return "text-blue-500";
+        return "text-info";
       case "error":
-        return "text-red-500";
+        return "text-error";
       default:
         return "text-muted-foreground";
     }
@@ -112,7 +112,7 @@
   <div
     class="px-4 py-2 bg-muted/50 border-b border-border text-xs text-muted-foreground shrink-0"
   >
-    <span class="inline-block w-2 h-2 rounded-full bg-green-500 mr-1.5"></span>
+    <span class="inline-block w-2 h-2 rounded-full bg-success mr-1.5"></span>
     Daemon running — tasks will execute on schedule
   </div>
 
@@ -166,7 +166,7 @@
               <div
                 class="mt-1 flex items-center gap-2 text-xs text-muted-foreground"
               >
-                <code class="font-mono bg-black/5 dark:bg-white/5 rounded px-1"
+                <code class="font-mono bg-code-bg rounded px-1"
                   >{job.schedule}</code
                 >
                 <span>·</span>
@@ -231,7 +231,7 @@
                   if (confirm("Delete this task?"))
                     automationStore.delete(job.id);
                 }}
-                class="p-2 rounded hover:bg-secondary text-red-500"
+                class="p-2 rounded hover:bg-secondary text-error"
                 title="Delete"
               >
                 <Trash2 class="w-4 h-4" />
@@ -246,7 +246,7 @@
               >{job.status}</span
             >
             <code
-              class="font-mono text-xs bg-black/5 dark:bg-white/5 rounded px-1"
+              class="font-mono text-xs bg-code-bg rounded px-1"
               >{job.schedule}</code
             >
           </div>
@@ -275,7 +275,7 @@
                 {/if}
                 {#if job.action.content}
                   <pre
-                    class="mt-1 bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
+                    class="mt-1 bg-code-bg rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
                       .action.content}</pre>
                 {/if}
               {:else if job.action.type === "shell"}
@@ -285,7 +285,7 @@
                 </div>
                 {#if job.action.command}
                   <pre
-                    class="mt-1 bg-black/5 dark:bg-white/5 rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
+                    class="mt-1 bg-code-bg rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
                       .action.command}</pre>
                 {/if}
                 {#if job.action.working_dir}
@@ -335,12 +335,12 @@
           {#if job.last_error}
             <section>
               <h3
-                class="text-xs font-semibold uppercase tracking-wider text-red-500 mb-2"
+                class="text-xs font-semibold uppercase tracking-wider text-error mb-2"
               >
                 Last Error
               </h3>
               <div
-                class="bg-red-500/5 border border-red-500/20 rounded-lg p-3 text-sm text-red-600"
+                class="bg-error/5 border border-error/20 rounded-lg p-3 text-sm text-error"
               >
                 {job.last_error}
               </div>
@@ -353,7 +353,7 @@
 
   {#if automationStore.error}
     <div
-      class="shrink-0 px-4 py-2 bg-red-500/10 border-t border-red-500/20 text-sm text-red-600 flex items-center gap-2"
+      class="shrink-0 px-4 py-2 bg-error/10 border-t border-error/20 text-sm text-error flex items-center gap-2"
     >
       <AlertTriangle class="w-4 h-4" />
       {automationStore.error}

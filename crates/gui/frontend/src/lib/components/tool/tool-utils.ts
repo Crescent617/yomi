@@ -4,15 +4,15 @@ import { activateSession as stateActivateSession } from "../../state.svelte";
 export function statusColor(status: string): string {
   switch (status) {
     case "running":
-      return "text-amber-700 border-amber-200 bg-amber-50/60 dark:text-amber-400 dark:border-amber-800 dark:bg-amber-950/30";
+      return "text-warning border-warning/20 bg-warning/10";
     case "completed":
-      return "text-green-700 border-green-200 bg-green-50/60 dark:text-green-400 dark:border-green-800 dark:bg-green-950/30";
+      return "text-success border-success/20 bg-success/10";
     case "failed":
-      return "text-red-700 border-red-200 bg-red-50/60 dark:text-red-400 dark:border-red-800 dark:bg-red-950/30";
+      return "text-error border-error/20 bg-error/10";
     case "cancelled":
-      return "text-gray-600 border-gray-200 bg-gray-50/60 dark:text-gray-400 dark:border-gray-700 dark:bg-gray-900/50";
+      return "text-muted-foreground border-muted-foreground/20 bg-muted-foreground/10";
     default:
-      return "text-gray-600 border-gray-200 bg-gray-50/60 dark:text-gray-400 dark:border-gray-700 dark:bg-gray-900/50";
+      return "text-muted-foreground border-muted-foreground/20 bg-muted-foreground/10";
   }
 }
 

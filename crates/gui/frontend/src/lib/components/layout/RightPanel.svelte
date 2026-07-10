@@ -394,9 +394,9 @@
   function lineBg(type: DiffLine["type"]) {
     switch (type) {
       case "add":
-        return "bg-green-500/10 dark:bg-green-500/15";
+        return "bg-success/10";
       case "del":
-        return "bg-red-500/10 dark:bg-red-500/15";
+        return "bg-error/10";
       case "hunk":
         return "bg-muted text-muted-foreground";
       default:
@@ -407,9 +407,9 @@
   function lineText(type: DiffLine["type"]) {
     switch (type) {
       case "add":
-        return "text-green-700 dark:text-green-400";
+        return "text-success";
       case "del":
-        return "text-red-700 dark:text-red-400";
+        return "text-error";
       case "hunk":
         return "text-muted-foreground";
       default:
@@ -419,26 +419,26 @@
 
   function leftLineBg(type: DiffLine["type"]) {
     // left column: old file — del lines are red, add lines are blank placeholder
-    if (type === "del") return "bg-red-500/10 dark:bg-red-500/15";
+    if (type === "del") return "bg-error/10";
     if (type === "add") return "bg-muted/30";
     return "";
   }
 
   function leftLineText(type: DiffLine["type"]) {
-    if (type === "del") return "text-red-700 dark:text-red-400";
+    if (type === "del") return "text-error";
     if (type === "add") return "text-muted-foreground";
     return "text-foreground";
   }
 
   function rightLineBg(type: DiffLine["type"]) {
     // right column: new file — add lines are green, del lines are blank placeholder
-    if (type === "add") return "bg-green-500/10 dark:bg-green-500/15";
+    if (type === "add") return "bg-success/10";
     if (type === "del") return "bg-muted/30";
     return "";
   }
 
   function rightLineText(type: DiffLine["type"]) {
-    if (type === "add") return "text-green-700 dark:text-green-400";
+    if (type === "add") return "text-success";
     if (type === "del") return "text-muted-foreground";
     return "text-foreground";
   }
@@ -563,11 +563,11 @@
                   onclick={() => loadFileDiff(node.path)}
                 >
                   {#if node.status === "added"}
-                    <FilePlus size={12} class="text-emerald-600 shrink-0" />
+                    <FilePlus size={12} class="text-success shrink-0" />
                   {:else if node.status === "deleted"}
-                    <FileMinus size={12} class="text-red-600 shrink-0" />
+                    <FileMinus size={12} class="text-error shrink-0" />
                   {:else}
-                    <FileEdit size={12} class="text-amber-600 shrink-0" />
+                    <FileEdit size={12} class="text-warning shrink-0" />
                   {/if}
                   <span class="text-xs truncate flex-1">{node.name}</span>
                   <span class="w-4 shrink-0 flex items-center justify-center">

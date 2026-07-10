@@ -136,7 +136,7 @@
         <!-- Mobile overlay sidebar -->
         <!-- Backdrop: always rendered for smooth fade-out -->
         <div
-          class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
+          class="fixed inset-0 z-40 bg-overlay backdrop-blur-sm lg:hidden
                  transition-opacity duration-200
                  {mobileSidebarOpen
             ? 'opacity-100 pointer-events-auto'
@@ -190,7 +190,7 @@
 
         <!-- Mobile right panel overlay -->
         <div
-          class="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm lg:hidden
+          class="fixed inset-0 z-40 bg-overlay backdrop-blur-sm lg:hidden
                  transition-opacity duration-200
                  {appState.rightPanelCollapsed
             ? 'opacity-0 pointer-events-none'

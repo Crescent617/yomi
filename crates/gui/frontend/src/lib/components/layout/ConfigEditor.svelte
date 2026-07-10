@@ -121,10 +121,10 @@
     </div>
     <div class="flex items-center gap-2">
       {#if dirty}
-        <span class="text-xs text-amber-500">Modified</span>
+        <span class="text-xs text-warning">Modified</span>
       {/if}
       {#if saved}
-        <span class="text-xs text-green-500 flex items-center gap-1">
+        <span class="text-xs text-success flex items-center gap-1">
           <Check class="w-3 h-3" />
           Saved
         </span>
@@ -133,7 +133,7 @@
         type="button"
         onclick={reload}
         disabled={loading}
-        class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-border hover:bg-secondary transition-colors disabled:opacity-50"
+        class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-border text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
       >
         <RotateCcw class="w-3 h-3" />
         Reload

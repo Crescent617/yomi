@@ -68,7 +68,7 @@
       <div class="ml-auto flex items-center gap-1">
         <button
           type="button"
-          class="relative inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground bg-transparent hover:bg-background dark:hover:bg-muted transition-colors"
+          class="relative inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground bg-transparent hover:bg-muted transition-colors"
           onmouseenter={() => (showSessionId = true)}
           onmouseleave={() => (showSessionId = false)}
           onclick={(e) => {

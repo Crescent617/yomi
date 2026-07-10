@@ -465,7 +465,7 @@
                     session.phase === 'executing_tool' ||
                     session.phase === 'compacting'
                       ? 'bg-primary'
-                      : 'bg-amber-500'} animate-pulse"
+                      : 'bg-warning'} animate-pulse"
                   ></span>
                 {/if}
                 <div class="relative">
@@ -593,7 +593,7 @@
                       s.phase === 'compacting',
                   )
                     ? 'bg-primary'
-                    : 'bg-amber-500'} animate-pulse shrink-0"
+                    : 'bg-warning'} animate-pulse shrink-0"
                 ></span>
               {/if}
             </button>
@@ -692,7 +692,7 @@
                         session.phase === 'executing_tool' ||
                         session.phase === 'compacting'
                           ? 'bg-primary'
-                          : 'bg-amber-500'} animate-pulse"
+                          : 'bg-warning'} animate-pulse"
                       ></span>
                     {/if}
                     <div class="relative">

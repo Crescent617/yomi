@@ -104,9 +104,7 @@ pub async fn run(cmd: DaemonCommands) -> Result<()> {
                 });
             }
 
-            let serve_result = server.serve_listener(listener, shutdown).await;
-            // Cancel all active connections and background tasks so the process can actually exit.
-            server.shutdown();
+            let serve_result = server.serve(listener, shutdown).await;
             let start = tokio::time::Instant::now();
             while server.connection_count() > 0 && start.elapsed() < SHUTDOWN_WAIT_TIMEOUT {
                 tokio::time::sleep(SHUTDOWN_POLL_INTERVAL).await;

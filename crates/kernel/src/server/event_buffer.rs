@@ -2,7 +2,7 @@ use crate::event::{ContentChunk, Event, ModelEvent};
 use crate::types::{EventId, SessionId};
 use crate::wire::Envelope;
 use dashmap::DashMap;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 /// Per-session event buffer for replay on re-subscribe.
 pub(crate) struct EventBuffer {
@@ -132,41 +132,55 @@ fn try_merge(last: &mut Envelope, incoming: &Envelope) -> bool {
     }
 }
 
-/// Real-time subscribers per session. Managed by the global event-forwarder task.
+/// Real-time fan-out per session. Managed by the global event-forwarder task.
 pub(crate) struct SessionSubscribers {
-    senders: DashMap<SessionId, mpsc::Sender<Envelope>>,
+    senders: DashMap<SessionId, broadcast::Sender<Envelope>>,
+    capacity: usize,
 }
 
 impl SessionSubscribers {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             senders: DashMap::new(),
+            capacity,
         }
     }
 
-    pub(crate) fn insert(&self, sid: &SessionId, sender: mpsc::Sender<Envelope>) {
-        self.senders.insert(sid.clone(), sender);
+    pub(crate) fn subscribe(&self, sid: &SessionId) -> broadcast::Receiver<Envelope> {
+        use dashmap::mapref::entry::Entry;
+
+        match self.senders.entry(sid.clone()) {
+            Entry::Occupied(entry) => entry.get().subscribe(),
+            Entry::Vacant(entry) => {
+                let (tx, rx) = broadcast::channel(self.capacity);
+                entry.insert(tx);
+                rx
+            }
+        }
     }
 
-    pub(crate) fn remove(&self, sid: &SessionId) {
+    pub(crate) fn remove_session(&self, sid: &SessionId) {
         self.senders.remove(sid);
     }
 
-    pub(crate) fn try_send(&self, sid: &SessionId, envelope: &Envelope) {
+    pub(crate) fn prune_idle(&self) {
+        let idle: Vec<SessionId> = self
+            .senders
+            .iter()
+            .filter(|entry| entry.value().receiver_count() == 0)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for sid in idle {
+            self.senders
+                .remove_if(&sid, |_, tx| tx.receiver_count() == 0);
+        }
+    }
+
+    pub(crate) fn publish(&self, sid: &SessionId, envelope: &Envelope) {
         if let Some(entry) = self.senders.get(sid) {
-            match entry.value().try_send(envelope.clone()) {
-                Ok(()) => {}
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                    drop(entry);
-                    self.senders.remove(sid);
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    // receiver still alive but slow; keep the sender.
-                    tracing::warn!(
-                        session_id = %sid,
-                        "event subscriber channel full, dropping event"
-                    );
-                }
+            if let Err(e) = entry.value().send(envelope.clone()) {
+                tracing::debug!(session_id = %sid, error = %e, "no active event subscribers");
             }
         }
     }

@@ -19,13 +19,7 @@
   let highlighted = $state("");
   let loading = $state(true);
   let error = $state("");
-  let highlighter: {
-    dispose(): void;
-    codeToHtml(
-      code: string,
-      options: { lang: string; theme: string },
-    ): Promise<string>;
-  } | null = null;
+  let highlighter: import("shiki").Highlighter | null = null;
 
   function breadcrumb(path: string): string[] {
     return path.split("/").filter(Boolean);
@@ -40,11 +34,12 @@
       // Lazy load Shiki
       const shiki = await import("shiki");
       const lang = detectLang(entry.name);
-      highlighter = await shiki.createHighlighter({
+      const hl = await shiki.createHighlighter({
         themes: ["github-light", "github-dark"],
         langs: [lang],
       });
-      highlighted = await highlighter.codeToHtml(content, {
+      highlighter = hl;
+      highlighted = hl.codeToHtml(content, {
         lang,
         theme: "github-dark",
       });

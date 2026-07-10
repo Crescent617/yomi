@@ -226,7 +226,7 @@
     cached_tokens: number;
   }): string {
     return d.prompt_tokens > 0 && d.cached_tokens / d.prompt_tokens > 0.5
-      ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+      ? "bg-success/15 text-success"
       : "bg-muted text-muted-foreground";
   }
 
@@ -288,31 +288,29 @@
 
   // ── echarts ──
 
-  function isDarkMode() {
-    return document.documentElement.classList.contains("dark");
-  }
-
-  function getHeatColors(dark: boolean): string[] {
-    // GitHub contribution graph colors
-    if (dark) {
-      return ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"];
-    }
-    return ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"];
-  }
-
-  function getBorderColor(dark: boolean): string {
-    return dark ? "#0f172a" : "#ffffff";
-  }
-
-  function getTooltipCacheColor(dark: boolean): string {
-    return dark ? "#39d353" : "#216e39";
+  /** Resolve theme colors from the CSS variables on <body> so the chart
+   *  always tracks the active theme (`hsl(var(--x))` tokens in app.css). */
+  function chartTheme() {
+    const style = getComputedStyle(document.body);
+    const hsl = (name: string) => `hsl(${style.getPropertyValue(name).trim()})`;
+    const dark = document.documentElement.classList.contains("dark");
+    return {
+      // GitHub contribution-graph ramp; level 0 comes from the theme so
+      // empty cells blend with the surface.
+      heat: dark
+        ? [hsl("--secondary"), "#0e4429", "#006d32", "#26a641", "#39d353"]
+        : [hsl("--secondary"), "#9be9a8", "#40c463", "#30a14e", "#216e39"],
+      cellBorder: hsl("--background"),
+      text: hsl("--muted-foreground"),
+      cache: hsl("--success"),
+      tooltipBg: hsl("--popover"),
+      tooltipBorder: hsl("--border"),
+      tooltipText: hsl("--popover-foreground"),
+    };
   }
 
   function buildChartOption(data: DayData[]): echarts.EChartsOption {
-    const dark = isDarkMode();
-    const colors = getHeatColors(dark);
-    const borderColor = getBorderColor(dark);
-    const textColor = dark ? "#94a3b8" : "#64748b";
+    const theme = chartTheme();
 
     const maxTokens = Math.max(...data.map((d) => d.total_tokens), 1);
     const chartData = data.map((d) => [d.date, d.total_tokens]);
@@ -323,19 +321,20 @@
       backgroundColor: "transparent",
       tooltip: {
         appendToBody: true,
-        backgroundColor: dark ? "#1e293b" : "#ffffff",
-        borderColor: dark ? "#334155" : "#e2e8f0",
-        textStyle: { color: dark ? "#f1f5f9" : "#0f172a", fontSize: 12 },
+        backgroundColor: theme.tooltipBg,
+        borderColor: theme.tooltipBorder,
+        textStyle: { color: theme.tooltipText, fontSize: 12 },
         extraCssText:
           "border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); z-index: 9999;",
-        formatter: (params: { value: [string, ...unknown[]] }) => {
-          const day = data.find((d) => d.date === params.value[0]);
-          if (!day) return params.value[0];
+        formatter: (params: unknown) => {
+          const [date] = (params as { value: [string, ...unknown[]] }).value;
+          const day = data.find((d) => d.date === date);
+          if (!day) return date;
           const total = day.prompt_tokens + day.completion_tokens;
           let html = `<div style="font-weight:600;margin-bottom:4px;">${formatFullDate(day.date)}</div>`;
           if (total > 0) {
             html += `<div>Prompt: <b>${formatNumber(day.prompt_tokens)}</b></div>`;
-            html += `<div>Cached: <b style="color:${getTooltipCacheColor(dark)}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
+            html += `<div>Cached: <b style="color:${theme.cache}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
             html += `<div>Completion: <b>${formatNumber(day.completion_tokens)}</b></div>`;
             html += `<div>Total: <b>${formatNumber(total)}</b></div>`;
             html += `<div>Requests: <b>${formatNumber(day.request_count)}</b></div>`;
@@ -353,19 +352,19 @@
         max: maxTokens,
         type: "piecewise",
         pieces: [
-          { min: 0, max: 0, color: colors[0] },
-          { min: 1, max: Math.round(maxTokens * 0.25), color: colors[1] },
+          { min: 0, max: 0, color: theme.heat[0] },
+          { min: 1, max: Math.round(maxTokens * 0.25), color: theme.heat[1] },
           {
             min: Math.round(maxTokens * 0.25) + 1,
             max: Math.round(maxTokens * 0.5),
-            color: colors[2],
+            color: theme.heat[2],
           },
           {
             min: Math.round(maxTokens * 0.5) + 1,
             max: Math.round(maxTokens * 0.75),
-            color: colors[3],
+            color: theme.heat[3],
           },
-          { min: Math.round(maxTokens * 0.75) + 1, color: colors[4] },
+          { min: Math.round(maxTokens * 0.75) + 1, color: theme.heat[4] },
         ],
       },
       calendar: {
@@ -376,9 +375,9 @@
         cellSize: [10, 10],
         range: [start, end],
         itemStyle: {
-          color: colors[0],
+          color: theme.heat[0],
           borderWidth: 3,
-          borderColor: borderColor,
+          borderColor: theme.cellBorder,
           borderRadius: 2,
         },
         splitLine: { show: false },
@@ -399,7 +398,7 @@
             "Nov",
             "Dec",
           ],
-          color: textColor,
+          color: theme.text,
           fontSize: 9,
           align: "left",
           margin: 4,
@@ -408,11 +407,10 @@
           show: true,
           firstDay: 1,
           nameMap: ["", "M", "", "W", "", "F", ""],
-          color: textColor,
+          color: theme.text,
           fontSize: 9,
         },
-        weekLabel: { show: false },
-      } as unknown,
+      },
       series: [
         {
           type: "heatmap",
@@ -566,10 +564,9 @@
           <div class="flex items-center gap-2">
             <span class="relative flex h-2 w-2">
               <span
-                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60"
+                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"
               ></span>
-              <span
-                class="relative inline-flex rounded-full h-2 w-2 bg-green-500"
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-success"
               ></span>
             </span>
             <span class="text-sm font-semibold">Today</span>
@@ -790,7 +787,7 @@
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
-                <Flame class="w-3.5 h-3.5 text-orange-500" />
+                <Flame class="w-3.5 h-3.5 text-warning" />
                 Current Streak
               </div>
               <div class="text-2xl font-bold font-mono">
@@ -809,7 +806,7 @@
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
-                <Award class="w-3.5 h-3.5 text-amber-500" />
+                <Award class="w-3.5 h-3.5 text-warning" />
                 Longest Streak
               </div>
               <div class="text-2xl font-bold font-mono">
@@ -848,7 +845,7 @@
                 <div
                   class="flex items-center gap-1.5 text-xs text-muted-foreground"
                 >
-                  <Hash class="w-3.5 h-3.5 text-blue-500" />
+                  <Hash class="w-3.5 h-3.5 text-info" />
                   Most Requests
                 </div>
                 <div class="text-sm font-medium">
@@ -935,7 +932,7 @@
                       <td class="px-4 py-2 text-right font-mono"
                         >{formatNumber(day.prompt_tokens)}</td
                       >
-                      <td class="px-4 py-2 text-right font-mono text-green-600"
+                      <td class="px-4 py-2 text-right font-mono text-success"
                         >{formatNumber(day.cached_tokens)}</td
                       >
                       <td class="px-4 py-2 text-right font-mono"
