@@ -61,6 +61,7 @@
   import TodayUsageCard from "../home/TodayUsageCard.svelte";
   import RecentSessions from "../home/RecentSessions.svelte";
   import { projectColor, formatTimeAgo } from "../../utils";
+  import { clock } from "../../clock.svelte";
   import { Search, Plus, Check } from "lucide-svelte";
 
   import type { FileEntry } from "../../fs/provider";
@@ -1233,7 +1234,10 @@
                                   <span
                                     class="ml-auto text-[10px] text-muted-foreground shrink-0"
                                   >
-                                    {formatTimeAgo(project.updated_at)}
+                                    {formatTimeAgo(
+                                      project.updated_at,
+                                      clock.now,
+                                    )}
                                   </span>
                                 {/if}
                               </span>

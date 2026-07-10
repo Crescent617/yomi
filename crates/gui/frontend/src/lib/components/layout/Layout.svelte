@@ -10,6 +10,7 @@
   import ConfigEditor from "./ConfigEditor.svelte";
   import RightPanel from "./RightPanel.svelte";
   import StatusBar from "./StatusBar.svelte";
+  import { startClock } from "../../clock.svelte";
 
   let mobileSidebarOpen = $state(false);
   let leftSidebarWidth = $state(256);
@@ -19,6 +20,7 @@
   let isDraggingRight = $state(false);
 
   onMount(() => {
+    startClock();
     if (!hasInitializedWidth) {
       rightSidebarWidth = Math.max(300, window.innerWidth / 2);
       hasInitializedWidth = true;

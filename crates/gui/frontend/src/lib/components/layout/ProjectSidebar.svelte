@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     Plus,
+    SquarePen,
     Folder,
     FolderOpen,
     MoreVertical,
@@ -13,6 +14,7 @@
   } from "lucide-svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import StatusDot from "./StatusDot.svelte";
   import {
     sessionState,
     projectState,
@@ -26,8 +28,24 @@
     createSessionState,
     activateSession as stateActivateSession,
   } from "../../state.svelte";
-
+  import { formatTimeAgo } from "../../utils";
+  import { clock } from "../../clock.svelte";
+  import { slide } from "svelte/transition";
   let { collapsed = false }: { collapsed?: boolean } = $props();
+
+  // Playful label for the new-chat button, rolled once per mount.
+  // Tooltip stays explicit so clarity never depends on the joke landing.
+  const NEW_CHAT_LABELS = [
+    "New Chat",
+    "Let's Build",
+    "New Quest",
+    "Fresh Start",
+    "Start Cooking",
+    "Once More",
+    "Blank Canvas",
+  ];
+  const newChatLabel =
+    NEW_CHAT_LABELS[Math.floor(Math.random() * NEW_CHAT_LABELS.length)];
 
   let expanded = $state<Record<string, boolean>>({});
   let loading = $state<Record<string, boolean>>({});
@@ -42,6 +60,7 @@
   let renamingSessionId = $state<string | null>(null);
   let renameValue = $state("");
   let deletingProject = $state<{ id: string; name: string } | null>(null);
+  let deletingSession = $state<{ id: string; title: string } | null>(null);
 
   onMount(() => {
     if (projectState.projects.length === 0) {
@@ -49,33 +68,43 @@
         .listProjects()
         .then((list) => {
           projectState.projects = list.map((p) => ({ ...p }));
-          // Auto-expand first 3 projects and load their sessions
-          const firstN = list.slice(0, 3).map((p) => p.id);
-          if (firstN.length > 0) {
-            expanded = Object.fromEntries(firstN.map((id) => [id, true]));
-            for (const id of firstN) {
-              loadSessions(id);
-            }
-          }
+          autoExpandRecent();
           loadPinnedSessions();
         })
         .catch(console.error);
     } else if (projectState.projects.length > 0) {
-      // Projects already loaded (e.g. HMR), expand first 3
-      const firstN = projectState.projects.slice(0, 3).map((p) => p.id);
-      expanded = Object.fromEntries(firstN.map((id) => [id, true]));
-      for (const id of firstN) {
-        loadSessions(id);
-      }
+      // Projects already loaded (e.g. HMR)
+      autoExpandRecent();
       loadPinnedSessions();
     }
   });
+
+  /** Auto-expand the 3 most recently active projects and load their sessions. */
+  function autoExpandRecent() {
+    const recentIds = [...projectState.projects]
+      .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
+      .slice(0, 3)
+      .map((p) => p.id);
+    if (recentIds.length > 0) {
+      expanded = Object.fromEntries(recentIds.map((id) => [id, true]));
+      for (const id of recentIds) {
+        loadSessions(id);
+      }
+    }
+  }
 
   function getSessions(project_id: string) {
     return sessionState.sessions
       .filter((s) => s.project_id === project_id)
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
+
+  /** Projects sorted by most recently updated. */
+  const sortedProjects = $derived(
+    [...projectState.projects].sort((a, b) =>
+      (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+    ),
+  );
 
   const pinnedList = $derived(
     Object.entries(pinnedSessionMeta)
@@ -166,8 +195,15 @@
     }
   }
 
-  async function deleteSession(id: string) {
-    if (!confirm("Delete this session?")) return;
+  function requestDeleteSession(id: string) {
+    const session = getSession(id);
+    deletingSession = { id, title: session?.alias ?? id.slice(-8) };
+  }
+
+  async function confirmDeleteSession() {
+    if (!deletingSession) return;
+    const { id } = deletingSession;
+    deletingSession = null;
     try {
       await api.unsubscribe(id);
       await api.deleteSession(id);
@@ -405,11 +441,12 @@
   {#if !collapsed}
     <div class="shrink-0 p-2">
       <button
-        class="w-full flex items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 active:scale-[0.98] transition-all"
+        class="w-full flex items-center justify-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 hover:border-primary/30 active:scale-[0.98] transition-all"
         onclick={() => setActiveSession(null)}
+        title="Start a new chat (back to home)"
       >
-        <Plus size={16} />
-        New Session
+        <SquarePen size={15} />
+        {newChatLabel}
       </button>
     </div>
   {:else}
@@ -417,14 +454,18 @@
       <button
         class="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
         onclick={() => setActiveSession(null)}
+        title="New chat"
       >
-        <Plus size={16} />
+        <SquarePen size={15} />
       </button>
     </div>
   {/if}
 
   {#if !collapsed && pinnedList.length > 0}
-    <div class="shrink-0 max-h-[33%] overflow-y-auto px-2 py-1">
+    <div
+      class="shrink-0 max-h-[33%] overflow-y-auto px-2 py-1"
+      onscroll={closeMenus}
+    >
       <div
         class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider"
       >
@@ -458,15 +499,8 @@
                 >{projectName(session?.project_id)}</span
               >
               <div class="flex items-center gap-1.5 shrink-0">
-                {#if session && session.phase !== "idle" && session.phase !== "closed"}
-                  <span
-                    class="w-1.5 h-1.5 rounded-full {session.phase ===
-                      'streaming' ||
-                    session.phase === 'executing_tool' ||
-                    session.phase === 'compacting'
-                      ? 'bg-primary'
-                      : 'bg-warning'} animate-pulse"
-                  ></span>
+                {#if session}
+                  <StatusDot phase={session.phase} />
                 {/if}
                 <div class="relative">
                   <button
@@ -505,7 +539,7 @@
                         class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
                         onclick={(e: Event) => {
                           e.stopPropagation();
-                          deleteSession(session_id);
+                          requestDeleteSession(session_id);
                           pinnedMenu = null;
                         }}
                       >
@@ -524,9 +558,10 @@
   {/if}
   <div
     class="flex-1 min-h-0 overflow-y-auto py-1 {collapsed ? 'px-1' : 'px-2'}"
+    onscroll={closeMenus}
   >
     {#if collapsed}
-      {#each projectState.projects as project (project.id)}
+      {#each sortedProjects as project (project.id)}
         <div class="flex flex-col items-center gap-1">
           <!-- Project divider -->
           <div
@@ -537,7 +572,7 @@
           </div>
           {#each getSessions(project.id) as session (session.id)}
             <button
-              class="w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id ===
+              class="relative w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-colors {session.id ===
               sessionState.activeSessionId
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
@@ -545,12 +580,15 @@
               title={session.alias ?? "Untitled"}
             >
               {(session.alias ?? "Untitled").slice(0, 2).toUpperCase()}
+              <span class="absolute -top-0.5 -right-0.5">
+                <StatusDot phase={session.phase} />
+              </span>
             </button>
           {/each}
         </div>
       {/each}
     {:else}
-      {#each projectState.projects as project (project.id)}
+      {#each sortedProjects as project (project.id)}
         {@const isActive =
           getSession(sessionState.activeSessionId ?? "")?.project_id ===
           project.id}
@@ -585,16 +623,27 @@
                 <span class="truncate font-medium">{project.name}</span>
               {/if}
               {#if getSessions(project.id).some((s) => s.phase !== "idle" && s.phase !== "closed")}
-                <span
-                  class="w-1.5 h-1.5 rounded-full {getSessions(project.id).some(
+                {@const projectRunning = getSessions(project.id).some(
+                  (s) =>
+                    s.phase === "streaming" ||
+                    s.phase === "executing_tool" ||
+                    s.phase === "compacting",
+                )}
+                <!-- Aggregate: attention (waiting) wins over running -->
+                <StatusDot
+                  phase={getSessions(project.id).some(
                     (s) =>
-                      s.phase === 'streaming' ||
-                      s.phase === 'executing_tool' ||
-                      s.phase === 'compacting',
+                      s.phase !== "idle" &&
+                      s.phase !== "closed" &&
+                      s.phase !== "streaming" &&
+                      s.phase !== "executing_tool" &&
+                      s.phase !== "compacting",
                   )
-                    ? 'bg-primary'
-                    : 'bg-warning'} animate-pulse shrink-0"
-                ></span>
+                    ? "waiting"
+                    : projectRunning
+                      ? "streaming"
+                      : "idle"}
+                />
               {/if}
             </button>
 
@@ -649,7 +698,10 @@
           </div>
 
           {#if expanded[project.id]}
-            <div class="ml-3 pl-2 border-l border-border/40 space-y-0 pb-1">
+            <div
+              class="ml-3 pl-2 border-l border-border/40 space-y-0 pb-1"
+              transition:slide={{ duration: 200 }}
+            >
               {#each getSessions(project.id) as session (session.id)}
                 <div
                   class="group w-full flex items-center gap-2 rounded-lg pl-2 pr-3 py-1 cursor-pointer transition-colors {session.id ===
@@ -685,77 +737,95 @@
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
-                    {#if session.phase !== "idle" && session.phase !== "closed"}
-                      <span
-                        class="w-1.5 h-1.5 rounded-full {session.phase ===
-                          'streaming' ||
-                        session.phase === 'executing_tool' ||
-                        session.phase === 'compacting'
-                          ? 'bg-primary'
-                          : 'bg-warning'} animate-pulse"
-                      ></span>
-                    {/if}
-                    <div class="relative">
+                    <StatusDot phase={session.phase} />
+                    {#if session.updated_at}
+                      {@const menuOpen = projectMenu?.session_id === session.id}
+                      <!-- Fixed-width slot: time fades out, ⋮ fades in on top — no layout shift -->
+                      <div
+                        class="relative flex items-center justify-end min-w-[3.25rem] h-5"
+                      >
+                        <span
+                          class="text-[10px] text-muted-foreground/60 transition-opacity {menuOpen
+                            ? 'opacity-0'
+                            : 'group-hover:opacity-0'}"
+                          title={new Date(session.updated_at).toLocaleString()}
+                        >
+                          {formatTimeAgo(session.updated_at, clock.now)}
+                        </span>
+                        <button
+                          class="absolute right-0 p-0.5 rounded hover:bg-secondary/80 transition-opacity {menuOpen
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100'}"
+                          onclick={(e: MouseEvent) =>
+                            openMenu(e, "project", session.id)}
+                        >
+                          <MoreVertical size={12} />
+                        </button>
+                      </div>
+                    {:else}
                       <button
-                        class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors opacity-0 group-hover:opacity-100"
+                        class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-opacity {projectMenu?.session_id ===
+                        session.id
+                          ? 'opacity-100'
+                          : 'opacity-0 group-hover:opacity-100'}"
                         onclick={(e: MouseEvent) =>
                           openMenu(e, "project", session.id)}
                       >
                         <MoreVertical size={12} />
                       </button>
-                      {#if projectMenu?.session_id === session.id}
-                        <div
-                          class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
-                          style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                    {/if}
+                    {#if projectMenu?.session_id === session.id}
+                      <div
+                        class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
+                        style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                      >
+                        <button
+                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            togglePin(session.id);
+                            projectMenu = null;
+                          }}
                         >
-                          <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                            onclick={(e: Event) => {
-                              e.stopPropagation();
-                              togglePin(session.id);
-                              projectMenu = null;
-                            }}
-                          >
-                            {#if session.is_pinned}
-                              <PinOff size={12} /> Unpin
-                            {:else}
-                              <Pin size={12} /> Pin to top
-                            {/if}
-                          </button>
-                          <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                            onclick={(e: Event) => {
-                              e.stopPropagation();
-                              renamingSessionId = session.id;
-                              renameValue = session.alias ?? "Untitled";
-                              projectMenu = null;
-                            }}
-                          >
-                            <Pencil size={12} /> Rename
-                          </button>
-                          <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                            onclick={(e: Event) => {
-                              e.stopPropagation();
-                              copySessionId(session.id);
-                              projectMenu = null;
-                            }}
-                          >
-                            <Copy size={12} /> Copy ID
-                          </button>
-                          <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
-                            onclick={(e: Event) => {
-                              e.stopPropagation();
-                              deleteSession(session.id);
-                              projectMenu = null;
-                            }}
-                          >
-                            <Trash2 size={12} /> Delete
-                          </button>
-                        </div>
-                      {/if}
-                    </div>
+                          {#if session.is_pinned}
+                            <PinOff size={12} /> Unpin
+                          {:else}
+                            <Pin size={12} /> Pin to top
+                          {/if}
+                        </button>
+                        <button
+                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            renamingSessionId = session.id;
+                            renameValue = session.alias ?? "Untitled";
+                            projectMenu = null;
+                          }}
+                        >
+                          <Pencil size={12} /> Rename
+                        </button>
+                        <button
+                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            copySessionId(session.id);
+                            projectMenu = null;
+                          }}
+                        >
+                          <Copy size={12} /> Copy ID
+                        </button>
+                        <button
+                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                          onclick={(e: Event) => {
+                            e.stopPropagation();
+                            requestDeleteSession(session.id);
+                            projectMenu = null;
+                          }}
+                        >
+                          <Trash2 size={12} /> Delete
+                        </button>
+                      </div>
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -763,6 +833,14 @@
                 <div class="px-3 py-1.5 text-xs text-muted-foreground">
                   Loading...
                 </div>
+              {:else if getSessions(project.id).length === 0}
+                <button
+                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground/60 hover:text-foreground transition-colors"
+                  onclick={() => quickCreateSession(project.id)}
+                  title="Create a session in this project"
+                >
+                  No sessions — click to create
+                </button>
               {/if}
               {#if project.id in sessionCursors}
                 <button
@@ -787,4 +865,13 @@
   confirmText="Delete project"
   onConfirm={confirmDeleteProject}
   onCancel={() => (deletingProject = null)}
+/>
+
+<ConfirmDialog
+  open={deletingSession !== null}
+  title="Delete session"
+  message={`Delete session "${deletingSession?.title ?? ""}"?\n\nThis permanently removes its message history, todos, checkpoints and related data.\n\nThis cannot be undone.`}
+  confirmText="Delete session"
+  onConfirm={confirmDeleteSession}
+  onCancel={() => (deletingSession = null)}
 />
