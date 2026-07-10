@@ -95,8 +95,8 @@
   --muted-foreground: 220 13% 40%;     /* #5c6370 */
   --accent: 222 14% 21%;               /* #2f343e */
   --accent-foreground: 220 13% 73%;   /* #abb2bf */
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
+  --destructive: 355 65% 65%;          /* #e06c75 — One Dark red, readable as text on dark bg */
+  --destructive-foreground: 222 14% 12%;
   --overlay: hsl(0 0% 0% / 0.6);
   --subtle: hsl(0 0% 100% / 0.1);
   --code-bg: hsl(0 0% 100% / 0.05);
