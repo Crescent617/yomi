@@ -58,7 +58,7 @@
     restarting = true;
     try {
       await api.restartDaemon();
-      showNotification("Daemon restarted, config reloaded", "success", 3000);
+      showNotification("Daemon restarted, config reloaded", "success");
       // Runtime config may have changed with the new daemon.
       const c = await api.getConfig().catch(() => null);
       full_config = c?.full_config ?? "";
@@ -66,7 +66,6 @@
       showNotification(
         `Failed to restart daemon: ${api.errorMessage(e)}`,
         "error",
-        4000,
       );
     } finally {
       restarting = false;
@@ -102,11 +101,7 @@
       showNotification("Config refreshed", "success");
     } catch (e: unknown) {
       console.error("Failed to refresh config:", e);
-      showNotification(
-        `Failed to refresh: ${api.errorMessage(e)}`,
-        "error",
-        4000,
-      );
+      showNotification(`Failed to refresh: ${api.errorMessage(e)}`, "error");
     } finally {
       loading = false;
     }
@@ -123,7 +118,6 @@
       showNotification(
         "Config saved. Click “Restart Daemon” to apply changes.",
         "success",
-        3000,
       );
       // Refresh runtime config after save
       const c = await api.getConfig().catch(() => null);

@@ -17,11 +17,7 @@
       activeSession.pending_permissions =
         activeSession.pending_permissions.filter((p) => p.req_id !== req_id);
     } catch (e: unknown) {
-      showNotification(
-        "Approval failed: " + api.errorMessage(e),
-        "error",
-        3000,
-      );
+      showNotification("Approval failed: " + api.errorMessage(e), "error");
     }
   }
 

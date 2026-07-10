@@ -279,7 +279,6 @@
         showNotification(
           "Please provide a goal description: /goal <description>",
           "error",
-          5000,
         );
         return;
       }
@@ -332,7 +331,6 @@
         showNotification(
           "Failed to create project: " + api.errorMessage(e),
           "error",
-          5000,
         );
         submitting = false;
         return;
@@ -442,7 +440,6 @@
         "Failed to create session: " +
           (e instanceof Error ? e.message : "Unknown error"),
         "error",
-        5000,
       );
     } finally {
       submitting = false;
@@ -908,16 +905,13 @@
             >
               <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
               {#if g.added_lines > 0}{#key g.added_lines}<span
-                    class="roll-num text-success/80"
-                    >+{g.added_lines}</span
+                    class="roll-num text-success/80">+{g.added_lines}</span
                   >{/key}{/if}
               {#if g.deleted_lines > 0}{#key g.deleted_lines}<span
-                    class="roll-num text-error/80"
-                    >-{g.deleted_lines}</span
+                    class="roll-num text-error/80">-{g.deleted_lines}</span
                   >{/key}{/if}
               {#if g.untracked > 0}{#key g.untracked}<span
-                    class="roll-num text-muted-foreground"
-                    >?{g.untracked}</span
+                    class="roll-num text-muted-foreground">?{g.untracked}</span
                   >{/key}{/if}
             </span>
           {/if}
@@ -1146,9 +1140,7 @@
                       {#if sel}
                         <span
                           class="w-2 h-2 rounded-full shrink-0"
-                          style="background: {projectColor(
-                            sel.name + sel.dir,
-                          )}"
+                          style="background: {projectColor(sel.name + sel.dir)}"
                         ></span>
                       {:else}
                         <FolderOpen class="w-4 h-4" />
@@ -1248,7 +1240,9 @@
                               </span>
                             </span>
                             {#if selectedProjectId === project.id}
-                              <Check class="w-3.5 h-3.5 text-primary shrink-0" />
+                              <Check
+                                class="w-3.5 h-3.5 text-primary shrink-0"
+                              />
                             {/if}
                           </button>
                         {:else}
@@ -1426,7 +1420,6 @@
                       showNotification(
                         "Steer message queued for next step",
                         "info",
-                        3000,
                       );
                     })
                     .catch((e: unknown) => {

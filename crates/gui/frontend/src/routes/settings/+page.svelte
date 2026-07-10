@@ -27,7 +27,7 @@
     settings.theme = theme;
     applyTheme(theme);
     persistSettings(settings);
-    pushToast("Theme updated", "success", 2000);
+    pushToast("Theme updated", "success");
   }
 
   function toggleNotifications() {
@@ -42,7 +42,7 @@
     settings.notificationsEnabled = true;
     applyTheme("system");
     persistSettings(settings);
-    pushToast("Settings reset to defaults", "info", 2000);
+    pushToast("Settings reset to defaults", "info");
   }
 </script>
 

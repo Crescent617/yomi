@@ -264,6 +264,20 @@
     requestAnimationFrame(autoResize);
   }
 
+  async function runNotificationDebug() {
+    const types = ["info", "success", "warning", "error"] as const;
+
+    for (let index = 1; index <= 10; index += 1) {
+      if (index > 1) {
+        const delay = 100 + Math.floor(Math.random() * 351);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      }
+
+      const type = types[Math.floor(Math.random() * types.length)];
+      showNotification(`Debug notification ${index}/10`, type);
+    }
+  }
+
   async function handleCommand(text: string): Promise<boolean> {
     const session_id = sessionState.activeSessionId;
     if (!session_id) return false;
@@ -273,6 +287,16 @@
 
     try {
       switch (cmd) {
+        case "/debug":
+          if (parts[1]?.toLowerCase() !== "noti") {
+            showNotification(
+              "Unknown debug command. Try /debug noti",
+              "warning",
+            );
+            return false;
+          }
+          void runNotificationDebug();
+          break;
         case "/cancel":
           await api.cancelSession(session_id);
           showNotification("Session cancelled", "info");
@@ -286,7 +310,6 @@
           showNotification(
             "YOLO mode enabled — all tools will be auto-approved",
             "info",
-            5000,
           );
           break;
         case "/undo":
@@ -320,18 +343,13 @@
               showNotification(
                 "Please provide steer content: /steer <content>",
                 "error",
-                5000,
               );
               return false;
             }
             const blocks = buildContentBlocks(steerText, inlineImages);
             await api.sendSteer(session_id, blocks);
             clearInlineImages();
-            showNotification(
-              "Steer message queued for next step",
-              "info",
-              3000,
-            );
+            showNotification("Steer message queued for next step", "info");
           }
           break;
         case "/fork":
@@ -350,7 +368,6 @@
               showNotification(
                 `Fork failed: ${e instanceof Error ? e.message : String(e)}`,
                 "error",
-                5000,
               );
               return false;
             }
@@ -365,7 +382,6 @@
               showNotification(
                 `Continue failed: ${e instanceof Error ? e.message : String(e)}`,
                 "error",
-                5000,
               );
               return false;
             }
@@ -395,7 +411,6 @@
               showNotification(
                 "Please provide a goal description: /goal <description>",
                 "error",
-                5000,
               );
               return false;
             }

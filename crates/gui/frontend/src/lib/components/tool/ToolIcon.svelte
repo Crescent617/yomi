@@ -60,7 +60,7 @@
   <MessageSquare class={cls} />
 {:else if name === "todo" || name === "task"}
   <ListChecks class={cls} />
-{:else if name === "update_goal" || name === "goal"}
+{:else if name.includes("goal")}
   <Target class={cls} />
 {:else if name === "send_message" || name === "message"}
   <Send class={cls} />
