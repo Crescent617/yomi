@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, Plus, AlertCircle, CheckCircle } from "lucide-svelte";
+  import { Plus, AlertCircle, CheckCircle } from "lucide-svelte";
   import {
     createCronJob,
     updateCronJob,
@@ -10,6 +10,7 @@
   } from "../../api";
   import type { ProjectInfo } from "../../api";
   import type { CronJob } from "../../api";
+  import Modal from "../ui/Modal.svelte";
 
   interface Props {
     editingJob?: CronJob;
@@ -168,262 +169,240 @@
   }
 </script>
 
-<div
-  class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+<Modal
+  open={true}
+  size="md"
+  {onClose}
+  title={editingJob ? "Edit Task" : "New Scheduled Task"}
 >
-  <div
-    class="bg-background rounded-xl border border-border shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
-  >
-    <!-- Header -->
-    <div
-      class="flex items-center justify-between px-5 py-4 border-b border-border shrink-0"
-    >
-      <h2 class="text-base font-semibold">
-        {editingJob ? "Edit Task" : "New Scheduled Task"}
-      </h2>
-      <button
-        type="button"
-        onclick={onClose}
-        class="p-1 rounded hover:bg-secondary text-muted-foreground"
+  <div class="space-y-4">
+    {#if error}
+      <div class="text-sm text-error bg-error/10 rounded-lg px-3 py-2">
+        {error}
+      </div>
+    {/if}
+
+    <!-- Name -->
+    <div>
+      <label class="block text-sm font-medium mb-1"
+        >Name <span class="text-error">*</span></label
       >
-        <X class="w-5 h-5" />
-      </button>
+      <input
+        type="text"
+        bind:value={name}
+        placeholder="Daily standup reminder"
+        class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      />
     </div>
 
-    <!-- Body -->
-    <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-      {#if error}
-        <div class="text-sm text-red-600 bg-red-500/10 rounded-lg px-3 py-2">
-          {error}
+    <!-- Schedule -->
+    <div>
+      <label class="block text-sm font-medium mb-1">
+        Schedule <span class="text-error">*</span>
+        {#if scheduleValid === true}
+          <CheckCircle class="inline w-3.5 h-3.5 text-success ml-1" />
+        {:else if scheduleValid === false}
+          <AlertCircle class="inline w-3.5 h-3.5 text-error ml-1" />
+        {/if}
+      </label>
+      <input
+        type="text"
+        bind:value={schedule}
+        placeholder="0 9 * * *  (9:00 AM daily)"
+        class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring
+               {scheduleValid === false ? 'border-error' : ''}"
+      />
+      {#if scheduleError}
+        <p class="text-xs text-error mt-1">{scheduleError}</p>
+      {:else}
+        <p class="text-xs text-muted-foreground mt-1">
+          5 or 6 fields (optional seconds prefix)
+        </p>
+      {/if}
+    </div>
+
+    <!-- Action type -->
+    <div>
+      <label class="block text-sm font-medium mb-1">Action Type</label>
+      <div class="flex gap-2">
+        <button
+          type="button"
+          onclick={() => (actionType = "send_message")}
+          class="flex-1 py-2 rounded-lg border text-sm transition-colors
+                 {actionType === 'send_message'
+            ? 'bg-primary/10 border-primary text-primary'
+            : 'border-input hover:bg-muted'}"
+        >
+          💬 Send Message
+        </button>
+        <button
+          type="button"
+          onclick={() => (actionType = "shell")}
+          class="flex-1 py-2 rounded-lg border text-sm transition-colors
+                 {actionType === 'shell'
+            ? 'bg-primary/10 border-primary text-primary'
+            : 'border-input hover:bg-muted'}"
+        >
+          🔧 Shell Command
+        </button>
+      </div>
+    </div>
+
+    <!-- Action fields -->
+    {#if actionType === "send_message"}
+      <!-- Session target -->
+      {#if !editingJob}
+        <div>
+          <label class="block text-sm font-medium mb-1">Session Target</label>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              onclick={() => (use_new_session = true)}
+              class="flex-1 py-2 rounded-lg border text-sm transition-colors
+                     {use_new_session
+                ? 'bg-primary/10 border-primary text-primary'
+                : 'border-input hover:bg-muted'}"
+            >
+              New Session
+            </button>
+            <button
+              type="button"
+              onclick={() => (use_new_session = false)}
+              class="flex-1 py-2 rounded-lg border text-sm transition-colors
+                     {!use_new_session
+                ? 'bg-primary/10 border-primary text-primary'
+                : 'border-input hover:bg-muted'}"
+            >
+              Existing Session
+            </button>
+          </div>
         </div>
       {/if}
 
-      <!-- Name -->
-      <div>
-        <label class="block text-sm font-medium mb-1"
-          >Name <span class="text-red-500">*</span></label
-        >
-        <input
-          type="text"
-          bind:value={name}
-          placeholder="Daily standup reminder"
-          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
-
-      <!-- Schedule -->
-      <div>
-        <label class="block text-sm font-medium mb-1">
-          Schedule <span class="text-red-500">*</span>
-          {#if scheduleValid === true}
-            <CheckCircle class="inline w-3.5 h-3.5 text-green-500 ml-1" />
-          {:else if scheduleValid === false}
-            <AlertCircle class="inline w-3.5 h-3.5 text-red-500 ml-1" />
-          {/if}
-        </label>
-        <input
-          type="text"
-          bind:value={schedule}
-          placeholder="0 9 * * *  (9:00 AM daily)"
-          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring
-                 {scheduleValid === false ? 'border-red-500' : ''}"
-        />
-        {#if scheduleError}
-          <p class="text-xs text-red-500 mt-1">{scheduleError}</p>
-        {:else}
-          <p class="text-xs text-muted-foreground mt-1">
-            5 or 6 fields (optional seconds prefix)
-          </p>
-        {/if}
-      </div>
-
-      <!-- Action type -->
-      <div>
-        <label class="block text-sm font-medium mb-1">Action Type</label>
-        <div class="flex gap-2">
-          <button
-            type="button"
-            onclick={() => (actionType = "send_message")}
-            class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                   {actionType === 'send_message'
-              ? 'bg-primary/10 border-primary text-primary'
-              : 'border-input hover:bg-muted'}"
-          >
-            💬 Send Message
-          </button>
-          <button
-            type="button"
-            onclick={() => (actionType = "shell")}
-            class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                   {actionType === 'shell'
-              ? 'bg-primary/10 border-primary text-primary'
-              : 'border-input hover:bg-muted'}"
-          >
-            🔧 Shell Command
-          </button>
-        </div>
-      </div>
-
-      <!-- Action fields -->
-      {#if actionType === "send_message"}
-        <!-- Session target -->
-        {#if !editingJob}
-          <div>
-            <label class="block text-sm font-medium mb-1">Session Target</label>
-            <div class="flex gap-2">
-              <button
-                type="button"
-                onclick={() => (use_new_session = true)}
-                class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                       {use_new_session
-                  ? 'bg-primary/10 border-primary text-primary'
-                  : 'border-input hover:bg-muted'}"
-              >
-                New Session
-              </button>
-              <button
-                type="button"
-                onclick={() => (use_new_session = false)}
-                class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                       {!use_new_session
-                  ? 'bg-primary/10 border-primary text-primary'
-                  : 'border-input hover:bg-muted'}"
-              >
-                Existing Session
-              </button>
-            </div>
-          </div>
-        {/if}
-
-        {#if !use_new_session}
-          <div>
-            <label class="block text-sm font-medium mb-1">Session ID</label>
-            <input
-              type="text"
-              bind:value={session_id}
-              placeholder="project-alpha"
-              class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-        {:else if !editingJob}
-          <div>
-            <label class="block text-sm font-medium mb-1"
-              >Project (optional)</label
-            >
-            <select
-              bind:value={selected_project_id}
-              class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              <option value="">None</option>
-              {#each projects as project (project.id)}
-                <option value={project.id}>{project.name}</option>
-              {/each}
-            </select>
-          </div>
-        {/if}
-
+      {#if !use_new_session}
         <div>
-          <label class="block text-sm font-medium mb-1">Content</label>
-          <textarea
-            bind:value={content}
-            placeholder="Review today's tasks..."
-            rows="3"
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-          ></textarea>
-          <p class="text-xs text-muted-foreground mt-1">
-            Supports {"{{date}}"}, {"{{time}}"}
-          </p>
-        </div>
-      {:else}
-        <div>
-          <label class="block text-sm font-medium mb-1">Command</label>
-          <textarea
-            bind:value={command}
-            placeholder="echo hello"
-            rows="3"
-            lang="en"
-            spellcheck={false}
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-          ></textarea>
-        </div>
-        <div>
-          <label class="block text-sm font-medium mb-1">Working Directory</label
-          >
+          <label class="block text-sm font-medium mb-1">Session ID</label>
           <input
             type="text"
-            bind:value={working_dir}
-            placeholder="."
+            bind:value={session_id}
+            placeholder="project-alpha"
             class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
-      {/if}
-
-      <!-- Advanced toggle -->
-      <button
-        type="button"
-        onclick={() => (showAdvanced = !showAdvanced)}
-        class="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
-      >
-        <Plus
-          class="w-3.5 h-3.5 transition-transform {showAdvanced
-            ? 'rotate-45'
-            : ''}"
-        />
-        {showAdvanced ? "Hide" : "Show"} advanced options
-      </button>
-
-      {#if showAdvanced}
-        <div class="space-y-3 pt-2 border-t border-border">
-          <div>
-            <label class="block text-sm font-medium mb-1">Max Runs</label>
-            <input
-              type="number"
-              bind:value={max_runs}
-              placeholder="Unlimited"
-              min="1"
-              class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-            <p class="text-xs text-muted-foreground mt-1">
-              Leave empty for unlimited
-            </p>
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Expires At</label>
-            <input
-              type="datetime-local"
-              bind:value={expires_at}
-              class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-            <p class="text-xs text-muted-foreground mt-1">
-              Leave empty for never
-            </p>
-          </div>
+      {:else if !editingJob}
+        <div>
+          <label class="block text-sm font-medium mb-1"
+            >Project (optional)</label
+          >
+          <select
+            bind:value={selected_project_id}
+            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">None</option>
+            {#each projects as project (project.id)}
+              <option value={project.id}>{project.name}</option>
+            {/each}
+          </select>
         </div>
       {/if}
-    </div>
 
-    <!-- Footer -->
-    <div
-      class="flex items-center justify-end gap-2 px-5 py-4 border-t border-border shrink-0"
+      <div>
+        <label class="block text-sm font-medium mb-1">Content</label>
+        <textarea
+          bind:value={content}
+          placeholder="Review today's tasks..."
+          rows="3"
+          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+        ></textarea>
+        <p class="text-xs text-muted-foreground mt-1">
+          Supports {"{{date}}"}, {"{{time}}"}
+        </p>
+      </div>
+    {:else}
+      <div>
+        <label class="block text-sm font-medium mb-1">Command</label>
+        <textarea
+          bind:value={command}
+          placeholder="echo hello"
+          rows="3"
+          lang="en"
+          spellcheck={false}
+          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+        ></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">Working Directory</label>
+        <input
+          type="text"
+          bind:value={working_dir}
+          placeholder="."
+          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+    {/if}
+
+    <!-- Advanced toggle -->
+    <button
+      type="button"
+      onclick={() => (showAdvanced = !showAdvanced)}
+      class="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
     >
-      <button
-        type="button"
-        onclick={onClose}
-        class="px-4 py-2 rounded-lg text-sm border border-input hover:bg-secondary transition-colors"
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        onclick={save}
-        disabled={!name.trim() ||
-          !schedule.trim() ||
-          scheduleValid === false ||
-          saving}
-        class="px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-      >
-        {saving ? "Saving..." : editingJob ? "Save Changes" : "Create Task"}
-      </button>
-    </div>
+      <Plus
+        class="w-3.5 h-3.5 transition-transform {showAdvanced
+          ? 'rotate-45'
+          : ''}"
+      />
+      {showAdvanced ? "Hide" : "Show"} advanced options
+    </button>
+
+    {#if showAdvanced}
+      <div class="space-y-3 pt-2 border-t border-border">
+        <div>
+          <label class="block text-sm font-medium mb-1">Max Runs</label>
+          <input
+            type="number"
+            bind:value={max_runs}
+            placeholder="Unlimited"
+            min="1"
+            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <p class="text-xs text-muted-foreground mt-1">
+            Leave empty for unlimited
+          </p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Expires At</label>
+          <input
+            type="datetime-local"
+            bind:value={expires_at}
+            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <p class="text-xs text-muted-foreground mt-1">
+            Leave empty for never
+          </p>
+        </div>
+      </div>
+    {/if}
   </div>
-</div>
+
+  {#snippet footer()}
+    <button
+      type="button"
+      onclick={onClose}
+      class="px-4 py-2 rounded-lg text-sm border border-input text-foreground hover:bg-secondary transition-colors"
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      onclick={save}
+      disabled={!name.trim() ||
+        !schedule.trim() ||
+        scheduleValid === false ||
+        saving}
+      class="px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+    >
+      {saving ? "Saving..." : editingJob ? "Save Changes" : "Create Task"}
+    </button>
+  {/snippet}
+</Modal>

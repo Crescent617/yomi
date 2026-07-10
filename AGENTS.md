@@ -44,6 +44,7 @@ cargo fmt -- --check
 
 ### gui
 - using tauri with npm as pkg manager
+- **Colors**: 禁止硬编码 Tailwind 颜色值（如 `text-red-500`）和 `dark:` 前缀。一律使用语义化颜色，由 `app.css` 的 `@theme` 变量统一提供。可用语义色包括 `primary`, `secondary`, `destructive`, `success`, `warning`, `error`, `info`, `overlay`, `subtle`, `code-bg` 等。示例：`text-error`（light/dark 自动适配）、`bg-success/10`、`border-subtle`。
 
 ### tui
 - **Unicode Handling**: must carefully handling of unicode width in TUI

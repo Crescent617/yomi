@@ -68,15 +68,15 @@
 
 {#if askUser && askUser.questions.length > 0}
   <div
-    class="shrink-0 border-t border-border bg-blue-50/40 dark:bg-blue-950/20 px-4 py-3"
+    class="shrink-0 border-t border-border bg-info/10 px-4 py-3"
   >
     <div
-      class="rounded-lg border border-blue-200 dark:border-blue-800 bg-background px-3 py-2.5 space-y-3"
+      class="rounded-lg border border-info/20 bg-background px-3 py-2.5 space-y-3"
     >
       {#each askUser.questions as question (question.header)}
         <div>
           <div
-            class="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1.5"
+            class="text-xs font-medium text-info mb-1.5"
           >
             {question.question}
           </div>
@@ -95,7 +95,7 @@
                       question.multi_select,
                     )}
                   class="px-2.5 py-1 rounded-md border text-xs transition-all {selected
-                    ? 'bg-blue-600 text-white border-blue-600'
+                    ? 'bg-primary text-primary-foreground border-primary'
                     : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'}"
                   title={opt.description}
                 >
@@ -106,7 +106,7 @@
             {#if question.options.some((o) => o.preview)}
               {#each question.options.filter((o) => o.preview && (selections[question.header] ?? []).includes(o.label)) as opt (opt.label)}
                 <pre
-                  class="mb-2 text-[10px] bg-black/5 dark:bg-white/5 rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
+                  class="mb-2 text-[10px] bg-code-bg rounded px-2 py-1 overflow-x-auto">{opt.preview}</pre>
               {/each}
             {/if}
           {/if}
@@ -130,7 +130,7 @@
         <button
           type="button"
           onclick={submit}
-          class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 active:scale-95 transition-colors flex items-center gap-1"
+          class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 active:scale-95 transition-colors flex items-center gap-1"
         >
           <Send class="w-3 h-3" />
           Submit

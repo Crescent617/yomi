@@ -31,6 +31,18 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
+  --color-overlay: var(--overlay);
+  --color-subtle: var(--subtle);
+  --color-code-bg: var(--code-bg);
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-error: hsl(var(--error));
+  --color-error-foreground: hsl(var(--error-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
 }
 
 :root {
@@ -50,31 +62,62 @@
   --accent-foreground: 240 5.9% 10%;
   --destructive: 0 72.2% 50.6%;
   --destructive-foreground: 0 0% 98%;
+  --overlay: hsl(0 0% 0% / 0.4);
+  --subtle: hsl(0 0% 0% / 0.05);
+  --code-bg: hsl(0 0% 0% / 0.05);
+  --success: 142 76% 40%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 0 0% 100%;
+  --error: 0 84% 55%;
+  --error-foreground: 0 0% 100%;
+  --info: 217 91% 55%;
+  --info-foreground: 0 0% 100%;
   --border: 240 5.9% 90%;
   --input: 240 5.9% 90%;
   --ring: 239 84% 67%;
 }
 
 .dark {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 10% 3.9%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 3.9%;
-  --popover-foreground: 0 0% 98%;
+  color-scheme: dark;
+  /* Zed One Dark inspired palette */
+  --background: 222 14% 15%;           /* #20242b */
+  --foreground: 220 13% 73%;           /* #abb2bf */
+  --card: 222 14% 17%;                 /* #282c34 */
+  --card-foreground: 220 13% 73%;      /* #abb2bf */
+  --popover: 222 14% 17%;              /* #282c34 */
+  --popover-foreground: 220 13% 73%;   /* #abb2bf */
   --primary: 239 84% 67%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --accent: 240 3.7% 15.9%;
-  --accent-foreground: 0 0% 98%;
+  --secondary: 222 14% 21%;            /* #2f343e */
+  --secondary-foreground: 220 13% 73%; /* #abb2bf */
+  --muted: 222 14% 21%;                /* #2f343e */
+  --muted-foreground: 220 13% 40%;     /* #5c6370 */
+  --accent: 222 14% 21%;               /* #2f343e */
+  --accent-foreground: 220 13% 73%;   /* #abb2bf */
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
-  --border: 240 3.7% 15.9%;
-  --input: 240 3.7% 15.9%;
+  --overlay: hsl(0 0% 0% / 0.6);
+  --subtle: hsl(0 0% 100% / 0.1);
+  --code-bg: hsl(0 0% 100% / 0.05);
+  --success: 142 76% 55%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 60%;
+  --warning-foreground: 0 0% 100%;
+  --error: 0 90% 70%;
+  --error-foreground: 0 0% 100%;
+  --info: 217 91% 65%;
+  --info-foreground: 0 0% 100%;
+  --border: 222 12% 27%;               /* #3b414d */
+  --input: 222 12% 27%;                /* #3b414d */
   --ring: 239 84% 67%;
+}
+
+/* ── Base theme colors on body (portaled overlays inherit from here) ── */
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings: "rlig" 1, "calt" 1;
 }
 
 /* ── Thin scrollbars everywhere ── */

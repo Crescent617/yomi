@@ -107,30 +107,30 @@
   function statusDotClass(status: string): string {
     switch (status) {
       case "active":
-        return "bg-green-500 animate-pulse";
+        return "bg-success animate-pulse";
       case "paused":
-        return "bg-amber-500";
+        return "bg-warning";
       case "blocked":
-        return "bg-red-500 animate-pulse";
+        return "bg-error animate-pulse";
       case "completed":
-        return "bg-green-500";
+        return "bg-success";
       default:
-        return "bg-gray-400";
+        return "bg-muted-foreground";
     }
   }
 
   function statusBadgeClass(status: string): string {
     switch (status) {
       case "active":
-        return "bg-green-500/10 text-green-500 border-green-500/20";
+        return "bg-success/10 text-success border-success/20";
       case "paused":
-        return "bg-amber-500/10 text-amber-500 border-amber-500/20";
+        return "bg-warning/10 text-warning border-warning/20";
       case "blocked":
-        return "bg-red-500/10 text-red-500 border-red-500/20";
+        return "bg-error/10 text-error border-error/20";
       case "completed":
-        return "bg-green-500/10 text-green-500 border-green-500/20";
+        return "bg-success/10 text-success border-success/20";
       default:
-        return "bg-gray-500/10 text-gray-500 border-gray-500/20";
+        return "bg-muted-foreground/10 text-muted-foreground border-muted-foreground/20";
     }
   }
 
@@ -356,7 +356,7 @@
                   type="button"
                   disabled={loading}
                   onclick={handleResumeGoal}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-green-500/30 hover:bg-green-500/10 transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-success/30 hover:bg-success/10 transition-colors text-success disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Resume goal"
                 >
                   <Play size={12} />
@@ -377,7 +377,7 @@
                 type="button"
                 disabled={loading}
                 onclick={handleStopGoal}
-                class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-red-500/30 hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border border-error/30 hover:bg-error/10 transition-colors text-error disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Stop and clear goal"
               >
                 <Square size={12} />
@@ -399,14 +399,14 @@
             <div
               class="mt-0.5 shrink-0 w-4 h-4 rounded border {item.status ===
               'completed'
-                ? 'bg-green-500 border-green-500'
+                ? 'bg-success border-success'
                 : item.status === 'in_progress'
-                  ? 'border-amber-500'
+                  ? 'border-warning'
                   : 'border-muted-foreground'} flex items-center justify-center"
             >
               {#if item.status === "completed"}
                 <svg
-                  class="w-3 h-3 text-white"
+                  class="w-3 h-3 text-success-foreground"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -423,7 +423,7 @@
               class={item.status === "completed"
                 ? "line-through text-muted-foreground"
                 : item.status === "in_progress"
-                  ? "text-amber-500"
+                  ? "text-warning"
                   : ""}>{item.content}</span
             >
           </div>
@@ -490,7 +490,7 @@
                   disabled={loading}
                   onpointerdown={(e: PointerEvent) => e.stopPropagation()}
                   onclick={handleResumeGoal}
-                  class="p-0.5 rounded hover:bg-secondary transition-colors text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="p-0.5 rounded hover:bg-secondary transition-colors text-success disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Resume"
                 >
                   <Play size={11} />
@@ -502,7 +502,7 @@
                 disabled={loading}
                 onpointerdown={(e: PointerEvent) => e.stopPropagation()}
                 onclick={handleStopGoal}
-                class="p-0.5 rounded hover:bg-red-500/10 transition-colors text-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                class="p-0.5 rounded hover:bg-error/10 transition-colors text-error disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Stop"
               >
                 <Square size={11} />
@@ -525,10 +525,7 @@
             >
             {#if inProgressItem}
               <div class="flex items-center gap-1 max-w-[200px]">
-                <Clock
-                  size={12}
-                  class="text-amber-500 shrink-0 animate-pulse"
-                />
+                <Clock size={12} class="text-warning shrink-0 animate-pulse" />
                 <span class="truncate text-foreground"
                   >{inProgressItem.content}</span
                 >

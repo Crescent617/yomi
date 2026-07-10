@@ -3,7 +3,7 @@ use crate::kernel::CreateSessionInput;
 use crate::kernel::Kernel;
 use crate::server::KernelServer;
 use crate::types::{EventId, ProjectId, Result, SessionId};
-use crate::wire::{Envelope, ReqMethod, RespBody, RpcError, WireMsg};
+use crate::wire::{ReqMethod, RespBody, RpcError, WireMsg};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -42,7 +42,7 @@ impl KernelServer {
                 if let Ok(report) = &result {
                     // Drop buffered events of deleted sessions
                     for sid in &report.sessions {
-                        self.event_buffer.remove(sid);
+                        self.cleanup_session(sid);
                     }
                 }
                 rpc_body("delete_project_failed", result)
@@ -111,83 +111,22 @@ impl KernelServer {
                 session_id,
                 after_event_id,
             } => {
-                let sid = SessionId::from(session_id.clone());
-
-                // 1. Register real-time subscription first so events
-                //    arriving during replay are queued rather than lost.
-                let (rt_tx, mut rt_rx) = mpsc::channel::<Envelope>(1000);
-                self.session_subscribers.insert(&sid, rt_tx);
-
-                let send_tx2 = send_tx.clone();
-                let event_buffer = Arc::clone(&self.event_buffer);
-                let cancel2 = cancel.clone();
-
                 let mut subs = subscriptions.write().await;
                 if let Some(old) = subs.remove(&session_id) {
                     old.abort();
                 }
-
-                let session_id_for_insert = session_id.clone();
-                let handle = tokio::spawn(async move {
-                    // 1. Replay buffered history.
-                    let history = event_buffer.get_after(&sid, after_event_id.as_ref());
-                    for envelope in history {
-                        let msg = WireMsg::Event(envelope);
-                        if send_tx2.try_send(msg).is_err() {
-                            return;
-                        }
-                    }
-
-                    // 2. Drain any events that arrived during the replay
-                    //    and deduplicate them against the already-sent buffer.
-                    //    Collect seen IDs, then clear immediately after.
-                    let mut seen = std::collections::HashSet::<EventId>::new();
-                    while let Ok(envelope) = rt_rx.try_recv() {
-                        if seen.contains(&envelope.event_id) {
-                            continue;
-                        }
-                        seen.insert(envelope.event_id.clone());
-                        let msg = WireMsg::Event(envelope);
-                        if send_tx2.try_send(msg).is_err() {
-                            return;
-                        }
-                    }
-                    drop(seen);
-
-                    // 3. Normal real-time loop. No deduplication needed here
-                    //    because the global forwarder pushes each event once.
-                    loop {
-                        let envelope = tokio::select! {
-                            biased;
-                            () = cancel2.cancelled() => break,
-                            opt = rt_rx.recv() => match opt {
-                                Some(e) => e,
-                                None => break,
-                            },
-                        };
-                        let msg = WireMsg::Event(envelope);
-                        if let Err(e) = send_tx2.try_send(msg) {
-                            match e {
-                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                                    tracing::warn!(
-                                        "Outbound channel full, dropping event for session={}",
-                                        session_id
-                                    );
-                                }
-                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
-                            }
-                        }
-                    }
-                });
-
-                subs.insert(session_id_for_insert, handle);
+                let handle = self.spawn_subscription(
+                    session_id.clone(),
+                    after_event_id,
+                    send_tx.clone(),
+                    cancel.clone(),
+                );
+                subs.insert(session_id, handle);
                 RespBody::Ok {
                     result: serde_json::Value::Null,
                 }
             }
             ReqMethod::Unsubscribe { session_id } => {
-                let sid = SessionId::from(session_id.clone());
-                self.session_subscribers.remove(&sid);
                 if let Some(handle) = subscriptions.write().await.remove(&session_id) {
                     handle.abort();
                 }
@@ -213,7 +152,7 @@ impl KernelServer {
                     .await
                     .map(|()| serde_json::Value::Null);
                 if result.is_ok() {
-                    self.event_buffer.remove(&sid);
+                    self.cleanup_session(&sid);
                 }
                 rpc_body("delete_failed", result)
             }
@@ -531,6 +470,86 @@ impl KernelServer {
                 proto: crate::wire::WIRE_PROTOCOL_VERSION,
             }),
         }
+    }
+
+    /// Spawn the per-connection event-forwarding task for one session.
+    ///
+    /// Replays buffered history first, then switches to real-time push.
+    /// Events that arrive while the replay is running are deduplicated
+    /// against the already-sent history.
+    fn spawn_subscription(
+        &self,
+        session_id: String,
+        after_event_id: Option<EventId>,
+        send_tx: mpsc::Sender<WireMsg>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::sync::broadcast::error::RecvError;
+
+        let sid = SessionId::from(session_id.clone());
+        // Register the real-time receiver *before* reading the buffer so
+        // events arriving during replay are queued rather than lost.
+        let mut rt_rx = self.session_subscribers.subscribe(&sid);
+        let event_buffer = Arc::clone(&self.event_buffer);
+
+        tokio::spawn(async move {
+            // Forward one envelope; returns false when the connection is gone.
+            let forward = |envelope| match send_tx.try_send(WireMsg::Event(envelope)) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(%session_id, "outbound channel full, dropping event");
+                    true
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            };
+
+            // 1. Replay buffered history.
+            let mut seen = std::collections::HashSet::<EventId>::new();
+            for envelope in event_buffer.get_after(&sid, after_event_id.as_ref()) {
+                seen.insert(envelope.event_id.clone());
+                if !forward(envelope) {
+                    return;
+                }
+            }
+
+            // 2. Drain events that arrived during the replay, deduplicated
+            //    against the already-sent history.
+            while let Ok(envelope) = rt_rx.try_recv() {
+                if seen.insert(envelope.event_id.clone()) && !forward(envelope) {
+                    return;
+                }
+            }
+            drop(seen);
+
+            // 3. Real-time loop. No deduplication needed here because the
+            //    global forwarder pushes each event exactly once.
+            loop {
+                let envelope = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    result = rt_rx.recv() => match result {
+                        Ok(e) => e,
+                        // The receiver auto-resumes from the oldest retained
+                        // event; keep the subscription alive and only log the
+                        // gap instead of silently going dark.
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(%session_id, dropped = n, "event subscriber lagged");
+                            continue;
+                        }
+                        Err(RecvError::Closed) => break,
+                    },
+                };
+                if !forward(envelope) {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Drop all server-side per-session state (replay buffer + fan-out channel).
+    pub(crate) fn cleanup_session(&self, sid: &SessionId) {
+        self.event_buffer.remove(sid);
+        self.session_subscribers.remove_session(sid);
     }
 }
 

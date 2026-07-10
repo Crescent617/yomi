@@ -17,20 +17,20 @@
   };
 
   const colorMap = {
-    info: "border-blue-500/20 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300",
+    info: "border-info/20 bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-background))] text-info",
     success:
-      "border-emerald-500/20 bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300",
+      "border-success/20 bg-[color-mix(in_oklab,var(--color-success)_10%,var(--color-background))] text-success",
     warning:
-      "border-amber-500/20 bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300",
+      "border-warning/20 bg-[color-mix(in_oklab,var(--color-warning)_10%,var(--color-background))] text-warning",
     error:
-      "border-red-500/20 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300",
+      "border-error/20 bg-[color-mix(in_oklab,var(--color-error)_10%,var(--color-background))] text-error",
   };
 
   const iconColorMap = {
-    info: "text-blue-500",
-    success: "text-emerald-500",
-    warning: "text-amber-500",
-    error: "text-red-500",
+    info: "text-info",
+    success: "text-success",
+    warning: "text-warning",
+    error: "text-error",
   };
 </script>
 
@@ -45,7 +45,7 @@
     <div
       in:fly={{ x: 80, duration: 300, opacity: 0 }}
       out:fade={{ duration: 200 }}
-      class="toast pointer-events-auto w-full rounded-lg border px-3.5 py-2.5 shadow-lg flex items-start gap-2.5 opacity-[calc(1-var(--ri)*0.35)] group-hover:opacity-100 group-hover:mb-2 last:group-hover:mb-0 {colorMap[
+      class="toast pointer-events-auto w-full rounded-lg border px-3.5 py-2.5 shadow-lg flex items-start gap-2.5 group-hover:mb-2 last:group-hover:mb-0 {colorMap[
         toast.type
       ]}"
       style="--i: {index}; --ri: {ri}"
@@ -54,7 +54,7 @@
       <span class="flex-1 text-sm leading-snug">{toast.message}</span>
       <button
         onclick={() => removeToast(toast.id)}
-        class="shrink-0 -mr-1 -mt-0.5 p-1 rounded-md opacity-60 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-all"
+        class="shrink-0 -mr-1 -mt-0.5 p-1 rounded-md opacity-60 hover:opacity-100 hover:bg-secondary transition-all"
       >
         <X size={14} />
       </button>
@@ -64,7 +64,7 @@
   {#if toasts.length > 0}
     <button
       onclick={clearToasts}
-      class="pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 transition-opacity duration-150 absolute -top-5 right-0 z-[110] rounded-md bg-white/80 dark:bg-black/60 backdrop-blur-sm border border-black/10 dark:border-white/10 px-2 py-0.5 text-xs font-medium text-slate-600 dark:text-slate-300 shadow-sm hover:bg-white dark:hover:bg-black/80 transition-colors"
+      class="pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 transition-opacity duration-150 absolute -top-5 right-0 z-[110] rounded-md bg-popover border border-subtle px-2 py-0.5 text-xs font-medium text-muted-foreground shadow-sm hover:bg-muted transition-colors"
     >
       Clear all
     </button>
@@ -76,13 +76,12 @@
     z-index: calc(100 + var(--i));
     transform: translateY(calc(min(var(--ri), 3) * -20px))
       scale(calc(1 - min(var(--ri), 3) * 0.04));
+    transition:
+      transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      margin-bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .group:hover .toast {
-    transition:
-      transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-      opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-      margin-bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     transform: translateY(0) scale(1);
   }
 </style>

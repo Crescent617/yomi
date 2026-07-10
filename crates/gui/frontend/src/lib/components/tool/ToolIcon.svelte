@@ -56,7 +56,7 @@
   <Globe class={cls} />
 {:else if name === "agent" || name === "subagent" || name === "sub_agent"}
   <Bot class={cls} />
-{:else if name === "ask_user" || name === "ask"}
+{:else if name === "ask_user" || name === "askuser" || name === "ask"}
   <MessageSquare class={cls} />
 {:else if name === "todo" || name === "task"}
   <ListChecks class={cls} />

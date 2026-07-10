@@ -44,11 +44,11 @@
   <div class="flex items-center gap-3">
     <div class="flex items-center gap-1.5">
       {#if appState.connectionStatus === "connected"}
-        <Wifi class="w-3 h-3 text-green-500" />
-        <span class="text-green-500">Connected</span>
+        <Wifi class="w-3 h-3 text-success" />
+        <span class="text-success">Connected</span>
       {:else if appState.connectionStatus === "connecting"}
-        <WifiOff class="w-3 h-3 text-amber-500" />
-        <span class="text-amber-500">Connecting...</span>
+        <WifiOff class="w-3 h-3 text-warning" />
+        <span class="text-warning">Connecting...</span>
       {/if}
     </div>
     {#if version}

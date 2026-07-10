@@ -124,11 +124,10 @@ pub async fn spawn_daemon() -> Result<kernel::config::Config> {
     let server_clone = server.clone();
     let addr_clone = addr.clone();
     tokio::spawn(async move {
-        let result = server_clone.serve_listener(listener, shutdown).await;
+        let result = server_clone.serve(listener, shutdown).await;
         if let Err(e) = result {
             tracing::error!("Daemon server error: {e}");
         }
-        server_clone.shutdown();
         let _ = tokio::fs::remove_file(pid_file_path()).await;
         if let SocketAddr::Unix(ref path) = addr_clone {
             let _ = tokio::fs::remove_file(path).await;

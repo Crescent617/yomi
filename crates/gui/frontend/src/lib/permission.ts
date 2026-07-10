@@ -44,11 +44,11 @@ export function levelIcon(level: PermissionLevel) {
 export function levelColor(level: PermissionLevel): string {
   switch (level) {
     case "safe":
-      return "text-green-600 border-green-600 bg-green-600/10";
+      return "text-success border-success bg-success/10";
     case "caution":
-      return "text-amber-600 border-amber-600 bg-amber-600/10";
+      return "text-warning border-warning bg-warning/10";
     case "dangerous":
-      return "text-red-600 border-red-600 bg-red-600/10";
+      return "text-error border-error bg-error/10";
     default:
       return "";
   }

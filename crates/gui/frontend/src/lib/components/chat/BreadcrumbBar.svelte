@@ -48,7 +48,7 @@
 
 {#if chain.length > 1}
   <div
-    class="flex items-center gap-1 text-xs px-3 py-1.5 border-b border-black/5 dark:border-white/10"
+    class="flex items-center gap-1 text-xs px-3 py-1.5 border-b border-subtle"
   >
     {#each chain as item, i (item.id)}
       {#if i > 0}

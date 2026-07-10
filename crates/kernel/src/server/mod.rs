@@ -37,7 +37,7 @@ impl KernelServer {
             cron_scheduler: Arc::new(std::sync::Mutex::new(None)),
             shutdown: tokio_util::sync::CancellationToken::new(),
             event_buffer: Arc::new(EventBuffer::new(10_000)),
-            session_subscribers: Arc::new(SessionSubscribers::new()),
+            session_subscribers: Arc::new(SessionSubscribers::new(4096)),
         }
     }
 
@@ -74,6 +74,7 @@ impl KernelServer {
         // Start the global event-forwarder task that assigns event IDs,
         // buffers events, and forwards them to real-time subscribers.
         self.start_event_forwarder(self.shutdown.child_token());
+        self.start_subscriber_sweeper(self.shutdown.child_token());
     }
 
     fn start_event_forwarder(&self, cancel: tokio_util::sync::CancellationToken) {
@@ -104,7 +105,7 @@ impl KernelServer {
                             _ => {}
                         }
 
-                        session_subscribers.try_send(&sid, &envelope);
+                        session_subscribers.publish(&sid, &envelope);
                     }
                 }
             }
@@ -112,19 +113,31 @@ impl KernelServer {
         });
     }
 
-    /// Run the server on an IPC endpoint (Unix socket or TCP).
-    pub async fn serve_ipc(
-        &self,
-        addr: &crate::transport::SocketAddr,
-        shutdown: tokio_util::sync::CancellationToken,
-    ) -> Result<()> {
-        let listener = crate::transport::bind(addr).await?;
-        tracing::info!("KernelServer listening on {addr}");
-        self.serve_listener(listener, shutdown).await
+    fn start_subscriber_sweeper(&self, cancel: tokio_util::sync::CancellationToken) {
+        let session_subscribers = Arc::clone(&self.session_subscribers);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_mins(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    _ = interval.tick() => session_subscribers.prune_idle(),
+                }
+            }
+
+            tracing::info!("event subscriber sweeper exited");
+        });
     }
 
     /// Run the server on an already-bound listener.
-    pub async fn serve_listener(
+    ///
+    /// Returns after either `shutdown` or the server's internal token is
+    /// cancelled. All background tasks and the kernel are stopped before
+    /// returning, so callers only need to wait for connections to drain.
+    pub async fn serve(
         &self,
         listener: crate::transport::Listener,
         shutdown: tokio_util::sync::CancellationToken,
@@ -132,14 +145,8 @@ impl KernelServer {
         loop {
             tokio::select! {
                 biased;
-                () = self.shutdown.cancelled() => {
-                    tracing::info!("Server shutting down, stopping accept loop");
-                    break;
-                }
-                () = shutdown.cancelled() => {
-                    tracing::info!("Server shutting down, stopping accept loop");
-                    break;
-                }
+                () = self.shutdown.cancelled() => break,
+                () = shutdown.cancelled() => break,
                 result = listener.accept() => {
                     let (stream, _) = match result {
                         Ok(pair) => pair,
@@ -166,6 +173,10 @@ impl KernelServer {
                 }
             }
         }
+        tracing::info!("Server shutting down, accept loop stopped");
+        // Idempotent: cancels all connections/background tasks and stops the
+        // kernel regardless of which token ended the loop.
+        self.shutdown();
         Ok(())
     }
 
