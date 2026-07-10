@@ -46,36 +46,37 @@
 }
 
 :root {
-  --background: 0 0% 100%;
-  --foreground: 240 10% 3.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 240 10% 3.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 240 10% 3.9%;
-  --primary: 239 84% 67%;
+  /* Zed One Light inspired palette */
+  --background: 0 0% 98%;              /* #fafafa — editor bg */
+  --foreground: 228 8% 24%;            /* #383a42 — One Light ink */
+  --card: 0 0% 100%;                   /* #ffffff */
+  --card-foreground: 228 8% 24%;       /* #383a42 */
+  --popover: 0 0% 100%;                /* #ffffff */
+  --popover-foreground: 228 8% 24%;    /* #383a42 */
+  --primary: 221 88% 58%;              /* #3b77f0 ≈ One Light blue #4078f2 */
   --primary-foreground: 0 0% 100%;
-  --secondary: 240 4.8% 95.9%;
-  --secondary-foreground: 240 5.9% 10%;
-  --muted: 240 4.8% 95.9%;
-  --muted-foreground: 240 3.8% 46.1%;
-  --accent: 240 4.8% 95.9%;
-  --accent-foreground: 240 5.9% 10%;
-  --destructive: 0 72.2% 50.6%;
-  --destructive-foreground: 0 0% 98%;
+  --secondary: 228 12% 93%;            /* #eaebee — panel/element bg */
+  --secondary-foreground: 228 8% 24%;  /* #383a42 */
+  --muted: 228 12% 93%;                /* #eaebee */
+  --muted-foreground: 222 6% 44%;      /* #696c77 — One Light comment gray */
+  --accent: 228 12% 93%;               /* #eaebee */
+  --accent-foreground: 228 8% 24%;     /* #383a42 */
+  --destructive: 5 74% 55%;            /* #e0554a ≈ One Light red #e45649 */
+  --destructive-foreground: 0 0% 100%;
   --overlay: hsl(0 0% 0% / 0.4);
   --subtle: hsl(0 0% 0% / 0.05);
   --code-bg: hsl(0 0% 0% / 0.05);
-  --success: 142 76% 40%;
+  --success: 119 34% 40%;              /* #479446 ≈ One Light green #50a14f */
   --success-foreground: 0 0% 100%;
-  --warning: 38 92% 50%;
+  --warning: 41 99% 35%;               /* #b17a01 ≈ One Light yellow #c18401 */
   --warning-foreground: 0 0% 100%;
-  --error: 0 84% 55%;
+  --error: 345 84% 43%;                /* #ca1243 — One Light deep red */
   --error-foreground: 0 0% 100%;
-  --info: 217 91% 55%;
+  --info: 221 88% 58%;                 /* #3b77f0 — One Light blue */
   --info-foreground: 0 0% 100%;
-  --border: 240 5.9% 90%;
-  --input: 240 5.9% 90%;
-  --ring: 239 84% 67%;
+  --border: 225 8% 85%;                /* #d6d8dc */
+  --input: 225 8% 85%;                 /* #d6d8dc */
+  --ring: 221 88% 58%;                 /* match primary */
 }
 
 .dark {
@@ -87,8 +88,8 @@
   --card-foreground: 220 13% 73%;      /* #abb2bf */
   --popover: 222 14% 17%;              /* #282c34 */
   --popover-foreground: 220 13% 73%;   /* #abb2bf */
-  --primary: 239 84% 67%;
-  --primary-foreground: 0 0% 100%;
+  --primary: 207 82% 66%;              /* #61afef — One Dark blue */
+  --primary-foreground: 222 14% 12%;   /* dark ink on light-blue */
   --secondary: 222 14% 21%;            /* #2f343e */
   --secondary-foreground: 220 13% 73%; /* #abb2bf */
   --muted: 222 14% 21%;                /* #2f343e */
@@ -100,17 +101,17 @@
   --overlay: hsl(0 0% 0% / 0.6);
   --subtle: hsl(0 0% 100% / 0.1);
   --code-bg: hsl(0 0% 100% / 0.05);
-  --success: 142 76% 55%;
-  --success-foreground: 0 0% 100%;
-  --warning: 38 92% 60%;
-  --warning-foreground: 0 0% 100%;
-  --error: 0 90% 70%;
-  --error-foreground: 0 0% 100%;
-  --info: 217 91% 65%;
-  --info-foreground: 0 0% 100%;
+  --success: 95 38% 62%;               /* #98c379 — One Dark green */
+  --success-foreground: 222 14% 12%;
+  --warning: 39 67% 69%;               /* #e5c07b — One Dark yellow */
+  --warning-foreground: 222 14% 12%;
+  --error: 355 65% 65%;                /* #e06c75 — One Dark red */
+  --error-foreground: 222 14% 12%;
+  --info: 207 82% 66%;                 /* #61afef — One Dark blue */
+  --info-foreground: 222 14% 12%;
   --border: 222 12% 27%;               /* #3b414d */
   --input: 222 12% 27%;                /* #3b414d */
-  --ring: 239 84% 67%;
+  --ring: 207 82% 66%;                 /* match primary */
 }
 
 /* ── Base theme colors on body (portaled overlays inherit from here) ── */
