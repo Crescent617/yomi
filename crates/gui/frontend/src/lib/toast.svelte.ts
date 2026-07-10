@@ -2,23 +2,26 @@ export interface Toast {
   id: string;
   message: string;
   type: "info" | "success" | "error" | "warning";
-  duration?: number;
 }
 
 export const toasts = $state<Toast[]>([]);
+
+const durationByType: Record<Toast["type"], number> = {
+  success: 6000,
+  info: 8000,
+  warning: 12000,
+  error: 15000,
+};
 
 let toastIdCounter = 0;
 
 export function pushToast(
   message: string,
   type: Toast["type"] = "info",
-  duration = type === "error" ? 0 : 4000,
 ): string {
   const id = `toast-${++toastIdCounter}`;
-  toasts.push({ id, message, type, duration });
-  if (duration > 0) {
-    setTimeout(() => removeToast(id), duration);
-  }
+  toasts.push({ id, message, type });
+  setTimeout(() => removeToast(id), durationByType[type]);
   return id;
 }
 

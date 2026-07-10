@@ -47,11 +47,7 @@
     try {
       await api.rewind(session_id, message.id);
     } catch (e) {
-      showNotification(
-        "Failed to revert: " + api.errorMessage(e),
-        "error",
-        3000,
-      );
+      showNotification("Failed to revert: " + api.errorMessage(e), "error");
     }
   }
 

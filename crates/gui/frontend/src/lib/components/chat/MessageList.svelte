@@ -177,11 +177,11 @@
       class="h-full overflow-y-auto"
     >
       <div class="container mx-auto px-4 lg:px-6 pt-2 pb-4">
-        <div class="space-y-4">
+        <div class="flex flex-col gap-4">
           {#each displayItems as item, index (item.type === "message" ? item.message.id : `group-${item.messages[0]?.id ?? index}`)}
             {#if item.type === "message"}
               {@const msg = item.message}
-              <div class="group relative">
+              <div class="group relative" class:my-2={msg.type === "user"}>
                 {#if msg.type === "user"}
                   <UserBubble message={msg} session_id={activeSession.id} />
                 {:else if msg.type === "error"}

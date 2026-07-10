@@ -13,5 +13,6 @@ export const SLASH_COMMANDS: readonly (readonly [string, string])[] = [
   ["/history", "Search and reuse a previous message"],
   ["/fork", "Fork current session into a new one with full context"],
   ["/continue", "Trigger agent to continue without new input"],
+  ["/debug", "noti Emit 10 short-lived test notifications"],
   ["/help", "Show keyboard shortcuts help"],
 ] as const;

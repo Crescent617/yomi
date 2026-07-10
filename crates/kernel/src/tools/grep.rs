@@ -109,8 +109,10 @@ impl GrepTool {
 
         // File type filter
         if let Some(ft) = params.file_type {
-            args.push("--type".to_string());
-            args.push(ft.to_string());
+            if !ft.is_empty() {
+                args.push("--type".to_string());
+                args.push(ft.to_string());
+            }
         }
 
         // Glob pattern filter - split on spaces but preserve braces

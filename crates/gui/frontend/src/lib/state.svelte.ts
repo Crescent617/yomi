@@ -342,16 +342,8 @@ export const streamingMessages = $state<Record<string, Message[]>>({});
 export function showNotification(
   text: string,
   level: "info" | "success" | "warning" | "error" = "info",
-  durationMs?: number,
 ) {
-  const defaultDurations: Record<string, number> = {
-    info: 5000,
-    success: 5000,
-    warning: 7000,
-    error: 0,
-  };
-  const finalDuration = durationMs ?? defaultDurations[level] ?? 5000;
-  pushToast(text, level, finalDuration);
+  pushToast(text, level);
 }
 
 // ── Basic session accessors ────────────────────────────────────────────

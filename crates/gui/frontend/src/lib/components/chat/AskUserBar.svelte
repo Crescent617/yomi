@@ -43,11 +43,7 @@
       selections = {};
       customInputs = {};
     } catch (e: unknown) {
-      showNotification(
-        "Response failed: " + api.errorMessage(e),
-        "error",
-        3000,
-      );
+      showNotification("Response failed: " + api.errorMessage(e), "error");
     }
   }
 
@@ -67,17 +63,13 @@
 </script>
 
 {#if askUser && askUser.questions.length > 0}
-  <div
-    class="shrink-0 border-t border-border bg-info/10 px-4 py-3"
-  >
+  <div class="shrink-0 border-t border-border bg-info/10 px-4 py-3">
     <div
       class="rounded-lg border border-info/20 bg-background px-3 py-2.5 space-y-3"
     >
       {#each askUser.questions as question (question.header)}
         <div>
-          <div
-            class="text-xs font-medium text-info mb-1.5"
-          >
+          <div class="text-xs font-medium text-info mb-1.5">
             {question.question}
           </div>
           {#if question.options.length > 0}
