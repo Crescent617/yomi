@@ -49,8 +49,8 @@ impl Tool for SkillTool {
     }
 
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
-        let path_arg = args["path"].as_str();
-        let name_arg = args["name"].as_str();
+        let path_arg = args["path"].as_str().filter(|s| !s.is_empty());
+        let name_arg = args["name"].as_str().filter(|s| !s.is_empty());
 
         // Determine which file to load
         let skill_path = if let Some(path_str) = path_arg {

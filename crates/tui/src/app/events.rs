@@ -551,6 +551,14 @@ impl Model {
                     if let Some((old_id, _)) = self.pending_permission.as_ref() {
                         if old_id == &req_id {
                             self.pending_permission = None;
+                            // Close the dialog and restore focus immediately so the user
+                            // never ends up typing into a stale / invisible dialog.
+                            let _ = self.app.attr(
+                                &Id::Dialog,
+                                Attribute::Custom(attr::DIALOG_HIDE),
+                                AttrValue::Flag(true),
+                            );
+                            self.set_focus(&Id::InputBox);
                             self.state.should_redraw = true;
                         }
                     }
@@ -559,6 +567,12 @@ impl Model {
                     if let Some((old_id, _, _, _)) = self.pending_ask_user.as_ref() {
                         if old_id == &req_id {
                             self.pending_ask_user = None;
+                            let _ = self.app.attr(
+                                &Id::Dialog,
+                                Attribute::Custom(attr::DIALOG_HIDE),
+                                AttrValue::Flag(true),
+                            );
+                            self.set_focus(&Id::InputBox);
                             self.state.should_redraw = true;
                         }
                     }

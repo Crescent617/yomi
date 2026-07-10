@@ -277,12 +277,20 @@ impl Model {
                         });
                         // Return focus to input box
                         self.set_focus(&Id::InputBox);
+                    } else {
+                        // Dialog was closed but no pending request exists (e.g. ack arrived
+                        // before the user responded). Restore focus so input doesn't get stuck.
+                        self.set_focus(&Id::InputBox);
                     }
                     None
                 }
                 Msg::DialogCustomInput(text) => {
                     if self.pending_ask_user.is_some() {
                         self.advance_ask_user(Some(text));
+                    } else {
+                        // Same as DialogSelected: if the request was already acked, we still
+                        // need to restore focus so the input box doesn't get stuck.
+                        self.set_focus(&Id::InputBox);
                     }
                     None
                 }
