@@ -57,6 +57,11 @@
     type PermissionLevel,
   } from "../../permission";
   import { createFilePicker } from "$lib/filePicker.svelte";
+  import { pickGreeting } from "../home/greeting";
+  import TodayUsageCard from "../home/TodayUsageCard.svelte";
+  import RecentSessions from "../home/RecentSessions.svelte";
+  import { projectColor, formatTimeAgo } from "../../utils";
+  import { Search, Plus, Check } from "lucide-svelte";
 
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
@@ -90,6 +95,15 @@
     focus?: () => void;
   } | null = $state(null);
   let projectDropdownOpen = $state(false);
+  let projectSearch = $state("");
+  let projectSearchRef = $state<HTMLInputElement | null>(null);
+  let greeting = $state(pickGreeting());
+  // Re-roll greeting each time the user returns to the home screen
+  $effect(() => {
+    if (!sessionState.activeSessionId) {
+      greeting = pickGreeting();
+    }
+  });
   let openDropdownOpen = $state(false);
   let projectDropdownRef = $state<HTMLDivElement | null>(null);
   let homeComposing = $state(false);
@@ -199,14 +213,14 @@
     }
   });
 
-  // Pick the first project by default when projects load and nothing selected
+  // Pick the most recently used project by default when projects load
   $effect(() => {
     if (
       !sessionState.activeSessionId &&
       selectedProjectId === "" &&
       projectState.projects.length > 0
     ) {
-      selectedProjectId = projectState.projects[0].id;
+      selectedProjectId = sortedProjects[0].id;
     }
   });
 
@@ -532,6 +546,29 @@
       projectDropdownOpen = false;
     }
   }
+
+  // Projects sorted by most recently updated, filtered by search
+  const sortedProjects = $derived.by(() =>
+    [...projectState.projects].sort((a, b) =>
+      (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+    ),
+  );
+  const filteredProjects = $derived.by(() => {
+    const q = projectSearch.trim().toLowerCase();
+    if (!q) return sortedProjects;
+    return sortedProjects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) || p.dir.toLowerCase().includes(q),
+    );
+  });
+
+  $effect(() => {
+    if (projectDropdownOpen) {
+      projectSearch = "";
+      // focus search box after render
+      setTimeout(() => projectSearchRef?.focus(), 0);
+    }
+  });
 
   $effect(() => {
     if (projectDropdownOpen) {
@@ -982,7 +1019,7 @@
               class="w-24 h-24 mx-auto mb-3 object-contain dark:hidden"
             />
             <p class="text-muted-foreground text-lg">
-              What can I help you with today?
+              {greeting}
             </p>
           </div>
 
@@ -1095,60 +1132,143 @@
               <div class="flex items-center gap-3">
                 <!-- Project selector -->
                 <div class="relative" bind:this={projectDropdownRef}>
-                  <button
-                    type="button"
-                    onclick={() => (projectDropdownOpen = !projectDropdownOpen)}
-                    class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <FolderOpen class="w-4 h-4" />
-                    <span class="max-w-[140px] truncate">
-                      {#if selectedProjectId === ""}
-                        Select project
-                      {:else if selectedProjectId === "new"}
-                        + New Project
+                  {#if selectedProjectId !== "" && selectedProjectId !== "new"}
+                    {@const sel = projectState.projects.find(
+                      (p) => p.id === selectedProjectId,
+                    )}
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (projectDropdownOpen = !projectDropdownOpen)}
+                      class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {#if sel}
+                        <span
+                          class="w-2 h-2 rounded-full shrink-0"
+                          style="background: {projectColor(
+                            sel.name + sel.dir,
+                          )}"
+                        ></span>
                       {:else}
-                        {projectState.projects.find(
-                          (p) => p.id === selectedProjectId,
-                        )?.name ?? "Unknown"}
+                        <FolderOpen class="w-4 h-4" />
                       {/if}
-                    </span>
-                    <ChevronDown class="w-3 h-3" />
-                  </button>
+                      <span class="max-w-[140px] truncate"
+                        >{sel?.name ?? "Unknown"}</span
+                      >
+                      <ChevronDown class="w-3 h-3" />
+                    </button>
+                  {:else}
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (projectDropdownOpen = !projectDropdownOpen)}
+                      class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <FolderOpen class="w-4 h-4" />
+                      <span class="max-w-[140px] truncate">
+                        {selectedProjectId === "new"
+                          ? "+ New Project"
+                          : "Select project"}
+                      </span>
+                      <ChevronDown class="w-3 h-3" />
+                    </button>
+                  {/if}
                   {#if projectDropdownOpen}
                     <div
-                      class="absolute bottom-full left-0 mb-1 z-50 w-56 rounded-lg border border-border bg-popover shadow-lg overflow-hidden max-h-60 overflow-y-auto"
+                      class="absolute bottom-full left-0 mb-1 z-50 w-72 rounded-xl border border-border bg-popover shadow-xl overflow-hidden flex flex-col"
                     >
-                      {#each projectState.projects as project (project.id)}
-                        <button
-                          type="button"
-                          onclick={() => {
-                            selectedProjectId = project.id;
-                            projectDropdownOpen = false;
-                          }}
-                          class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors {selectedProjectId ===
-                          project.id
-                            ? 'bg-accent/50'
-                            : ''}"
+                      {#if projectState.projects.length > 5}
+                        <div
+                          class="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0"
                         >
-                          <div class="font-medium">{project.name}</div>
-                          <div class="text-xs text-muted-foreground truncate">
-                            {project.dir}
+                          <Search
+                            class="w-3.5 h-3.5 text-muted-foreground shrink-0"
+                          />
+                          <input
+                            bind:this={projectSearchRef}
+                            bind:value={projectSearch}
+                            type="text"
+                            placeholder="Search projects..."
+                            class="w-full bg-transparent text-sm focus:outline-none placeholder:text-muted-foreground"
+                            onkeydown={(e: KeyboardEvent) => {
+                              if (e.key === "Escape") {
+                                projectDropdownOpen = false;
+                              }
+                              if (
+                                e.key === "Enter" &&
+                                filteredProjects.length > 0
+                              ) {
+                                selectedProjectId = filteredProjects[0].id;
+                                projectDropdownOpen = false;
+                              }
+                            }}
+                          />
+                        </div>
+                      {/if}
+                      <div class="max-h-64 overflow-y-auto">
+                        {#each filteredProjects as project (project.id)}
+                          <button
+                            type="button"
+                            onclick={() => {
+                              selectedProjectId = project.id;
+                              projectDropdownOpen = false;
+                            }}
+                            class="w-full flex items-center gap-2.5 text-left px-3 py-2 text-sm hover:bg-accent transition-colors {selectedProjectId ===
+                            project.id
+                              ? 'bg-accent/50'
+                              : ''}"
+                          >
+                            <span
+                              class="w-2 h-2 rounded-full shrink-0"
+                              style="background: {projectColor(
+                                project.name + project.dir,
+                              )}"
+                            ></span>
+                            <span class="flex-1 min-w-0">
+                              <span class="flex items-center gap-2 min-w-0">
+                                <span class="font-medium truncate"
+                                  >{project.name}</span
+                                >
+                                {#if project.updated_at}
+                                  <span
+                                    class="ml-auto text-[10px] text-muted-foreground shrink-0"
+                                  >
+                                    {formatTimeAgo(project.updated_at)}
+                                  </span>
+                                {/if}
+                              </span>
+                              <span
+                                class="block text-xs text-muted-foreground truncate"
+                              >
+                                {project.dir}
+                              </span>
+                            </span>
+                            {#if selectedProjectId === project.id}
+                              <Check class="w-3.5 h-3.5 text-primary shrink-0" />
+                            {/if}
+                          </button>
+                        {:else}
+                          <div
+                            class="px-3 py-4 text-center text-xs text-muted-foreground"
+                          >
+                            No matching projects
                           </div>
-                        </button>
-                      {/each}
-                      <div class="border-t border-border"></div>
+                        {/each}
+                      </div>
+                      <div class="border-t border-border shrink-0"></div>
                       <button
                         type="button"
                         onclick={() => {
                           selectedProjectId = "new";
                           projectDropdownOpen = false;
                         }}
-                        class="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors text-primary font-medium {selectedProjectId ===
+                        class="w-full flex items-center gap-2 text-left px-3 py-2 text-sm hover:bg-accent transition-colors text-primary font-medium shrink-0 {selectedProjectId ===
                         'new'
                           ? 'bg-accent/50'
                           : ''}"
                       >
-                        + New Project...
+                        <Plus class="w-3.5 h-3.5" />
+                        New Project...
                       </button>
                     </div>
                   {/if}
@@ -1236,6 +1356,16 @@
               />
             </div>
           {/if}
+
+          <!-- Recent sessions quick-resume -->
+          <div class="mt-6">
+            <RecentSessions />
+          </div>
+
+          <!-- Today usage hero card -->
+          <div class="mt-3">
+            <TodayUsageCard />
+          </div>
         </div>
       </div>
     {:else if activeSession?.active_tab_id === "chat"}

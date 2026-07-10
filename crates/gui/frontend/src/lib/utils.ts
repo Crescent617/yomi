@@ -4,6 +4,16 @@ export function formatShortId(id: string): string {
   return id.slice(-8);
 }
 
+/** Deterministic accent color for a project (hash of name+dir → hue). */
+export function projectColor(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  const hue = h % 360;
+  return `hsl(${hue}, 65%, 55%)`;
+}
+
 export function formatTimeAgo(date: Date | string): string {
   const now = new Date();
   const then = typeof date === "string" ? new Date(date) : date;
