@@ -11,6 +11,7 @@
     showNotification,
   } from "../../state.svelte";
   import { formatTimeAgo, projectColor } from "../../utils";
+  import { clock } from "../../clock.svelte";
   import { MessageSquare, History } from "lucide-svelte";
 
   let recent = $state<SessionInfo[]>([]);
@@ -113,7 +114,7 @@
               <span class="opacity-50">·</span>
             {/if}
             <span class="shrink-0"
-              >{formatTimeAgo(s.updated_at ?? s.created_at)}</span
+              >{formatTimeAgo(s.updated_at ?? s.created_at, clock.now)}</span
             >
           </span>
         </button>

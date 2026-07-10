@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { XCircle, Wrench, Lightbulb, Bot, Pencil } from "lucide-svelte";
+  import {
+    XCircle,
+    Wrench,
+    Lightbulb,
+    Bot,
+    FileEdit,
+    SquareTerminal,
+  } from "lucide-svelte";
   import type { Message } from "../../state.svelte";
   import { textFromBlocks, findThinking } from "../../state.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
@@ -29,6 +36,7 @@
     let toolCount = 0;
     let subagentCount = 0;
     let editWriteCount = 0;
+    let shellCount = 0;
     let thinkingCount = 0;
     let runningCount = 0;
     let failedCount = 0;
@@ -48,6 +56,12 @@
           subagentCount++;
         } else if (m.tool_name === "write" || m.tool_name === "edit") {
           editWriteCount++;
+        } else if (
+          m.tool_name === "shell" ||
+          m.tool_name === "bash" ||
+          m.tool_name === "command"
+        ) {
+          shellCount++;
         } else {
           toolCount++;
         }
@@ -69,7 +83,8 @@
     const badges = [
       { icon: Lightbulb, count: thinkingCount, label: "thinking" },
       { icon: Bot, count: subagentCount, label: "subagent" },
-      { icon: Pencil, count: editWriteCount, label: "edit/write" },
+      { icon: FileEdit, count: editWriteCount, label: "edit/write" },
+      { icon: SquareTerminal, count: shellCount, label: "shell" },
       { icon: Wrench, count: toolCount, label: "tool" },
     ].filter((b) => b.count > 0);
 

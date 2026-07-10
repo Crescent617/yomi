@@ -14,10 +14,12 @@ export function projectColor(seed: string): string {
   return `hsl(${hue}, 65%, 55%)`;
 }
 
-export function formatTimeAgo(date: Date | string): string {
-  const now = new Date();
+export function formatTimeAgo(
+  date: Date | string,
+  nowMs: number = Date.now(),
+): string {
   const then = typeof date === "string" ? new Date(date) : date;
-  const diff = Math.floor((now.getTime() - then.getTime()) / 1000);
+  const diff = Math.floor((nowMs - then.getTime()) / 1000);
 
   if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
