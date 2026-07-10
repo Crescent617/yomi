@@ -6,6 +6,7 @@
     Bot,
     FileEdit,
     SquareTerminal,
+    FileSearch,
   } from "lucide-svelte";
   import type { Message } from "../../state.svelte";
   import { textFromBlocks, findThinking } from "../../state.svelte";
@@ -32,11 +33,26 @@
     }
   });
 
+  // Read-only lookup tools: file reads, code search, web search/fetch
+  const SEARCH_READ_TOOLS = new Set([
+    "read",
+    "read_file",
+    "grep",
+    "grep_search",
+    "glob",
+    "glob_search",
+    "websearch",
+    "web_search",
+    "webfetch",
+    "web_fetch",
+  ]);
+
   const stats = $derived.by(() => {
     let toolCount = 0;
     let subagentCount = 0;
     let editWriteCount = 0;
     let shellCount = 0;
+    let searchReadCount = 0;
     let thinkingCount = 0;
     let runningCount = 0;
     let failedCount = 0;
@@ -62,6 +78,8 @@
           m.tool_name === "command"
         ) {
           shellCount++;
+        } else if (SEARCH_READ_TOOLS.has(m.tool_name)) {
+          searchReadCount++;
         } else {
           toolCount++;
         }
@@ -85,6 +103,7 @@
       { icon: Bot, count: subagentCount, label: "subagent" },
       { icon: FileEdit, count: editWriteCount, label: "edit/write" },
       { icon: SquareTerminal, count: shellCount, label: "shell" },
+      { icon: FileSearch, count: searchReadCount, label: "search/read" },
       { icon: Wrench, count: toolCount, label: "tool" },
     ].filter((b) => b.count > 0);
 
