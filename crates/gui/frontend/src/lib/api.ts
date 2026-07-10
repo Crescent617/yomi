@@ -437,6 +437,14 @@ export async function getConfig(): Promise<{
   return invokeCmd("get_config");
 }
 
+export async function getDaemonStatus(): Promise<{ managed: boolean }> {
+  return invokeCmd("get_daemon_status");
+}
+
+export async function restartDaemon(): Promise<void> {
+  return invokeCmd("restart_daemon");
+}
+
 export async function getUsageSummary(): Promise<{
   prompt_tokens: number;
   completion_tokens: number;

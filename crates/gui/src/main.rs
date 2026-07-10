@@ -87,6 +87,8 @@ pub fn run() {
             commands::skill::reload_config,
             commands::system::read_asset,
             commands::system::ping,
+            commands::system::get_daemon_status,
+            commands::system::restart_daemon,
             commands::system::get_cwd,
             commands::system::get_config_toml,
             commands::system::save_config_toml,

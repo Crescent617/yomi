@@ -10,11 +10,36 @@ pub async fn ping(_state: State<'_, AppState>) -> Result<bool, GuiError> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn read_asset(state: State<'_, AppState>, url: String) -> Result<Vec<u8>, GuiError> {
-    if let Some(bytes) = kernel::utils::asset::read_asset(&url, &state.data_dir).await {
+    let data_dir = state
+        .data_dir
+        .read()
+        .map_err(|e| GuiError::unknown(format!("data_dir lock poisoned: {e}")))?
+        .clone();
+    if let Some(bytes) = kernel::utils::asset::read_asset(&url, &data_dir).await {
         Ok(bytes)
     } else {
         Err(GuiError::unknown(format!("Asset not found: {url}")))
     }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_daemon_status() -> Result<serde_json::Value, GuiError> {
+    Ok(serde_json::json!({
+        "managed": crate::daemon::is_managed().await,
+    }))
+}
+
+/// Restart the daemon spawned by this GUI so it reloads the config file.
+/// Fails when the GUI is connected to an externally started daemon.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn restart_daemon(state: State<'_, AppState>) -> Result<(), GuiError> {
+    let config = crate::daemon::restart_daemon()
+        .await
+        .map_err(|e| GuiError::unknown(format!("Failed to restart daemon: {e}")))?;
+    if let Ok(mut data_dir) = state.data_dir.write() {
+        *data_dir = config.data_dir;
+    }
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

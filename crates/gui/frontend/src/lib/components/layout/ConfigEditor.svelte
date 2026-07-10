@@ -7,9 +7,11 @@
     Check,
     Zap,
     PanelLeftOpen,
+    RefreshCw,
   } from "lucide-svelte";
   import * as api from "../../api";
   import { showNotification } from "../../state.svelte";
+  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
   let {
     onToggleLeftPanel,
@@ -24,6 +26,55 @@
   let dirty = $state(false);
   let saved = $state(false);
   let full_config = $state("");
+
+  let daemonManaged = $state<boolean | null>(null);
+  let restarting = $state(false);
+  let restartConfirmOpen = $state(false);
+
+  const restartMessage =
+    "Restart the daemon to apply config changes?\n\nAll running sessions and tasks will be interrupted. Chat history is preserved.";
+
+  const daemonButtonTitle = $derived(
+    daemonManaged === null
+      ? "Checking daemon status…"
+      : !daemonManaged
+        ? "Daemon was started externally (e.g. via CLI) — restart it from that process"
+        : dirty
+          ? "Save config changes before restarting"
+          : "Restart the daemon to apply config changes",
+  );
+
+  async function refreshDaemonStatus() {
+    try {
+      const status = await api.getDaemonStatus();
+      daemonManaged = status.managed;
+    } catch (e: unknown) {
+      console.error("Failed to get daemon status:", e);
+    }
+  }
+
+  async function doRestartDaemon() {
+    restartConfirmOpen = false;
+    restarting = true;
+    try {
+      await api.restartDaemon();
+      showNotification("Daemon restarted, config reloaded", "success", 3000);
+      // Runtime config may have changed with the new daemon.
+      const c = await api.getConfig().catch(() => null);
+      full_config = c?.full_config ?? "";
+    } catch (e: unknown) {
+      showNotification(
+        `Failed to restart daemon: ${api.errorMessage(e)}`,
+        "error",
+        4000,
+      );
+    } finally {
+      restarting = false;
+      // Re-sync with the backend: a restart may have adopted an external
+      // daemon, which flips the managed flag.
+      await refreshDaemonStatus();
+    }
+  }
 
   async function load() {
     loading = true;
@@ -70,7 +121,7 @@
       saved = true;
       setTimeout(() => (saved = false), 2000);
       showNotification(
-        "Config saved. Restart to apply changes.",
+        "Config saved. Click “Restart Daemon” to apply changes.",
         "success",
         3000,
       );
@@ -94,6 +145,7 @@
 
   onMount(() => {
     load();
+    refreshDaemonStatus();
   });
 </script>
 
@@ -147,6 +199,18 @@
         <Save class="w-3 h-3" />
         Save
       </button>
+      <!-- Wrapper span so the tooltip also shows while the button is disabled -->
+      <span title={daemonButtonTitle}>
+        <button
+          type="button"
+          onclick={() => (restartConfirmOpen = true)}
+          disabled={!daemonManaged || restarting || dirty}
+          class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-warning text-warning-foreground hover:bg-warning/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+        >
+          <RefreshCw class="w-3 h-3 {restarting ? 'animate-spin' : ''}" />
+          {restarting ? "Restarting…" : "Restart Daemon"}
+        </button>
+      </span>
     </div>
   </div>
 
@@ -202,4 +266,13 @@
       {/if}
     </div>
   </div>
+
+  <ConfirmDialog
+    open={restartConfirmOpen}
+    title="Restart Daemon"
+    message={restartMessage}
+    confirmText="Restart"
+    onConfirm={doRestartDaemon}
+    onCancel={() => (restartConfirmOpen = false)}
+  />
 </div>
