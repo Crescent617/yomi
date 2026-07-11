@@ -197,6 +197,22 @@
   );
 </script>
 
+{#snippet messageTimestamp(
+  createdAt: string | undefined,
+  isStreaming: boolean,
+  isUser = false,
+)}
+  {#if createdAt && !isStreaming}
+    <div
+      class="flex text-[10px] leading-none text-muted-foreground/55 transition-colors group-hover:text-muted-foreground {isUser
+        ? 'mt-1 justify-end pr-1'
+        : 'justify-start pl-1'}"
+    >
+      <time datetime={createdAt}>{formatMessageTime(createdAt)}</time>
+    </div>
+  {/if}
+{/snippet}
+
 {#if activeSession}
   <div class="h-full relative">
     <div
@@ -226,18 +242,11 @@
                     isStreaming={item.isStreaming}
                   />
                 {/if}
-                {#if msg.created_at && !item.isStreaming}
-                  <div
-                    class="mt-1 flex text-[10px] leading-none text-muted-foreground/55 transition-colors group-hover:text-muted-foreground {msg.type ===
-                    'user'
-                      ? 'justify-end pr-1'
-                      : 'justify-start pl-1'}"
-                  >
-                    <time datetime={msg.created_at}>
-                      {formatMessageTime(msg.created_at)}
-                    </time>
-                  </div>
-                {/if}
+                {@render messageTimestamp(
+                  msg.created_at,
+                  item.isStreaming,
+                  msg.type === "user",
+                )}
               </div>
             {:else}
               <div class="group relative -mb-2 space-y-1">
@@ -252,6 +261,10 @@
                         content={textFromBlocks(m.content)}
                         isStreaming={item.isStreaming}
                       />
+                      {@render messageTimestamp(
+                        m.created_at,
+                        item.isStreaming,
+                      )}
                     </div>
                   {/if}
                 {/each}
