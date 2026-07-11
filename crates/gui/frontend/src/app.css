@@ -46,79 +46,81 @@
 }
 
 :root {
-  /* Zed One Light inspired palette */
-  --background: 0 0% 98%;              /* #fafafa — editor bg */
-  --foreground: 228 8% 24%;            /* #383a42 — One Light ink */
-  --card: 0 0% 100%;                   /* #ffffff */
-  --card-foreground: 228 8% 24%;       /* #383a42 */
-  --popover: 0 0% 100%;                /* #ffffff */
-  --popover-foreground: 228 8% 24%;    /* #383a42 */
-  --primary: 221 88% 58%;              /* #3b77f0 ≈ One Light blue #4078f2 */
-  --primary-foreground: 0 0% 100%;
-  --secondary: 228 12% 93%;            /* #eaebee — panel/element bg */
-  --secondary-foreground: 228 8% 24%;  /* #383a42 */
-  --muted: 228 12% 93%;                /* #eaebee */
-  --muted-foreground: 222 6% 44%;      /* #696c77 — One Light comment gray */
-  --accent: 228 12% 93%;               /* #eaebee */
-  --accent-foreground: 228 8% 24%;     /* #383a42 */
-  --destructive: 5 74% 55%;            /* #e0554a ≈ One Light red #e45649 */
-  --destructive-foreground: 0 0% 100%;
+  /* Zed One Light palette */
+  --background: 0 0% 98%; /* #fafafa — editor background */
+  --foreground: 228 6.5% 15.1%; /* #242529 — UI text */
+  --card: 240 2.3% 94.9%; /* #f2f2f3 — between editor and elevated surface */
+  --card-foreground: 228 6.5% 15.1%; /* #242529 */
+  --popover: 240 2.6% 92.4%; /* #ebebec */
+  --popover-foreground: 228 6.5% 15.1%; /* #242529 */
+  --primary: 227.5 69.8% 62.4%; /* #5c78e2 — accent text */
+  --primary-foreground: 0 0% 98%; /* #fafafa */
+  --secondary: 240 2.6% 92.4%; /* #ebebec — element background */
+  --secondary-foreground: 228 6.5% 15.1%; /* #242529 */
+  --muted: 240 2.6% 92.4%; /* #ebebec */
+  --muted-foreground: 240 1.1% 34.9%; /* #58585a — muted UI text */
+  --accent: 240 1.6% 87.6%; /* #dfdfe0 — hover */
+  --accent-foreground: 228 6.5% 15.1%; /* #242529 */
+  --destructive: 7.4 59.6% 57.3%; /* #d36151 */
+  --destructive-foreground: 0 0% 98%;
   --overlay: hsl(0 0% 0% / 0.4);
-  --subtle: hsl(0 0% 0% / 0.05);
-  --code-bg: hsl(0 0% 0% / 0.05);
-  --success: 119 34% 40%;              /* #479446 ≈ One Light green #50a14f */
-  --success-foreground: 0 0% 100%;
-  --warning: 41 99% 35%;               /* #b17a01 ≈ One Light yellow #c18401 */
-  --warning-foreground: 0 0% 100%;
-  --error: 345 84% 43%;                /* #ca1243 — One Light deep red */
-  --error-foreground: 0 0% 100%;
-  --info: 221 88% 58%;                 /* #3b77f0 — One Light blue */
-  --info-foreground: 0 0% 100%;
-  --border: 225 8% 85%;                /* #d6d8dc */
-  --input: 225 8% 85%;                 /* #d6d8dc */
-  --ring: 221 88% 58%;                 /* match primary */
+  --subtle: hsl(240 1.1% 34.9% / 0.1);
+  --code-bg: hsl(240 2.6% 92.4%); /* #ebebec — code surface */
+  --success: 108.9 28.2% 48.6%; /* #669f59 */
+  --success-foreground: 0 0% 98%;
+  --warning: 47.9 73.5% 37.1%; /* #a48819 */
+  --warning-foreground: 0 0% 98%;
+  --error: 7.4 59.6% 57.3%; /* #d36151 */
+  --error-foreground: 0 0% 98%;
+  --info: 227.5 69.8% 62.4%; /* #5c78e2 */
+  --info-foreground: 0 0% 98%;
+  --border: 240 0.9% 79%; /* #c9c9ca */
+  --input: 240 0.9% 79%; /* #c9c9ca */
+  --ring: 237.2 69.9% 70%; /* #7d82e8 */
 }
 
 .dark {
   color-scheme: dark;
-  /* Zed One Dark inspired palette */
-  --background: 222 14% 15%;           /* #20242b */
-  --foreground: 220 13% 73%;           /* #abb2bf */
-  --card: 222 14% 17%;                 /* #282c34 */
-  --card-foreground: 220 13% 73%;      /* #abb2bf */
-  --popover: 222 14% 17%;              /* #282c34 */
-  --popover-foreground: 220 13% 73%;   /* #abb2bf */
-  --primary: 207 82% 66%;              /* #61afef — One Dark blue */
-  --primary-foreground: 222 14% 12%;   /* dark ink on light-blue */
-  --secondary: 222 14% 21%;            /* #2f343e */
-  --secondary-foreground: 220 13% 73%; /* #abb2bf */
-  --muted: 222 14% 21%;                /* #2f343e */
-  --muted-foreground: 220 13% 40%;     /* #5c6370 */
-  --accent: 222 14% 21%;               /* #2f343e */
-  --accent-foreground: 220 13% 73%;   /* #abb2bf */
-  --destructive: 355 65% 65%;          /* #e06c75 — One Dark red, readable as text on dark bg */
-  --destructive-foreground: 222 14% 12%;
+  /* Zed One Dark palette */
+  --background: 218.2 12.1% 17.8%; /* #282c33 — editor background */
+  --foreground: 213.3 14.8% 88%; /* #dce0e5 — UI text */
+  --card: 220 13.8% 21.4%; /* #2f343e — elevated surface */
+  --card-foreground: 213.3 14.8% 88%; /* #dce0e5 */
+  --popover: 220 13.8% 21.4%; /* #2f343e */
+  --popover-foreground: 213.3 14.8% 88%; /* #dce0e5 */
+  --primary: 210.5 71.6% 68.2%; /* #74ade8 — accent text */
+  --primary-foreground: 218.2 12.1% 17.8%; /* #282c33 */
+  --secondary: 217.5 14.8% 21.2%; /* #2e343e — element background */
+  --secondary-foreground: 213.3 14.8% 88%; /* #dce0e5 */
+  --muted: 217.5 14.8% 21.2%; /* #2e343e */
+  --muted-foreground: 221.1 12.4% 70%; /* #a9afbc — muted UI text */
+  --accent: 217.5 12.9% 24.3%; /* #363c46 — hover */
+  --accent-foreground: 213.3 14.8% 88%; /* #dce0e5 */
+  --destructive: 356.8 50% 63.1%; /* #d07277 */
+  --destructive-foreground: 218.2 12.1% 17.8%;
   --overlay: hsl(0 0% 0% / 0.6);
-  --subtle: hsl(0 0% 100% / 0.1);
-  --code-bg: hsl(0 0% 100% / 0.05);
-  --success: 95 38% 62%;               /* #98c379 — One Dark green */
-  --success-foreground: 222 14% 12%;
-  --warning: 39 67% 69%;               /* #e5c07b — One Dark yellow */
-  --warning-foreground: 222 14% 12%;
-  --error: 355 65% 65%;                /* #e06c75 — One Dark red */
-  --error-foreground: 222 14% 12%;
-  --info: 207 82% 66%;                 /* #61afef — One Dark blue */
-  --info-foreground: 222 14% 12%;
-  --border: 222 12% 27%;               /* #3b414d */
-  --input: 222 12% 27%;                /* #3b414d */
-  --ring: 207 82% 66%;                 /* match primary */
+  --subtle: hsl(221.1 12.4% 70% / 0.1);
+  --code-bg: hsl(220 13.8% 21.4%); /* #2f343e — code surface */
+  --success: 90 34% 63.1%; /* #a1c181 */
+  --success-foreground: 218.2 12.1% 17.8%;
+  --warning: 40.7 57.7% 69.4%; /* #dec184 */
+  --warning-foreground: 218.2 12.1% 17.8%;
+  --error: 356.8 50% 63.1%; /* #d07277 */
+  --error-foreground: 218.2 12.1% 17.8%;
+  --info: 210.5 71.6% 68.2%; /* #74ade8 */
+  --info-foreground: 218.2 12.1% 17.8%;
+  --border: 222.4 10.8% 30.8%; /* #464b57 */
+  --input: 222.4 10.8% 30.8%; /* #464b57 */
+  --ring: 217.9 38% 44.9%; /* #47679e */
 }
 
 /* ── Base theme colors on body (portaled overlays inherit from here) ── */
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-feature-settings: "rlig" 1, "calt" 1;
+  font-feature-settings:
+    "rlig" 1,
+    "calt" 1;
 }
 
 /* ── Thin scrollbars everywhere ── */
@@ -146,4 +148,27 @@ body {
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Respect OS motion preferences while preserving visible state changes. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .animate-ping,
+  .animate-pulse,
+  .animate-breathe,
+  .roll-num {
+    animation: none !important;
+  }
 }

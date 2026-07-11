@@ -79,7 +79,8 @@ impl Tool for TaskUpdateTool {
     async fn exec(&self, args: Value, _ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let task_id = args["taskId"]
             .as_str()
-            .ok_or_else(|| KernelError::tool("taskId is required"))?
+            .filter(|task_id| !task_id.trim().is_empty())
+            .ok_or_else(|| KernelError::tool("taskId is required and must be non-empty"))?
             .to_string();
 
         let existing = self.store.get_task(&self.task_list_id, &task_id).await?;
@@ -132,25 +133,35 @@ impl Tool for TaskUpdateTool {
         let mut updates = TaskUpdates::default();
         let mut updated_fields = Vec::new();
 
-        if let Some(subject) = args["subject"].as_str() {
+        if let Some(subject) = args["subject"]
+            .as_str()
+            .filter(|subject| !subject.trim().is_empty())
+        {
             if subject != existing.subject {
                 updates.subject = Some(subject.to_string());
                 updated_fields.push("subject");
             }
         }
-        if let Some(description) = args["description"].as_str() {
+        if let Some(description) = args["description"]
+            .as_str()
+            .filter(|description| !description.trim().is_empty())
+        {
             if description != existing.description {
                 updates.description = Some(description.to_string());
                 updated_fields.push("description");
             }
         }
-        if let Some(owner) = args["owner"].as_str() {
+        if let Some(owner) = args["owner"]
+            .as_str()
+            .filter(|owner| !owner.trim().is_empty())
+        {
             if Some(owner.to_string()) != existing.owner {
                 updates.owner = Some(owner.to_string());
                 updated_fields.push("owner");
             }
         }
-        if let Some(status_str) = args["status"].as_str() {
+        let status_arg = args["status"].as_str().filter(|status| !status.is_empty());
+        if let Some(status_str) = status_arg {
             let status = match status_str {
                 "pending" => TaskStatus::Pending,
                 "in_progress" => TaskStatus::InProgress,
@@ -177,7 +188,11 @@ impl Tool for TaskUpdateTool {
             let mut new_blocks = existing.blocks.clone();
             let block_ids: Vec<String> = add_blocks
                 .iter()
-                .filter_map(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
+                .filter_map(|v| {
+                    v.as_str()
+                        .filter(|id| !id.trim().is_empty())
+                        .map(str::to_string)
+                })
                 .collect();
 
             for block_id in block_ids {
@@ -197,7 +212,11 @@ impl Tool for TaskUpdateTool {
             let mut new_blocked_by = existing.blocked_by.clone();
             let blocker_ids: Vec<String> = add_blocked_by
                 .iter()
-                .filter_map(|v| v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()))
+                .filter_map(|v| {
+                    v.as_str()
+                        .filter(|id| !id.trim().is_empty())
+                        .map(str::to_string)
+                })
                 .collect();
 
             for blocker_id in blocker_ids {
@@ -224,14 +243,10 @@ impl Tool for TaskUpdateTool {
                 task_id,
                 updated_fields: updated_fields.into_iter().map(|s| s.to_string()).collect(),
                 error: None,
-                status_change: if args["status"].as_str().is_some() {
-                    Some(StatusChange {
-                        from: existing.status.to_string(),
-                        to: task.status.to_string(),
-                    })
-                } else {
-                    None
-                },
+                status_change: status_arg.map(|_| StatusChange {
+                    from: existing.status.to_string(),
+                    to: task.status.to_string(),
+                }),
             };
 
             Ok(ToolOutput::text_with_summary(
@@ -253,3 +268,7 @@ impl Tool for TaskUpdateTool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "update_test.rs"]
+mod tests;

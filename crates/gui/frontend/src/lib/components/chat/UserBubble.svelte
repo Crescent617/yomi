@@ -135,21 +135,30 @@
 
     <!-- Text content -->
     {#if textFromBlocks(message.content).trim()}
-      <div class:truncate={isLong && !expanded}>
-        {@html rendered}
+      <div class="relative" class:message-collapsed={isLong && !expanded}>
+        <div class:truncate={isLong && !expanded}>
+          {@html rendered}
+        </div>
+        {#if isLong && !expanded}
+          <div
+            class="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-secondary to-transparent"
+            aria-hidden="true"
+          ></div>
+        {/if}
       </div>
       {#if isLong}
         <button
           type="button"
-          class="mt-1 text-xs text-primary hover:underline cursor-pointer"
+          class="relative z-10 mt-1 inline-flex text-xs font-medium text-primary hover:underline cursor-pointer"
           onclick={() => (expanded = !expanded)}
+          aria-expanded={expanded}
         >
-          {expanded ? "less" : "more"}
+          {expanded ? "Collapse" : "Show full message"}
         </button>
       {/if}
     {/if}
     <div
-      class="absolute left-0 -bottom-6 pl-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+      class="message-actions absolute right-full top-0 z-10 mr-1.5 translate-x-1 opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100"
     >
       <OperationBar {message} {session_id} />
     </div>
@@ -157,6 +166,13 @@
 </div>
 
 <style>
+  @media (hover: none) {
+    .message-actions {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
   .user-text :global(h1) {
     font-size: 1.25rem;
     font-weight: 700;
@@ -248,5 +264,8 @@
   .truncate {
     max-height: 120px;
     overflow: hidden;
+  }
+  .message-collapsed {
+    margin-bottom: -0.25rem;
   }
 </style>

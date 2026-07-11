@@ -388,7 +388,7 @@ impl ToolFlags {
     pub fn new(enable_subagent: bool) -> Self {
         Self {
             subagent: enable_subagent,
-            reminder: true,
+            reminder: false,
             goal: true,
             sleep: true,
         }

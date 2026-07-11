@@ -1,18 +1,26 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    Timer,
-    Plus,
-    Pause,
-    Trash2,
-    ChevronRight,
     AlertTriangle,
+    ArrowLeft,
+    CalendarClock,
     CheckCircle2,
-    XCircle,
-    Zap,
+    ChevronRight,
+    Clock3,
+    FileClock,
+    MessageSquare,
+    Pause,
+    Pencil,
+    Play,
+    Plus,
     RefreshCw,
+    RotateCcw,
+    Terminal,
+    Trash2,
   } from "lucide-svelte";
   import { automationStore } from "../../automation.svelte";
+  import type { CronJob } from "../../api";
+  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import CreateJobModal from "./CreateJobModal.svelte";
 
   interface Props {
@@ -21,43 +29,49 @@
 
   let { onToggleLeftPanel }: Props = $props();
 
+  let pendingAction = $state<{
+    job_id: string;
+    type: "run" | "toggle" | "delete";
+  } | null>(null);
+  let deleteTarget = $state<CronJob | null>(null);
+
   onMount(() => {
-    automationStore.load();
+    void automationStore.load();
   });
 
   function formatDate(iso: string | null): string {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    return d.toLocaleString();
+    if (!iso) return "Not yet";
+    return new Date(iso).toLocaleString([], {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
   }
 
   function timeUntil(iso: string | null): string {
-    if (!iso) return "—";
+    if (!iso) return "Not scheduled";
     const diff = new Date(iso).getTime() - Date.now();
     if (diff <= 0) return "Due now";
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h`;
-    return `${Math.floor(hours / 24)}d`;
+    const minutes = Math.floor(diff / 60_000);
+    if (minutes < 60) return `in ${Math.max(1, minutes)}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `in ${hours}h`;
+    return `in ${Math.floor(hours / 24)}d`;
   }
 
-  function statusIcon(status: string) {
+  function statusDotClass(status: CronJob["status"]): string {
     switch (status) {
       case "active":
-        return CheckCircle2;
+        return "bg-success";
       case "paused":
-        return Pause;
+        return "bg-warning";
       case "completed":
-        return CheckCircle2;
-      case "error":
-        return XCircle;
-      default:
-        return AlertTriangle;
+        return "bg-info";
+      case "failed":
+        return "bg-error";
     }
   }
 
-  function statusColor(status: string): string {
+  function statusTextClass(status: CronJob["status"]): string {
     switch (status) {
       case "active":
         return "text-success";
@@ -65,29 +79,67 @@
         return "text-warning";
       case "completed":
         return "text-info";
-      case "error":
+      case "failed":
         return "text-error";
-      default:
-        return "text-muted-foreground";
     }
+  }
+
+  function actionLabel(job: CronJob): string {
+    return job.action.type === "shell" ? "Shell command" : "Send message";
+  }
+
+  async function runJob(job: CronJob) {
+    if (pendingAction) return;
+    pendingAction = { job_id: job.id, type: "run" };
+    try {
+      await automationStore.trigger(job.id);
+    } finally {
+      pendingAction = null;
+    }
+  }
+
+  async function toggleJob(job: CronJob) {
+    if (pendingAction) return;
+    pendingAction = { job_id: job.id, type: "toggle" };
+    try {
+      await automationStore.toggleStatus(job);
+    } finally {
+      pendingAction = null;
+    }
+  }
+
+  async function deleteJob() {
+    if (!deleteTarget || pendingAction) return;
+    const job = deleteTarget;
+    pendingAction = { job_id: job.id, type: "delete" };
+    try {
+      await automationStore.delete(job.id);
+      deleteTarget = null;
+    } finally {
+      pendingAction = null;
+    }
+  }
+
+  function isPending(job_id: string, type: "run" | "toggle" | "delete") {
+    return pendingAction?.job_id === job_id && pendingAction.type === type;
   }
 </script>
 
-<div class="flex flex-col h-full w-full">
-  <!-- Header -->
-  <div
-    class="flex items-center justify-between px-4 py-3 border-b border-border shrink-0"
+<div class="flex h-full w-full flex-col">
+  <header
+    class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-4 lg:px-6"
   >
-    <div class="flex items-center gap-2">
+    <div class="flex min-w-0 items-center gap-2">
       {#if onToggleLeftPanel}
         <button
           type="button"
           onclick={onToggleLeftPanel}
-          class="lg:hidden p-1.5 rounded hover:bg-secondary text-muted-foreground"
+          class="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring lg:hidden"
           title="Toggle sidebar"
+          aria-label="Toggle sidebar"
         >
           <svg
-            class="w-5 h-5"
+            class="size-5"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -95,49 +147,77 @@
           >
         </button>
       {/if}
-      <Timer class="w-5 h-5 text-primary" />
-      <h1 class="text-lg font-semibold">Automation</h1>
+      <CalendarClock class="size-5 shrink-0 text-primary" />
+      <h1 class="truncate text-lg font-semibold">Automation</h1>
+      <span class="hidden text-xs text-muted-foreground sm:inline"
+        >{automationStore.jobs.length} tasks</span
+      >
     </div>
-    <button
-      type="button"
-      onclick={() => automationStore.openCreate()}
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90"
-    >
-      <Plus class="w-4 h-4" />
-      New Task
-    </button>
-  </div>
 
-  <!-- Daemon status banner (placeholder) -->
-  <div
-    class="px-4 py-2 bg-muted/50 border-b border-border text-xs text-muted-foreground shrink-0"
-  >
-    <span class="inline-block w-2 h-2 rounded-full bg-success mr-1.5"></span>
-    Daemon running — tasks will execute on schedule
-  </div>
+    <div class="flex shrink-0 items-center gap-1.5">
+      <button
+        type="button"
+        onclick={() => automationStore.load()}
+        disabled={automationStore.loading}
+        class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+        title="Refresh tasks"
+        aria-label="Refresh tasks"
+      >
+        <RefreshCw
+          class="size-4 {automationStore.loading ? 'animate-spin' : ''}"
+        />
+      </button>
+      <button
+        type="button"
+        onclick={() => automationStore.openCreate()}
+        class="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/10 px-3 text-xs font-medium text-primary transition-colors hover:border-primary/40 hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Plus class="size-4" />
+        New Task
+      </button>
+    </div>
+  </header>
 
-  <!-- Content -->
-  <div class="flex-1 flex min-h-0 overflow-hidden">
-    <!-- Job list -->
-    <div
-      class="w-full lg:w-80 xl:w-96 border-r border-border flex flex-col min-h-0 shrink-0 overflow-hidden"
+  <div class="flex min-h-0 flex-1 overflow-hidden">
+    <aside
+      class="{automationStore.selectedJob
+        ? 'hidden lg:flex'
+        : 'flex'} w-full shrink-0 flex-col overflow-hidden border-r border-border lg:w-80 xl:w-96"
+      aria-label="Scheduled tasks"
     >
+      <div
+        class="flex h-10 shrink-0 items-center justify-between border-b border-border px-4 text-xs text-muted-foreground"
+      >
+        <span class="font-medium uppercase tracking-wide">Tasks</span>
+        <span>{automationStore.jobs.length}</span>
+      </div>
+
       {#if automationStore.loading && automationStore.jobs.length === 0}
         <div
-          class="flex-1 flex items-center justify-center text-muted-foreground text-sm"
+          class="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"
         >
-          Loading...
+          <RefreshCw class="size-4 animate-spin" />
+          Loading tasks
         </div>
       {:else if automationStore.jobs.length === 0}
         <div
-          class="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-3 p-6"
+          class="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center"
         >
-          <Timer class="w-10 h-10 opacity-40" />
-          <p class="text-sm">No scheduled tasks yet.</p>
+          <div
+            class="flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground"
+          >
+            <FileClock class="size-5" />
+          </div>
+          <div>
+            <p class="text-sm font-medium">No scheduled tasks</p>
+            <p class="mt-1 max-w-56 text-xs text-muted-foreground">
+              Create a task to send a message or run a command automatically.
+            </p>
+          </div>
           <button
             type="button"
             onclick={() => automationStore.openCreate()}
-            class="text-sm text-primary hover:underline"
+            class="text-xs font-medium text-primary hover:underline"
           >
             Create your first task
           </button>
@@ -148,219 +228,283 @@
             <button
               type="button"
               onclick={() => automationStore.select(job.id)}
-              class="w-full text-left px-4 py-3 border-b border-border/50 transition-colors
-                     {automationStore.selectedJobId === job.id
-                ? 'bg-accent'
-                : 'hover:bg-muted/50'}"
+              class="group relative w-full border-b border-border/50 px-4 py-3 text-left transition-colors hover:bg-secondary/40 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring {automationStore.selectedJobId ===
+              job.id
+                ? 'bg-primary/5'
+                : ''}"
             >
-              <div class="flex items-center justify-between gap-2">
-                <div class="flex items-center gap-2 min-w-0">
-                  <svelte:component
-                    this={statusIcon(job.status)}
-                    class="w-4 h-4 shrink-0 {statusColor(job.status)}"
-                  />
-                  <span class="font-medium truncate">{job.name}</span>
+              {#if automationStore.selectedJobId === job.id}
+                <span
+                  class="absolute inset-y-2 left-0 w-0.5 rounded-r bg-primary"
+                  aria-hidden="true"
+                ></span>
+              {/if}
+              <div class="flex items-start gap-2.5">
+                <span
+                  class="mt-1.5 size-2 shrink-0 rounded-full {statusDotClass(
+                    job.status,
+                  )}"
+                  title={job.status}
+                ></span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <span class="min-w-0 flex-1 truncate text-sm font-medium"
+                      >{job.name}</span
+                    >
+                    <ChevronRight
+                      class="size-4 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5"
+                    />
+                  </div>
+                  <div
+                    class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    {#if job.action.type === "shell"}
+                      <Terminal class="size-3 shrink-0" />
+                    {:else}
+                      <MessageSquare class="size-3 shrink-0" />
+                    {/if}
+                    <span class="truncate">{actionLabel(job)}</span>
+                  </div>
+                  <div
+                    class="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <code class="truncate font-mono text-foreground/70"
+                      >{job.schedule}</code
+                    >
+                    <span aria-hidden="true">·</span>
+                    <span class="shrink-0">{timeUntil(job.next_run_at)}</span>
+                  </div>
                 </div>
-                <ChevronRight class="w-4 h-4 shrink-0 text-muted-foreground" />
-              </div>
-              <div
-                class="mt-1 flex items-center gap-2 text-xs text-muted-foreground"
-              >
-                <code class="font-mono bg-code-bg rounded px-1"
-                  >{job.schedule}</code
-                >
-                <span>·</span>
-                <span>{timeUntil(job.next_run_at)}</span>
               </div>
             </button>
           {/each}
         </div>
       {/if}
-    </div>
+    </aside>
 
-    <!-- Detail panel -->
     {#if automationStore.selectedJob}
       {@const job = automationStore.selectedJob}
-      <div class="hidden lg:flex flex-col flex-1 min-h-0 overflow-hidden">
-        <div class="px-6 py-4 border-b border-border shrink-0">
-          <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold">{job.name}</h2>
-            <div class="flex items-center gap-1">
-              <button
-                type="button"
-                onclick={() => automationStore.trigger(job.id)}
-                class="p-2 rounded hover:bg-secondary text-muted-foreground"
-                title="Run now"
-              >
-                <Zap class="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onclick={() => automationStore.toggleStatus(job)}
-                class="p-2 rounded hover:bg-secondary text-muted-foreground"
-                title={job.status === "active" ? "Pause" : "Activate"}
-              >
-                {#if job.status === "active"}
-                  <Pause class="w-4 h-4" />
-                {:else}
-                  <RefreshCw class="w-4 h-4" />
-                {/if}
-              </button>
-              <button
-                type="button"
-                onclick={() => automationStore.openEdit(job.id)}
-                class="p-2 rounded hover:bg-secondary text-muted-foreground"
-                title="Edit"
-              >
-                <svg
-                  class="w-4 h-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  ><path
-                    d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
-                  /><path
-                    d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
-                  /></svg
+      <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div
+          class="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3 lg:px-6"
+        >
+          <div class="flex min-w-0 items-start gap-2">
+            <button
+              type="button"
+              onclick={() => automationStore.select(null)}
+              class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground lg:hidden"
+              title="Back to tasks"
+              aria-label="Back to tasks"
+            >
+              <ArrowLeft class="size-4" />
+            </button>
+            <div class="min-w-0">
+              <div class="flex min-w-0 items-center gap-2">
+                <h2 class="truncate text-base font-semibold">{job.name}</h2>
+                <span
+                  class="shrink-0 text-xs font-medium capitalize {statusTextClass(
+                    job.status,
+                  )}">{job.status}</span
                 >
-              </button>
-              <button
-                type="button"
-                onclick={() => {
-                  if (confirm("Delete this task?"))
-                    automationStore.delete(job.id);
-                }}
-                class="p-2 rounded hover:bg-secondary text-error"
-                title="Delete"
+              </div>
+              <div
+                class="mt-1 flex items-center gap-2 text-xs text-muted-foreground"
               >
-                <Trash2 class="w-4 h-4" />
-              </button>
+                <code class="font-mono">{job.schedule}</code>
+                <span aria-hidden="true">·</span>
+                <span>{timeUntil(job.next_run_at)}</span>
+              </div>
             </div>
           </div>
-          <div
-            class="mt-1 flex items-center gap-2 text-sm text-muted-foreground"
-          >
-            <span
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-xs capitalize"
-              >{job.status}</span
+
+          <div class="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onclick={() => runJob(job)}
+              disabled={pendingAction !== null}
+              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              title="Run now"
+              aria-label="Run now"
             >
-            <code
-              class="font-mono text-xs bg-code-bg rounded px-1"
-              >{job.schedule}</code
+              {#if isPending(job.id, "run")}
+                <RefreshCw class="size-4 animate-spin" />
+              {:else}
+                <Play class="size-4" />
+              {/if}
+            </button>
+            <button
+              type="button"
+              onclick={() => toggleJob(job)}
+              disabled={pendingAction !== null}
+              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              title={job.status === "active" ? "Pause task" : "Activate task"}
+              aria-label={job.status === "active"
+                ? "Pause task"
+                : "Activate task"}
             >
+              {#if isPending(job.id, "toggle")}
+                <RefreshCw class="size-4 animate-spin" />
+              {:else if job.status === "active"}
+                <Pause class="size-4" />
+              {:else}
+                <RotateCcw class="size-4" />
+              {/if}
+            </button>
+            <button
+              type="button"
+              onclick={() => automationStore.openEdit(job.id)}
+              disabled={pendingAction !== null}
+              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              title="Edit task"
+              aria-label="Edit task"
+            >
+              <Pencil class="size-4" />
+            </button>
+            <button
+              type="button"
+              onclick={() => (deleteTarget = job)}
+              disabled={pendingAction !== null}
+              class="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              title="Delete task"
+              aria-label="Delete task"
+            >
+              <Trash2 class="size-4" />
+            </button>
           </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-          <!-- Action -->
-          <section>
+        <div class="flex-1 overflow-y-auto">
+          <section class="border-b border-border px-4 py-5 lg:px-6">
             <h3
-              class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2"
+              class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               Action
             </h3>
-            <div class="bg-muted/30 rounded-lg p-3 text-sm space-y-1">
-              {#if job.action.type === "send_message"}
-                <div class="flex items-center gap-2">
-                  <span class="text-base">💬</span>
-                  <span class="font-medium">Send Message</span>
-                </div>
-                {#if job.action.session_id}
-                  <div class="text-muted-foreground">
-                    Session: <span class="font-mono"
-                      >{job.action.session_id}</span
-                    >
-                  </div>
-                {/if}
-                {#if job.action.content}
-                  <pre
-                    class="mt-1 bg-code-bg rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
-                      .action.content}</pre>
-                {/if}
-              {:else if job.action.type === "shell"}
-                <div class="flex items-center gap-2">
-                  <span class="text-base">🔧</span>
-                  <span class="font-medium">Shell Command</span>
-                </div>
-                {#if job.action.command}
-                  <pre
-                    class="mt-1 bg-code-bg rounded px-2 py-1 whitespace-pre-wrap text-xs">{job
-                      .action.command}</pre>
-                {/if}
-                {#if job.action.working_dir}
-                  <div class="text-muted-foreground text-xs">
-                    Working dir: <span class="font-mono"
-                      >{job.action.working_dir}</span
-                    >
-                  </div>
-                {/if}
+            <div class="mt-3 flex items-center gap-2 text-sm font-medium">
+              {#if job.action.type === "shell"}
+                <Terminal class="size-4 text-primary" />
               {:else}
-                <div>Unknown action type: {job.action.type}</div>
+                <MessageSquare class="size-4 text-primary" />
               {/if}
+              {actionLabel(job)}
             </div>
+
+            {#if job.action.session_id}
+              <div class="mt-2 text-xs text-muted-foreground">
+                Session
+                <code class="ml-1 font-mono text-foreground"
+                  >{job.action.session_id}</code
+                >
+              </div>
+            {/if}
+            {#if job.action.working_dir}
+              <div class="mt-2 text-xs text-muted-foreground">
+                Working directory
+                <code class="ml-1 font-mono text-foreground"
+                  >{job.action.working_dir}</code
+                >
+              </div>
+            {/if}
+            {#if job.action.content || job.action.command}
+              <pre
+                class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-code-bg px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{job
+                  .action.content ?? job.action.command}</pre>
+            {/if}
           </section>
 
-          <!-- Schedule info -->
-          <section>
+          <section class="border-b border-border px-4 py-5 lg:px-6">
             <h3
-              class="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2"
+              class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
             >
               Schedule
             </h3>
-            <div class="grid grid-cols-2 gap-3 text-sm">
-              <div class="bg-muted/30 rounded-lg p-3">
-                <div class="text-muted-foreground text-xs mb-1">Next run</div>
-                <div class="font-medium">{formatDate(job.next_run_at)}</div>
+            <dl
+              class="mt-3 grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 xl:grid-cols-4"
+            >
+              <div>
+                <dt
+                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <Clock3 class="size-3.5" /> Next run
+                </dt>
+                <dd class="mt-1 text-sm font-medium">
+                  {formatDate(job.next_run_at)}
+                </dd>
               </div>
-              <div class="bg-muted/30 rounded-lg p-3">
-                <div class="text-muted-foreground text-xs mb-1">Last run</div>
-                <div class="font-medium">{formatDate(job.last_run_at)}</div>
+              <div>
+                <dt
+                  class="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <CheckCircle2 class="size-3.5" /> Last run
+                </dt>
+                <dd class="mt-1 text-sm font-medium">
+                  {formatDate(job.last_run_at)}
+                </dd>
               </div>
-              <div class="bg-muted/30 rounded-lg p-3">
-                <div class="text-muted-foreground text-xs mb-1">Runs</div>
-                <div class="font-medium">
+              <div>
+                <dt class="text-xs text-muted-foreground">Runs</dt>
+                <dd class="mt-1 text-sm font-medium tabular-nums">
                   {job.run_count}{#if job.max_runs}
                     / {job.max_runs}{/if}
-                </div>
+                </dd>
               </div>
-              <div class="bg-muted/30 rounded-lg p-3">
-                <div class="text-muted-foreground text-xs mb-1">Expires</div>
-                <div class="font-medium">{formatDate(job.expires_at)}</div>
+              <div>
+                <dt class="text-xs text-muted-foreground">Expires</dt>
+                <dd class="mt-1 text-sm font-medium">
+                  {formatDate(job.expires_at)}
+                </dd>
               </div>
-            </div>
+            </dl>
           </section>
 
-          <!-- Last error -->
           {#if job.last_error}
-            <section>
+            <section class="px-4 py-5 lg:px-6">
               <h3
-                class="text-xs font-semibold uppercase tracking-wider text-error mb-2"
+                class="text-xs font-medium uppercase tracking-wide text-error"
               >
-                Last Error
+                Last error
               </h3>
               <div
-                class="bg-error/5 border border-error/20 rounded-lg p-3 text-sm text-error"
+                class="mt-3 flex items-start gap-2 rounded-md border border-error/20 bg-error/10 px-3 py-2 text-sm text-error"
               >
-                {job.last_error}
+                <AlertTriangle class="mt-0.5 size-4 shrink-0" />
+                <span class="whitespace-pre-wrap">{job.last_error}</span>
               </div>
             </section>
           {/if}
         </div>
-      </div>
+      </main>
+    {:else}
+      <main
+        class="hidden min-w-0 flex-1 items-center justify-center p-8 text-center lg:flex"
+      >
+        <div class="max-w-64">
+          <div
+            class="mx-auto flex size-11 items-center justify-center rounded-full bg-secondary text-muted-foreground"
+          >
+            <FileClock class="size-5" />
+          </div>
+          <p class="mt-3 text-sm font-medium">Select a task</p>
+          <p class="mt-1 text-xs text-muted-foreground">
+            Choose a scheduled task to inspect its action, schedule, and run
+            history.
+          </p>
+        </div>
+      </main>
     {/if}
   </div>
 
   {#if automationStore.error}
     <div
-      class="shrink-0 px-4 py-2 bg-error/10 border-t border-error/20 text-sm text-error flex items-center gap-2"
+      class="flex shrink-0 items-center gap-2 border-t border-error/20 bg-error/10 px-4 py-2 text-sm text-error"
+      role="alert"
     >
-      <AlertTriangle class="w-4 h-4" />
-      {automationStore.error}
+      <AlertTriangle class="size-4 shrink-0" />
+      <span class="min-w-0 flex-1 truncate">{automationStore.error}</span>
       <button
         type="button"
         onclick={() => (automationStore.error = null)}
-        class="ml-auto text-xs hover:underline">Dismiss</button
+        class="text-xs font-medium hover:underline">Dismiss</button
       >
     </div>
   {/if}
@@ -374,7 +518,23 @@
     onClose={() => automationStore.closeModal()}
     onSaved={() => {
       automationStore.closeModal();
-      automationStore.load();
+      void automationStore.load();
     }}
   />
 {/if}
+
+<ConfirmDialog
+  open={deleteTarget !== null}
+  title="Delete scheduled task?"
+  message={deleteTarget
+    ? `“${deleteTarget.name}” will be permanently deleted. This cannot be undone.`
+    : ""}
+  confirmText={deleteTarget && isPending(deleteTarget.id, "delete")
+    ? "Deleting..."
+    : "Delete"}
+  cancelText="Cancel"
+  onConfirm={deleteJob}
+  onCancel={() => {
+    if (!pendingAction) deleteTarget = null;
+  }}
+/>

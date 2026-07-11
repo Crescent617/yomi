@@ -84,7 +84,7 @@ async fn test_todo_write_missing_content() {
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("todo content is required"));
+        .contains("todo id and non-empty content are required"));
 }
 
 #[tokio::test]
@@ -307,4 +307,110 @@ async fn test_todo_unknown_action() {
 
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("unknown action"));
+}
+
+#[tokio::test]
+async fn test_todo_write_empty_content() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage);
+
+    let input = json!({
+        "action": "write",
+        "todos": [{"id": "1", "content": "", "status": "pending"}]
+    });
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    let result = tool.exec(input, ctx).await;
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("todo id and non-empty content are required"));
+}
+
+#[tokio::test]
+async fn test_todo_update_rejects_blank_id() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage);
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    let result = tool
+        .exec(
+            json!({"action": "update", "todos": [{"id": "   ", "status": "completed"}]}),
+            ctx,
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("update item must have non-empty id"));
+}
+
+#[tokio::test]
+async fn test_todo_update_ignores_blank_optional_fields() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage.clone());
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(
+        json!({
+            "action": "write",
+            "todos": [{"id": "1", "content": "Task 1", "status": "pending"}]
+        }),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(
+        json!({
+            "action": "update",
+            "todos": [{"id": "1", "content": "   ", "status": ""}]
+        }),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    let loaded = storage.load("test-session").await.unwrap().unwrap();
+    let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
+    assert_eq!(loaded_json["todos"][0]["content"], "Task 1");
+    assert_eq!(loaded_json["todos"][0]["status"], "pending");
+}
+
+#[tokio::test]
+async fn test_todo_update_blank_notes_removes_notes() {
+    let (storage, _temp) = create_test_storage().await;
+    let tool = TodoTool::new(storage.clone());
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(
+        json!({
+            "action": "write",
+            "todos": [{
+                "id": "1",
+                "content": "Task 1",
+                "status": "pending",
+                "notes": "Original note"
+            }]
+        }),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    let ctx = ToolExecCtx::new("test", "/tmp", "test-session");
+    tool.exec(
+        json!({"action": "update", "todos": [{"id": "1", "notes": "   "}]}),
+        ctx,
+    )
+    .await
+    .unwrap();
+
+    let loaded = storage.load("test-session").await.unwrap().unwrap();
+    let loaded_json: Value = serde_json::from_str(&loaded).unwrap();
+    assert!(loaded_json["todos"][0].get("notes").is_none());
 }

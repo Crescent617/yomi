@@ -1,26 +1,28 @@
 <script lang="ts">
-  import { Loader2, FileEdit, FileText } from "lucide-svelte";
+  import { Loader2 } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
   import { parseEditArgs, parseWriteArgs, diffLines } from "./tool-utils";
 
-  let { tool }: { tool: ToolCall } = $props();
+  let { tool, embedded = false }: { tool: ToolCall; embedded?: boolean } =
+    $props();
 
   const editArgs = $derived(parseEditArgs(tool.arguments ?? ""));
   const writeArgs = $derived(parseWriteArgs(tool.arguments ?? ""));
 </script>
 
 <div
-  class="px-3 pb-2 space-y-1.5 border-t border-subtle max-h-96 overflow-y-auto"
+  class="space-y-1.5 max-h-96 overflow-y-auto {embedded
+    ? 'py-1 pr-1'
+    : 'border-t border-subtle px-3 pb-2'}"
 >
   <!-- Edit tool: diff view -->
   {#if editArgs}
     <div class="text-xs">
-      <div
-        class="font-medium mb-1 opacity-60 flex items-center gap-1.5"
-      >
-        <FileEdit class="w-3.5 h-3.5" />
-        <span class="font-mono">{editArgs.path}</span>
-      </div>
+      {#if !embedded}
+        <div class="font-medium mb-1 opacity-60 flex items-center gap-1.5">
+          <span class="font-mono">{editArgs.path}</span>
+        </div>
+      {/if}
       <div
         class="rounded border border-subtle bg-code-bg overflow-hidden font-mono text-[11px] leading-relaxed"
       >
@@ -34,9 +36,7 @@
               class="shrink-0 w-5 text-right pr-1 select-none
               {line.type === 'add' ? 'text-success' : ''}
               {line.type === 'del' ? 'text-error' : ''}
-              {line.type === 'context'
-                ? 'text-muted-foreground'
-                : ''}"
+              {line.type === 'context' ? 'text-muted-foreground' : ''}"
             >
               {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
             </span>
@@ -44,9 +44,7 @@
               class="whitespace-pre-wrap flex-1 min-w-0
               {line.type === 'add' ? 'text-success' : ''}
               {line.type === 'del' ? 'text-error' : ''}
-              {line.type === 'context'
-                ? 'text-foreground/80'
-                : ''}"
+              {line.type === 'context' ? 'text-foreground/80' : ''}"
             >
               {line.text}
             </span>
@@ -58,12 +56,11 @@
     <!-- Write tool: content view -->
   {:else if writeArgs}
     <div class="text-xs">
-      <div
-        class="font-medium mb-1 opacity-60 flex items-center gap-1.5"
-      >
-        <FileText class="w-3.5 h-3.5" />
-        <span class="font-mono">{writeArgs.file_path}</span>
-      </div>
+      {#if !embedded}
+        <div class="font-medium mb-1 opacity-60 flex items-center gap-1.5">
+          <span class="font-mono">{writeArgs.file_path}</span>
+        </div>
+      {/if}
       <pre
         class="bg-code-bg rounded px-2.5 py-2 whitespace-pre-wrap overflow-x-auto text-[11px] leading-relaxed font-mono text-foreground/80">{writeArgs.content}</pre>
     </div>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    Send,
+    ArrowUp,
     Command,
     Square,
     Clock,
@@ -8,12 +8,7 @@
     X,
     Wrench,
   } from "lucide-svelte";
-  import {
-    levelDescription,
-    levelIcon,
-    levelColor,
-    type PermissionLevel,
-  } from "../../permission";
+  import type { PermissionLevel } from "../../permission";
   import * as api from "../../api";
   import { buildContentBlocks } from "../../types";
   import {
@@ -32,6 +27,7 @@
   import FilePicker from "../filePicker/FilePicker.svelte";
 
   import ModelSelector from "./ModelSelector.svelte";
+  import PermissionSelector from "./PermissionSelector.svelte";
 
   let content = $state("");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
@@ -73,6 +69,27 @@
   const isStreaming = $derived(
     activeSession?.phase === "streaming" ||
       activeSession?.phase === "executing_tool",
+  );
+
+  let context_window = $state(0);
+  const total_tokens = $derived(activeSession?.token_usage?.total_tokens ?? 0);
+  const context_percent = $derived(
+    context_window > 0 && total_tokens > 0
+      ? (total_tokens / context_window) * 100
+      : null,
+  );
+  const context_progress_percent = $derived(
+    context_percent === null ? 0 : Math.min(context_percent, 100),
+  );
+  const context_segments = $derived(
+    context_progress_percent === 0
+      ? 0
+      : Math.max(1, Math.ceil(context_progress_percent / 20)),
+  );
+  const context_title = $derived(
+    context_percent !== null
+      ? `${total_tokens.toLocaleString()} of ${context_window.toLocaleString()} tokens used (${context_percent.toFixed(1)}%) · ${Math.max(context_window - total_tokens, 0).toLocaleString()} remaining`
+      : "",
   );
 
   // detect completion triggers
@@ -920,7 +937,7 @@
     </div>
   {/if}
 
-  <div class="rounded-xl bg-background overflow-hidden">
+  <div class="rounded-lg bg-background overflow-hidden">
     {#if inlineImages.length > 0}
       <div class="flex flex-wrap gap-2 px-3 pt-3 pb-1">
         {#each inlineImages as img (img.id)}
@@ -972,8 +989,9 @@
         <button
           type="button"
           onclick={handleCancel}
-          class="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground h-9 w-9 hover:bg-destructive/90 active:scale-95 transition-all shrink-0"
-          title="Cancel"
+          class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-destructive text-destructive-foreground transition-all hover:bg-destructive/90 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          aria-label="Stop generating"
+          title="Stop generating"
         >
           <Square class="w-4 h-4 fill-current" />
         </button>
@@ -984,9 +1002,11 @@
           disabled={!content.trim() ||
             !sessionState.activeSessionId ||
             isSending}
-          class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-9 w-9 hover:bg-primary/90 disabled:opacity-50 shrink-0"
+          class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background enabled:bg-primary enabled:text-primary-foreground enabled:hover:bg-primary/90 enabled:active:scale-95 disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground/60"
+          aria-label="Send message"
+          title="Send message"
         >
-          <Send size={16} />
+          <ArrowUp size={17} strokeWidth={2.25} />
         </button>
       {/if}
     </div>
@@ -1015,35 +1035,60 @@
       </div>
     {/if}
 
-    <div class="flex items-center gap-1 pb-1">
-      <button
-        type="button"
-        onclick={attachFiles}
-        class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
-        title="Attach files"
-      >
-        <Paperclip size={14} />
-      </button>
-      <!-- Permission level -->
-      <div
-        class="flex items-center gap-1 rounded-md border border-border px-1 py-0.5"
-      >
-        {#each ["safe", "caution", "dangerous"] as PermissionLevel[] as level (level)}
-          {@const Icon = levelIcon(level)}
-          <button
-            type="button"
-            onclick={() => handlePermissionSet(level)}
-            class="p-0.5 rounded transition-colors {activeSession.permission_level ===
-            level
-              ? levelColor(level)
-              : 'text-muted-foreground hover:text-foreground'}"
-            title={levelDescription(level)}
-          >
-            <Icon class="w-4 h-4" />
-          </button>
-        {/each}
+    <div class="flex items-center justify-between gap-2 pb-1">
+      <div class="flex min-w-0 items-center gap-1">
+        <button
+          type="button"
+          onclick={attachFiles}
+          class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+          title="Attach files"
+        >
+          <Paperclip size={14} />
+        </button>
+        <PermissionSelector
+          value={(activeSession.permission_level as PermissionLevel) ??
+            "caution"}
+          onSelect={handlePermissionSet}
+        />
+        <ModelSelector
+          session_id={activeSession.id}
+          onContextWindowChange={(value) => (context_window = value)}
+        />
       </div>
-      <ModelSelector session_id={activeSession.id} />
+      {#if context_percent !== null}
+        <div
+          class="group/context flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary/50"
+          title={context_title}
+          aria-label={`Context usage ${context_percent.toFixed(1)} percent`}
+        >
+          <span
+            class="flex items-center gap-0.5"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={Math.round(context_progress_percent)}
+          >
+            {#each Array(5) as _, index (index)}
+              <span
+                class="h-2 w-1.5 rounded-[2px] transition-colors {index >=
+                context_segments
+                  ? 'bg-secondary'
+                  : context_percent >= 90
+                    ? 'bg-error'
+                    : context_percent >= 70
+                      ? 'bg-warning'
+                      : 'bg-muted-foreground'}"
+              ></span>
+            {/each}
+          </span>
+          <span
+            class="font-mono tabular-nums leading-none"
+            class:text-warning={context_percent >= 70 && context_percent < 90}
+            class:text-error={context_percent >= 90}
+            >{Math.round(context_percent)}%</span
+          >
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

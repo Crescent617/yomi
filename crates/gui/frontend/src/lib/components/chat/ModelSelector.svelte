@@ -7,13 +7,16 @@
     type ModelInfo,
   } from "../../api";
   import { getSession } from "../../state.svelte";
+  import { getHomeModel, setHomeModel } from "../../settings.svelte";
+  import { formatTokens } from "../../utils";
   import { Cpu } from "lucide-svelte";
 
   interface Props {
     session_id?: string;
+    onContextWindowChange?: (context_window: number) => void;
   }
 
-  let { session_id }: Props = $props();
+  let { session_id, onContextWindowChange }: Props = $props();
 
   let models = $state<ModelInfo[]>([]);
   let activeModel = $state<string>("");
@@ -34,8 +37,17 @@
     try {
       const res = await getModels();
       models = res.models;
-      if (!session_id && !activeModel && models.length > 0) {
-        activeModel = models[0].name;
+      if (!session_id && models.length > 0) {
+        const savedModel = await getHomeModel();
+        if (session_id) return;
+        const nextModel =
+          savedModel && models.some((model) => model.name === savedModel)
+            ? savedModel
+            : models[0].name;
+        activeModel = nextModel;
+        if (savedModel !== nextModel) {
+          await setHomeModel(nextModel);
+        }
       }
     } catch (e) {
       error = errorMessage(e);
@@ -45,12 +57,9 @@
   async function loadSessionModel(sid: string) {
     try {
       const key = await getSessionModel(sid);
-      // Discard stale responses if the prop changed while awaiting
       if (session_id !== sid) return;
       activeModel = key;
       error = null;
-      // Note: do NOT write the resolved default into session.model_key —
-      // sessions using the default model keep model_key = null semantics.
     } catch (e) {
       if (session_id !== sid) return;
       error = errorMessage(e);
@@ -64,6 +73,7 @@
     }
     if (!session_id) {
       activeModel = key;
+      await setHomeModel(key);
       open = false;
       return;
     }
@@ -71,10 +81,8 @@
     loading = true;
     try {
       await setSessionModel(sid, key);
-      // Update local session state so InfoBar reacts immediately
       const session = getSession(sid);
       if (session) session.model_key = key;
-      // Only touch local display state if we're still on the same session
       if (session_id === sid) {
         activeModel = key;
         error = null;
@@ -104,47 +112,62 @@
     }
   }
 
-  const activeLabel = $derived.by(() => {
-    const m = models.find((m) => m.name === activeModel);
-    return m ? m.name : activeModel || "Model";
+  const activeModelInfo = $derived(
+    models.find((model) => model.name === activeModel) ?? null,
+  );
+
+  const activeLabel = $derived(activeModelInfo?.name ?? activeModel ?? "Model");
+
+  $effect(() => {
+    onContextWindowChange?.(activeModelInfo?.context_window ?? 0);
   });
 </script>
 
 <svelte:window onclick={handleClickOutside} />
 
-{#if models.length > 1}
-  <div class="relative">
-    <button
-      bind:this={buttonRef}
-      type="button"
-      onclick={() => (open = !open)}
-      class="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary/80 transition-colors text-xs text-muted-foreground hover:text-foreground border border-transparent hover:border-border"
-      title={error ?? "Switch model"}
-      disabled={loading}
-    >
-      <Cpu size={12} />
-      <span class="max-w-[220px] truncate">{activeLabel}</span>
-      {#if loading}
-        <span class="animate-spin ml-0.5">⟳</span>
-      {/if}
-    </button>
+{#if activeModelInfo || models.length > 0}
+  <div class="relative min-w-0">
+    {#if models.length > 1}
+      <button
+        bind:this={buttonRef}
+        type="button"
+        onclick={() => (open = !open)}
+        class="flex max-w-60 items-center gap-1 rounded-md border border-transparent px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-secondary/80 hover:text-foreground"
+        title={error ?? "Switch model"}
+        disabled={loading}
+      >
+        <Cpu size={12} class="shrink-0" />
+        <span class="truncate">{activeLabel}</span>
+        {#if loading}
+          <span class="ml-0.5 animate-spin">⟳</span>
+        {/if}
+      </button>
+    {:else}
+      <span
+        class="flex max-w-60 items-center gap-1 px-2 py-1 text-xs text-muted-foreground"
+        title={activeModelInfo?.model_id ?? activeLabel}
+      >
+        <Cpu size={12} class="shrink-0" />
+        <span class="truncate">{activeLabel}</span>
+      </span>
+    {/if}
 
     {#if open}
       <div
         bind:this={dropdownRef}
-        class="absolute bottom-full mb-1 left-0 z-20 w-72 rounded-md border border-border bg-popover shadow-md py-1"
+        class="absolute bottom-full left-0 z-20 mb-1 w-72 rounded-md border border-border bg-popover py-1 shadow-md"
       >
-        {#each models as m (m.name)}
+        {#each models as model (model.name)}
           <button
-            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-secondary/50 {m.name ===
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-secondary/50 {model.name ===
             activeModel
               ? 'bg-secondary/30 font-medium'
               : ''}"
-            onclick={() => selectModel(m.name)}
+            onclick={() => selectModel(model.name)}
           >
-            <span class="truncate">{m.name} ({m.model_id})</span>
-            <span class="text-muted-foreground/40 shrink-0 ml-auto"
-              >{m.context_window.toLocaleString()} ctx</span
+            <span class="truncate">{model.name} ({model.model_id})</span>
+            <span class="ml-auto shrink-0 text-muted-foreground/50"
+              >{formatTokens(model.context_window)} ctx</span
             >
           </button>
         {/each}

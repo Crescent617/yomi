@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import {
     Plus,
-    SquarePen,
+    MessageSquarePlus,
     Folder,
     FolderOpen,
     MoreVertical,
@@ -441,22 +441,24 @@
   {#if !collapsed}
     <div class="shrink-0 p-2">
       <button
-        class="w-full flex items-center justify-center gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 hover:border-primary/30 active:scale-[0.98] transition-all"
+        class="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-border bg-secondary px-3 text-sm font-medium text-foreground transition-all hover:bg-secondary/80 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onclick={() => setActiveSession(null)}
-        title="Start a new chat (back to home)"
+        aria-label={`New session — ${newChatLabel}`}
+        title="New session"
       >
-        <SquarePen size={15} />
+        <MessageSquarePlus size={16} />
         {newChatLabel}
       </button>
     </div>
   {:else}
     <div class="shrink-0 py-2">
       <button
-        class="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+        class="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-secondary text-foreground transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onclick={() => setActiveSession(null)}
-        title="New chat"
+        aria-label="New session"
+        title="New session"
       >
-        <SquarePen size={15} />
+        <MessageSquarePlus size={16} />
       </button>
     </div>
   {/if}
@@ -477,9 +479,9 @@
           {@const active = sessionState.activeSessionId === session_id}
           <div class="relative">
             <div
-              class="group w-full flex items-center gap-2 rounded-lg px-3 py-1 cursor-pointer transition-colors {active
-                ? 'bg-primary/10 text-foreground'
-                : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
+              class="group w-full flex items-center gap-2 rounded-sm border-l-2 px-3 py-1 cursor-pointer transition-colors {active
+                ? 'border-primary bg-primary/8 text-foreground'
+                : 'border-transparent hover:border-border hover:bg-secondary/40 text-muted-foreground hover:text-foreground'}"
               onclick={() => activateSession(session_id)}
               role="button"
               tabindex="0"
@@ -495,7 +497,7 @@
                 {session?.alias ?? "Untitled"}
               </span>
               <span
-                class="shrink-0 text-[10px] text-muted-foreground/70 truncate max-w-[6rem]"
+                class="shrink-0 text-[10px] text-muted-foreground truncate max-w-[6rem]"
                 >{projectName(session?.project_id)}</span
               >
               <div class="flex items-center gap-1.5 shrink-0">
@@ -592,20 +594,30 @@
         {@const isActive =
           getSession(sessionState.activeSessionId ?? "")?.project_id ===
           project.id}
-        <div class="rounded-md mb-0.5">
+        <div class="border-b border-border/40 pb-0.5 mb-0.5">
           <div
-            class="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs transition-colors select-none {isActive
-              ? 'text-foreground bg-secondary/60'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'}"
+            class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
+              ? 'text-foreground bg-secondary/35'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/25'}"
           >
             <button
               class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
               onclick={() => toggle(project.id)}
             >
               {#if expanded[project.id]}
-                <FolderOpen size={13} class="shrink-0 opacity-70" />
+                <FolderOpen
+                  size={13}
+                  class="shrink-0 {isActive
+                    ? 'text-primary'
+                    : 'text-muted-foreground'}"
+                />
               {:else}
-                <Folder size={13} class="shrink-0 opacity-70" />
+                <Folder
+                  size={13}
+                  class="shrink-0 {isActive
+                    ? 'text-primary'
+                    : 'text-muted-foreground'}"
+                />
               {/if}
               {#if renamingProjectId === project.id}
                 <input
@@ -699,15 +711,15 @@
 
           {#if expanded[project.id]}
             <div
-              class="ml-3 pl-2 border-l border-border/40 space-y-0 pb-1"
+              class="ml-2 space-y-0.5 pb-1"
               transition:slide={{ duration: 200 }}
             >
               {#each getSessions(project.id) as session (session.id)}
                 <div
-                  class="group w-full flex items-center gap-2 rounded-lg pl-2 pr-3 py-1 cursor-pointer transition-colors {session.id ===
+                  class="group relative w-full flex items-center gap-2 rounded-sm px-2 py-1 cursor-pointer border-l-2 transition-colors {session.id ===
                   sessionState.activeSessionId
-                    ? 'bg-primary/10 text-foreground'
-                    : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'}"
+                    ? 'border-primary bg-primary/8 text-foreground'
+                    : 'border-transparent hover:border-border hover:bg-secondary/40 text-muted-foreground hover:text-foreground'}"
                   onclick={() => activateSession(session.id)}
                   role="button"
                   tabindex="0"
@@ -745,7 +757,7 @@
                         class="relative flex items-center justify-end min-w-[3.25rem] h-5"
                       >
                         <span
-                          class="text-[10px] text-muted-foreground/60 transition-opacity {menuOpen
+                          class="text-[10px] text-muted-foreground transition-opacity {menuOpen
                             ? 'opacity-0'
                             : 'group-hover:opacity-0'}"
                           title={new Date(session.updated_at).toLocaleString()}
@@ -835,7 +847,7 @@
                 </div>
               {:else if getSessions(project.id).length === 0}
                 <button
-                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground/60 hover:text-foreground transition-colors"
+                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
                   onclick={() => quickCreateSession(project.id)}
                   title="Create a session in this project"
                 >

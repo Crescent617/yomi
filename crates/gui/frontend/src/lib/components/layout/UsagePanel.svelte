@@ -293,55 +293,87 @@
   function chartTheme() {
     const style = getComputedStyle(document.body);
     const hsl = (name: string) => `hsl(${style.getPropertyValue(name).trim()})`;
-    const dark = document.documentElement.classList.contains("dark");
+    const alpha = (name: string, opacity: number) =>
+      `hsl(${style.getPropertyValue(name).trim()} / ${opacity})`;
     return {
-      // GitHub contribution-graph ramp; level 0 comes from the theme so
-      // empty cells blend with the surface.
-      heat: dark
-        ? [hsl("--secondary"), "#0e4429", "#006d32", "#26a641", "#39d353"]
-        : [hsl("--secondary"), "#9be9a8", "#40c463", "#30a14e", "#216e39"],
-      cellBorder: hsl("--background"),
+      heat: [
+        hsl("--secondary"),
+        alpha("--primary", 0.22),
+        alpha("--primary", 0.42),
+        alpha("--primary", 0.68),
+        hsl("--primary"),
+      ],
+      cellBorder: hsl("--card"),
       text: hsl("--muted-foreground"),
       cache: hsl("--success"),
       tooltipBg: hsl("--popover"),
       tooltipBorder: hsl("--border"),
       tooltipText: hsl("--popover-foreground"),
+      emphasisShadow: alpha("--foreground", 0.28),
     };
   }
 
   function buildChartOption(data: DayData[]): echarts.EChartsOption {
     const theme = chartTheme();
 
-    const maxTokens = Math.max(...data.map((d) => d.total_tokens), 1);
-    const chartData = data.map((d) => [d.date, d.total_tokens]);
+    const activeTokens = data
+      .map((d) => d.total_tokens)
+      .filter((tokens) => tokens > 0)
+      .sort((a, b) => a - b);
+    const quantile = (ratio: number) => {
+      if (activeTokens.length === 0) return 1;
+      return activeTokens[
+        Math.min(
+          activeTokens.length - 1,
+          Math.floor((activeTokens.length - 1) * ratio),
+        )
+      ];
+    };
+    const thresholds = [quantile(0.25), quantile(0.5), quantile(0.75)];
+    const intensity = (tokens: number) => {
+      if (tokens === 0) return 0;
+      if (tokens <= thresholds[0]) return 1;
+      if (tokens <= thresholds[1]) return 2;
+      if (tokens <= thresholds[2]) return 3;
+      return 4;
+    };
+    const chartData = data.map((d) => [
+      d.date,
+      d.total_tokens,
+      intensity(d.total_tokens),
+    ]);
     const start = data[0]?.date ?? "";
     const end = data[data.length - 1]?.date ?? "";
 
     return {
       backgroundColor: "transparent",
       tooltip: {
+        trigger: "item",
         appendToBody: true,
+        enterable: true,
+        hideDelay: 250,
+        transitionDuration: 0.15,
         backgroundColor: theme.tooltipBg,
         borderColor: theme.tooltipBorder,
         textStyle: { color: theme.tooltipText, fontSize: 12 },
         extraCssText:
-          "border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); z-index: 9999;",
+          "border-radius: 0.375rem; box-shadow: 0 8px 24px rgba(0,0,0,0.14); padding: 10px 12px; z-index: 9999;",
         formatter: (params: unknown) => {
           const [date] = (params as { value: [string, ...unknown[]] }).value;
           const day = data.find((d) => d.date === date);
           if (!day) return date;
           const total = day.prompt_tokens + day.completion_tokens;
-          let html = `<div style="font-weight:600;margin-bottom:4px;">${formatFullDate(day.date)}</div>`;
+          let html = `<div style="font-weight:600;margin-bottom:6px;">${formatFullDate(day.date)}</div>`;
           if (total > 0) {
-            html += `<div>Prompt: <b>${formatNumber(day.prompt_tokens)}</b></div>`;
-            html += `<div>Cached: <b style="color:${theme.cache}">${formatNumber(day.cached_tokens)}</b> (${cacheRate(day)})</div>`;
-            html += `<div>Completion: <b>${formatNumber(day.completion_tokens)}</b></div>`;
-            html += `<div>Total: <b>${formatNumber(total)}</b></div>`;
-            html += `<div>Requests: <b>${formatNumber(day.request_count)}</b></div>`;
+            html += `<div style="font-size:16px;font-weight:700;margin-bottom:6px;">${formatNumber(total)} <span style="font-size:11px;font-weight:400;opacity:.7">tokens</span></div>`;
+            html += `<div style="display:grid;grid-template-columns:auto auto;gap:2px 14px;font-size:11px;opacity:.85"><span>Prompt</span><b style="text-align:right">${formatNumber(day.prompt_tokens)}</b>`;
+            html += `<span>Cached</span><b style="text-align:right;color:${theme.cache}">${formatNumber(day.cached_tokens)} · ${cacheRate(day)}</b>`;
+            html += `<span>Completion</span><b style="text-align:right">${formatNumber(day.completion_tokens)}</b>`;
+            html += `<span>Requests</span><b style="text-align:right">${formatNumber(day.request_count)}</b></div>`;
             if (day.models.length)
-              html += `<div style="margin-top:4px;opacity:0.7">${day.models.join(", ")}</div>`;
+              html += `<div style="margin-top:6px;font-size:10px;opacity:.65">${day.models.join(", ")}</div>`;
           } else {
-            html += `<div style="opacity:0.7">No activity</div>`;
+            html += `<div style="font-size:11px;opacity:.7">No activity</div>`;
           }
           return html;
         },
@@ -349,22 +381,15 @@
       visualMap: {
         show: false,
         min: 0,
-        max: maxTokens,
+        max: 4,
         type: "piecewise",
+        dimension: 2,
         pieces: [
-          { min: 0, max: 0, color: theme.heat[0] },
-          { min: 1, max: Math.round(maxTokens * 0.25), color: theme.heat[1] },
-          {
-            min: Math.round(maxTokens * 0.25) + 1,
-            max: Math.round(maxTokens * 0.5),
-            color: theme.heat[2],
-          },
-          {
-            min: Math.round(maxTokens * 0.5) + 1,
-            max: Math.round(maxTokens * 0.75),
-            color: theme.heat[3],
-          },
-          { min: Math.round(maxTokens * 0.75) + 1, color: theme.heat[4] },
+          { value: 0, color: theme.heat[0] },
+          { value: 1, color: theme.heat[1] },
+          { value: 2, color: theme.heat[2] },
+          { value: 3, color: theme.heat[3] },
+          { value: 4, color: theme.heat[4] },
         ],
       },
       calendar: {
@@ -416,6 +441,15 @@
           type: "heatmap",
           coordinateSystem: "calendar",
           data: chartData,
+          emphasis: {
+            disabled: false,
+            itemStyle: {
+              borderColor: theme.tooltipText,
+              borderWidth: 2,
+              shadowBlur: 6,
+              shadowColor: theme.emphasisShadow,
+            },
+          },
         },
       ],
     };
@@ -522,14 +556,14 @@
 <div class="flex-1 flex flex-col min-w-0 overflow-y-auto">
   <div class="container mx-auto px-4 lg:px-6">
     <!-- Header -->
-    <div class="shrink-0 py-4 border-b border-border">
+    <div class="shrink-0 h-14 border-b border-border flex items-center">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           {#if onToggleLeftPanel}
             <button
               type="button"
               onclick={() => onToggleLeftPanel?.()}
-              class="lg:hidden p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground mr-1"
+              class="lg:hidden inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring mr-1"
               title="Toggle sidebar"
             >
               <PanelLeftOpen size={18} />
@@ -559,7 +593,7 @@
       <div class="flex-1 py-6 space-y-6">
         <!-- Today (hero panel) -->
         <div
-          class="rounded-xl border border-primary/40 bg-primary/5 p-4 space-y-3"
+          class="rounded-md border border-primary/40 bg-primary/5 p-4 space-y-3"
         >
           <div class="flex items-center gap-2">
             <span class="relative flex h-2 w-2">
@@ -653,11 +687,9 @@
                         >{formatNumber(total)} · {pct}%</span
                       >
                     </div>
-                    <div
-                      class="h-1.5 rounded-full bg-background/60 overflow-hidden"
-                    >
+                    <div class="h-1.5 bg-background/60 overflow-hidden">
                       <div
-                        class="h-full rounded-full transition-all {isCurrent
+                        class="h-full transition-all {isCurrent
                           ? 'bg-primary'
                           : 'bg-muted-foreground/40'}"
                         style="width: {pct}%"
@@ -684,7 +716,7 @@
         <!-- Summary Cards -->
         {#if filteredSummary}
           <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
@@ -697,7 +729,7 @@
               <div class="text-[10px] text-muted-foreground">tokens</div>
             </div>
 
-            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
@@ -710,7 +742,7 @@
               <div class="text-[10px] text-muted-foreground">calls</div>
             </div>
 
-            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
@@ -725,7 +757,7 @@
               </div>
             </div>
 
-            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
@@ -738,7 +770,7 @@
               <div class="text-[10px] text-muted-foreground">tokens</div>
             </div>
 
-            <div class="rounded-xl border border-border bg-card p-3 space-y-1">
+            <div class="rounded-md border border-border bg-card p-3 space-y-1">
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
               >
@@ -758,7 +790,7 @@
 
         <!-- ECharts Heatmap (square cells) -->
         {#if filledDaily.length > 0}
-          <div class="rounded-xl border border-border bg-card p-4 space-y-2">
+          <div class="rounded-md border border-border bg-card p-4 space-y-2">
             <div class="flex items-center gap-2">
               <Calendar class="w-4 h-4 text-muted-foreground" />
               <span class="text-sm font-medium">Activity Heatmap</span>
@@ -769,10 +801,26 @@
             <div class="flex overflow-x-auto [justify-content:safe_center]">
               <div bind:this={chartDiv} style="height: 128px;"></div>
             </div>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-[10px] text-muted-foreground">Token volume</span
+              >
+              <div
+                class="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+                aria-label="Heatmap intensity from less to more"
+              >
+                <span>Less</span>
+                <span class="h-2.5 w-2.5 rounded-xs bg-secondary"></span>
+                <span class="h-2.5 w-2.5 rounded-xs bg-primary/20"></span>
+                <span class="h-2.5 w-2.5 rounded-xs bg-primary/40"></span>
+                <span class="h-2.5 w-2.5 rounded-xs bg-primary/70"></span>
+                <span class="h-2.5 w-2.5 rounded-xs bg-primary"></span>
+                <span>More</span>
+              </div>
+            </div>
           </div>
         {:else}
           <div
-            class="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground"
+            class="rounded-md border border-border bg-card p-8 text-center text-sm text-muted-foreground"
           >
             No activity data for the last {DAYS_RANGE} days
           </div>
@@ -782,7 +830,7 @@
         {#if daily.length > 0}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div
-              class="rounded-xl border border-border bg-card p-3 space-y-1.5"
+              class="rounded-md border border-border bg-card p-3 space-y-1.5"
             >
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -801,7 +849,7 @@
             </div>
 
             <div
-              class="rounded-xl border border-border bg-card p-3 space-y-1.5"
+              class="rounded-md border border-border bg-card p-3 space-y-1.5"
             >
               <div
                 class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -819,7 +867,7 @@
 
             {#if busiestDay && busiestDay.total_tokens > 0}
               <div
-                class="rounded-xl border border-border bg-card p-3 space-y-1.5"
+                class="rounded-md border border-border bg-card p-3 space-y-1.5"
               >
                 <div
                   class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -840,7 +888,7 @@
 
             {#if mostRequestsDay && mostRequestsDay.request_count > 0}
               <div
-                class="rounded-xl border border-border bg-card p-3 space-y-1.5"
+                class="rounded-md border border-border bg-card p-3 space-y-1.5"
               >
                 <div
                   class="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -863,7 +911,7 @@
 
         <!-- Top Days Table -->
         {#if topDays.length > 0}
-          <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <div class="rounded-md border border-border bg-card overflow-hidden">
             <div
               class="flex items-center gap-2 px-4 py-3 border-b border-border"
             >
@@ -970,7 +1018,7 @@
 
         <!-- Models (all configured + totals) -->
         {#if configuredModels.length > 0}
-          <div class="rounded-xl border border-border bg-card overflow-hidden">
+          <div class="rounded-md border border-border bg-card overflow-hidden">
             <div
               class="flex items-center gap-2 px-4 py-3 border-b border-border"
             >

@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp, ArrowUpRight, Bot } from "lucide-svelte";
+  import { ArrowRight, ChevronDown, ChevronRight } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
   import {
-    statusColor,
     compactArgs,
     extractTarget,
     extraMeta,
@@ -14,105 +13,143 @@
 
   let {
     tool,
-    expanded: initialExpanded = false,
-  }: { tool: ToolCall; expanded?: boolean } = $props();
+    isFirst = false,
+    isLast = false,
+  }: {
+    tool: ToolCall;
+    isFirst?: boolean;
+    isLast?: boolean;
+  } = $props();
 
-  let expanded = $state(initialExpanded);
-
+  let expanded = $state(false);
   const target = $derived(extractTarget(tool.tool_name, tool.arguments ?? ""));
   const meta = $derived(extraMeta(tool.tool_name, tool.arguments ?? ""));
+  const isSubagent = $derived(Boolean(tool.subagent_session_id));
+  const label = $derived(
+    isSubagent
+      ? "Agent"
+      : tool.tool_name
+        ? tool.tool_name.charAt(0).toUpperCase() + tool.tool_name.slice(1)
+        : "Tool",
+  );
 
-  let showSessionId = $state(false);
+  function statusDotClass(status: string): string {
+    switch (status) {
+      case "running":
+        return "bg-primary";
+      case "completed":
+        return "bg-success";
+      case "failed":
+        return "bg-error";
+      default:
+        return "bg-muted-foreground";
+    }
+  }
 </script>
 
-<div
-  class="rounded-md border text-sm overflow-hidden {statusColor(tool.status)}"
->
-  <!-- Header — always visible, clickable -->
-  <button
-    type="button"
-    class="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors"
-    onclick={() => (expanded = !expanded)}
-  >
-    <ToolIcon
-      toolName={tool.tool_name}
-      isRunning={tool.status === "running"}
-      className="w-4 h-4 shrink-0"
-    />
+<div class="relative flex gap-1">
+  <div class="relative w-3 shrink-0" aria-hidden="true">
+    {#if !(isFirst && isLast)}
+      <span
+        class="absolute left-1/2 w-px -translate-x-1/2 bg-border/70 {isFirst
+          ? 'bottom-0 top-[18px]'
+          : isLast
+            ? 'bottom-[calc(100%-18px)] top-0'
+            : 'inset-y-0'}"
+      ></span>
+    {/if}
+    <span
+      class="absolute left-1/2 top-[18px] z-10 flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background"
+    >
+      {#if tool.status === "running"}
+        <span class="relative flex size-1.5">
+          <span
+            class="absolute size-full animate-ping rounded-full bg-primary/60"
+          ></span>
+          <span class="relative size-1.5 rounded-full bg-primary"></span>
+        </span>
+      {:else}
+        <span class="size-1.5 rounded-full {statusDotClass(tool.status)}"
+        ></span>
+      {/if}
+    </span>
+  </div>
 
-    <span class="font-semibold capitalize shrink-0">{tool.tool_name}</span>
-
-    {#if target}
-      <span class="text-xs opacity-70 truncate">{target}</span>
-    {:else if tool.arguments}
-      <span class="text-xs opacity-60 truncate"
-        >{compactArgs(tool.arguments, 80)}</span
+  <div class="min-w-0 flex-1 py-1">
+    <div
+      class="flex min-h-7 items-center gap-2 rounded-md px-0.5 transition-colors hover:bg-secondary/40"
+    >
+      <button
+        type="button"
+        onclick={() => (expanded = !expanded)}
+        class="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-expanded={expanded}
       >
-    {/if}
-    {#if meta}
-      <span class="text-xs opacity-50 shrink-0">· {meta}</span>
-    {/if}
+        <ToolIcon
+          toolName={tool.tool_name}
+          isRunning={tool.status === "running"}
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span class="shrink-0 text-xs font-medium text-foreground">{label}</span
+        >
+        {#if target}
+          <span
+            class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground {isSubagent
+              ? ''
+              : 'font-mono'}"
+          >
+            {target}
+          </span>
+        {:else if tool.arguments}
+          <span
+            class="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground"
+          >
+            {compactArgs(tool.arguments, 80)}
+          </span>
+        {:else}
+          <span class="flex-1"></span>
+        {/if}
+        {#if meta}
+          <span
+            class="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline"
+          >
+            {meta}
+          </span>
+        {/if}
+        {#if tool.elapsed_ms && tool.elapsed_ms > 0}
+          <span
+            class="shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
+          >
+            {formatElapsed(tool.elapsed_ms)}
+          </span>
+        {/if}
+        {#if expanded}
+          <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+        {:else}
+          <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" />
+        {/if}
+      </button>
 
-    {#if tool.elapsed_ms && tool.elapsed_ms > 1000}
-      <span class="text-xs opacity-60 shrink-0"
-        >{formatElapsed(tool.elapsed_ms)}</span
-      >
-    {/if}
-    {#if tool.progress && tool.status === "running"}
-      <span class="text-xs opacity-60 truncate">· {tool.progress}</span>
-    {/if}
-    {#if tool.tokens}
-      <span class="text-xs opacity-60 shrink-0">· {tool.tokens} tokens</span>
-    {/if}
-    {#if tool.subagent_session_id}
-      <div class="ml-auto flex items-center gap-1">
+      {#if tool.subagent_session_id}
         <button
           type="button"
-          class="relative inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground bg-transparent hover:bg-muted transition-colors"
-          onmouseenter={() => (showSessionId = true)}
-          onmouseleave={() => (showSessionId = false)}
-          onclick={(e) => {
-            e.stopPropagation();
-            handleJumpToSubagent(tool.subagent_session_id!);
-          }}
+          onclick={() => handleJumpToSubagent(tool.subagent_session_id!)}
+          class="group/open inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          title="Open subagent session"
+          aria-label="Open subagent session"
         >
-          <Bot class="w-3 h-3 opacity-60" />
-          <ArrowUpRight class="w-3 h-3 opacity-50" />
-          {#if showSessionId}
-            <div
-              class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-50 pointer-events-none"
-            >
-              <div
-                class="absolute left-1/2 -translate-x-1/2 -bottom-[3px] w-2 h-2 bg-card rotate-45 border-r border-b border-border/20"
-              ></div>
-              <div
-                class="relative px-3 py-2 bg-card rounded-lg border border-border/20 text-[11px] text-foreground whitespace-nowrap font-mono"
-              >
-                {tool.subagent_session_id}
-              </div>
-            </div>
-          {/if}
+          <span class="hidden sm:inline">Open</span>
+          <ArrowRight
+            class="size-3 transition-transform group-hover/open:translate-x-0.5"
+          />
         </button>
-        <span>
-          {#if expanded}
-            <ChevronUp class="w-3.5 h-3.5 opacity-50" />
-          {:else}
-            <ChevronDown class="w-3.5 h-3.5 opacity-50" />
-          {/if}
-        </span>
-      </div>
-    {:else}
-      <span class="ml-auto">
-        {#if expanded}
-          <ChevronUp class="w-3.5 h-3.5 opacity-50" />
-        {:else}
-          <ChevronDown class="w-3.5 h-3.5 opacity-50" />
-        {/if}
-      </span>
-    {/if}
-  </button>
+      {/if}
+    </div>
 
-  {#if expanded}
-    <ToolBody {tool} />
-  {/if}
+    {#if expanded}
+      <div class="mt-1 overflow-hidden px-0.5">
+        <ToolBody {tool} embedded />
+      </div>
+    {/if}
+  </div>
 </div>

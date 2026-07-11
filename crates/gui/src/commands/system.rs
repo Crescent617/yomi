@@ -69,6 +69,84 @@ pub async fn get_config_toml(_state: State<'_, AppState>) -> Result<serde_json::
     }))
 }
 
+fn validate_config_toml(content: &str) -> Result<(), GuiError> {
+    let config: kernel::config::Config =
+        toml::from_str(content).map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
+
+    let mut model_names = std::collections::HashSet::new();
+    if config
+        .models
+        .iter()
+        .any(|model| !model_names.insert(&model.name))
+    {
+        return Err(GuiError::unknown(
+            "Invalid config: duplicate model name in [[models]]",
+        ));
+    }
+
+    if !config.models.is_empty()
+        && !config
+            .models
+            .iter()
+            .any(|model| model.name == config.agent.default_model)
+    {
+        return Err(GuiError::unknown(
+            "Invalid config: agent.default_model must match a [[models]] name",
+        ));
+    }
+
+    Ok(())
+}
+
+fn resolve_config_write_target(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let mut target = path.to_path_buf();
+    for _ in 0..40 {
+        let metadata = match std::fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(target),
+            Err(error) => return Err(error),
+        };
+        if !metadata.file_type().is_symlink() {
+            return Ok(target);
+        }
+
+        let link = std::fs::read_link(&target)?;
+        target = if link.is_absolute() {
+            link
+        } else {
+            target
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(link)
+        };
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "too many symbolic links in config path",
+    ))
+}
+
+fn atomic_write_config(file_path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let file_path = resolve_config_write_target(file_path)?;
+    let parent = file_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    temp_file.write_all(content.as_bytes())?;
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(file_path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn save_config_toml_to_path(file_path: &std::path::Path, content: &str) -> Result<(), GuiError> {
+    validate_config_toml(content)?;
+    atomic_write_config(file_path, content)
+        .map_err(|e| GuiError::unknown(format!("Failed to write config: {e}")))
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn save_config_toml(
     _state: State<'_, AppState>,
@@ -87,13 +165,7 @@ pub async fn save_config_toml(
         }
     };
 
-    let _: toml::Value =
-        toml::from_str(&content).map_err(|e| GuiError::unknown(format!("Invalid TOML: {e}")))?;
-
-    std::fs::write(&file_path, content)
-        .map_err(|e| GuiError::unknown(format!("Failed to write config: {e}")))?;
-
-    Ok(())
+    save_config_toml_to_path(&file_path, &content)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -464,3 +536,7 @@ pub async fn get_git_info(path: String) -> Result<serde_json::Value, GuiError> {
         "repo_root": repo_root.to_string_lossy().to_string(),
     }))
 }
+
+#[cfg(test)]
+#[path = "system_test.rs"]
+mod tests;

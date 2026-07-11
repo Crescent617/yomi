@@ -1,15 +1,24 @@
 <script lang="ts">
-  import { Plus, AlertCircle, CheckCircle } from "lucide-svelte";
+  import {
+    AlertCircle,
+    CheckCircle2,
+    ChevronDown,
+    Clock3,
+    FolderKanban,
+    Loader2,
+    MessageSquare,
+    Terminal,
+  } from "lucide-svelte";
   import {
     createCronJob,
-    updateCronJob,
     createSession,
-    listProjects,
-    getCwd,
     errorMessage,
+    getCwd,
+    listProjects,
+    updateCronJob,
+    type CronJob,
+    type ProjectInfo,
   } from "../../api";
-  import type { ProjectInfo } from "../../api";
-  import type { CronJob } from "../../api";
   import Modal from "../ui/Modal.svelte";
 
   interface Props {
@@ -22,13 +31,15 @@
 
   let name = $state(editingJob?.name ?? "");
   let schedule = $state(editingJob?.schedule ?? "");
-  let actionType = $state(editingJob?.action.type ?? "send_message");
-  let use_new_session = $state(editingJob ? false : true);
+  let actionType = $state<"send_message" | "shell">(
+    editingJob?.action.type === "shell" ? "shell" : "send_message",
+  );
+  let use_new_session = $state(!editingJob);
   let session_id = $state(editingJob?.action.session_id ?? "");
   let content = $state(editingJob?.action.content ?? "");
   let command = $state(editingJob?.action.command ?? "");
   let working_dir = $state(editingJob?.action.working_dir ?? "");
-  let max_runs = $state(editingJob?.max_runs ?? "");
+  let max_runs = $state<string | number>(editingJob?.max_runs ?? "");
   let expires_at = $state(
     editingJob?.expires_at
       ? utcToLocalDatetimeLocal(editingJob.expires_at)
@@ -37,38 +48,61 @@
 
   let projects = $state<ProjectInfo[]>([]);
   let selected_project_id = $state("");
-  let showAdvanced = $state(false);
-  let scheduleValid = $state<boolean | null>(null);
-  let scheduleError = $state("");
+  let showAdvanced = $state(
+    Boolean(editingJob) &&
+      (editingJob?.max_runs !== null || editingJob?.expires_at !== null),
+  );
+  let loadingProjects = $state(false);
   let saving = $state(false);
+  let attempted = $state(false);
   let error = $state("");
 
-  function validateSchedule(s: string) {
-    if (!s) {
-      scheduleValid = null;
-      scheduleError = "";
-      return;
+  const scheduleError = $derived.by(() => {
+    if (!schedule.trim()) return "Schedule is required";
+    const fields = schedule.trim().split(/\s+/);
+    if (fields.length !== 5 && fields.length !== 6) {
+      return "Use 5 fields, or 6 with an optional seconds prefix";
     }
-    const parts = s.trim().split(/\s+/);
-    if (parts.length !== 5 && parts.length !== 6) {
-      scheduleValid = false;
-      scheduleError = "Cron must have 5 or 6 fields";
-      return;
-    }
-    scheduleValid = true;
-    scheduleError = "";
-  }
-
-  $effect(() => {
-    validateSchedule(schedule);
+    return "";
   });
 
-  // Load projects when opening new session mode
+  const validationErrors = $derived.by(() => {
+    const errors: Record<string, string> = {};
+    if (!name.trim()) errors.name = "Task name is required";
+    if (scheduleError) errors.schedule = scheduleError;
+
+    if (actionType === "send_message") {
+      if (!content.trim()) errors.content = "Message content is required";
+      if (!use_new_session && !session_id.trim()) {
+        errors.session_id = "Session ID is required";
+      }
+    } else if (!command.trim()) {
+      errors.command = "Command is required";
+    }
+
+    if (max_runs !== "") {
+      const value = Number(max_runs);
+      if (!Number.isInteger(value) || value < 1) {
+        errors.max_runs = "Enter a positive whole number";
+      }
+    }
+    if (expires_at && Number.isNaN(new Date(expires_at).getTime())) {
+      errors.expires_at = "Enter a valid expiration date";
+    }
+    return errors;
+  });
+
+  const scheduleValid = $derived(Boolean(schedule.trim()) && !scheduleError);
+
   async function loadProjects() {
+    if (loadingProjects || projects.length > 0) return;
+    loadingProjects = true;
     try {
       projects = await listProjects();
     } catch (e) {
       console.error("Failed to load projects:", e);
+    } finally {
+      loadingProjects = false;
     }
   }
 
@@ -78,69 +112,54 @@
       actionType === "send_message" &&
       projects.length === 0
     ) {
-      loadProjects();
+      void loadProjects();
     }
   });
 
-  async function save() {
-    if (!name.trim() || !schedule.trim() || scheduleValid === false) return;
+  function close() {
+    if (!saving) onClose();
+  }
+
+  async function save(event?: SubmitEvent) {
+    event?.preventDefault();
+    if (saving) return;
+    attempted = true;
+    error = "";
+    if (Object.keys(validationErrors).length > 0) return;
 
     saving = true;
-    error = "";
-
-    if (
-      actionType === "send_message" &&
-      !use_new_session &&
-      !session_id.trim()
-    ) {
-      error = "Session ID is required for existing session";
-      saving = false;
-      return;
-    }
-
     let final_session_id = session_id;
 
-    if (actionType === "send_message" && use_new_session) {
-      try {
-        const project = projects.find((p) => p.id === selected_project_id);
+    try {
+      if (actionType === "send_message" && use_new_session) {
+        const project = projects.find(
+          (item) => item.id === selected_project_id,
+        );
         const workingDir = project?.dir ?? (await getCwd());
         final_session_id = await createSession(
           workingDir,
           "safe",
           selected_project_id || undefined,
         );
-      } catch (e: unknown) {
-        error = "Failed to create session: " + errorMessage(e);
-        saving = false;
-        return;
       }
-    }
 
-    const action: Record<string, unknown> = { type: actionType };
-    if (actionType === "send_message") {
-      action.session_id = final_session_id.trim() || undefined;
-      action.content = content;
-    } else if (actionType === "shell") {
-      action.command = command;
-      action.working_dir = working_dir.trim() || undefined;
-    }
+      const action: Record<string, unknown> = { type: actionType };
+      if (actionType === "send_message") {
+        action.session_id = final_session_id.trim() || undefined;
+        action.content = content.trim();
+      } else {
+        action.command = command.trim();
+        action.working_dir = working_dir.trim() || undefined;
+      }
 
-    const payload: Record<string, unknown> = {
-      name: name.trim(),
-      schedule: schedule.trim(),
-      action: JSON.stringify(action),
-    };
+      const payload: Record<string, unknown> = {
+        name: name.trim(),
+        schedule: schedule.trim(),
+        action: JSON.stringify(action),
+      };
+      if (max_runs !== "") payload.max_runs = Number(max_runs);
+      if (expires_at) payload.expires_at = new Date(expires_at).toISOString();
 
-    const max_runsNum =
-      max_runs !== "" ? parseInt(String(max_runs), 10) : undefined;
-    if (max_runsNum !== undefined && !Number.isNaN(max_runsNum)) {
-      payload.max_runs = max_runsNum;
-    }
-    if (expires_at) {
-      payload.expires_at = new Date(expires_at).toISOString();
-    }
-
-    try {
       if (editingJob) {
         await updateCronJob(editingJob.id, payload);
       } else {
@@ -163,246 +182,378 @@
   }
 
   function utcToLocalDatetimeLocal(iso: string): string {
-    const d = new Date(iso);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const date = new Date(iso);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 </script>
 
 <Modal
   open={true}
-  size="md"
-  {onClose}
-  title={editingJob ? "Edit Task" : "New Scheduled Task"}
+  size="lg"
+  onClose={close}
+  title={editingJob ? "Edit scheduled task" : "New scheduled task"}
 >
-  <div class="space-y-4">
+  <form id="automation-task-form" onsubmit={save} class="space-y-6">
+    <p class="-mt-1 text-sm text-muted-foreground">
+      {editingJob
+        ? "Update when this task runs and what it should do."
+        : "Run a message or shell command automatically on a cron schedule."}
+    </p>
+
     {#if error}
-      <div class="text-sm text-error bg-error/10 rounded-lg px-3 py-2">
-        {error}
+      <div
+        class="flex items-start gap-2 rounded-md border border-error/20 bg-error/10 px-3 py-2 text-sm text-error"
+        role="alert"
+      >
+        <AlertCircle class="mt-0.5 size-4 shrink-0" />
+        <span>{error}</span>
       </div>
     {/if}
 
-    <!-- Name -->
-    <div>
-      <label class="block text-sm font-medium mb-1"
-        >Name <span class="text-error">*</span></label
+    <section aria-labelledby="task-basics-heading">
+      <h3
+        id="task-basics-heading"
+        class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
-      <input
-        type="text"
-        bind:value={name}
-        placeholder="Daily standup reminder"
-        class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-      />
-    </div>
+        Basics
+      </h3>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="task-name" class="mb-1.5 block text-sm font-medium">
+            Name <span class="text-error">*</span>
+          </label>
+          <input
+            id="task-name"
+            type="text"
+            bind:value={name}
+            placeholder="Daily standup reminder"
+            aria-invalid={attempted && Boolean(validationErrors.name)}
+            class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+          />
+          {#if attempted && validationErrors.name}
+            <p class="mt-1 text-xs text-error">{validationErrors.name}</p>
+          {/if}
+        </div>
 
-    <!-- Schedule -->
-    <div>
-      <label class="block text-sm font-medium mb-1">
-        Schedule <span class="text-error">*</span>
-        {#if scheduleValid === true}
-          <CheckCircle class="inline w-3.5 h-3.5 text-success ml-1" />
-        {:else if scheduleValid === false}
-          <AlertCircle class="inline w-3.5 h-3.5 text-error ml-1" />
-        {/if}
-      </label>
-      <input
-        type="text"
-        bind:value={schedule}
-        placeholder="0 9 * * *  (9:00 AM daily)"
-        class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring
-               {scheduleValid === false ? 'border-error' : ''}"
-      />
-      {#if scheduleError}
-        <p class="text-xs text-error mt-1">{scheduleError}</p>
-      {:else}
-        <p class="text-xs text-muted-foreground mt-1">
-          5 or 6 fields (optional seconds prefix)
-        </p>
-      {/if}
-    </div>
+        <div>
+          <label for="task-schedule" class="mb-1.5 block text-sm font-medium">
+            Schedule <span class="text-error">*</span>
+          </label>
+          <div class="relative">
+            <Clock3
+              class="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              id="task-schedule"
+              type="text"
+              bind:value={schedule}
+              placeholder="0 9 * * *"
+              spellcheck={false}
+              aria-invalid={(attempted || Boolean(schedule)) && !scheduleValid}
+              class="h-9 w-full rounded-md border border-input bg-background pl-9 pr-8 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            />
+            {#if scheduleValid}
+              <CheckCircle2
+                class="absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-success"
+              />
+            {/if}
+          </div>
+          <p
+            class="mt-1 text-xs {(attempted || Boolean(schedule)) &&
+            !scheduleValid
+              ? 'text-error'
+              : 'text-muted-foreground'}"
+          >
+            {(attempted || Boolean(schedule)) && !scheduleValid
+              ? scheduleError
+              : "5 fields, or 6 with an optional seconds prefix"}
+          </p>
+        </div>
+      </div>
+    </section>
 
-    <!-- Action type -->
-    <div>
-      <label class="block text-sm font-medium mb-1">Action Type</label>
-      <div class="flex gap-2">
+    <section
+      class="border-t border-border pt-5"
+      aria-labelledby="task-action-heading"
+    >
+      <h3
+        id="task-action-heading"
+        class="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+      >
+        Action
+      </h3>
+
+      <div
+        class="mt-3 grid grid-cols-2 rounded-md bg-secondary p-1"
+        role="group"
+      >
         <button
           type="button"
           onclick={() => (actionType = "send_message")}
-          class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                 {actionType === 'send_message'
-            ? 'bg-primary/10 border-primary text-primary'
-            : 'border-input hover:bg-muted'}"
+          aria-pressed={actionType === "send_message"}
+          class="inline-flex h-8 items-center justify-center gap-2 rounded text-sm transition-colors {actionType ===
+          'send_message'
+            ? 'bg-background font-medium text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground'}"
         >
-          💬 Send Message
+          <MessageSquare class="size-4" /> Send message
         </button>
         <button
           type="button"
           onclick={() => (actionType = "shell")}
-          class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                 {actionType === 'shell'
-            ? 'bg-primary/10 border-primary text-primary'
-            : 'border-input hover:bg-muted'}"
+          aria-pressed={actionType === "shell"}
+          class="inline-flex h-8 items-center justify-center gap-2 rounded text-sm transition-colors {actionType ===
+          'shell'
+            ? 'bg-background font-medium text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground'}"
         >
-          🔧 Shell Command
+          <Terminal class="size-4" /> Shell command
         </button>
       </div>
-    </div>
 
-    <!-- Action fields -->
-    {#if actionType === "send_message"}
-      <!-- Session target -->
-      {#if !editingJob}
-        <div>
-          <label class="block text-sm font-medium mb-1">Session Target</label>
-          <div class="flex gap-2">
-            <button
-              type="button"
-              onclick={() => (use_new_session = true)}
-              class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                     {use_new_session
-                ? 'bg-primary/10 border-primary text-primary'
-                : 'border-input hover:bg-muted'}"
+      {#if actionType === "send_message"}
+        <div class="mt-4 space-y-4">
+          {#if !editingJob}
+            <div>
+              <span class="mb-1.5 block text-sm font-medium"
+                >Session target</span
+              >
+              <div
+                class="grid grid-cols-2 rounded-md bg-secondary p-1"
+                role="group"
+              >
+                <button
+                  type="button"
+                  onclick={() => (use_new_session = true)}
+                  aria-pressed={use_new_session}
+                  class="h-8 rounded text-sm transition-colors {use_new_session
+                    ? 'bg-background font-medium text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'}"
+                >
+                  New session
+                </button>
+                <button
+                  type="button"
+                  onclick={() => (use_new_session = false)}
+                  aria-pressed={!use_new_session}
+                  class="h-8 rounded text-sm transition-colors {!use_new_session
+                    ? 'bg-background font-medium text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'}"
+                >
+                  Existing session
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          {#if !use_new_session}
+            <div>
+              <label
+                for="task-session"
+                class="mb-1.5 block text-sm font-medium"
+              >
+                Session ID <span class="text-error">*</span>
+              </label>
+              <input
+                id="task-session"
+                type="text"
+                bind:value={session_id}
+                placeholder="Session ID"
+                aria-invalid={attempted && Boolean(validationErrors.session_id)}
+                class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+              />
+              {#if attempted && validationErrors.session_id}
+                <p class="mt-1 text-xs text-error">
+                  {validationErrors.session_id}
+                </p>
+              {/if}
+            </div>
+          {:else if !editingJob}
+            <div>
+              <label
+                for="task-project"
+                class="mb-1.5 block text-sm font-medium"
+              >
+                Project <span class="font-normal text-muted-foreground"
+                  >optional</span
+                >
+              </label>
+              <div class="relative">
+                <FolderKanban
+                  class="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                />
+                <select
+                  id="task-project"
+                  bind:value={selected_project_id}
+                  disabled={loadingProjects}
+                  class="h-9 w-full appearance-none rounded-md border border-input bg-background pl-9 pr-8 text-sm outline-none transition-shadow focus:ring-2 focus:ring-ring disabled:opacity-60"
+                >
+                  <option value="">
+                    {loadingProjects ? "Loading projects..." : "No project"}
+                  </option>
+                  {#each projects as project (project.id)}
+                    <option value={project.id}>{project.name}</option>
+                  {/each}
+                </select>
+                <ChevronDown
+                  class="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                />
+              </div>
+            </div>
+          {/if}
+
+          <div>
+            <label for="task-content" class="mb-1.5 block text-sm font-medium">
+              Message <span class="text-error">*</span>
+            </label>
+            <textarea
+              id="task-content"
+              bind:value={content}
+              placeholder="Review today's tasks..."
+              rows="4"
+              aria-invalid={attempted && Boolean(validationErrors.content)}
+              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            ></textarea>
+            <p
+              class="mt-1 text-xs {attempted && validationErrors.content
+                ? 'text-error'
+                : 'text-muted-foreground'}"
             >
-              New Session
-            </button>
-            <button
-              type="button"
-              onclick={() => (use_new_session = false)}
-              class="flex-1 py-2 rounded-lg border text-sm transition-colors
-                     {!use_new_session
-                ? 'bg-primary/10 border-primary text-primary'
-                : 'border-input hover:bg-muted'}"
+              {attempted && validationErrors.content
+                ? validationErrors.content
+                : "Supports {{date}} and {{time}} variables"}
+            </p>
+          </div>
+        </div>
+      {:else}
+        <div class="mt-4 space-y-4">
+          <div>
+            <label for="task-command" class="mb-1.5 block text-sm font-medium">
+              Command <span class="text-error">*</span>
+            </label>
+            <textarea
+              id="task-command"
+              bind:value={command}
+              placeholder="cargo test"
+              rows="4"
+              lang="en"
+              spellcheck={false}
+              aria-invalid={attempted && Boolean(validationErrors.command)}
+              class="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            ></textarea>
+            {#if attempted && validationErrors.command}
+              <p class="mt-1 text-xs text-error">{validationErrors.command}</p>
+            {/if}
+          </div>
+          <div>
+            <label
+              for="task-working-dir"
+              class="mb-1.5 block text-sm font-medium"
             >
-              Existing Session
-            </button>
+              Working directory
+              <span class="font-normal text-muted-foreground">optional</span>
+            </label>
+            <input
+              id="task-working-dir"
+              type="text"
+              bind:value={working_dir}
+              placeholder="Use daemon working directory"
+              class="h-9 w-full rounded-md border border-input bg-background px-3 font-mono text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring"
+            />
           </div>
         </div>
       {/if}
+    </section>
 
-      {#if !use_new_session}
-        <div>
-          <label class="block text-sm font-medium mb-1">Session ID</label>
-          <input
-            type="text"
-            bind:value={session_id}
-            placeholder="project-alpha"
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-        </div>
-      {:else if !editingJob}
-        <div>
-          <label class="block text-sm font-medium mb-1"
-            >Project (optional)</label
-          >
-          <select
-            bind:value={selected_project_id}
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">None</option>
-            {#each projects as project (project.id)}
-              <option value={project.id}>{project.name}</option>
-            {/each}
-          </select>
+    <section class="border-t border-border pt-4">
+      <button
+        type="button"
+        onclick={() => (showAdvanced = !showAdvanced)}
+        class="flex w-full items-center justify-between rounded-md py-1 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+        aria-expanded={showAdvanced}
+      >
+        <span>Advanced options</span>
+        <ChevronDown
+          class="size-4 transition-transform {showAdvanced ? 'rotate-180' : ''}"
+        />
+      </button>
+
+      {#if showAdvanced}
+        <div class="mt-3 grid gap-4 sm:grid-cols-2">
+          <div>
+            <label for="task-max-runs" class="mb-1.5 block text-sm font-medium">
+              Max runs
+            </label>
+            <input
+              id="task-max-runs"
+              type="number"
+              bind:value={max_runs}
+              placeholder="Unlimited"
+              min="1"
+              step="1"
+              aria-invalid={attempted && Boolean(validationErrors.max_runs)}
+              class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow placeholder:text-muted-foreground/60 focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            />
+            <p
+              class="mt-1 text-xs {attempted && validationErrors.max_runs
+                ? 'text-error'
+                : 'text-muted-foreground'}"
+            >
+              {attempted && validationErrors.max_runs
+                ? validationErrors.max_runs
+                : "Leave empty for unlimited"}
+            </p>
+          </div>
+          <div>
+            <label for="task-expires" class="mb-1.5 block text-sm font-medium">
+              Expires at
+            </label>
+            <input
+              id="task-expires"
+              type="datetime-local"
+              bind:value={expires_at}
+              aria-invalid={attempted && Boolean(validationErrors.expires_at)}
+              class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-shadow focus:ring-2 focus:ring-ring aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/20"
+            />
+            <p
+              class="mt-1 text-xs {attempted && validationErrors.expires_at
+                ? 'text-error'
+                : 'text-muted-foreground'}"
+            >
+              {attempted && validationErrors.expires_at
+                ? validationErrors.expires_at
+                : "Leave empty for no expiration"}
+            </p>
+          </div>
         </div>
       {/if}
-
-      <div>
-        <label class="block text-sm font-medium mb-1">Content</label>
-        <textarea
-          bind:value={content}
-          placeholder="Review today's tasks..."
-          rows="3"
-          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-        ></textarea>
-        <p class="text-xs text-muted-foreground mt-1">
-          Supports {"{{date}}"}, {"{{time}}"}
-        </p>
-      </div>
-    {:else}
-      <div>
-        <label class="block text-sm font-medium mb-1">Command</label>
-        <textarea
-          bind:value={command}
-          placeholder="echo hello"
-          rows="3"
-          lang="en"
-          spellcheck={false}
-          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-        ></textarea>
-      </div>
-      <div>
-        <label class="block text-sm font-medium mb-1">Working Directory</label>
-        <input
-          type="text"
-          bind:value={working_dir}
-          placeholder="."
-          class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        />
-      </div>
-    {/if}
-
-    <!-- Advanced toggle -->
-    <button
-      type="button"
-      onclick={() => (showAdvanced = !showAdvanced)}
-      class="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
-    >
-      <Plus
-        class="w-3.5 h-3.5 transition-transform {showAdvanced
-          ? 'rotate-45'
-          : ''}"
-      />
-      {showAdvanced ? "Hide" : "Show"} advanced options
-    </button>
-
-    {#if showAdvanced}
-      <div class="space-y-3 pt-2 border-t border-border">
-        <div>
-          <label class="block text-sm font-medium mb-1">Max Runs</label>
-          <input
-            type="number"
-            bind:value={max_runs}
-            placeholder="Unlimited"
-            min="1"
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <p class="text-xs text-muted-foreground mt-1">
-            Leave empty for unlimited
-          </p>
-        </div>
-        <div>
-          <label class="block text-sm font-medium mb-1">Expires At</label>
-          <input
-            type="datetime-local"
-            bind:value={expires_at}
-            class="w-full px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <p class="text-xs text-muted-foreground mt-1">
-            Leave empty for never
-          </p>
-        </div>
-      </div>
-    {/if}
-  </div>
+    </section>
+  </form>
 
   {#snippet footer()}
     <button
       type="button"
-      onclick={onClose}
-      class="px-4 py-2 rounded-lg text-sm border border-input text-foreground hover:bg-secondary transition-colors"
+      onclick={close}
+      disabled={saving}
+      class="h-9 rounded-md border border-input px-4 text-sm text-foreground transition-colors hover:bg-secondary disabled:opacity-50"
     >
       Cancel
     </button>
     <button
-      type="button"
-      onclick={save}
-      disabled={!name.trim() ||
-        !schedule.trim() ||
-        scheduleValid === false ||
-        saving}
-      class="px-4 py-2 rounded-lg text-sm bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+      type="submit"
+      form="automation-task-form"
+      disabled={saving}
+      class="inline-flex h-9 min-w-28 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
     >
-      {saving ? "Saving..." : editingJob ? "Save Changes" : "Create Task"}
+      {#if saving}
+        <Loader2 class="size-4 animate-spin" />
+        Saving...
+      {:else if editingJob}
+        Save changes
+      {:else}
+        Create task
+      {/if}
     </button>
   {/snippet}
 </Modal>

@@ -1,62 +1,66 @@
 <script lang="ts">
   import {
-    X,
-    Info,
-    CheckCircle,
-    AlertTriangle,
+    CheckCircle2,
     AlertCircle,
+    Info,
+    AlertTriangle,
+    X,
   } from "lucide-svelte";
   import type { Toast } from "../../toast.svelte";
 
   let {
     toast,
     onDismiss,
+    compact = false,
   }: {
     toast: Toast;
     onDismiss: () => void;
+    compact?: boolean;
   } = $props();
 
-  const iconMap = {
-    info: Info,
-    success: CheckCircle,
-    warning: AlertTriangle,
+  const icons = {
+    success: CheckCircle2,
     error: AlertCircle,
+    info: Info,
+    warning: AlertTriangle,
   };
 
-  const colorMap = {
-    info: "border-info/20 bg-[color-mix(in_oklab,var(--color-info)_10%,var(--color-background))] text-info",
-    success:
-      "border-success/20 bg-[color-mix(in_oklab,var(--color-success)_10%,var(--color-background))] text-success",
-    warning:
-      "border-warning/20 bg-[color-mix(in_oklab,var(--color-warning)_10%,var(--color-background))] text-warning",
-    error:
-      "border-error/20 bg-[color-mix(in_oklab,var(--color-error)_10%,var(--color-background))] text-error",
-  };
-
-  const iconColorMap = {
-    info: "text-info",
+  const iconClasses = {
     success: "text-success",
-    warning: "text-warning",
     error: "text-error",
+    info: "text-info",
+    warning: "text-warning",
   };
 
-  const Icon = $derived(iconMap[toast.type]);
+  const Icon = $derived(icons[toast.type]);
 </script>
 
 <div
-  class="pointer-events-auto relative z-[3] flex w-full items-start gap-2.5 rounded-lg border px-3.5 py-2.5 shadow-lg {colorMap[
-    toast.type
-  ]}"
+  class="pointer-events-auto flex w-full items-start gap-2.5 rounded-lg bg-popover px-3 py-2.5 text-popover-foreground shadow-lg ring-1 ring-border/70"
+  class:py-2={compact}
   role={toast.type === "error" ? "alert" : "status"}
 >
-  <Icon size={18} class="mt-0.5 shrink-0 {iconColorMap[toast.type]}" />
-  <span class="flex-1 text-sm leading-snug">{toast.message}</span>
+  <Icon size={16} class="mt-0.5 shrink-0 {iconClasses[toast.type]}" />
+  <p class="min-w-0 flex-1 text-xs leading-relaxed">
+    {toast.message}
+  </p>
+  {#if toast.count > 1}
+    <span
+      class="mt-0.5 shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground"
+      aria-label={`Repeated ${toast.count} times`}
+    >
+      ×{toast.count}
+    </span>
+  {/if}
   <button
     type="button"
-    onclick={onDismiss}
+    class="-mr-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    onclick={(event) => {
+      event.stopPropagation();
+      onDismiss();
+    }}
     aria-label="Dismiss notification"
-    class="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 opacity-60 transition-all hover:bg-secondary hover:opacity-100"
   >
-    <X size={14} />
+    <X size={13} />
   </button>
 </div>
