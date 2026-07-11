@@ -475,12 +475,16 @@
 
   function renderChart() {
     if (!chartDiv || filledDaily.length === 0) return;
+    // ECharts reads the container size during init, so establish dimensions
+    // first. Initializing before these styles are applied emits a zero-size
+    // warning and can produce a blank canvas.
+    chartDiv.style.height = "128px";
+    chartDiv.style.width = `${calcChartWidth(filledDaily)}px`;
+    if (chartDiv.clientWidth === 0 || chartDiv.clientHeight === 0) return;
     if (!chartInstance) {
       chartInstance = echarts.init(chartDiv, undefined, { renderer: "canvas" });
     }
     chartInstance.setOption(buildChartOption(filledDaily), true);
-    chartDiv.style.height = "128px";
-    chartDiv.style.width = `${calcChartWidth(filledDaily)}px`;
     chartInstance.resize();
   }
 
