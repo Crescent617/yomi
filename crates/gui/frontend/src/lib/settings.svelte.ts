@@ -1,6 +1,7 @@
 import { Store } from "@tauri-apps/plugin-store";
 
 const STORAGE_KEY = "yomi-gui-settings";
+const HOME_MODEL_KEY = "home_model";
 
 export interface AppSettings {
   theme: "light" | "dark" | "system";
@@ -42,6 +43,26 @@ async function saveSettings(settings: AppSettings): Promise<void> {
     await s.save();
   } catch (e) {
     console.error("[Settings] Failed to save to store:", e);
+  }
+}
+
+export async function getHomeModel(): Promise<string | null> {
+  try {
+    const s = await getStore();
+    return (await s.get<string>(HOME_MODEL_KEY)) ?? null;
+  } catch (e) {
+    console.error("[Settings] Failed to load home model:", e);
+    return null;
+  }
+}
+
+export async function setHomeModel(model: string): Promise<void> {
+  try {
+    const s = await getStore();
+    await s.set(HOME_MODEL_KEY, model);
+    await s.save();
+  } catch (e) {
+    console.error("[Settings] Failed to save home model:", e);
   }
 }
 

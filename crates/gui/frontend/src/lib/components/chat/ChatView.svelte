@@ -22,8 +22,7 @@
   import ChatInput from "./ChatInput.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
-  import InfoBar from "./InfoBar.svelte";
-  import BreadcrumbBar from "./BreadcrumbBar.svelte";
+  import HeaderBreadcrumb from "./HeaderBreadcrumb.svelte";
   import PermissionBar from "./PermissionBar.svelte";
   import AskUserBar from "./AskUserBar.svelte";
   import QueuedInputBar from "./QueuedInputBar.svelte";
@@ -31,9 +30,7 @@
   import {
     ArrowLeft,
     ChevronDown,
-    Send,
-    PanelRightOpen,
-    PanelRightClose,
+    ArrowUp,
     PanelLeftOpen,
     PanelLeftClose,
     ExternalLink,
@@ -47,15 +44,12 @@
     Globe,
     FolderOpen,
     Info,
+    Loader2,
+    AlertCircle,
   } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { homeDir } from "@tauri-apps/api/path";
-  import {
-    levelDescription,
-    levelIcon,
-    levelColor,
-    type PermissionLevel,
-  } from "../../permission";
+  import type { PermissionLevel } from "../../permission";
   import { createFilePicker } from "$lib/filePicker.svelte";
   import { pickGreeting } from "../home/greeting";
   import TodayUsageCard from "../home/TodayUsageCard.svelte";
@@ -63,24 +57,69 @@
   import { projectColor, formatTimeAgo } from "../../utils";
   import { clock } from "../../clock.svelte";
   import { Search, Plus, Check } from "lucide-svelte";
+  import ChangesWorkspace from "../layout/ChangesWorkspace.svelte";
+  import PermissionSelector from "./PermissionSelector.svelte";
 
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
   import { buildContentBlocks } from "../../types";
 
   let {
-    rightPanelCollapsed,
-    onToggleRightPanel,
     onToggleLeftPanel,
     leftPanelCollapsed,
   }: {
-    rightPanelCollapsed?: boolean;
-    onToggleRightPanel?: () => void;
     onToggleLeftPanel?: () => void;
     leftPanelCollapsed?: boolean;
   } = $props();
 
   const activeSession = $derived(getActiveSession());
+
+  let showingChanges = $state(false);
+  let changesCount = $state(0);
+  let changesLoading = $state(false);
+  let changesError = $state(false);
+  let changesLoadVersion = 0;
+
+  async function loadChangesCount(path: string) {
+    const version = ++changesLoadVersion;
+    changesLoading = true;
+    changesError = false;
+    try {
+      const [working, staged] = await Promise.all([
+        api.getGitDiffSummary(path, false),
+        api.getGitDiffSummary(path, true),
+      ]);
+      if (version !== changesLoadVersion) return;
+      changesCount = new Set([
+        ...(working ?? []).map((file) => file.path),
+        ...(staged ?? []).map((file) => file.path),
+      ]).size;
+    } catch (error) {
+      if (version !== changesLoadVersion) return;
+      console.error("Failed to load changes summary:", error);
+      changesError = true;
+    } finally {
+      if (version === changesLoadVersion) changesLoading = false;
+    }
+  }
+
+  $effect(() => {
+    const sessionId = activeSession?.id;
+    const path = activeSession?.project_path;
+    showingChanges = false;
+    if (sessionId && path) {
+      void loadChangesCount(path);
+    } else {
+      changesCount = 0;
+      changesError = false;
+    }
+  });
+
+  $effect(() => {
+    const revision = activeSession?.git_refresh_revision;
+    const path = activeSession?.project_path;
+    if (revision && path) void loadChangesCount(path);
+  });
 
   const hasNonChatTabs = $derived(
     activeSession?.tabs.some((t: { type: string }) => t.type !== "chat") ??
@@ -470,8 +509,6 @@
     closeTab(activeSession, id);
   }
 
-  let editingTitle = $state(false);
-  let titleValue = $state("");
   let showSessionInfo = $state(false);
   let infoButtonRef = $state<HTMLButtonElement | null>(null);
   let infoTooltipRef = $state<HTMLDivElement | null>(null);
@@ -493,28 +530,6 @@
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   });
-
-  async function confirmRenameTitle() {
-    if (!activeSession) return;
-    const name = titleValue.trim();
-    if (!name || name === (activeSession.alias ?? activeSession.id.slice(-8))) {
-      editingTitle = false;
-      return;
-    }
-    try {
-      await api.renameSession(activeSession.id, name);
-      activeSession.alias = name;
-      showNotification("Session renamed", "success");
-    } catch (e: unknown) {
-      console.error(
-        "Failed to rename session:",
-        e instanceof Error ? e.message : e,
-      );
-      showNotification("Failed to rename session", "error");
-    } finally {
-      editingTitle = false;
-    }
-  }
 
   // ── Git info sync ──
   async function syncGitInfo(session_id: string, project_path: string) {
@@ -755,15 +770,19 @@
 <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
   {#if activeSession}
     <!-- Header -->
-    <div class="flex items-center justify-between p-2 border-b border-border">
-      <div class="flex items-center gap-1 min-w-0">
+    <div
+      class="flex h-11 shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-2"
+    >
+      <div class="flex h-full min-w-0 items-center gap-2">
         <!-- Left panel toggle -->
         {#if onToggleLeftPanel}
           <button
             type="button"
             onclick={() => onToggleLeftPanel()}
-            class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-            title={leftPanelCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors {leftPanelCollapsed
+              ? 'bg-primary/5 text-primary hover:bg-primary/10'
+              : 'text-muted-foreground hover:bg-secondary/80 hover:text-foreground'}"
+            title={leftPanelCollapsed ? "Show sidebar" : "Hide sidebar"}
           >
             {#if leftPanelCollapsed}
               <PanelLeftOpen size={16} />
@@ -772,158 +791,177 @@
             {/if}
           </button>
         {/if}
-        {#if editingTitle}
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            type="text"
-            bind:value={titleValue}
-            onkeydown={(e: KeyboardEvent) => {
-              if (e.key === "Enter") confirmRenameTitle();
-              if (e.key === "Escape") editingTitle = false;
-            }}
-            onblur={() => confirmRenameTitle()}
-            class="flex-1 min-w-0 bg-background border border-border rounded px-2 py-0.5 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-ring"
-            autofocus
-          />
-        {:else}
-          <span
-            class="font-medium truncate cursor-pointer hover:text-primary transition-colors"
-            title={activeSession.alias ?? activeSession.id.slice(-8)}
-            ondblclick={() => {
-              editingTitle = true;
-              titleValue = activeSession.alias ?? activeSession.id.slice(-8);
-            }}
-            role="button"
-            tabindex="0"
-          >
-            {activeSession.alias ?? activeSession.id.slice(-8)}
-          </span>
-          <div class="group relative">
+        <div class="flex min-w-0 flex-1 items-center gap-1.5">
+          <HeaderBreadcrumb session={activeSession} />
+          <div class="relative flex shrink-0 items-center">
             <button
               type="button"
               bind:this={infoButtonRef}
-              class="inline-flex items-center justify-center rounded p-0.5 hover:bg-secondary/80 transition-colors {showSessionInfo
-                ? 'bg-secondary/80'
+              class="inline-flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground {showSessionInfo
+                ? 'bg-secondary/80 text-foreground'
                 : ''}"
               onclick={(e) => {
                 e.stopPropagation();
                 showSessionInfo = !showSessionInfo;
               }}
+              aria-label="Session information"
+              aria-expanded={showSessionInfo}
             >
-              <Info class="w-3.5 h-3.5 text-muted-foreground opacity-60" />
+              <Info size={13} />
             </button>
             {#if showSessionInfo}
               <div
                 bind:this={infoTooltipRef}
-                class="absolute left-full top-0 ml-2 z-50"
+                class="absolute left-0 top-full z-50 mt-1.5 w-80 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
               >
                 <div
-                  class="absolute left-0 top-3 w-2 h-2 bg-card rotate-45 border-l border-b border-border/20 -translate-x-[3px]"
-                ></div>
-                <div
-                  class="relative p-3 w-80 bg-card rounded-xl border border-border/20 shadow-xl overflow-visible"
+                  class="flex items-center justify-between border-b border-border/70 bg-secondary/40 px-3 py-2"
                 >
-                  <div
-                    class="text-[11px] font-medium text-foreground mb-2 pb-1.5 border-b border-border/20"
+                  <span class="text-xs font-semibold text-foreground">
+                    Session information
+                  </span>
+                  <span
+                    class="inline-flex items-center gap-1 text-[10px] font-medium capitalize text-muted-foreground"
                   >
-                    Session Info
+                    <span
+                      class="h-1.5 w-1.5 rounded-full {activeSession.phase ===
+                      'idle'
+                        ? 'bg-success'
+                        : activeSession.phase === 'error'
+                          ? 'bg-error'
+                          : 'bg-warning'}"
+                    ></span>
+                    {activeSession.phase}
+                  </span>
+                </div>
+                <div class="space-y-3 p-3 text-[11px]">
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
+                      <div class="text-[10px] text-muted-foreground">
+                        Messages
+                      </div>
+                      <div class="mt-0.5 font-semibold text-foreground">
+                        {activeSession.messages.length}
+                      </div>
+                    </div>
+                    <div class="rounded-sm bg-secondary/35 px-2 py-1.5">
+                      <div class="text-[10px] text-muted-foreground">
+                        Permission
+                      </div>
+                      <div
+                        class="mt-0.5 font-semibold capitalize {activeSession.permission_level ===
+                        'safe'
+                          ? 'text-success'
+                          : activeSession.permission_level === 'dangerous'
+                            ? 'text-error'
+                            : 'text-warning'}"
+                      >
+                        {activeSession.permission_level || "Caution"}
+                      </div>
+                    </div>
                   </div>
-                  <div
-                    class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1 text-[11px]"
-                  >
-                    <span class="text-muted-foreground text-left">ID</span>
-                    <span class="text-foreground font-mono text-left break-all">
-                      {activeSession.id}
-                    </span>
-                    <span class="text-muted-foreground text-left">Title</span>
-                    <span class="text-foreground text-left break-words">
-                      {activeSession.alias || "Untitled"}
-                    </span>
-                    <span class="text-muted-foreground text-left">Phase</span>
-                    <span class="text-foreground text-left"
-                      >{activeSession.phase}</span
+                  <div class="space-y-1.5">
+                    <div
+                      class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
                     >
-                    {#if activeSession.parent_session_id}
-                      <span class="text-muted-foreground text-left">Parent</span
-                      >
-                      <span
-                        class="text-foreground font-mono text-left break-all"
-                      >
-                        {activeSession.parent_session_id}
-                      </span>
-                    {/if}
-                    <span class="text-muted-foreground text-left">Messages</span
+                      Working directory
+                    </div>
+                    <div
+                      class="rounded-sm bg-code-bg px-2 py-1.5 font-mono text-foreground break-all"
                     >
-                    <span class="text-foreground text-left"
-                      >{activeSession.messages.length}</span
-                    >
-                    <span class="text-muted-foreground text-left"
-                      >Working Dir</span
-                    >
-                    <span class="text-foreground text-left break-all">
                       {activeSession.project_path || "N/A"}
-                    </span>
-                    <span class="text-muted-foreground text-left">Updated</span>
-                    <span class="text-foreground text-left">
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-[3.5rem_1fr] gap-x-3 gap-y-1.5">
+                    <span class="text-muted-foreground">Updated</span>
+                    <span class="text-foreground">
                       {new Date(activeSession.updated_at).toLocaleString()}
                     </span>
-                    {#if activeSession.permission_level}
-                      <span class="text-muted-foreground text-left"
-                        >Permission</span
-                      >
-                      <span class="text-foreground text-left"
-                        >{activeSession.permission_level}</span
-                      >
+                    <span class="text-muted-foreground">Session ID</span>
+                    <span
+                      class="rounded-sm bg-code-bg px-1.5 py-0.5 font-mono text-foreground break-all"
+                    >
+                      {activeSession.id}
+                    </span>
+                    {#if activeSession.parent_session_id}
+                      <span class="text-muted-foreground">Parent</span>
+                      <span class="font-mono text-foreground break-all">
+                        {activeSession.parent_session_id}
+                      </span>
                     {/if}
                   </div>
                 </div>
               </div>
             {/if}
           </div>
-        {/if}
-        {#if activeSession.project_path}
-          {@const displayPath = collapseHome(
-            activeSession.project_path,
-            homeDirPath,
-          )}
-          <span
-            class="text-xs text-muted-foreground truncate"
-            title={activeSession.project_path}>{displayPath}</span
-          >
-        {/if}
-        {#if activeSession.git_info?.branch}
-          <span
-            class="inline-flex items-center gap-1 text-xs text-muted-foreground/80 bg-muted rounded px-1.5 py-0.5 ml-1"
-          >
-            <GitBranch size={10} />
-            {activeSession.git_info.branch}
-          </span>
-          {@const g = activeSession.git_info}
-          {#if g.added_lines > 0 || g.deleted_lines > 0 || g.untracked > 0}
+          {#if activeSession.project_path}
+            {@const displayPath = collapseHome(
+              activeSession.project_path,
+              homeDirPath,
+            )}
+            <span class="text-border">·</span>
             <span
-              class="inline-flex items-center gap-1 text-xs text-muted-foreground/70 font-mono bg-muted rounded px-1.5 py-0.5 ml-1"
+              class="min-w-0 truncate text-[11px] text-muted-foreground"
+              title={activeSession.project_path}
             >
-              <FileDiff size={10} class="text-muted-foreground/50 shrink-0" />
-              {#if g.added_lines > 0}{#key g.added_lines}<span
-                    class="roll-num text-success/80">+{g.added_lines}</span
-                  >{/key}{/if}
-              {#if g.deleted_lines > 0}{#key g.deleted_lines}<span
-                    class="roll-num text-error/80">-{g.deleted_lines}</span
-                  >{/key}{/if}
-              {#if g.untracked > 0}{#key g.untracked}<span
-                    class="roll-num text-muted-foreground">?{g.untracked}</span
-                  >{/key}{/if}
+              {displayPath}
             </span>
           {/if}
-        {/if}
+          {#if activeSession.git_info?.branch}
+            <span class="text-border">·</span>
+            <span
+              class="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground"
+            >
+              <GitBranch size={10} />
+              {activeSession.git_info.branch}
+            </span>
+          {/if}
+        </div>
       </div>
-      <div class="flex items-center gap-0.5">
+      <div class="h-full flex items-center gap-0.5 shrink-0">
         {#if activeSession.project_path}
-          <div class="relative">
+          {@const gitInfo = activeSession.git_info}
+          <button
+            type="button"
+            onclick={() => (showingChanges = true)}
+            class="relative inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors {showingChanges
+              ? 'bg-secondary text-foreground'
+              : 'text-muted-foreground hover:bg-secondary/80 hover:text-foreground'}"
+            title={changesError
+              ? "Couldn’t load changes — open to retry"
+              : changesLoading
+                ? "Loading changes"
+                : changesCount > 0
+                  ? `${changesCount} changed file${changesCount === 1 ? "" : "s"}${gitInfo ? ` · +${gitInfo.added_lines} −${gitInfo.deleted_lines}` : ""}`
+                  : "Working tree clean"}
+            aria-label={changesError
+              ? "Review changes; summary unavailable"
+              : changesCount > 0
+                ? `Review changes: ${changesCount} files`
+                : "Review changes: working tree clean"}
+            aria-pressed={showingChanges}
+          >
+            {#if changesLoading}
+              <Loader2 size={14} class="animate-spin" />
+            {:else if changesError}
+              <AlertCircle size={14} class="text-error" />
+            {:else if changesCount > 0}
+              <FileDiff size={15} />
+              <span
+                class="absolute -right-1 -top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] leading-4 text-primary-foreground"
+                >{changesCount}</span
+              >
+            {:else}
+              <Check size={15} class="text-success" />
+            {/if}
+          </button>
+        {/if}
+        {#if activeSession.project_path}
+          <div class="relative flex h-full items-center">
             <button
               type="button"
               onclick={() => (openDropdownOpen = !openDropdownOpen)}
-              class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
+              class="inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
               title="Open project"
             >
               <ExternalLink size={16} />
@@ -967,23 +1005,9 @@
             {/if}
           </div>
         {/if}
-        <button
-          type="button"
-          onclick={() => onToggleRightPanel?.()}
-          class="p-1.5 rounded-md hover:bg-secondary/80 transition-colors text-muted-foreground hover:text-foreground"
-          title={rightPanelCollapsed ? "Open side panel" : "Close side panel"}
-        >
-          {#if rightPanelCollapsed}
-            <PanelRightOpen size={16} />
-          {:else}
-            <PanelRightClose size={16} />
-          {/if}
-        </button>
       </div>
     </div>
   {/if}
-
-  <!-- InfoBar removed from here — moved into chat area above ChatInput -->
 
   <!-- Tabs — only show non-chat tabs (e.g. preview/edit) -->
   {#if activeSession && hasNonChatTabs}
@@ -1020,7 +1044,7 @@
 
           <!-- Input card -->
           <div
-            class="relative rounded-2xl border border-border bg-card shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all"
+            class="relative rounded-lg border border-border bg-card/70 shadow-sm focus-within:shadow-md focus-within:ring-1 focus-within:ring-ring transition-all"
             onfocusout={handleHomeFocusOut}
           >
             <div class="p-4">
@@ -1282,22 +1306,10 @@
                   <Paperclip size={14} />
                 </button>
                 <!-- Permission level -->
-                <div class="flex items-center gap-1">
-                  {#each ["safe", "caution", "dangerous"] as PermissionLevel[] as level (level)}
-                    {@const Icon = levelIcon(level)}
-                    <button
-                      type="button"
-                      onclick={() => (permission_level = level)}
-                      class="p-1 rounded transition-colors {permission_level ===
-                      level
-                        ? levelColor(level)
-                        : 'text-muted-foreground hover:text-foreground'}"
-                      title={levelDescription(level)}
-                    >
-                      <Icon class="w-4 h-4" />
-                    </button>
-                  {/each}
-                </div>
+                <PermissionSelector
+                  value={(permission_level as PermissionLevel) || "caution"}
+                  onSelect={(level) => (permission_level = level)}
+                />
                 <ModelSelector bind:this={modelSelectorRef} />
               </div>
 
@@ -1307,14 +1319,16 @@
                 disabled={submitting ||
                   !homeInput.trim() ||
                   selectedProjectId === ""}
-                class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground h-8 w-8 hover:bg-primary/90 disabled:opacity-50 shrink-0 transition-colors"
+                class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background enabled:bg-primary enabled:text-primary-foreground enabled:hover:bg-primary/90 enabled:active:scale-95 disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground/60"
+                aria-label="Send message"
+                title="Send message"
               >
                 {#if submitting}
                   <span
                     class="w-3.5 h-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"
                   ></span>
                 {:else}
-                  <Send class="w-4 h-4" />
+                  <ArrowUp size={17} strokeWidth={2.25} />
                 {/if}
               </button>
             </div>
@@ -1323,7 +1337,7 @@
           <!-- New project inputs -->
           {#if selectedProjectId === "new"}
             <div
-              class="mt-3 space-y-2 rounded-xl border border-border bg-card p-3 shadow-sm"
+              class="mt-3 space-y-2 rounded-lg border border-border bg-card p-3 shadow-sm"
             >
               <div class="flex gap-2">
                 <div class="relative flex-1">
@@ -1366,6 +1380,14 @@
           </div>
         </div>
       </div>
+    {:else if showingChanges && activeSession}
+      <ChangesWorkspace
+        session={activeSession}
+        onClose={() => {
+          showingChanges = false;
+          void loadChangesCount(activeSession.project_path);
+        }}
+      />
     {:else if activeSession?.active_tab_id === "chat"}
       <div class="flex h-full relative">
         <!-- Main chat area -->
@@ -1402,9 +1424,6 @@
             </div>
           {/if}
           <div class="flex-1 relative min-h-0" onclick={handleChatClick}>
-            {#if activeSession}
-              <BreadcrumbBar session={activeSession} />
-            {/if}
             <MessageList />
           </div>
           <div class="shrink-0 w-full">
@@ -1431,7 +1450,6 @@
                     });
                 }}
               />
-              <InfoBar session={activeSession} />
               <PermissionBar />
               <AskUserBar />
               <ChatInput bind:this={chatInputRef} />
@@ -1481,19 +1499,3 @@
     {/if}
   </div>
 </div>
-
-<style>
-  @keyframes roll-in {
-    0% {
-      transform: translateY(60%);
-      opacity: 0;
-    }
-    100% {
-      transform: translateY(0);
-      opacity: 1;
-    }
-  }
-  .roll-num {
-    animation: roll-in 0.25s ease-out;
-  }
-</style>

@@ -12,25 +12,30 @@
       .catch(() => {});
   });
 
-  const streamingCount = $derived(
+  const runningCount = $derived(
     sessionState.sessions.filter(
-      (s) => s.phase === "streaming" || s.phase === "executing_tool",
+      (session) =>
+        session.phase === "streaming" ||
+        session.phase === "executing_tool" ||
+        session.phase === "compacting",
     ).length,
   );
 
-  const anyStreaming = $derived(streamingCount > 0);
+  const anyRunning = $derived(runningCount > 0);
 </script>
 
 <div
-  class="shrink-0 h-7 border-t border-border bg-background flex items-center px-3 text-xs select-none gap-3"
+  class="shrink-0 h-7 border-t border-border bg-card flex items-center px-3 text-xs select-none gap-3"
 >
-  <!-- Left: Streaming indicator -->
+  <!-- Left: background activity -->
   <div class="flex items-center gap-1.5 min-w-0">
-    {#if anyStreaming}
+    {#if anyRunning}
       <span class="flex items-center gap-1 text-primary">
         <Activity class="w-3 h-3 animate-pulse" />
         <span class="truncate">
-          {streamingCount > 1 ? `${streamingCount} streaming` : "Streaming..."}
+          {runningCount === 1
+            ? "1 session running"
+            : `${runningCount} sessions running`}
         </span>
       </span>
     {:else}

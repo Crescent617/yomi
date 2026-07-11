@@ -10,11 +10,12 @@ use crate::compactor::CompactionError;
 use crate::event::{AgentEvent, AgentStatus, Event, ModelEvent, StopReason};
 use crate::permission::Checker;
 use crate::prompt::SystemPromptBuilder;
-use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig};
+use crate::tools::{ToolFlags, ToolRegistry, ToolRegistryConfig, UPDATE_GOAL_TOOL_NAME};
 use crate::types::{ContentBlock, Message, MessageId, MessageTokenUsage, Role, SessionId};
 use crate::FinishReason;
 use futures::TryStreamExt;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, Instrument};
 
 /// Input messages that can be sent to an Agent
@@ -734,6 +735,19 @@ impl Agent {
 
         // 2. Prepare streaming
         let tools = self.tool_registry.definitions();
+        let has_goal = if let Some(store) = &self.shared.goal_store {
+            store.load(&self.session_id).await.ok().flatten().is_some()
+        } else {
+            false
+        };
+        let tools = if has_goal {
+            tools
+        } else {
+            tools
+                .into_iter()
+                .filter(|t| t.name != UPDATE_GOAL_TOOL_NAME)
+                .collect()
+        };
         tracing::debug!(
             "iteration {}/{}",
             self.context.iteration_count(),
@@ -1227,9 +1241,24 @@ impl Agent {
                     tracing::warn!("Streaming failed (attempt {}), retrying: {}", attempt, e);
                     self.emit_retrying(attempt, max_retries, &e.to_string());
                     self.emit_error(crate::event::ErrorPhase::Streaming, &e.to_string(), true);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(u64::from(attempt))).await;
+                    wait_for_retry(&self.cancel_token, Duration::from_secs(u64::from(attempt)))
+                        .await?;
                 }
             }
         }
     }
 }
+
+async fn wait_for_retry(cancel_token: &CancelToken, delay: Duration) -> Result<(), AgentError> {
+    tokio::select! {
+        biased;
+        () = cancel_token.cancelled() => {
+            Err(AgentError::Cancelled("streaming retry".into()))
+        }
+        () = tokio::time::sleep(delay) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[path = "agent_test.rs"]
+mod tests;

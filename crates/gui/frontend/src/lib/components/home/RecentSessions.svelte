@@ -85,7 +85,7 @@
           type="button"
           onclick={() => resume(s)}
           disabled={opening !== null}
-          class="group flex flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2 text-left
+          class="group flex flex-col gap-1 rounded-md border border-border/80 bg-card/40 px-3 py-2 text-left
                  hover:border-primary/40 hover:bg-card transition-all disabled:opacity-60 min-w-0"
         >
           <span class="flex items-center gap-1.5 min-w-0">
@@ -111,7 +111,7 @@
                 style="background: {projectColor(project.name + project.dir)}"
               ></span>
               <span class="truncate">{project.name}</span>
-              <span class="opacity-50">·</span>
+              <span>·</span>
             {/if}
             <span class="shrink-0"
               >{formatTimeAgo(s.updated_at ?? s.created_at, clock.now)}</span

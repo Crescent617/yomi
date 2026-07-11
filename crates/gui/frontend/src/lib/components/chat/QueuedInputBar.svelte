@@ -37,7 +37,7 @@
 
 {#if session.queued_input}
   <div
-    class="mx-4 mb-2 rounded-lg border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3"
+    class="mx-4 mb-2 rounded-md border border-border bg-secondary/50 px-3 py-2 flex items-center gap-3"
   >
     <Send class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
     <div class="flex-1 min-w-0">

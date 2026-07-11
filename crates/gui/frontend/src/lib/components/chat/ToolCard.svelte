@@ -4,7 +4,7 @@
   let open = $state(false);
 </script>
 
-<div class="rounded-lg border border-border bg-muted/50 my-2">
+<div class="rounded-md border border-border bg-muted/50 my-2">
   <button
     class="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted/80 transition-colors"
     onclick={() => (open = !open)}

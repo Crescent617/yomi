@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import type { ModelUsage } from "../../api";
-  import { appState } from "../../state.svelte";
+  import { requestActivePanel } from "../../state.svelte";
   import { Flame, ArrowUpRight, ArrowDownLeft, Hash } from "lucide-svelte";
 
   let todayUsage = $state<ModelUsage[]>([]);
@@ -36,7 +36,8 @@
     if (todayUsage.length === 0) return null;
     return [...todayUsage].sort(
       (a, b) =>
-        b.prompt_tokens + b.completion_tokens -
+        b.prompt_tokens +
+        b.completion_tokens -
         (a.prompt_tokens + a.completion_tokens),
     )[0];
   });
@@ -48,7 +49,7 @@
   }
 
   function openUsagePanel() {
-    appState.activePanel = "usage";
+    requestActivePanel("usage");
   }
 </script>
 
@@ -56,12 +57,12 @@
   <button
     type="button"
     onclick={openUsagePanel}
-    class="group w-full flex items-center gap-4 rounded-xl border border-border bg-card/60 px-4 py-2.5
+    class="group w-full flex items-center gap-4 rounded-md border border-border bg-card/60 px-4 py-2.5
            hover:border-primary/40 hover:bg-card transition-all text-left"
     title="Open usage panel"
   >
     <span
-      class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary shrink-0"
+      class="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10 text-primary shrink-0"
     >
       <Flame class="w-4 h-4" />
     </span>

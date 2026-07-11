@@ -47,12 +47,14 @@ function maybeRefreshGitInfo(session: SessionState) {
       const current = getSession(id);
       if (current && current.id === sessionState.activeSessionId) {
         current.git_info = info;
+        current.git_refresh_revision = (current.git_refresh_revision ?? 0) + 1;
       }
     })
     .catch(() => {
       const current = getSession(id);
       if (current && current.id === sessionState.activeSessionId) {
         current.git_info = null;
+        current.git_refresh_revision = (current.git_refresh_revision ?? 0) + 1;
       }
     });
 }

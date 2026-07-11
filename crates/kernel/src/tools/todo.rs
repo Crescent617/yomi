@@ -38,17 +38,21 @@ impl TodoTool {
             g_lock_timeout(format!("todo-{}", ctx.session_id), DEFAULT_LOCK_TIMEOUT).await?;
 
         // Validate todo items
-        for item in todos_array {
-            if item["id"].as_str().is_none() {
-                return Err(KernelError::tool("todo id is required"));
-            }
-            if item["content"].as_str().is_none() {
-                return Err(KernelError::tool("todo content is required"));
-            }
-            match item["status"].as_str() {
-                Some("pending" | "in_progress" | "completed") => {}
-                _ => return Err(KernelError::tool("invalid status")),
-            }
+        if todos_array.iter().any(|item| {
+            item["id"].as_str().is_none()
+                || item["content"].as_str().is_none_or(|s| s.trim().is_empty())
+        }) {
+            return Err(KernelError::tool(
+                "todo id and non-empty content are required".to_string(),
+            ));
+        }
+        if todos_array.iter().any(|item| {
+            !matches!(
+                item["status"].as_str(),
+                Some("pending" | "in_progress" | "completed")
+            )
+        }) {
+            return Err(KernelError::tool("invalid status".to_string()));
         }
 
         // Persist to file (delete if empty)
@@ -88,14 +92,15 @@ impl TodoTool {
         for update in updates_array {
             let id = update["id"]
                 .as_str()
-                .ok_or_else(|| KernelError::tool("update item must have id"))?;
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| KernelError::tool("update item must have non-empty id"))?;
 
             // Find and update the todo
             let mut found = false;
             for todo in todos_array.iter_mut() {
                 if todo["id"].as_str() == Some(id) {
                     // Update status if provided
-                    if let Some(status) = update["status"].as_str() {
+                    if let Some(status) = update["status"].as_str().filter(|s| !s.is_empty()) {
                         match status {
                             "pending" | "in_progress" | "completed" => {
                                 todo["status"] = json!(status);
@@ -104,15 +109,22 @@ impl TodoTool {
                         }
                     }
                     // Update content if provided
-                    if let Some(content) = update["content"].as_str() {
+                    if let Some(content) = update["content"]
+                        .as_str()
+                        .filter(|content| !content.trim().is_empty())
+                    {
                         todo["content"] = json!(content);
                     }
-                    // Update notes if provided
+                    // Update notes if provided; null or blank removes them.
                     if update.get("notes").is_some() {
-                        if let Some(notes) = update["notes"].as_str() {
-                            todo["notes"] = json!(notes);
-                        } else if update["notes"].is_null() {
+                        if update["notes"].is_null()
+                            || update["notes"]
+                                .as_str()
+                                .is_some_and(|notes| notes.trim().is_empty())
+                        {
                             todo.as_object_mut().unwrap().remove("notes");
+                        } else if let Some(notes) = update["notes"].as_str() {
+                            todo["notes"] = json!(notes);
                         }
                     }
                     updated_todos.push(todo.clone());

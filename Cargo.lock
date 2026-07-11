@@ -8730,6 +8730,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-pilot",
  "tauri-plugin-store",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

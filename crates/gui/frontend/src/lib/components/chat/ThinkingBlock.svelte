@@ -1,41 +1,69 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight } from "lucide-svelte";
+  import { ChevronDown, ChevronRight, Lightbulb } from "lucide-svelte";
   import { formatElapsed, tokenEstimate } from "../../utils";
 
   let {
     content,
     elapsed_ms,
-    expanded: initialExpanded = false,
-  }: { content: string; elapsed_ms: number; expanded?: boolean } = $props();
+    isFirst = false,
+    isLast = false,
+  }: {
+    content: string;
+    elapsed_ms: number;
+    isFirst?: boolean;
+    isLast?: boolean;
+  } = $props();
 
-  let expanded = $state(initialExpanded);
+  let expanded = $state(false);
 </script>
 
-<div class="text-xs text-muted-foreground">
-  <button
-    type="button"
-    class="flex items-center gap-1.5 hover:text-muted-foreground/80 transition-colors cursor-pointer"
-    onclick={() => (expanded = !expanded)}
-  >
-    <span class="font-mono">Thinking</span>
-    {#if elapsed_ms > 0}
-      <span class="text-muted-foreground/50">· {formatElapsed(elapsed_ms)}</span
-      >
+<div class="relative flex gap-1">
+  <div class="relative w-3 shrink-0" aria-hidden="true">
+    {#if !(isFirst && isLast)}
+      <span
+        class="absolute left-1/2 w-px -translate-x-1/2 bg-border/70 {isFirst
+          ? 'bottom-0 top-[18px]'
+          : isLast
+            ? 'bottom-[calc(100%-18px)] top-0'
+            : 'inset-y-0'}"
+      ></span>
     {/if}
-    <span class="text-muted-foreground/50"
-      >· {tokenEstimate(content)} tokens</span
+    <span
+      class="absolute left-1/2 top-[18px] z-10 flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground"
     >
+      <span class="size-1 rounded-full bg-muted-foreground/60"></span>
+    </span>
+  </div>
+
+  <div class="min-w-0 flex-1 py-1">
+    <button
+      type="button"
+      class="flex min-h-7 w-full items-center gap-2 rounded-md px-0.5 text-left transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      onclick={() => (expanded = !expanded)}
+      aria-expanded={expanded}
+    >
+      <Lightbulb class="size-3.5 shrink-0 text-muted-foreground" />
+      <span class="shrink-0 text-xs font-medium text-foreground">Thought</span>
+      <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+        {tokenEstimate(content)} tokens
+      </span>
+      {#if elapsed_ms > 0}
+        <span
+          class="shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
+        >
+          {formatElapsed(elapsed_ms)}
+        </span>
+      {/if}
+      {#if expanded}
+        <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+      {:else}
+        <ChevronRight class="size-3.5 shrink-0 text-muted-foreground" />
+      {/if}
+    </button>
+
     {#if expanded}
-      <ChevronDown class="w-3 h-3" />
-    {:else}
-      <ChevronRight class="w-3 h-3" />
+      <pre
+        class="mt-1 max-h-60 overflow-y-auto whitespace-pre-wrap px-0.5 py-1 text-xs leading-relaxed text-muted-foreground">{content}</pre>
     {/if}
-  </button>
-  {#if expanded}
-    <div
-      class="mt-2 max-h-60 overflow-y-auto rounded bg-muted/50 px-3 py-2 text-xs text-muted-foreground/70"
-    >
-      <pre class="whitespace-pre-wrap">{content}</pre>
-    </div>
-  {/if}
+  </div>
 </div>

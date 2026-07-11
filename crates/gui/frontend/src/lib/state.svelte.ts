@@ -173,6 +173,7 @@ export interface SessionState {
   };
   streaming_tool_name?: string;
   git_info?: GitInfo | null;
+  git_refresh_revision?: number;
   goal?: { description: string; status: string } | null;
   todos?: { id: string; content: string; status: string }[];
   browserUrl?: string;
@@ -308,6 +309,8 @@ export type KernelEvent =
 
 // ── Core state ───────────────────────────────────────────────────────────
 
+export type ActivePanel = "chat" | "usage" | "config" | "automation";
+
 export const appState = $state({
   connectionStatus: "disconnected" as
     | "connected"
@@ -316,8 +319,25 @@ export const appState = $state({
   currentTheme: "system" as "light" | "dark" | "system",
   sidebarCollapsed: false,
   rightPanelCollapsed: true,
-  activePanel: "chat" as "chat" | "usage" | "config" | "automation",
+  activePanel: "chat" as ActivePanel,
+  config_dirty: false,
+  config_restart_required: false,
+  config_applied: false,
 });
+
+export function requestActivePanel(panel: ActivePanel): boolean {
+  if (panel === appState.activePanel) return true;
+  if (
+    appState.activePanel === "config" &&
+    appState.config_dirty &&
+    typeof window !== "undefined" &&
+    !window.confirm("You have unsaved config changes. Leave without saving?")
+  ) {
+    return false;
+  }
+  appState.activePanel = panel;
+  return true;
+}
 
 export const projectState = $state({
   projects: [] as ProjectState[],

@@ -2,9 +2,9 @@ import * as api from "./api";
 import type { SessionMessage } from "./api";
 import type { TaggedContentBlock } from "./types";
 import {
-  appState,
   getSession,
   pinnedSessionMeta,
+  requestActivePanel,
   sessionState,
   streamingMessages,
   type Message,
@@ -93,7 +93,7 @@ export function sendDesktopNotification(
           getCurrentWindow()
             .setFocus()
             .catch(() => {});
-          appState.activePanel = "chat";
+          if (!requestActivePanel("chat")) return;
           if (getSession(session_id)) {
             setActiveSession(session_id);
           }
