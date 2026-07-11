@@ -137,54 +137,61 @@
 </script>
 
 {#if stats.actionCount > 0}
-  <div class="overflow-hidden rounded-md border border-border/60 bg-background">
+  <div class="overflow-hidden rounded-md">
     <button
       type="button"
-      class="flex min-h-8 w-full items-center gap-2 px-2.5 text-left transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      class="flex min-h-8 w-full items-center gap-1 text-left transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       onclick={toggleExpanded}
       aria-expanded={expanded}
     >
-      <ChevronDown
-        class="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 {expanded
-          ? ''
-          : '-rotate-90'}"
-      />
-      <span class="shrink-0 text-xs font-medium text-foreground">Activity</span>
-      <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-        {stats.actionCount}
+      <span class="flex w-3 shrink-0 items-center justify-center">
+        <ChevronDown
+          class="size-3.5 text-muted-foreground transition-transform duration-150 {expanded
+            ? ''
+            : '-rotate-90'}"
+        />
       </span>
-      <span class="shrink-0 text-muted-foreground/40" aria-hidden="true">·</span
-      >
-      <span
-        class="hidden min-w-0 items-center gap-2 text-muted-foreground sm:flex"
-      >
-        {#each stats.badges as badge (badge.label)}
-          <span
-            class="inline-flex shrink-0 items-center gap-1 text-[11px]"
-            title={`${badge.count} ${badge.label}`}
-          >
-            <badge.icon class="size-3.5" /><span class="tabular-nums"
-              >{badge.count}</span
+      <span class="flex min-w-0 flex-1 items-center gap-2">
+        <span class="shrink-0 text-xs font-medium text-foreground"
+          >Activity</span
+        >
+        <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {stats.actionCount}
+        </span>
+        <span class="shrink-0 text-muted-foreground/40" aria-hidden="true"
+          >·</span
+        >
+        <span
+          class="hidden min-w-0 items-center gap-2 text-muted-foreground sm:flex"
+        >
+          {#each stats.badges as badge (badge.label)}
+            <span
+              class="inline-flex shrink-0 items-center gap-1 text-[11px]"
+              title={`${badge.count} ${badge.label}`}
             >
-          </span>
-        {/each}
+              <badge.icon class="size-3.5" /><span class="tabular-nums"
+                >{badge.count}</span
+              >
+            </span>
+          {/each}
+        </span>
+        {#if stats.failedCount > 0}
+          <span
+            class="inline-flex shrink-0 items-center gap-1 text-[11px] text-error"
+            ><XCircle class="size-3.5" />{stats.failedCount} failed</span
+          >
+        {/if}
+        {#if stats.elapsedMs > 0}
+          <span
+            class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
+            >{formatElapsed(stats.elapsedMs)}</span
+          >
+        {/if}
       </span>
-      {#if stats.failedCount > 0}
-        <span
-          class="inline-flex shrink-0 items-center gap-1 text-[11px] text-error"
-          ><XCircle class="size-3.5" />{stats.failedCount} failed</span
-        >
-      {/if}
-      {#if stats.elapsedMs > 0}
-        <span
-          class="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70"
-          >{formatElapsed(stats.elapsedMs)}</span
-        >
-      {/if}
     </button>
 
     {#if expanded}
-      <div class="border-t border-border/60 bg-secondary/10 px-2.5 py-1.5">
+      <div class="bg-secondary/10 pl-0.5">
         {#each trailItems as item, index (item.id)}
           {#if item.type === "thought"}
             <ThinkingBlock

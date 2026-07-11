@@ -37,6 +37,36 @@ function findMessageById(
   return undefined;
 }
 
+function findToolMessage(
+  session: SessionState,
+  message_id: string,
+): ToolMessage | undefined {
+  const message = findMessageById(session, message_id);
+  return message?.type === "tool" ? message : undefined;
+}
+
+function warnToolIdentityMismatch(
+  session: SessionState,
+  message_id: string,
+  tool_id: string,
+) {
+  const allMessages = [
+    ...session.messages,
+    ...(streamingMessages[session.id] ?? []),
+  ];
+  const existing = allMessages.find(
+    (message) => message.type === "tool" && message.tool_call_id === tool_id,
+  );
+  if (existing && existing.id !== message_id) {
+    console.warn("Tool events reused a tool_id with a different message_id", {
+      session_id: session.id,
+      tool_id,
+      existing_message_id: existing.id,
+      event_message_id: message_id,
+    });
+  }
+}
+
 function maybeRefreshGitInfo(session: SessionState) {
   if (!session.project_path || session.id !== sessionState.activeSessionId)
     return;
@@ -252,12 +282,13 @@ function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
 function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
   if (event.start) {
     const start = event.start;
-    const msg = findMessageById(session, start.message_id);
-    if (msg && msg.type === "tool") {
+    const msg = findToolMessage(session, start.message_id);
+    if (msg) {
       msg.status = "running";
       if (start.arguments) msg.arguments = start.arguments;
       return true;
     }
+    warnToolIdentityMismatch(session, start.message_id, start.tool_id);
     const buf = streamingMessages[session.id] ?? [];
     const toolMsg: ToolMessage = {
       id: start.message_id,
@@ -274,14 +305,15 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     return true;
   } else if (event.metadata) {
     const md = event.metadata;
-    const msg = findMessageById(session, md.message_id);
-    if (msg && msg.type === "tool") {
+    const msg = findToolMessage(session, md.message_id);
+    if (msg) {
       const sid = md.metadata["subagent_session_id"];
       if (sid) {
         msg.subagent_session_id = sid;
       }
       return true;
     }
+    warnToolIdentityMismatch(session, md.message_id, md.tool_id);
     const buf = streamingMessages[session.id] ?? [];
     const toolMsg: ToolMessage = {
       id: md.message_id,
@@ -302,8 +334,8 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
     return true;
   } else if (event.end) {
     const end = event.end;
-    const msg = findMessageById(session, end.message_id);
-    if (msg && msg.type === "tool") {
+    const msg = findToolMessage(session, end.message_id);
+    if (msg) {
       msg.status = end.is_error ? "failed" : "completed";
       msg.elapsed_ms = end.elapsed_ms;
       msg.result = end.content_blocks ?? [];
@@ -311,6 +343,7 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
       maybeRefreshGitInfo(session);
       return true;
     }
+    warnToolIdentityMismatch(session, end.message_id, end.tool_id);
     const buf = streamingMessages[session.id] ?? [];
     const toolMsg: ToolMessage = {
       id: end.message_id,

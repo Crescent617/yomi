@@ -227,3 +227,108 @@ async fn test_skip_duplicate_channel() {
 
     cancel.cancel();
 }
+
+#[test]
+fn test_parse_model_commands() {
+    assert!(matches!(
+        parse_channel_command(Some("/models")),
+        ChannelCommand::ListModels
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("  /model\n")),
+        ChannelCommand::CurrentModel
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/model claude-sonnet")),
+        ChannelCommand::SwitchModel(ref key) if key == "claude-sonnet"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/models@yomi_bot")),
+        ChannelCommand::ListModels
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/model@yomi_bot kimi-k2")),
+        ChannelCommand::SwitchModel(ref key) if key == "kimi-k2"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/models kimi-k2")),
+        ChannelCommand::SwitchModel(ref key) if key == "kimi-k2"
+    ));
+}
+
+#[test]
+fn test_parse_invalid_model_command() {
+    assert!(matches!(
+        parse_channel_command(Some("/model one two")),
+        ChannelCommand::InvalidModelCommand
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("please use /model kimi-k2")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(parse_channel_command(None), ChannelCommand::None));
+}
+
+#[test]
+fn test_parse_existing_commands_from_raw_text() {
+    assert!(matches!(
+        parse_channel_command(Some("/clear")),
+        ChannelCommand::Clear
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/stop")),
+        ChannelCommand::Stop
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/stop@yomi_bot")),
+        ChannelCommand::Stop
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/steer@yomi_bot inspect the logs")),
+        ChannelCommand::Steer(ref text) if text == "inspect the logs"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/steer inspect the logs")),
+        ChannelCommand::Steer(ref text) if text == "inspect the logs"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/steer")),
+        ChannelCommand::None
+    ));
+}
+
+fn model_info(name: &str, model_id: &str, context_window: u32) -> crate::kernel::ModelInfo {
+    crate::kernel::ModelInfo {
+        name: name.to_string(),
+        model_id: model_id.to_string(),
+        provider: "anthropic".to_string(),
+        context_window,
+    }
+}
+
+#[test]
+fn test_format_model_list_marks_current_model() {
+    let models = vec![
+        model_info("claude", "claude-sonnet", 200_000),
+        model_info("kimi", "kimi-k2", 256_000),
+    ];
+
+    let output = format_model_list(&models, "kimi");
+
+    assert!(output.contains("`claude` · anthropic · `claude-sonnet` · 200k ctx"));
+    assert!(output.contains("`kimi` · anthropic · `kimi-k2` · 256k ctx **← current**"));
+    assert!(output.contains("/model <model_key>"));
+}
+
+#[test]
+fn test_format_current_and_unknown_model() {
+    let models = vec![model_info("kimi", "kimi-k2", 256_000)];
+
+    let current = format_current_model(&models, "kimi");
+    assert!(current.contains("Current model: `kimi`"));
+    assert!(current.contains("`kimi-k2`"));
+
+    let unknown = format_unknown_model("missing", &models);
+    assert!(unknown.contains("Model `missing` was not found"));
+    assert!(unknown.contains("Available model keys: `kimi`"));
+}

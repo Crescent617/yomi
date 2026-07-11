@@ -326,7 +326,7 @@ async fn handle_incoming_message(
     let reply_msg_id = msg.external_message_id.filter(|_| msg.thread_id.is_some());
     let mapping_key = msg.thread_id.clone().unwrap_or_else(|| chat_id.clone());
 
-    let cmd = parse_channel_command(&msg.content);
+    let cmd = parse_channel_command(msg.raw_text.as_deref());
     match cmd {
         ChannelCommand::Clear => {
             if let Some(sid) = store.find_mapping(channel_name, &mapping_key).await? {
@@ -356,6 +356,56 @@ async fn handle_incoming_message(
             kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
+        ChannelCommand::ListModels => {
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &kernel,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            let models = kernel.list_models().await?;
+            let current = kernel.get_session_model(&sid).await;
+            Ok(Some(format_model_list(&models, &current)))
+        }
+        ChannelCommand::CurrentModel => {
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &kernel,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            let models = kernel.list_models().await?;
+            let current = kernel.get_session_model(&sid).await;
+            Ok(Some(format_current_model(&models, &current)))
+        }
+        ChannelCommand::SwitchModel(key) => {
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &kernel,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            let models = kernel.list_models().await?;
+            if !models.iter().any(|model| model.name == key) {
+                return Ok(Some(format_unknown_model(&key, &models)));
+            }
+            kernel.set_session_model(&sid, &key).await?;
+            Ok(Some(format!(
+                "Switched to `{key}`. It takes effect on the next model invocation."
+            )))
+        }
+        ChannelCommand::InvalidModelCommand => Ok(Some(
+            "Usage: `/model` or `/model <model_key>`. Use `/models` to list models.".to_string(),
+        )),
         ChannelCommand::None => {
             let sid = get_or_create_session(
                 channel_name,
@@ -411,23 +461,125 @@ enum ChannelCommand {
     Stop,
     /// Inject a steer message before the next turn.
     Steer(String),
+    /// List configured models and mark the current one.
+    ListModels,
+    /// Show the current session model.
+    CurrentModel,
+    /// Switch this session to the model identified by its config key.
+    SwitchModel(String),
+    /// A model command with too many arguments.
+    InvalidModelCommand,
     /// Not a command.
     None,
 }
 
-fn parse_channel_command(content: &[ContentBlock]) -> ChannelCommand {
-    let text = match content.first() {
-        Some(ContentBlock::Text { text }) => text.as_str(),
-        _ => return ChannelCommand::None,
+fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
+    let Some(text) = raw_text.map(str::trim).filter(|text| !text.is_empty()) else {
+        return ChannelCommand::None;
+    };
+    let mut parts = text.split_whitespace();
+    let Some(cmd) = parts.next() else {
+        return ChannelCommand::None;
     };
 
-    let (cmd, rest) = text.split_once([' ', '\n']).unwrap_or((text, ""));
+    let command = if cmd.starts_with("/models") {
+        "/models"
+    } else if cmd.starts_with("/model") {
+        "/model"
+    } else if cmd.starts_with("/clear") {
+        "/clear"
+    } else if cmd.starts_with("/stop") {
+        "/stop"
+    } else if cmd.starts_with("/steer") {
+        "/steer"
+    } else {
+        return ChannelCommand::None;
+    };
 
-    match cmd {
-        "/clear" => ChannelCommand::Clear,
-        "/stop" => ChannelCommand::Stop,
-        "/steer" => ChannelCommand::Steer(rest.to_string()),
+    match command {
+        "/clear" if parts.next().is_none() => ChannelCommand::Clear,
+        "/stop" if parts.next().is_none() => ChannelCommand::Stop,
+        "/steer" => {
+            let rest = parts.collect::<Vec<_>>().join(" ");
+            if rest.is_empty() {
+                ChannelCommand::None
+            } else {
+                ChannelCommand::Steer(rest)
+            }
+        }
+        "/models" | "/model" => match (parts.next(), parts.next()) {
+            (None, None) if command == "/models" => ChannelCommand::ListModels,
+            (None, None) => ChannelCommand::CurrentModel,
+            (Some(key), None) => ChannelCommand::SwitchModel(key.to_string()),
+            _ => ChannelCommand::InvalidModelCommand,
+        },
         _ => ChannelCommand::None,
+    }
+}
+
+pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
+    let command = raw_text.split_whitespace().next().unwrap_or_default();
+    ["/models", "/model", "/clear", "/stop", "/steer"]
+        .iter()
+        .any(|prefix| command.starts_with(prefix))
+}
+
+fn format_model_list(models: &[crate::kernel::ModelInfo], current: &str) -> String {
+    if models.is_empty() {
+        return "No models are currently available.".to_string();
+    }
+
+    let mut lines = vec!["**Available models**".to_string(), String::new()];
+    for model in models {
+        let marker = if model.name == current {
+            " **← current**"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "- `{}` · {} · `{}` · {}k ctx{}",
+            model.name,
+            model.provider,
+            model.model_id,
+            model.context_window / 1000,
+            marker
+        ));
+    }
+    lines.push(String::new());
+    lines.push("Switch with `/model <model_key>`.".to_string());
+    lines.join("\n")
+}
+
+fn format_current_model(models: &[crate::kernel::ModelInfo], current: &str) -> String {
+    models
+        .iter()
+        .find(|model| model.name == current)
+        .map_or_else(
+            || format!("Current model: `{current}`. Use `/models` to list available models."),
+            |model| {
+                format!(
+                "Current model: `{}` · {} · `{}` · {}k ctx\n\nSwitch with `/model <model_key>`.",
+                model.name,
+                model.provider,
+                model.model_id,
+                model.context_window / 1000
+            )
+            },
+        )
+}
+
+fn format_unknown_model(key: &str, models: &[crate::kernel::ModelInfo]) -> String {
+    let keys = models
+        .iter()
+        .map(|model| format!("`{}`", model.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if keys.is_empty() {
+        format!("Model `{key}` was not found. No models are currently available.")
+    } else {
+        format!(
+            "Model `{key}` was not found.\n\nAvailable model keys: {keys}\n\nUse `/models` for details."
+        )
     }
 }
 

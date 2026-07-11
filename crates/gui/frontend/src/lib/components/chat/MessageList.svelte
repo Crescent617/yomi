@@ -17,6 +17,7 @@
   import InlineStreamStatus from "./InlineStreamStatus.svelte";
   import type { ErrorMessage, Message } from "../../state.svelte";
   import { formatMessageTime } from "../../utils";
+  import { isActivityTail } from "./activity-group";
 
   const activeSession = $derived(getActiveSession());
   const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
@@ -25,6 +26,7 @@
   let messageContent = $state<HTMLDivElement | null>(null);
   let isNearBottom = $state(true);
   let followLatest = $state(true);
+  let scrollFrame: number | null = null;
 
   // Browser scroll measurements are expressed in CSS pixels. Keep these
   // named so layout styling can continue to use the Tailwind/rem scale.
@@ -58,52 +60,20 @@
     setScrollToBottom("smooth");
   }
 
-  // Track last message fingerprint for detecting changes during streaming
-  let lastFp = "";
-
-  function getFingerprint(msgs: Message[]): string {
-    if (!msgs.length) return "";
-    const last = msgs[msgs.length - 1];
-    const parts: string[] = [last.id];
-    if (last.type !== "tool" && last.type !== "error") {
-      parts.push(`${textFromBlocks(last.content).length}`);
-    }
-    if (last.type === "assistant") {
-      const thinking = findThinking(last.content);
-      if (thinking) {
-        parts.push(`${thinking.content.length}`);
-      }
-    }
-    if (last.type === "assistant" && last.tool_calls) {
-      for (const t of last.tool_calls) {
-        parts.push(t.id, `${t.arguments?.length}`);
-      }
-    }
-    if (last.type === "tool") {
-      parts.push(`${textFromBlocks(last.result).length}`, last.status);
-    }
-    return parts.join("|");
+  function scheduleScrollToBottom() {
+    if (scrollFrame !== null) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
+      setScrollToBottom();
+    });
   }
-
-  // Auto-scroll to bottom only when user is already near bottom
-  $effect(() => {
-    const msgs = displayMessages;
-    const fp = getFingerprint(msgs);
-    if (fp === lastFp) return;
-    lastFp = fp;
-
-    if (scrollContainer && followLatest) {
-      requestAnimationFrame(() => setScrollToBottom());
-    }
-  });
 
   // Scroll to bottom on session switch
   $effect(() => {
     const id = activeSession?.id;
     if (id && scrollContainer) {
-      lastFp = "";
       followLatest = true;
-      requestAnimationFrame(() => setScrollToBottom());
+      scheduleScrollToBottom();
     }
   });
 
@@ -114,11 +84,14 @@
   onMount(() => {
     if (!messageContent) return;
     const resizeObserver = new ResizeObserver(() => {
-      if (followLatest) requestAnimationFrame(() => setScrollToBottom());
+      if (followLatest) scheduleScrollToBottom();
       else updateBottomState();
     });
     resizeObserver.observe(messageContent);
-    return () => resizeObserver.disconnect();
+    return () => {
+      resizeObserver.disconnect();
+      if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+    };
   });
 
   // ── action group logic ──
@@ -131,22 +104,6 @@
         isStreaming: boolean;
         isActiveActivity: boolean;
       };
-
-  function isActivityTail(message: Message | undefined): boolean {
-    if (!message) return false;
-    if (message.type === "tool") return true;
-    if (message.type !== "assistant") return false;
-
-    const lastBlock = message.content.at(-1);
-    if (lastBlock?.type === "text" && lastBlock.text.trim().length > 0) {
-      return false;
-    }
-
-    return (
-      findThinking(message.content) !== null ||
-      Boolean(message.tool_calls?.length)
-    );
-  }
 
   function buildDisplayItems(
     messages: Message[],
@@ -252,7 +209,7 @@
         bind:this={messageContent}
         class="container mx-auto px-4 lg:px-6 pt-2 pb-4"
       >
-        <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-3">
           {#each displayItems as item, index (item.type === "message" ? item.message.id : `${item.type}-${item.messages[0]?.id ?? index}`)}
             {#if item.type === "error_group"}
               <div class="group relative">
@@ -283,14 +240,14 @@
                 {/if}
               </div>
             {:else}
-              <div class="group relative space-y-1">
+              <div class="group relative -mb-2 space-y-1">
                 <ActivityGroup
                   messages={item.messages}
                   isActiveActivity={item.isActiveActivity}
                 />
                 {#each item.messages as m (m.id)}
                   {#if m.type === "assistant" && hasText(m.content)}
-                    <div class="w-full space-y-1 mt-3">
+                    <div class="w-full space-y-1">
                       <TextBlock
                         content={textFromBlocks(m.content)}
                         isStreaming={item.isStreaming}

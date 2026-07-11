@@ -347,9 +347,13 @@ impl MsgChunkAssembler {
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
     fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
-        let response: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
-        })?;
+        let response: OpenAIStreamResponse = match serde_json::from_str(data) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to parse SSE chunk: {e} - data: {data}");
+                return Ok(Vec::new());
+            }
+        };
 
         // Capture response ID from any chunk that has it
         if let Some(id) = response.id {

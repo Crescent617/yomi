@@ -377,9 +377,13 @@ impl ResponseAssembler {
 
     /// Process one SSE event's data payload.
     fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
-        let event: ResponsesStreamEvent = serde_json::from_str(data).map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse SSE event: {e} - data: {data}"))
-        })?;
+        let event: ResponsesStreamEvent = match serde_json::from_str(data) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("Failed to parse SSE event: {e} - data: {data}");
+                return Ok(Vec::new());
+            }
+        };
 
         let mut items = Vec::new();
 

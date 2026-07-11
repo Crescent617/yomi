@@ -352,13 +352,11 @@ fn test_assembler_no_delta() {
 }
 
 #[test]
-fn test_assembler_invalid_json() {
+fn test_assembler_invalid_json_ignored() {
     let mut assembler = MsgChunkAssembler::new();
 
-    let result = assembler.process("invalid json");
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("Failed to parse SSE chunk"));
+    let items = assembler.process("invalid json").unwrap();
+    assert!(items.is_empty(), "invalid JSON should be ignored with warning");
 }
 
 #[test]
