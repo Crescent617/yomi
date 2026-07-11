@@ -1,5 +1,6 @@
 use crate::event::{Event, ModelEvent};
 use crate::kernel::{CreateSessionInput, Kernel};
+use crate::storage::SessionStore;
 use crate::types::{ContentBlock, Result, SessionId};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -438,19 +439,53 @@ async fn get_or_create_session(
         return Ok(sid);
     }
 
+    let model_key = model_key_for_new_channel_session(
+        channel_name,
+        chat_id,
+        mapping_key,
+        store,
+        &kernel.session_store().await,
+    )
+    .await?;
     let sid = kernel
         .create_session(CreateSessionInput {
             project_id: None,
             working_dir: None,
             auto_approve_level: crate::permission::Level::Dangerous,
             tool_blocklist: vec![crate::tools::ask_user::ASK_USER_TOOL_NAME.to_string()],
-            model_key: None,
+            model_key,
         })
         .await?;
     store
         .save_mapping(channel_name, mapping_key, &sid, chat_id, reply_msg_id)
         .await?;
     Ok(sid)
+}
+
+/// Resolve the persisted model key for a newly-created channel session.
+/// Thread sessions inherit an explicit model choice from their parent chat
+/// session. Missing mappings, sessions, or model keys intentionally yield
+/// `None`, allowing runtime model resolution to use the configured default
+/// without persisting it.
+async fn model_key_for_new_channel_session(
+    channel_name: &str,
+    chat_id: &str,
+    mapping_key: &str,
+    channel_store: &Arc<dyn ChannelStore>,
+    session_store: &Arc<dyn SessionStore>,
+) -> Result<Option<String>> {
+    if mapping_key == chat_id {
+        return Ok(None);
+    }
+
+    let Some(parent_session_id) = channel_store.find_mapping(channel_name, chat_id).await? else {
+        return Ok(None);
+    };
+
+    Ok(session_store
+        .get(&parent_session_id)
+        .await?
+        .and_then(|session| session.model_key))
 }
 
 /// Parsed channel command from an incoming message.
