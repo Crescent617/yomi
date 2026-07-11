@@ -475,6 +475,10 @@ async fn run_single_tool(p: RunSingleToolParams<'_>) -> ToolExecutionResult {
     }
 }
 
+#[cfg(test)]
+#[path = "tool_exec_test.rs"]
+mod tests;
+
 /// Extract a human-readable string from a panic payload.
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {

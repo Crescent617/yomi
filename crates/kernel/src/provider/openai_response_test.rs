@@ -564,12 +564,10 @@ fn test_assembler_unknown_events_ignored() {
 }
 
 #[test]
-fn test_assembler_invalid_json() {
+fn test_assembler_invalid_json_ignored() {
     let mut assembler = ResponseAssembler::new();
-    let result = assembler.process("not json");
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("Failed to parse SSE event"));
-    assert!(!err.is_retryable(), "parse errors are not retryable");
+    let items = assembler.process("not json").unwrap();
+    assert!(items.is_empty(), "invalid JSON should be ignored with warning");
 }
 
 #[test]

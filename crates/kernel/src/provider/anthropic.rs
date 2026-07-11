@@ -408,9 +408,13 @@ impl AnthropicStreamState {
     }
 
     fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
-        let event: AnthropicStreamEvent = serde_json::from_str(data).map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse SSE chunk: {e} - data: {data}"))
-        })?;
+        let event: AnthropicStreamEvent = match serde_json::from_str(data) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("Failed to parse SSE chunk: {e} - data: {data}");
+                return Ok(Vec::new());
+            }
+        };
 
         let mut items = Vec::new();
 

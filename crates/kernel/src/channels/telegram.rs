@@ -62,6 +62,25 @@ impl TelegramAdapter {
         Ok(format!("data:{mime_type};base64,{base64}"))
     }
 
+    fn split_command_batches<T>(items: Vec<T>, is_command: impl Fn(&T) -> bool) -> Vec<Vec<T>> {
+        let mut batches = Vec::new();
+        let mut regular_items = Vec::new();
+        for item in items {
+            if is_command(&item) {
+                if !regular_items.is_empty() {
+                    batches.push(std::mem::take(&mut regular_items));
+                }
+                batches.push(vec![item]);
+            } else {
+                regular_items.push(item);
+            }
+        }
+        if !regular_items.is_empty() {
+            batches.push(regular_items);
+        }
+        batches
+    }
+
     fn format_message_line(
         msg: &teloxide_core::types::Message,
         chat_id: &str,
@@ -133,11 +152,17 @@ impl TelegramAdapter {
             .and_then(|m| m.from.as_ref())
             .map_or_else(|| chat_id.to_string(), |u| u.id.0.to_string());
 
+        let raw_text = (msgs.len() == 1)
+            .then(|| msgs[0].text().or_else(|| msgs[0].caption()))
+            .flatten()
+            .map(str::to_string);
+
         Some(ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id,
             external_message_id: msgs.last().map(|m| m.id.0.to_string()),
             is_mention,
+            raw_text,
             content,
             thread_id: None,
         })
@@ -212,6 +237,10 @@ impl TelegramAdapter {
     }
 }
 
+#[cfg(test)]
+#[path = "telegram_test.rs"]
+mod tests;
+
 use teloxide_core::payloads::SetMessageReactionSetters;
 use teloxide_core::types::ReactionType;
 
@@ -277,20 +306,27 @@ impl PlatformAdapter for TelegramAdapter {
                     let bot_username = self.ensure_username().await;
 
                     for (chat_id, msgs) in by_chat {
-                        let Some(channel_msg) = self
-                            .build_channel_message(&chat_id, &msgs, bot_username)
-                            .await
-                        else {
-                            continue;
-                        };
+                        let batches = Self::split_command_batches(msgs, |msg| {
+                            let raw_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
+                            super::hub::has_channel_command_prefix(raw_text)
+                        });
 
-                        if let Some(ref msg_id) = channel_msg.external_message_id {
-                            self.fire_reaction(&chat_id, msg_id, "👀");
-                        }
+                        for batch in batches {
+                            let Some(channel_msg) = self
+                                .build_channel_message(&chat_id, &batch, bot_username)
+                                .await
+                            else {
+                                continue;
+                            };
 
-                        if incoming.send(channel_msg).await.is_err() {
-                            warn!("incoming channel closed, stopping receiver");
-                            return Ok(());
+                            if let Some(ref msg_id) = channel_msg.external_message_id {
+                                self.fire_reaction(&chat_id, msg_id, "👀");
+                            }
+
+                            if incoming.send(channel_msg).await.is_err() {
+                                warn!("incoming channel closed, stopping receiver");
+                                return Ok(());
+                            }
                         }
                     }
                 }

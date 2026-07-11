@@ -692,11 +692,15 @@ impl FeishuAdapter {
 
         info!(chat_id, msg_id, user_id, is_mention, text, "Feishu message");
 
+        let raw_text =
+            strip_bot_mention(text, message["mentions"].as_array(), bot_open_id.as_deref());
+
         let channel_msg = ChannelMessage {
             external_chat_id: chat_id.to_string(),
             external_user_id: user_id.to_string(),
             external_message_id: Some(msg_id.clone()),
             is_mention,
+            raw_text: Some(raw_text),
             content: vec![ContentBlock::Text { text: formatted }],
             thread_id,
         };
@@ -711,6 +715,10 @@ impl FeishuAdapter {
         Ok(Some(msg_id))
     }
 }
+
+#[cfg(test)]
+#[path = "feishu_test.rs"]
+mod tests;
 
 // ── Protobuf helpers ───────────────────────────────────────────────
 
@@ -743,6 +751,24 @@ fn build_ack(original: &lark_websocket_protobuf::pbbp2::Frame) -> Vec<u8> {
 }
 
 // ── Small helpers ──────────────────────────────────────────────────
+
+fn strip_bot_mention(
+    text: &str,
+    mentions: Option<&Vec<serde_json::Value>>,
+    bot_open_id: Option<&str>,
+) -> String {
+    let Some(bot_open_id) = bot_open_id else {
+        return text.trim().to_string();
+    };
+    mentions
+        .into_iter()
+        .flatten()
+        .filter(|mention| mention["id"]["open_id"].as_str() == Some(bot_open_id))
+        .filter_map(|mention| mention["key"].as_str())
+        .fold(text.to_string(), |text, key| text.replace(key, ""))
+        .trim()
+        .to_string()
+}
 
 fn cached_token(cache: Option<&TokenCache>) -> Option<String> {
     cache.and_then(|c| {

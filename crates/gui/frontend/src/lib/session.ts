@@ -202,13 +202,15 @@ export async function activateSession(sessionId: string) {
       if (!getSession(sessionId)) {
         await loadSessionData(sessionId);
       } else {
-        const [msgs, goalResult, todosResult] = await Promise.all([
+        const [sessionInfo, msgs, goalResult, todosResult] = await Promise.all([
+          api.getSession(sessionId),
           api.getMessages(sessionId),
           api.getGoal(sessionId).catch(() => null),
           api.getTodos(sessionId).catch(() => ({ todos: [] })),
         ]);
         const session = getSession(sessionId);
         if (session) {
+          syncSessionStatus(sessionId, sessionInfo);
           session.goal = goalResult;
           session.todos = todosResult.todos;
         }

@@ -167,6 +167,9 @@
   .text-block :global(p) {
     margin: 0.35rem 0;
   }
+  .text-block > :global(:first-child) {
+    margin-top: 0.125rem;
+  }
   .text-block :global(ul) {
     list-style-type: disc;
     padding-left: 1.25rem;

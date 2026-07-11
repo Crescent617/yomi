@@ -103,6 +103,8 @@ pub struct ChannelMessage {
     pub external_user_id: String,
     pub external_message_id: Option<String>,
     pub is_mention: bool,
+    /// Raw platform text used for command parsing, before model-context metadata is added.
+    pub raw_text: Option<String>,
     pub content: Vec<ContentBlock>,
     /// Thread ID for platforms that support threaded conversations (e.g. Feishu).
     /// When present, the hub uses this as the session mapping key instead of
