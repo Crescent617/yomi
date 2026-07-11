@@ -411,7 +411,19 @@ fn test_parse_existing_commands_from_raw_text() {
         ChannelCommand::Steer(ref text) if text == "inspect the logs"
     ));
     assert!(matches!(
+        parse_channel_command(Some("/queue@yomi_bot run this next")),
+        ChannelCommand::Queue(ref text) if text == "run this next"
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/queue run this next")),
+        ChannelCommand::Queue(ref text) if text == "run this next"
+    ));
+    assert!(matches!(
         parse_channel_command(Some("/steer")),
+        ChannelCommand::None
+    ));
+    assert!(matches!(
+        parse_channel_command(Some("/queue")),
         ChannelCommand::None
     ));
 }

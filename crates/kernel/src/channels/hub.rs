@@ -357,6 +357,21 @@ async fn handle_incoming_message(
             kernel.send_steer(&sid, vec![ContentBlock::Text { text }]);
             Ok(None)
         }
+        ChannelCommand::Queue(text) => {
+            let sid = get_or_create_session(
+                channel_name,
+                store,
+                &kernel,
+                &chat_id,
+                &mapping_key,
+                reply_msg_id.as_deref(),
+            )
+            .await?;
+            kernel
+                .send_message(&sid, vec![ContentBlock::Text { text }])
+                .await?;
+            Ok(None)
+        }
         ChannelCommand::ListModels => {
             let sid = get_or_create_session(
                 channel_name,
@@ -417,7 +432,7 @@ async fn handle_incoming_message(
                 reply_msg_id.as_deref(),
             )
             .await?;
-            kernel.send_message(&sid, msg.content).await?;
+            kernel.send_steer(&sid, msg.content);
             Ok(None)
         }
     }
@@ -496,6 +511,8 @@ enum ChannelCommand {
     Stop,
     /// Inject a steer message before the next turn.
     Steer(String),
+    /// Queue a normal user message for a later turn.
+    Queue(String),
     /// List configured models and mark the current one.
     ListModels,
     /// Show the current session model.
@@ -527,6 +544,8 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
         "/stop"
     } else if cmd.starts_with("/steer") {
         "/steer"
+    } else if cmd.starts_with("/queue") {
+        "/queue"
     } else {
         return ChannelCommand::None;
     };
@@ -534,10 +553,12 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
     match command {
         "/clear" if parts.next().is_none() => ChannelCommand::Clear,
         "/stop" if parts.next().is_none() => ChannelCommand::Stop,
-        "/steer" => {
+        "/steer" | "/queue" => {
             let rest = parts.collect::<Vec<_>>().join(" ");
             if rest.is_empty() {
                 ChannelCommand::None
+            } else if command == "/queue" {
+                ChannelCommand::Queue(rest)
             } else {
                 ChannelCommand::Steer(rest)
             }
@@ -554,7 +575,7 @@ fn parse_channel_command(raw_text: Option<&str>) -> ChannelCommand {
 
 pub(super) fn has_channel_command_prefix(raw_text: &str) -> bool {
     let command = raw_text.split_whitespace().next().unwrap_or_default();
-    ["/models", "/model", "/clear", "/stop", "/steer"]
+    ["/models", "/model", "/clear", "/stop", "/steer", "/queue"]
         .iter()
         .any(|prefix| command.starts_with(prefix))
 }
