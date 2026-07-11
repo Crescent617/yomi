@@ -17,7 +17,7 @@
   import InlineStreamStatus from "./InlineStreamStatus.svelte";
   import type { ErrorMessage, Message } from "../../state.svelte";
   import { formatMessageTime } from "../../utils";
-  import { isActivityTail } from "./activity-group";
+  import { isActivityTail, isSameActivityMessage } from "./activity-group";
 
   const activeSession = $derived(getActiveSession());
   const displayMessages = $derived(getDisplayMessages(activeSession?.id ?? ""));
@@ -157,6 +157,7 @@
       }
 
       if (msg.type === "tool") {
+        if (!isSameActivityMessage(group, msg)) flush();
         group.push(msg);
         continue;
       }
@@ -167,6 +168,7 @@
       const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
 
       if (hasThinking || hasToolCalls) {
+        if (!isSameActivityMessage(group, msg)) flush();
         group.push(msg);
         if (hasTextContent) flush();
       } else {
@@ -254,17 +256,14 @@
                   messages={item.messages}
                   isActiveActivity={item.isActiveActivity}
                 />
-                {#each item.messages as m (m.id)}
+                {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
                   {#if m.type === "assistant" && hasText(m.content)}
                     <div class="w-full space-y-1">
                       <TextBlock
                         content={textFromBlocks(m.content)}
                         isStreaming={item.isStreaming}
                       />
-                      {@render messageTimestamp(
-                        m.created_at,
-                        item.isStreaming,
-                      )}
+                      {@render messageTimestamp(m.created_at, item.isStreaming)}
                     </div>
                   {/if}
                 {/each}

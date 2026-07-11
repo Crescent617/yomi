@@ -1,6 +1,13 @@
 import type { Message } from "../../state.svelte";
 import { findThinking } from "../../state.svelte";
 
+export function isSameActivityMessage(
+  group: Message[],
+  message: Message,
+): boolean {
+  return group.length === 0 || group[0].id === message.id;
+}
+
 export function isActivityTail(message: Message | undefined): boolean {
   if (!message) return false;
   if (message.type === "tool") return true;
