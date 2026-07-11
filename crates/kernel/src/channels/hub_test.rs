@@ -7,6 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::channels::store::SqliteChannelStore;
 use crate::channels::PlatformConfig;
+use crate::storage::migrations::run_migrations;
+use crate::storage::{SessionStore, SqliteSessionStore};
 use sqlx::sqlite::SqlitePoolOptions;
 
 pub struct MockAdapter {
@@ -69,6 +71,123 @@ async fn create_test_pool() -> (sqlx::SqlitePool, Arc<SqliteChannelStore>) {
     .unwrap();
     let store = Arc::new(SqliteChannelStore::new(pool.clone()));
     (pool, store)
+}
+
+async fn create_model_key_test_stores() -> (Arc<dyn ChannelStore>, Arc<dyn SessionStore>) {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    run_migrations(&pool).await.unwrap();
+    (
+        Arc::new(SqliteChannelStore::new(pool.clone())),
+        Arc::new(SqliteSessionStore::new(pool)),
+    )
+}
+
+async fn create_session_with_model(
+    store: &Arc<dyn SessionStore>,
+    model_key: Option<&str>,
+) -> SessionId {
+    let id = SessionId::new();
+    store
+        .create(&id, None, None, None, None, model_key)
+        .await
+        .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn test_thread_session_inherits_parent_chat_model_key() {
+    let (channel_store, session_store) = create_model_key_test_stores().await;
+    let parent_id = create_session_with_model(&session_store, Some("parent-model")).await;
+    channel_store
+        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .await
+        .unwrap();
+
+    let model_key = model_key_for_new_channel_session(
+        "feishu",
+        "chat-1",
+        "chat-1:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(model_key.as_deref(), Some("parent-model"));
+}
+
+#[tokio::test]
+async fn test_thread_session_leaves_model_key_unset_without_explicit_parent_model() {
+    let (channel_store, session_store) = create_model_key_test_stores().await;
+    let parent_id = create_session_with_model(&session_store, None).await;
+    channel_store
+        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .await
+        .unwrap();
+
+    let without_model = model_key_for_new_channel_session(
+        "feishu",
+        "chat-1",
+        "chat-1:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+    let without_mapping = model_key_for_new_channel_session(
+        "feishu",
+        "chat-2",
+        "chat-2:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+
+    let missing_parent_id = SessionId::new();
+    channel_store
+        .save_mapping("feishu", "chat-3", &missing_parent_id, "chat-3", None)
+        .await
+        .unwrap();
+    let without_parent_session = model_key_for_new_channel_session(
+        "feishu",
+        "chat-3",
+        "chat-3:thread-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(without_model, None);
+    assert_eq!(without_mapping, None);
+    assert_eq!(without_parent_session, None);
+}
+
+#[tokio::test]
+async fn test_non_thread_session_does_not_inherit_model_key() {
+    let (channel_store, session_store) = create_model_key_test_stores().await;
+    let parent_id = create_session_with_model(&session_store, Some("parent-model")).await;
+    channel_store
+        .save_mapping("feishu", "chat-1", &parent_id, "chat-1", None)
+        .await
+        .unwrap();
+
+    let model_key = model_key_for_new_channel_session(
+        "feishu",
+        "chat-1",
+        "chat-1",
+        &channel_store,
+        &session_store,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(model_key, None);
 }
 
 #[tokio::test]

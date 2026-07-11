@@ -29,7 +29,8 @@ pub struct CreateSessionInput {
     pub working_dir: Option<std::path::PathBuf>,
     pub auto_approve_level: Level,
     pub tool_blocklist: Vec<String>,
-    /// Initial model key for this session (defaults to `agent.default_model`)
+    /// Initial model key persisted for this session. When absent, runtime
+    /// model resolution falls back to `agent.default_model` without storing it.
     pub model_key: Option<String>,
 }
 
@@ -462,9 +463,6 @@ impl Kernel {
         };
 
         let id = SessionId::new();
-        let model_key = input
-            .model_key
-            .unwrap_or_else(|| self.agent_config.default_model.clone());
 
         self.session_store()
             .await
@@ -474,7 +472,7 @@ impl Kernel {
                 working_dir.as_deref(),
                 Some(input.auto_approve_level.as_str()),
                 None,
-                Some(&model_key),
+                input.model_key.as_deref(),
             )
             .await?;
 
