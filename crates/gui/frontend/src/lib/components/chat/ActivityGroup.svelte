@@ -192,7 +192,7 @@
 
     {#if expanded}
       <div class="bg-secondary/10 pl-0.5">
-        {#each trailItems as item, index (item.id)}
+        {#each trailItems as item, index (`${item.type}-${item.id}-${index}`)}
           {#if item.type === "thought"}
             <ThinkingBlock
               content={item.content}

@@ -1,6 +1,35 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("activity group state", () => {
+  test("groups activity only when message ids match", async ({ page }) => {
+    await page.goto("/");
+
+    const result = await page.evaluate(async () => {
+      const { isSameActivityMessage } =
+        await import("/src/lib/components/chat/activity-group.ts");
+      const first = {
+        id: "message-one",
+        type: "tool" as const,
+        tool_call_id: "tool-one",
+        tool_name: "agent",
+        status: "running" as const,
+        arguments: "{}",
+        result: [],
+        created_at: new Date().toISOString(),
+      };
+      return {
+        same: isSameActivityMessage([first], { ...first }),
+        different: isSameActivityMessage([first], {
+          ...first,
+          id: "message-two",
+          tool_call_id: "tool-two",
+        }),
+      };
+    });
+
+    expect(result).toEqual({ same: true, different: false });
+  });
+
   test("keeps a tool-calling assistant active after text arrives", async ({
     page,
   }) => {
