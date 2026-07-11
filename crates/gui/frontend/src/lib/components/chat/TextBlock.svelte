@@ -4,6 +4,7 @@
   import { mount, onDestroy, unmount } from "svelte";
   import * as smd from "streaming-markdown";
   import CodeBlock from "./CodeBlock.svelte";
+  import MermaidBlock from "./MermaidBlock.svelte";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -37,7 +38,6 @@
     const blocks = [...el.querySelectorAll("pre > code")];
     if (blocks.length === 0) return;
 
-    const shiki = await import("shiki");
     for (const codeElement of blocks) {
       if (!el || version !== highlightVersion) return;
       const pre = codeElement.parentElement;
@@ -45,9 +45,29 @@
       const languageClass = [...codeElement.classList].find((name) =>
         name.startsWith("language-"),
       );
-      const rawLanguage = languageClass?.slice("language-".length) || "text";
-      const lang = languageAliases[rawLanguage] ?? rawLanguage;
+      // streaming-markdown emits the fence info as a direct class ("mermaid"),
+      // while other renderers commonly emit "language-mermaid".
+      const rawLanguage = (
+        languageClass?.slice("language-".length) ||
+        codeElement.classList[0] ||
+        "text"
+      ).toLowerCase();
       const code = codeElement.textContent ?? "";
+      const target = document.createElement("div");
+      pre.replaceWith(target);
+
+      if (rawLanguage === "mermaid") {
+        mountedCodeBlocks.push(
+          mount(MermaidBlock, {
+            target,
+            props: { source: code },
+          }),
+        );
+        continue;
+      }
+
+      const shiki = await import("shiki");
+      const lang = languageAliases[rawLanguage] ?? rawLanguage;
       let highlightedHtml = "";
       try {
         const html = await shiki.codeToHtml(code, {
@@ -64,8 +84,6 @@
         // Keep a plain code block for unknown or unsupported languages.
       }
 
-      const target = document.createElement("div");
-      pre.replaceWith(target);
       mountedCodeBlocks.push(
         mount(CodeBlock, {
           target,
