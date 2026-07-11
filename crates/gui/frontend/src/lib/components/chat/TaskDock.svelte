@@ -134,6 +134,21 @@
   }
 </script>
 
+{#snippet progressSpinner(compact = false)}
+  <span
+    class="relative flex shrink-0 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20 {compact
+      ? 'size-4'
+      : 'size-5'}"
+    role="status"
+    aria-label="In progress"
+  >
+    <Loader2
+      class="animate-spin text-primary {compact ? 'size-3' : 'size-3.5'}"
+      strokeWidth={2.5}
+    />
+  </span>
+{/snippet}
+
 {#if shouldShow}
   <div class="sticky top-0 z-20 shrink-0 bg-background/95 backdrop-blur-sm">
     <div class="container mx-auto px-4 py-2 lg:px-6">
@@ -162,17 +177,7 @@
             </h2>
             {#if inProgressItem}
               <span class="text-muted-foreground/50" aria-hidden="true">·</span>
-              <span
-                class="task-flow relative h-1.5 w-4 shrink-0 overflow-hidden"
-                aria-hidden="true"
-              >
-                <span
-                  class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-primary/15"
-                ></span>
-                <span
-                  class="task-comet absolute left-0 top-1/2 h-px w-2.5 -translate-y-1/2 bg-gradient-to-r from-transparent to-primary"
-                ></span>
-              </span>
+              {@render progressSpinner(true)}
               <span class="min-w-0 truncate text-xs text-muted-foreground">
                 {inProgressItem.content}
               </span>
@@ -288,16 +293,8 @@
                           class="mt-0.5 size-4 shrink-0 text-success"
                         />
                       {:else if item.status === "in_progress"}
-                        <span
-                          class="task-flow relative mt-1 h-2 w-4 shrink-0 overflow-hidden"
-                          aria-hidden="true"
-                        >
-                          <span
-                            class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-primary/15"
-                          ></span>
-                          <span
-                            class="task-comet absolute left-0 top-1/2 h-px w-2.5 -translate-y-1/2 bg-gradient-to-r from-transparent to-primary"
-                          ></span>
+                        <span class="mt-0.5">
+                          {@render progressSpinner()}
                         </span>
                       {:else}
                         <Circle
@@ -379,31 +376,3 @@
   onConfirm={stopGoal}
   onCancel={() => (stopConfirmOpen = false)}
 />
-
-<style>
-  @keyframes task-flow {
-    from {
-      opacity: 0;
-      transform: translateX(-0.625rem);
-    }
-    20%,
-    80% {
-      opacity: 1;
-    }
-    to {
-      opacity: 0;
-      transform: translateX(1rem);
-    }
-  }
-  .task-comet {
-    animation: task-flow 1.35s ease-in-out infinite;
-    will-change: transform, opacity;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .task-comet {
-      animation: none;
-      opacity: 1;
-      transform: translateX(0.25rem);
-    }
-  }
-</style>
