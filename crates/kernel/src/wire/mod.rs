@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // ── Wire Protocol ────────────────────────────────────────────────────────
 
 /// Wire protocol version. Bumped on any breaking change to the IPC schema.
-pub const WIRE_PROTOCOL_VERSION: u32 = 12;
+pub const WIRE_PROTOCOL_VERSION: u32 = 13;
 
 /// All operations a client can request from the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +76,9 @@ pub enum ReqMethod {
         project_id: Option<String>,
         before: Option<DateTime<Utc>>,
         limit: usize,
+    },
+    ListSubagents {
+        parent_session_id: String,
     },
     ListMessages {
         session_id: String,

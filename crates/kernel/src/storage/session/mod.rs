@@ -74,6 +74,9 @@ pub trait SessionStore: Send + Sync {
         limit: usize,
     ) -> Result<(Vec<SessionInfo>, Option<String>)>;
 
+    /// List direct subagent children of a parent session, newest first.
+    async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>>;
+
     /// Update message count for a session
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()>;
 

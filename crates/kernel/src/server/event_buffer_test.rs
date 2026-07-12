@@ -22,15 +22,17 @@ fn message_added(role: Role) -> Event {
 }
 
 #[test]
-fn test_message_added_clears_event_buffer_for_non_tool_roles() {
-    for role in [Role::System, Role::User, Role::Assistant, Role::Internal] {
+fn test_message_added_clears_event_buffer_for_conversation_roles() {
+    for role in [Role::System, Role::User, Role::Assistant] {
         assert!(should_clear_event_buffer(&message_added(role)));
     }
 }
 
 #[test]
-fn test_tool_message_added_does_not_clear_event_buffer() {
-    assert!(!should_clear_event_buffer(&message_added(Role::Tool)));
+fn test_metadata_roles_do_not_clear_event_buffer() {
+    for role in [Role::Tool, Role::Internal] {
+        assert!(!should_clear_event_buffer(&message_added(role)));
+    }
 }
 
 #[test]

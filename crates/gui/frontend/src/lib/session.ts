@@ -4,8 +4,10 @@ import type { TaggedContentBlock } from "./types";
 import {
   getSession,
   pinnedSessionMeta,
+  refreshSubagents,
   requestActivePanel,
   sessionState,
+  showNotification,
   streamingMessages,
   type Message,
   type SessionState,
@@ -120,6 +122,7 @@ export function createSessionState(
     updated_at: new Date().toISOString(),
     goal: null,
     todos: [],
+    subagents: [],
     ...partial,
   };
 }
@@ -170,27 +173,36 @@ export function upsertSession(session: SessionState) {
   }
 }
 
-export async function loadSessionData(sessionId: string) {
-  const info = await api.getSession(sessionId);
-  const session: SessionState = createSessionState({
-    id: sessionId,
-    project_path: info.working_dir || "",
-    alias: info.title || undefined,
-    parent_session_id: info.parent_id || undefined,
-    phase: info.phase,
-    is_running: info.phase !== "idle" && info.phase !== "closed",
-    permission_level: info.auto_approve_level || undefined,
-    model_key: info.model_key || undefined,
-  });
-  upsertSession(session);
-  const [msgs, goalResult, todosResult] = await Promise.all([
+async function hydrateSession(sessionId: string, session: SessionState) {
+  const [info, msgs, goal, todos] = await Promise.all([
+    api.getSession(sessionId),
     api.getMessages(sessionId),
     api.getGoal(sessionId).catch(() => null),
     api.getTodos(sessionId).catch(() => ({ todos: [] })),
+    refreshSubagents(sessionId),
   ]);
-  session.goal = goalResult;
-  session.todos = todosResult.todos;
+
+  session.project_path = info.working_dir || session.project_path;
+  session.project_id = info.project_id ?? session.project_id;
+  session.alias = info.title ?? session.alias;
+  session.parent_session_id = info.parent_id ?? undefined;
+  session.permission_level =
+    info.auto_approve_level ?? session.permission_level;
+  session.model_key = info.model_key ?? session.model_key;
+  session.updated_at = info.updated_at;
+  session.goal = goal;
+  session.todos = todos.todos;
+  syncSessionStatus(sessionId, info);
   loadSessionMessages(sessionId, msgs);
+}
+
+export async function loadSessionData(sessionId: string) {
+  let session = getSession(sessionId);
+  if (!session) {
+    session = createSessionState({ id: sessionId });
+    upsertSession(session);
+  }
+  await hydrateSession(sessionId, session);
   return session;
 }
 
@@ -199,27 +211,32 @@ export async function activateSession(sessionId: string) {
   const existing = inFlightActivations.get(sessionId);
   if (existing) return existing;
 
+  const previousId = sessionState.activeSessionId;
+  const createdPlaceholder = !getSession(sessionId);
+  if (createdPlaceholder) {
+    upsertSession(createSessionState({ id: sessionId }));
+  }
   setActiveSession(sessionId);
 
   const promise = (async () => {
     try {
-      if (!getSession(sessionId)) {
-        await loadSessionData(sessionId);
-      } else {
-        const [sessionInfo, msgs, goalResult, todosResult] = await Promise.all([
-          api.getSession(sessionId),
-          api.getMessages(sessionId),
-          api.getGoal(sessionId).catch(() => null),
-          api.getTodos(sessionId).catch(() => ({ todos: [] })),
-        ]);
-        const session = getSession(sessionId);
-        if (session) {
-          syncSessionStatus(sessionId, sessionInfo);
-          session.goal = goalResult;
-          session.todos = todosResult.todos;
-        }
-        loadSessionMessages(sessionId, msgs);
+      await loadSessionData(sessionId);
+    } catch (error) {
+      if (createdPlaceholder) {
+        sessionState.sessions = sessionState.sessions.filter(
+          (session) => session.id !== sessionId,
+        );
       }
+      if (sessionState.activeSessionId === sessionId) {
+        const rollbackId =
+          previousId && getSession(previousId) ? previousId : null;
+        setActiveSession(rollbackId);
+      }
+      showNotification(
+        `Failed to open session: ${api.errorMessage(error)}`,
+        "error",
+      );
+      throw error;
     } finally {
       inFlightActivations.delete(sessionId);
     }

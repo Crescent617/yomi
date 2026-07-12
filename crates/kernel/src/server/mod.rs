@@ -14,7 +14,8 @@ use event_buffer::{EventBuffer, SessionSubscribers};
 fn should_clear_event_buffer(event: &Event) -> bool {
     matches!(
         event,
-        Event::Internal(InternalEvent::MessageAdded { message }) if message.role != Role::Tool
+        Event::Internal(InternalEvent::MessageAdded { message })
+            if matches!(message.role, Role::System | Role::User | Role::Assistant)
     )
 }
 

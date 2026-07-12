@@ -1,9 +1,56 @@
-import type { Checkpoint, GitInfo } from "./api";
+import type { Checkpoint, GitInfo, SubagentInfo } from "./api";
+import {
+  getSession as fetchSession,
+  listSubagents as fetchSubagents,
+} from "./api";
 import type { TaggedContentBlock } from "./types";
 import { listen } from "@tauri-apps/api/event";
 import { pushToast } from "./toast.svelte";
 
 // ── Kernel notification listener ─────────────────────────────────────────
+
+const subagentRefreshes = new Map<string, Promise<void>>();
+const dirtySubagentParents = new Set<string>();
+
+export function refreshSubagents(parent_session_id: string): Promise<void> {
+  dirtySubagentParents.add(parent_session_id);
+  const existing = subagentRefreshes.get(parent_session_id);
+  if (existing) return existing;
+
+  const refresh = (async () => {
+    try {
+      while (dirtySubagentParents.delete(parent_session_id)) {
+        const subagents = await fetchSubagents(parent_session_id);
+        const parent = getSession(parent_session_id);
+        if (parent) parent.subagents = subagents;
+      }
+    } catch {
+      // Keep the current snapshot; activation or a later notification retries.
+    } finally {
+      subagentRefreshes.delete(parent_session_id);
+    }
+  })();
+  subagentRefreshes.set(parent_session_id, refresh);
+  return refresh;
+}
+
+function refreshSubagentParent(session_id: string) {
+  for (const parent of sessionState.sessions) {
+    if (parent.subagents.some((item) => item.id === session_id)) {
+      void refreshSubagents(parent.id);
+      return;
+    }
+  }
+  if (!session_id.startsWith("sub_")) return;
+
+  void fetchSession(session_id)
+    .then((session) => {
+      if (session.parent_id) return refreshSubagents(session.parent_id);
+    })
+    .catch(() => {
+      // The subagent may not be persisted yet; a later notification retries.
+    });
+}
 
 export function startNotificationListener(): Promise<() => void> {
   return listen(
@@ -19,15 +66,17 @@ export function startNotificationListener(): Promise<() => void> {
       if (payload.state_changed) {
         const { session_id, status } = payload.state_changed;
         const session = getSession(session_id);
-        if (!session) return;
-        session.phase = status;
-        session.is_running = status !== "idle" && status !== "closed";
+        if (session) {
+          session.phase = status;
+          session.is_running = status !== "idle" && status !== "closed";
+        }
+        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
+        if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
         const session = getSession(session_id);
-        if (!session) return;
-        session.alias = title;
+        if (session) session.alias = title;
       }
       if (payload.connection_lost) {
         showNotification("Connection lost", "warning");
@@ -187,6 +236,7 @@ export interface SessionState {
   git_refresh_revision?: number;
   goal?: { description: string; status: string } | null;
   todos?: { id: string; content: string; status: string }[];
+  subagents: SubagentInfo[];
   browserUrl?: string;
 }
 

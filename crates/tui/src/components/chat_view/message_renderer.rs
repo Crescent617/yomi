@@ -176,7 +176,7 @@ fn render_steer(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
             continue;
         };
         for line in text.lines() {
-            let prefix = if first { "✉ " } else { "  " };
+            let prefix = if first { " " } else { "  " };
             lines.push(Arc::new(Line::from(vec![
                 Span::styled(
                     prefix,
@@ -186,7 +186,7 @@ fn render_steer(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                 ),
                 Span::styled(
                     preprocess(line),
-                    Style::default().fg(colors::text_secondary()),
+                    Style::default().fg(colors::text_primary()),
                 ),
             ])));
             first = false;

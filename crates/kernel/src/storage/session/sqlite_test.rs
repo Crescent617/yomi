@@ -175,6 +175,86 @@ async fn test_list_limit_and_next_cursor() {
 }
 
 #[tokio::test]
+async fn test_list_subagents_returns_only_direct_subagent_children() {
+    let store = create_test_store().await;
+    let parent = SessionId::new();
+    store
+        .create(&parent, None, None, None, None, None)
+        .await
+        .unwrap();
+
+    let direct_subagent = SessionId::new_subagent();
+    store
+        .create(&direct_subagent, None, None, None, Some(&parent), None)
+        .await
+        .unwrap();
+
+    let fork = store.fork(&parent).await.unwrap();
+    let nested_subagent = SessionId::new_subagent();
+    store
+        .create(
+            &nested_subagent,
+            None,
+            None,
+            None,
+            Some(&direct_subagent),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let other_parent = SessionId::new();
+    store
+        .create(&other_parent, None, None, None, None, None)
+        .await
+        .unwrap();
+    let other_subagent = SessionId::new_subagent();
+    store
+        .create(&other_subagent, None, None, None, Some(&other_parent), None)
+        .await
+        .unwrap();
+
+    let subagents = store.list_subagents(&parent).await.unwrap();
+
+    assert_eq!(subagents.len(), 1);
+    assert_eq!(subagents[0].id, direct_subagent);
+    assert_eq!(subagents[0].parent_id.as_ref(), Some(&parent));
+    assert_ne!(subagents[0].id, fork);
+}
+
+#[tokio::test]
+async fn test_list_subagents_orders_by_most_recent() {
+    let store = create_test_store().await;
+    let parent = SessionId::new();
+    store
+        .create(&parent, None, None, None, None, None)
+        .await
+        .unwrap();
+
+    let older = SessionId::new_subagent();
+    store
+        .create(&older, None, None, None, Some(&parent), None)
+        .await
+        .unwrap();
+    let newer = SessionId::new_subagent();
+    store
+        .create(&newer, None, None, None, Some(&parent), None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET updated_at = datetime('now', '-1 minute') WHERE id = ?")
+        .bind(&*older.0)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let subagents = store.list_subagents(&parent).await.unwrap();
+
+    assert_eq!(subagents.len(), 2);
+    assert_eq!(subagents[0].id, newer);
+    assert_eq!(subagents[1].id, older);
+}
+
+#[tokio::test]
 async fn test_list_expired_and_delete_batch() {
     let store = create_test_store().await;
 

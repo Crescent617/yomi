@@ -149,6 +149,21 @@ impl SessionStore for SqliteSessionStore {
         Ok((sessions, next_cursor))
     }
 
+    async fn list_subagents(&self, parent_id: &SessionId) -> Result<Vec<SessionInfo>> {
+        let rows = sqlx::query_as::<_, SessionRow>(
+            "SELECT id, created_at, updated_at, parent_id, title, message_count, working_dir, project_id, auto_approve_level, model_key
+             FROM sessions
+             WHERE parent_id = ? AND id LIKE 'sub_%'
+             ORDER BY updated_at DESC",
+        )
+        .bind(&*parent_id.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| storage_err(format!("failed to list subagents: {e}")))?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     async fn update_message_count(&self, id: &SessionId, count: i64) -> Result<()> {
         sqlx::query(
             "UPDATE sessions SET message_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
