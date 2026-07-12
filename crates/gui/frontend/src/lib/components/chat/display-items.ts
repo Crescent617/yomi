@@ -165,9 +165,10 @@ export class DisplayItemProjection {
     }
 
     let sealEnd = this.sealedMessageCount;
-    // Keep the final stable message dynamic because tail flags depend on what
-    // arrives after it and on the current session phase.
-    for (let i = this.sealedMessageCount; i < stableMessages.length - 1; i++) {
+    // Closed committed messages are independent from the live stream and can be
+    // sealed immediately, including the final committed message. Only an open
+    // activity tail remains dynamic so later tool events can join its group.
+    for (let i = this.sealedMessageCount; i < stableMessages.length; i++) {
       if (isClosedAfter(stableMessages[i])) sealEnd = i + 1;
     }
 

@@ -1,3 +1,4 @@
+import { findThinking, hasText } from "../../session";
 import type {
   BotMessage,
   ErrorMessage,
@@ -94,10 +95,18 @@ describe("message display item projection", () => {
         active,
       );
       const stableIds = new Set(stable.map((message) => message.id));
-      const fullMessages = [
-        ...stable,
-        ...stream.filter((message) => !stableIds.has(message.id)),
-      ];
+      const effectiveStream = stream.filter(
+        (message) => !stableIds.has(message.id),
+      );
+      const stableTail = stable.at(-1);
+      const stableTailIsOpen =
+        stableTail?.type === "tool" ||
+        stableTail?.type === "error" ||
+        (stableTail?.type === "assistant" &&
+          (findThinking(stableTail.content) !== null ||
+            Boolean(stableTail.tool_calls?.length)) &&
+          !hasText(stableTail.content));
+      const fullMessages = [...stable, ...effectiveStream];
       results.push({
         label,
         equal:
@@ -105,7 +114,13 @@ describe("message display item projection", () => {
             normalize([...sections.stableItems, ...sections.dynamicItems]),
           ) ===
           JSON.stringify(
-            normalize(buildDisplayItems(fullMessages, streaming, active)),
+            normalize(
+              buildDisplayItems(
+                fullMessages,
+                streaming && (effectiveStream.length > 0 || stableTailIsOpen),
+                active,
+              ),
+            ),
           ),
       });
     };
@@ -189,7 +204,11 @@ describe("message display item projection", () => {
 
     const initial = cache.update("session-a", [user], 0, [], false, false);
     const initialItems = initial.stableItems;
-    expect(initialItems).toEqual([]);
+    expect(initialItems).toHaveLength(1);
+    expect(initialItems[0]).toMatchObject({
+      type: "message",
+      message: user,
+    });
 
     const duringStream = cache.update(
       "session-a",
@@ -210,10 +229,7 @@ describe("message display item projection", () => {
       false,
     );
     expect(afterAppend.stableItems).not.toBe(initialItems);
-    expect(afterAppend.stableItems[0]).toMatchObject({
-      type: "message",
-      message: user,
-    });
+    expect(afterAppend.stableItems).toHaveLength(2);
 
     const appendedItems = afterAppend.stableItems;
     const nextStream = cache.update(
@@ -350,7 +366,7 @@ test("preserves cached items for non-structural in-place mutations", () => {
   expect(tool.result).toEqual([{ type: "text", text: "done" }]);
 });
 
-test("keeps one stable tail dynamic and never seals streaming state", () => {
+test("seals a closed committed tail away from later streaming updates", () => {
   const created_at = "2026-01-01T00:00:00.000Z";
   const messages: Message[] = [
     {
@@ -368,16 +384,28 @@ test("keeps one stable tail dynamic and never seals streaming state", () => {
   ];
   const cache = new DisplayItemProjection();
 
-  const first = cache.update("session-a", messages, 0, [], true, false);
-  expect(first.stableItems).toHaveLength(1);
-  expect(first.dynamicItems).toMatchObject([
-    { type: "message", isStreaming: true },
-  ]);
+  const first = cache.update("session-a", messages, 0, [], false, false);
+  expect(first.stableItems).toHaveLength(2);
+  expect(first.dynamicItems).toEqual([]);
 
-  const second = cache.update("session-a", messages, 0, [], false, false);
-  expect(second.stableItems).toBe(first.stableItems);
+  const sealedItems = first.stableItems;
+  const streaming: Message = {
+    id: "assistant-stream",
+    type: "assistant",
+    content: [{ type: "text", text: "working" }],
+    created_at,
+  };
+  const second = cache.update(
+    "session-a",
+    messages,
+    0,
+    [streaming],
+    true,
+    false,
+  );
+  expect(second.stableItems).toBe(sealedItems);
   expect(second.dynamicItems).toMatchObject([
-    { type: "message", isStreaming: false },
+    { type: "message", message: streaming, isStreaming: true },
   ]);
 });
 

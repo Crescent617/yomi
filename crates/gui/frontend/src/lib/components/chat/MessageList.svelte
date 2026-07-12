@@ -5,7 +5,7 @@
   import TaskDock from "./TaskDock.svelte";
   import InlineStreamStatus from "./InlineStreamStatus.svelte";
   import DisplayItemList from "./DisplayItemList.svelte";
-  import { DisplayItemProjection, keyDisplayItems } from "./display-items";
+  import { DisplayItemProjection } from "./display-items";
 
   const activeSession = $derived(getActiveSession());
   const displayItemProjection = new DisplayItemProjection();
@@ -24,12 +24,6 @@
           activeSession.phase === "executing_tool"),
     );
   });
-  const displayItems = $derived(
-    keyDisplayItems([
-      ...displaySections.stableItems,
-      ...displaySections.dynamicItems,
-    ]),
-  );
   const displayMessages = $derived(displaySections.tailMessages);
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
@@ -120,7 +114,14 @@
         class="container mx-auto px-4 lg:px-6 pt-2 pb-4"
       >
         <div class="flex flex-col gap-3">
-          <DisplayItemList items={displayItems} session_id={activeSession.id} />
+          <DisplayItemList
+            items={displaySections.stableItems}
+            session_id={activeSession.id}
+          />
+          <DisplayItemList
+            items={displaySections.dynamicItems}
+            session_id={activeSession.id}
+          />
           {#if activeSession.is_running}
             <InlineStreamStatus
               session={activeSession}
