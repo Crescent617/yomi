@@ -131,7 +131,7 @@
 
 <div
   bind:this={block}
-  class="mermaid-block group relative my-2 h-80 overflow-hidden rounded-md bg-code-bg"
+  class="mermaid-block group relative my-2 h-96 overflow-hidden rounded-md bg-code-bg"
 >
   <div
     class="absolute right-1.5 top-1.5 z-10 flex items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
@@ -255,7 +255,7 @@
     width: auto;
     max-width: 100%;
     height: auto;
-    max-height: 272px;
+    max-height: 336px;
     margin-inline: auto;
   }
   .mermaid-canvas :global(text),

@@ -5,6 +5,7 @@
   import * as smd from "streaming-markdown";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
+  import { countClosedMermaidFences } from "./markdown-fences";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -13,11 +14,13 @@
   let parser: ReturnType<typeof smd.parser> | null | undefined;
   let lastContent = "";
   let enhanceFrame: number | null = null;
+  let enhancedMermaidCount = 0;
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
 
   function clearMountedCodeBlocks() {
     for (const component of mountedCodeBlocks) void unmount(component);
     mountedCodeBlocks = [];
+    enhancedMermaidCount = 0;
   }
 
   function createRenderer() {
@@ -27,7 +30,14 @@
   }
 
   function enhanceCodeBlocks() {
-    if (!el || isStreaming) return;
+    if (!el) return;
+    const closedMermaidCount = isStreaming
+      ? countClosedMermaidFences(content)
+      : Number.POSITIVE_INFINITY;
+    let mermaidsToEnhance = Math.max(
+      0,
+      closedMermaidCount - enhancedMermaidCount,
+    );
     const blocks = [...el.querySelectorAll<HTMLElement>("pre > code")];
 
     for (const codeElement of blocks) {
@@ -44,10 +54,16 @@
         "text"
       ).toLowerCase();
       const code = codeElement.textContent ?? "";
+
+      if (isStreaming && rawLanguage !== "mermaid") continue;
+      if (isStreaming && mermaidsToEnhance === 0) continue;
+
       const target = document.createElement("div");
       pre.replaceWith(target);
 
       if (rawLanguage === "mermaid") {
+        mermaidsToEnhance -= 1;
+        enhancedMermaidCount += 1;
         mountedCodeBlocks.push(
           mount(MermaidBlock, {
             target,
@@ -116,6 +132,7 @@
     if (parser === undefined) {
       resetParser(curr);
       if (!streaming) finalizeParser();
+      else scheduleCodeBlockEnhancement();
       return;
     }
 
@@ -127,12 +144,14 @@
     if (streaming && parser && curr.startsWith(lastContent)) {
       smd.parser_write(parser, curr.slice(lastContent.length));
       lastContent = curr;
+      scheduleCodeBlockEnhancement();
       return;
     }
 
     // Rebuild after replacement, truncation, or a finalized message changing.
     resetParser(curr);
     if (!streaming) finalizeParser();
+    else scheduleCodeBlockEnhancement();
   });
 </script>
 

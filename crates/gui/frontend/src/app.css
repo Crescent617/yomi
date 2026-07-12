@@ -114,6 +114,11 @@
   --ring: 217.9 38% 44.9%; /* #47679e */
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 /* ── Base theme colors on body (portaled overlays inherit from here) ── */
 body {
   background-color: hsl(var(--background));
