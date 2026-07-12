@@ -35,14 +35,18 @@ test("renders a Mermaid block only when it approaches the viewport", async ({
 
   const target = page.locator("#mermaid-lazy-test");
   await page.evaluate(async () => {
-    const { mount } = await import("svelte");
+    const { mount } = await import("/@id/svelte");
     const { default: MermaidBlock } =
       await import("/src/lib/components/chat/MermaidBlock.svelte");
+    const scrollContainer = document.createElement("div");
+    scrollContainer.style.height = "400px";
+    scrollContainer.style.overflowY = "auto";
     const spacer = document.createElement("div");
-    spacer.style.height = "10000px";
+    spacer.style.height = "1000px";
     const target = document.createElement("div");
     target.id = "mermaid-lazy-test";
-    document.body.append(spacer, target);
+    scrollContainer.append(spacer, target);
+    document.body.replaceChildren(scrollContainer);
     mount(MermaidBlock, {
       target,
       props: { source: "graph TD; Lazy-->Rendered" },
@@ -50,8 +54,10 @@ test("renders a Mermaid block only when it approaches the viewport", async ({
   });
 
   await expect(target).toContainText("Diagram ready when visible");
-  await expect(target.locator("svg")).toHaveCount(0);
+  await expect(target.locator(".mermaid-diagram svg")).toHaveCount(0);
 
   await target.scrollIntoViewIfNeeded();
-  await expect(target.locator("svg")).toHaveCount(1, { timeout: 10_000 });
+  await expect(target.locator(".mermaid-diagram svg")).toHaveCount(1, {
+    timeout: 10_000,
+  });
 });

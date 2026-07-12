@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.90+-orange.svg)](https://www.rust-lang.org)
 [![Release](https://github.com/crescent617/yomi/actions/workflows/release.yml/badge.svg)](https://github.com/crescent617/yomi/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 > A minimalist AI coding assistant built in Rust, with both terminal and desktop interfaces.
 
@@ -108,7 +108,9 @@ yomi -y
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`) - see the [LICENSE](LICENSE) file for details.
+
+You may use this project commercially, but distributing modified versions or making modified versions available to users over a network requires offering the corresponding source code under the same license.
 
 ## Acknowledgments
 
