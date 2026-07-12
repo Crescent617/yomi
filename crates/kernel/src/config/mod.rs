@@ -164,11 +164,20 @@ pub struct FeaturesConfig {
     pub allow_command_hooks: bool,
 }
 
+/// Configuration for lightweight model-backed tasks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TasksConfig {
+    /// Model key used for lightweight tasks. Falls back to the session model when absent.
+    pub fast_model: Option<String>,
+}
+
 /// Complete yomi configuration from environment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub agent: AgentConfig,
+    pub tasks: TasksConfig,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +204,7 @@ impl Default for Config {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
             agent: AgentConfig::default(),
+            tasks: TasksConfig::default(),
             auto_approve: Level::default(),
             data_dir,
             log_dir: None,

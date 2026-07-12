@@ -67,6 +67,11 @@
   import type { FileEntry } from "../../fs/provider";
   import FilePicker from "../filePicker/FilePicker.svelte";
   import { buildContentBlocks } from "../../types";
+  import {
+    guiPreferences,
+    saveGuiPreferences,
+    snapshotGuiPreferences,
+  } from "../../settings.svelte";
 
   let {
     onToggleLeftPanel,
@@ -288,15 +293,14 @@
       .getConfig()
       .then((c) => {
         if (cancelled) return;
-        if (c?.auto_approve) {
-          permission_level = c.auto_approve;
-        } else {
-          permission_level = "caution";
-        }
+        permission_level =
+          guiPreferences.chat.auto_approve_level ??
+          c?.auto_approve ??
+          "caution";
       })
       .catch(() => {
         if (cancelled) return;
-        permission_level = "caution";
+        permission_level = guiPreferences.chat.auto_approve_level ?? "caution";
       });
     homeDir()
       .then((h) => {
@@ -1315,6 +1319,9 @@
                   value={(permission_level as PermissionLevel) || "caution"}
                   onSelect={(level) => {
                     permission_level = level;
+                    const next = snapshotGuiPreferences();
+                    next.chat.auto_approve_level = level;
+                    void saveGuiPreferences(next);
                   }}
                 />
                 <ModelSelector bind:this={modelSelectorRef} />

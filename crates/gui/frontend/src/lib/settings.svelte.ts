@@ -1,4 +1,5 @@
 import { Store } from "@tauri-apps/plugin-store";
+import type { PermissionLevel } from "./permission";
 
 const STORAGE_FILE = "yomi-gui-settings";
 const PREFERENCES_KEY = "gui_preferences";
@@ -6,7 +7,7 @@ const LEGACY_SETTINGS_KEY = "settings";
 const LEGACY_HOME_MODEL_KEY = "home_model";
 
 export type ThemePreference = "light" | "dark" | "system";
-export type FontSizePreference = "sm" | "base" | "lg";
+export type FontSizePreference = "xs" | "sm" | "base" | "lg" | "xl";
 
 export interface GuiPreferences {
   schemaVersion: 1;
@@ -24,6 +25,7 @@ export interface GuiPreferences {
   chat: {
     homeModel: string | null;
     autoScroll: boolean;
+    auto_approve_level: PermissionLevel | null;
   };
 }
 
@@ -50,6 +52,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   chat: {
     homeModel: null,
     autoScroll: true,
+    auto_approve_level: null,
   },
 };
 
@@ -74,6 +77,12 @@ function cloneGuiPreferences(value: GuiPreferences): GuiPreferences {
 function clampSidebarWidth(width: number | undefined): number {
   if (!Number.isFinite(width)) return defaultGuiPreferences.layout.sidebarWidth;
   return Math.max(160, Math.min(400, Math.round(width!)));
+}
+
+function normalizePermissionLevel(value: unknown): PermissionLevel | null {
+  return value === "safe" || value === "caution" || value === "dangerous"
+    ? value
+    : null;
 }
 
 function normalizeGuiPreferences(
@@ -102,6 +111,9 @@ function normalizeGuiPreferences(
       homeModel: value?.chat?.homeModel ?? defaultGuiPreferences.chat.homeModel,
       autoScroll:
         value?.chat?.autoScroll ?? defaultGuiPreferences.chat.autoScroll,
+      auto_approve_level: normalizePermissionLevel(
+        value?.chat?.auto_approve_level,
+      ),
     },
   };
 }
@@ -144,6 +156,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
     chat: {
       homeModel: legacyHomeModel,
       autoScroll: defaultGuiPreferences.chat.autoScroll,
+      auto_approve_level: defaultGuiPreferences.chat.auto_approve_level,
     },
   });
 }
@@ -220,9 +233,11 @@ export function applyTheme(theme: ThemePreference): void {
 export function applyFontSize(fontSize: FontSizePreference): void {
   if (typeof document === "undefined") return;
   const sizes: Record<FontSizePreference, string> = {
+    xs: "13px",
     sm: "14px",
     base: "16px",
     lg: "18px",
+    xl: "20px",
   };
   document.documentElement.style.fontSize = sizes[fontSize];
 }

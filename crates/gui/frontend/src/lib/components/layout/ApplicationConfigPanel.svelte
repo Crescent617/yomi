@@ -12,7 +12,6 @@
     Sun,
     Type,
   } from "lucide-svelte";
-  import { getModels, type ModelInfo } from "../../api";
   import {
     defaultGuiPreferences,
     replaceGuiPreferences,
@@ -32,7 +31,6 @@
 
   let saved = $state<GuiPreferences>(snapshotGuiPreferences());
   let draft = $state<GuiPreferences>(snapshotGuiPreferences());
-  let models = $state<ModelInfo[]>([]);
   let saving = $state(false);
   let error = $state<string | null>(null);
 
@@ -47,9 +45,11 @@
   ];
 
   const fontSizes: Array<{ id: FontSizePreference; label: string }> = [
+    { id: "xs", label: "Compact" },
     { id: "sm", label: "Small" },
     { id: "base", label: "Medium" },
     { id: "lg", label: "Large" },
+    { id: "xl", label: "Extra large" },
   ];
 
   const dirty = $derived(
@@ -62,23 +62,11 @@
   });
 
   onMount(() => {
-    void loadModels();
     return () => {
       if (dirty) replaceGuiPreferences(saved);
       onDirtyChange?.(false);
     };
   });
-
-  async function loadModels() {
-    try {
-      models = (await getModels()).models;
-    } catch (loadError) {
-      console.error(
-        "Failed to load models for application settings:",
-        loadError,
-      );
-    }
-  }
 
   function preview(update: (value: GuiPreferences) => void) {
     update(draft);
@@ -124,8 +112,8 @@
   }
 </script>
 
-<div class="flex-1 min-h-0 overflow-y-auto bg-background">
-  <div class="mx-auto w-full max-w-4xl px-4 py-5 sm:px-6 lg:py-7">
+<div class="min-h-0 min-w-0 flex-1 overflow-y-auto bg-background">
+  <div class="w-full px-4 py-5 sm:px-6 lg:py-7">
     <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
       <div>
         <div class="flex items-center gap-2">
@@ -328,38 +316,7 @@
             Defaults for new conversations.
           </p>
         </div>
-        <div class="divide-y divide-border">
-          <div
-            class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div>
-              <div class="text-sm text-foreground">Home model</div>
-              <div class="text-xs text-muted-foreground">
-                The model selected when starting a new chat.
-              </div>
-            </div>
-            <div class="relative min-w-52">
-              <select
-                value={draft.chat.homeModel ?? ""}
-                onchange={(event) =>
-                  preview(
-                    (value) =>
-                      (value.chat.homeModel =
-                        event.currentTarget.value || null),
-                  )}
-                class="w-full appearance-none rounded-md border border-border bg-background py-1.5 pl-2.5 pr-8 text-xs text-foreground outline-none focus:border-primary/60"
-              >
-                <option value="">Kernel default</option>
-                {#each models as model (model.name)}
-                  <option value={model.name}>{model.name}</option>
-                {/each}
-              </select>
-              <ChevronDown
-                size={13}
-                class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-            </div>
-          </div>
+        <div>
           <label
             class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
           >
