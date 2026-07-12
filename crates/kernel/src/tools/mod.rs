@@ -11,6 +11,7 @@ pub mod executor;
 pub mod glob;
 pub mod grep;
 pub mod helper;
+pub mod post_message;
 pub mod read;
 pub mod reminder;
 pub mod shell;
@@ -36,6 +37,7 @@ pub use ask_user::{AskOption, AskQuestion, AskUserResponse, AskUserTool, ASK_USE
 pub use edit::{EditTool, EDIT_TOOL_NAME};
 pub use glob::{GlobTool, GLOB_TOOL_NAME};
 pub use grep::{GrepTool, GREP_TOOL_NAME};
+pub use post_message::{PostMessageTool, POST_MESSAGE_TOOL_NAME};
 pub use read::{ReadTool, READ_TOOL_NAME};
 pub use reminder::{ReminderTool, REMINDER_TOOL_NAME};
 pub use send_message::{SendMessageTool, SEND_MESSAGE_TOOL_NAME};
@@ -308,6 +310,14 @@ impl ToolRegistry {
                     "SubAgent tool enabled but input_bus not provided; skipping registration"
                 );
             }
+        }
+
+        // Register post_message for agent-to-agent messages.
+        if let Some(input_bus) = config.input_bus {
+            self.register(PostMessageTool::new(
+                Arc::clone(input_bus),
+                config.shared.session_store.clone(),
+            ));
         }
 
         // Register todo tool

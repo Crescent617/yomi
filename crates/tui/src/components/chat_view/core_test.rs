@@ -169,8 +169,8 @@ fn test_steer_renderer_uses_envelope_icon() {
         .map(|span| span.content.as_ref())
         .collect();
 
-    assert_eq!(unicode_width::UnicodeWidthStr::width("✉ "), 2);
-    assert_eq!(text, "✉ change direction");
+    assert_eq!(unicode_width::UnicodeWidthStr::width(" "), 2);
+    assert_eq!(text, " change direction");
 }
 
 #[test]

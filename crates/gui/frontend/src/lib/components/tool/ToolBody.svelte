@@ -1,13 +1,23 @@
 <script lang="ts">
   import { Loader2 } from "lucide-svelte";
   import type { ToolCall } from "../../state.svelte";
-  import { parseEditArgs, parseWriteArgs, diffLines } from "./tool-utils";
+  import {
+    diffLines,
+    parseEditArgs,
+    parsePostMessageArgs,
+    parseWriteArgs,
+  } from "./tool-utils";
 
   let { tool, embedded = false }: { tool: ToolCall; embedded?: boolean } =
     $props();
 
   const editArgs = $derived(parseEditArgs(tool.arguments ?? ""));
   const writeArgs = $derived(parseWriteArgs(tool.arguments ?? ""));
+  const postMessageArgs = $derived(
+    tool.tool_name === "post_message"
+      ? parsePostMessageArgs(tool.arguments ?? "")
+      : null,
+  );
 </script>
 
 <div
@@ -63,6 +73,26 @@
       {/if}
       <pre
         class="bg-code-bg rounded px-2.5 py-2 whitespace-pre-wrap overflow-x-auto text-[11px] leading-relaxed font-mono text-foreground/80">{writeArgs.content}</pre>
+    </div>
+
+    <!-- Post message tool: recipient, subject, and body -->
+  {:else if postMessageArgs}
+    <div class="rounded border border-info/20 bg-info/5 px-2.5 py-2 text-xs">
+      <div class="flex items-baseline gap-2">
+        <span
+          class="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+          >To</span
+        >
+        <span class="truncate font-mono text-[11px] text-info"
+          >{postMessageArgs.agent_id}</span
+        >
+      </div>
+      <div class="mt-1 font-medium text-foreground">
+        {postMessageArgs.title}
+      </div>
+      <div class="mt-1 whitespace-pre-wrap break-words text-foreground/80">
+        {postMessageArgs.content}
+      </div>
     </div>
 
     <!-- Other tools: raw JSON -->
