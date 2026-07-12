@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{format_message, PostMessageTool, POST_MESSAGE_TOOL_NAME};
+use super::{format_message, PostMessageTool};
 use crate::agent::AgentInput;
 use crate::comms::InputBus;
 use crate::storage::migrations::run_migrations;
@@ -27,11 +27,14 @@ async fn session_store_with(id: &SessionId) -> std::sync::Arc<dyn SessionStore> 
 async fn test_definition() {
     let tool = PostMessageTool::new(InputBus::new(), None);
 
-    assert_eq!(tool.name(), POST_MESSAGE_TOOL_NAME);
+    assert_eq!(tool.name(), "postMessage");
     assert!(tool.desc().contains("another agent by its ID"));
     assert!(tool
         .desc()
-        .contains("current session ID identified as the sender"));
+        .contains("Messages from other agents have the form"));
+    assert!(tool
+        .desc()
+        .contains("set `agent_id` to the sender ID from that prefix"));
     assert_eq!(
         tool.schema()["required"],
         json!(["agent_id", "title", "content"])
@@ -138,5 +141,5 @@ async fn test_exec_rejects_missing_required_argument() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("Invalid post_message arguments"));
+    assert!(error.to_string().contains("Invalid postMessage arguments"));
 }

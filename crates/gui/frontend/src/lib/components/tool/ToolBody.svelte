@@ -14,7 +14,7 @@
   const editArgs = $derived(parseEditArgs(tool.arguments ?? ""));
   const writeArgs = $derived(parseWriteArgs(tool.arguments ?? ""));
   const postMessageArgs = $derived(
-    tool.tool_name === "post_message"
+    tool.tool_name === "postMessage"
       ? parsePostMessageArgs(tool.arguments ?? "")
       : null,
   );

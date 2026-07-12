@@ -28,7 +28,7 @@
   const label = $derived(
     isSubagent
       ? "Agent"
-      : tool.tool_name === "post_message"
+      : tool.tool_name === "postMessage"
         ? "Post message"
         : tool.tool_name
           ? tool.tool_name.charAt(0).toUpperCase() + tool.tool_name.slice(1)

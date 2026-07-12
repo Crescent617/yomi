@@ -10,7 +10,7 @@ use crate::storage::SessionStore;
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{ContentBlock, KernelError, Result, SessionId, ToolOutput};
 
-pub const POST_MESSAGE_TOOL_NAME: &str = "post_message";
+pub const POST_MESSAGE_TOOL_NAME: &str = "postMessage";
 
 pub struct PostMessageTool {
     input_bus: Arc<InputBus>,
@@ -44,7 +44,7 @@ impl Tool for PostMessageTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Send/Replay a titled message to another agent by its ID. Use this to coordinate work, share findings, request help, or assign tasks to an agent. The recipient receives the message with your current session ID identified as the sender."
+        "Send/Replay a titled message to another agent by its ID. Use this to coordinate work, share findings, request help, or assign tasks to an agent. The recipient receives the message with your current session ID identified as the sender. Messages from other agents have the form `[From Agent: <agent_id>] <title>\\n<content>`. If a response is needed, use this tool and set `agent_id` to the sender ID from that prefix."
     }
 
     fn schema(&self) -> Value {
@@ -71,7 +71,7 @@ impl Tool for PostMessageTool {
 
     async fn exec(&self, args: Value, ctx: ToolExecCtx<'_>) -> Result<ToolOutput> {
         let args: PostMessageArgs = serde_json::from_value(args).map_err(|error| {
-            KernelError::tool(format!("Invalid post_message arguments: {error}"))
+            KernelError::tool(format!("Invalid postMessage arguments: {error}"))
         })?;
 
         let target = SessionId::from(args.agent_id.clone());

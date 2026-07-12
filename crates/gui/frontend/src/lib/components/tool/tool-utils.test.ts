@@ -7,9 +7,9 @@ const argumentsJson = JSON.stringify({
   content: "Found two issues.",
 });
 
-describe("post_message tool rendering", () => {
+describe("postMessage tool rendering", () => {
   test("uses the recipient as the compact target", () => {
-    expect(extractTarget("post_message", argumentsJson)).toBe("sub_123");
+    expect(extractTarget("postMessage", argumentsJson)).toBe("sub_123");
   });
 
   test("parses the specialized message fields", () => {
