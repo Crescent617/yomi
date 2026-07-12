@@ -106,7 +106,7 @@ fn test_assembler_single_tool_call() {
     // First chunk: tool call starts
     let delta = create_tool_call_delta(0, Some("call_123"), Some("bash"), Some("{\"cmd\":\""));
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     // ToolCallDelta is emitted for UI feedback since id is available
     assert_eq!(items.len(), 1);
@@ -115,7 +115,7 @@ fn test_assembler_single_tool_call() {
     // Second chunk: arguments continue
     let delta = create_tool_call_delta(0, None, None, Some("ls"));
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     // ToolCallDelta is emitted for the argument delta
     assert_eq!(items.len(), 1);
@@ -126,7 +126,7 @@ fn test_assembler_single_tool_call() {
     // Third chunk: arguments complete
     let delta = create_tool_call_delta(0, None, None, Some("\"}"));
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     // ToolCallDelta is emitted for the argument delta
     assert_eq!(items.len(), 1);
@@ -161,7 +161,7 @@ fn test_assembler_multiple_tool_calls() {
         Some("{\"path\":\"file.txt\"}"),
     );
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
     // ToolCallDelta is emitted for UI feedback
     assert_eq!(items.len(), 1);
     assert!(matches!(&items[0], ModelStreamItem::ToolCallDelta { id, .. } if id == "call_1"));
@@ -174,7 +174,7 @@ fn test_assembler_multiple_tool_calls() {
         Some("{\"path\":\"out.txt\"}"),
     );
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     // Should emit first tool call immediately when second starts (ToolCall)
     // and ToolCallDelta for the second call
@@ -208,7 +208,7 @@ fn test_assembler_text_content() {
         tool_calls: None,
     };
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert_eq!(items.len(), 1);
     match &items[0] {
@@ -233,7 +233,7 @@ fn test_assembler_thinking_content() {
         tool_calls: None,
     };
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert_eq!(items.len(), 1);
     match &items[0] {
@@ -263,7 +263,7 @@ fn test_assembler_reasoning_content_fallback() {
         tool_calls: None,
     };
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert_eq!(items.len(), 1);
     match &items[0] {
@@ -288,7 +288,7 @@ fn test_assembler_redacted_thinking() {
         tool_calls: None,
     };
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert_eq!(items.len(), 1);
     assert!(matches!(
@@ -312,7 +312,7 @@ fn test_assembler_empty_content_filtered() {
         tool_calls: None,
     };
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert!(items.is_empty());
 }
@@ -327,7 +327,7 @@ fn test_assembler_no_choices() {
         usage: None,
     };
     let json = serde_json::to_string(&response).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert!(items.is_empty());
 }
@@ -346,7 +346,7 @@ fn test_assembler_no_delta() {
         usage: None,
     };
     let json = serde_json::to_string(&response).unwrap();
-    let items = assembler.process(&json).unwrap();
+    let items = assembler.process(&json);
 
     assert!(items.is_empty());
 }
@@ -355,8 +355,11 @@ fn test_assembler_no_delta() {
 fn test_assembler_invalid_json_ignored() {
     let mut assembler = MsgChunkAssembler::new();
 
-    let items = assembler.process("invalid json").unwrap();
-    assert!(items.is_empty(), "invalid JSON should be ignored with warning");
+    let items = assembler.process("invalid json");
+    assert!(
+        items.is_empty(),
+        "invalid JSON should be ignored with warning"
+    );
 }
 
 #[test]
@@ -366,7 +369,7 @@ fn test_assembler_incomplete_tool_call_finish() {
     // Start a tool call but never complete it
     let delta = create_tool_call_delta(0, Some("call_1"), None, None); // missing name
     let json = serde_json::to_string(&create_test_response(delta)).unwrap();
-    let _ = assembler.process(&json).unwrap();
+    let _ = assembler.process(&json);
 
     // Finish should not emit incomplete tool call (no name)
     let items = assembler.finish();
@@ -381,7 +384,7 @@ fn test_assembler_finish_reason_and_usage_in_same_chunk() {
     // Real data from Kimi/free-tokens proxy: last chunk has both finish_reason and top-level usage
     let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
 
-    let items = assembler.process(data).unwrap();
+    let items = assembler.process(data);
     assert_eq!(items.len(), 1);
     assert!(matches!(
         &items[0],
@@ -412,7 +415,7 @@ fn test_assembler_choice_usage_only() {
     // Some providers (like older Kimi) put usage only inside the choice
     let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.5","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":113,"total_tokens":121}}]}"#;
 
-    let items = assembler.process(data).unwrap();
+    let items = assembler.process(data);
     assert_eq!(items.len(), 1);
     assert!(matches!(
         &items[0],
@@ -442,7 +445,7 @@ fn test_assembler_empty_choices_with_usage() {
     // Some proxies send a chunk with empty choices but usage after the finish_reason chunk
     let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"kimi-k2.7-code-highspeed","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":16,"total_tokens":27}}"#;
 
-    let items = assembler.process(data).unwrap();
+    let items = assembler.process(data);
     assert_eq!(items.len(), 1);
     assert!(matches!(
         &items[0],
@@ -461,7 +464,7 @@ fn test_assembler_usage_without_delta() {
     // Chunk with finish_reason but no delta (empty delta object)
     let data = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"length","usage":null}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}"#;
 
-    let items = assembler.process(data).unwrap();
+    let items = assembler.process(data);
     assert_eq!(items.len(), 1);
     assert!(matches!(
         &items[0],

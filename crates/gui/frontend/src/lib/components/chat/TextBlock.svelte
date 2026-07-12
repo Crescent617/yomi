@@ -12,7 +12,7 @@
   let el: HTMLDivElement | null = null;
   let parser: ReturnType<typeof smd.parser> | null = null;
   let lastContent = "";
-  let highlightVersion = 0;
+  let enhanceFrame: number | null = null;
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
 
   function clearMountedCodeBlocks() {
@@ -20,26 +20,17 @@
     mountedCodeBlocks = [];
   }
 
-  const languageAliases: Record<string, string> = {
-    js: "javascript",
-    ts: "typescript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    sh: "bash",
-    shell: "bash",
-    yml: "yaml",
-  };
+  function createRenderer() {
+    if (!el)
+      throw new Error("Cannot create a Markdown renderer without a root");
+    return smd.default_renderer(el);
+  }
 
-  async function enhanceCodeBlocks() {
+  function enhanceCodeBlocks() {
     if (!el || isStreaming) return;
-    const version = ++highlightVersion;
-    clearMountedCodeBlocks();
-    const blocks = [...el.querySelectorAll("pre > code")];
-    if (blocks.length === 0) return;
+    const blocks = [...el.querySelectorAll<HTMLElement>("pre > code")];
 
     for (const codeElement of blocks) {
-      if (!el || version !== highlightVersion) return;
       const pre = codeElement.parentElement;
       if (!pre) continue;
       const languageClass = [...codeElement.classList].find((name) =>
@@ -66,35 +57,30 @@
         continue;
       }
 
-      const shiki = await import("shiki");
-      const lang = languageAliases[rawLanguage] ?? rawLanguage;
-      let highlightedHtml = "";
-      try {
-        const html = await shiki.codeToHtml(code, {
-          lang,
-          themes: { light: "github-light", dark: "github-dark" },
-          defaultColor: false,
-        });
-        if (version !== highlightVersion) return;
-        const template = document.createElement("template");
-        template.innerHTML = html;
-        highlightedHtml =
-          template.content.querySelector("code")?.innerHTML ?? "";
-      } catch {
-        // Keep a plain code block for unknown or unsupported languages.
-      }
-
       mountedCodeBlocks.push(
         mount(CodeBlock, {
           target,
           props: {
             code,
             language: rawLanguage === "text" ? "Code" : rawLanguage,
-            highlightedHtml,
           },
         }),
       );
     }
+  }
+
+  function scheduleCodeBlockEnhancement() {
+    if (enhanceFrame !== null) cancelAnimationFrame(enhanceFrame);
+    enhanceFrame = requestAnimationFrame(() => {
+      enhanceFrame = null;
+      enhanceCodeBlocks();
+    });
+  }
+
+  function cancelCodeBlockEnhancement() {
+    if (enhanceFrame === null) return;
+    cancelAnimationFrame(enhanceFrame);
+    enhanceFrame = null;
   }
 
   function flushParser() {
@@ -104,8 +90,18 @@
     }
   }
 
+  function resetParser(content: string) {
+    cancelCodeBlockEnhancement();
+    clearMountedCodeBlocks();
+    if (!el) return;
+    el.innerHTML = "";
+    parser = smd.parser(createRenderer());
+    smd.parser_write(parser, content);
+    lastContent = content;
+  }
+
   onDestroy(() => {
-    highlightVersion += 1;
+    cancelCodeBlockEnhancement();
     flushParser();
     clearMountedCodeBlocks();
     el = null;
@@ -117,37 +113,24 @@
     const streaming = isStreaming;
 
     if (!parser) {
-      clearMountedCodeBlocks();
-      el.innerHTML = "";
-      const renderer = smd.default_renderer(el);
-      parser = smd.parser(renderer);
-      smd.parser_write(parser, curr);
-      lastContent = curr;
+      resetParser(curr);
       if (!streaming) {
         flushParser();
-        requestAnimationFrame(() => void enhanceCodeBlocks());
+        scheduleCodeBlockEnhancement();
       }
-    } else if (!curr.startsWith(lastContent)) {
-      clearMountedCodeBlocks();
-      el.innerHTML = "";
-      const renderer = smd.default_renderer(el);
-      parser = smd.parser(renderer);
-      smd.parser_write(parser, curr);
-      lastContent = curr;
-      if (!streaming) {
-        flushParser();
-        requestAnimationFrame(() => void enhanceCodeBlocks());
-      }
-    } else if (streaming && curr.length > lastContent.length) {
-      smd.parser_write(parser, curr.slice(lastContent.length));
-      lastContent = curr;
-    } else if (!streaming) {
-      if (curr.length > lastContent.length) {
+    } else if (streaming) {
+      if (curr.length < lastContent.length) {
+        resetParser(curr);
+      } else if (curr.length > lastContent.length) {
         smd.parser_write(parser, curr.slice(lastContent.length));
         lastContent = curr;
       }
+    } else {
+      // Completed content is authoritative and may replace a streamed prefix.
+      // Rebuild once rather than comparing the full accumulated text on every frame.
+      if (curr !== lastContent) resetParser(curr);
       flushParser();
-      requestAnimationFrame(() => void enhanceCodeBlocks());
+      scheduleCodeBlockEnhancement();
     }
   });
 </script>
@@ -293,13 +276,6 @@
   }
   .text-block :global(em) {
     font-style: italic;
-  }
-  /* streaming-markdown renders $$...$$ as <equation-block> and $...$ as <equation-inline> */
-  .text-block :global(.shiki-code span) {
-    color: var(--shiki-light);
-  }
-  :global(.dark) .text-block :global(.shiki-code span) {
-    color: var(--shiki-dark);
   }
   .text-block :global(equation-block) {
     display: block;

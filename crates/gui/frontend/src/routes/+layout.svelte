@@ -3,11 +3,15 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import {
-    handleEvent,
     getSession,
     sessionState,
     startNotificationListener,
   } from "../lib/state.svelte";
+  import { handleEvent } from "../lib/events";
+  import {
+    EventFrameBuffer,
+    type KernelEventEnvelope,
+  } from "../lib/event-frame-buffer";
   import ToastContainer from "../lib/components/ui/ToastContainer.svelte";
   import {
     initSettings,
@@ -21,22 +25,25 @@
   onMount(async () => {
     await initSettings();
     startThemeListener();
-    const unlistenEvent = listen(
-      "kernel:event",
-      (e: {
-        payload: { session_id: string; event_id?: string; event: unknown };
-      }) => {
-        const { session_id, event_id, event } = e.payload;
+    const eventFrameBuffer = new EventFrameBuffer(
+      ({ session_id, event_id, event }: KernelEventEnvelope) => {
         const session = getSession(session_id);
         if (session) {
           handleEvent(session_id, event_id, event);
         }
       },
     );
+    const unlistenEvent = listen(
+      "kernel:event",
+      (e: { payload: KernelEventEnvelope }) => {
+        eventFrameBuffer.enqueue(e.payload);
+      },
+    );
     const unlistenNoti = startNotificationListener();
     const appWindow = getCurrentWindow();
     const unlistenClose = await appWindow.onCloseRequested(() => {
       try {
+        eventFrameBuffer.flush();
         const active = sessionState.activeSessionId;
         if (active) {
           api.unsubscribe(active);
@@ -46,6 +53,7 @@
       }
     });
     return () => {
+      eventFrameBuffer.dispose();
       unlistenEvent.then((fn: () => void) => fn());
       unlistenNoti.then((fn: () => void) => fn());
       unlistenClose();

@@ -1,12 +1,5 @@
 import type { Message } from "../../state.svelte";
-import { findThinking } from "../../state.svelte";
-
-export function isSameActivityMessage(
-  group: Message[],
-  message: Message,
-): boolean {
-  return group.length === 0 || group[0].id === message.id;
-}
+import { findThinking } from "../../session";
 
 export function isActivityTail(message: Message | undefined): boolean {
   if (!message) return false;
@@ -15,7 +8,7 @@ export function isActivityTail(message: Message | undefined): boolean {
   if (message.tool_calls?.length) return true;
 
   const lastBlock = message.content.at(-1);
-  if (lastBlock?.type === "text" && lastBlock.text.trim().length > 0) {
+  if (lastBlock?.type === "text" && lastBlock.text?.trim()) {
     return false;
   }
 

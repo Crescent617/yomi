@@ -1,15 +1,8 @@
 <script lang="ts">
   import { Check, Copy } from "lucide-svelte";
 
-  let {
-    language = "Code",
-    code,
-    highlightedHtml = "",
-  }: {
-    language?: string;
-    code: string;
-    highlightedHtml?: string;
-  } = $props();
+  let { language = "Code", code }: { language?: string; code: string } =
+    $props();
 
   let copied = $state(false);
   let resetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -45,8 +38,7 @@
   </button>
   <pre
     class="code-block-content m-0 overflow-x-auto border-0 bg-transparent p-3 pr-10 text-xs leading-relaxed"><code
-      class:shiki-code={Boolean(highlightedHtml)}
-      >{#if highlightedHtml}{@html highlightedHtml}{:else}{code}{/if}</code
+      >{code}</code
     ></pre>
 </div>
 
@@ -63,11 +55,5 @@
     background: transparent;
     padding: 0;
     box-shadow: none;
-  }
-  .code-block :global(.shiki-code span) {
-    color: var(--shiki-light);
-  }
-  :global(.dark) .code-block :global(.shiki-code span) {
-    color: var(--shiki-dark);
   }
 </style>

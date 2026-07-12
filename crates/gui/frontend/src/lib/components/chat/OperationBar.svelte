@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { Check, Copy, Loader2, Undo2 } from "lucide-svelte";
+  import { Check, Copy, Undo2 } from "lucide-svelte";
+  import LoadingIndicator from "../ui/LoadingIndicator.svelte";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import type { Message } from "../../state.svelte";
-  import {
-    textFromBlocks,
-    showNotification,
-    getSession,
-  } from "../../state.svelte";
+  import { showNotification, getSession } from "../../state.svelte";
+  import { textFromBlocks } from "../../session";
   import * as api from "../../api";
 
   let {
@@ -107,7 +105,7 @@
       title="Rewind to this message"
     >
       {#if reverting}
-        <Loader2 size={14} class="animate-spin" />
+        <LoadingIndicator size="sm" label="Rewinding message" />
       {:else}
         <Undo2 size={14} strokeWidth={2} />
       {/if}

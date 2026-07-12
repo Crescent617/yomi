@@ -216,6 +216,8 @@
 
   <div
     bind:this={viewport}
+    role="application"
+    aria-label="Interactive Mermaid diagram preview"
     class="relative min-h-0 flex-1 overflow-hidden bg-code-bg/40 {dragging
       ? 'cursor-grabbing'
       : 'cursor-grab'}"
@@ -248,7 +250,9 @@
     justify-content: center;
     border-radius: 0.375rem;
     color: hsl(var(--muted-foreground));
-    transition: color 150ms, background-color 150ms;
+    transition:
+      color 150ms,
+      background-color 150ms;
   }
   .preview-button:hover {
     color: hsl(var(--foreground));

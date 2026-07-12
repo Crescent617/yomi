@@ -20,14 +20,16 @@
     projectState,
     sessionCursors,
     pinnedSessionMeta,
-    setActiveSession,
-    loadPinnedSessions,
     getSession,
     showNotification,
+  } from "../../state.svelte";
+  import {
+    setActiveSession,
+    loadPinnedSessions,
     refreshCheckpoints,
     createSessionState,
     activateSession as stateActivateSession,
-  } from "../../state.svelte";
+  } from "../../session";
   import { formatTimeAgo } from "../../utils";
   import { clock } from "../../clock.svelte";
   import { slide } from "svelte/transition";
@@ -61,6 +63,11 @@
   let renameValue = $state("");
   let deletingProject = $state<{ id: string; name: string } | null>(null);
   let deletingSession = $state<{ id: string; title: string } | null>(null);
+
+  function focusAndSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
 
   onMount(() => {
     if (projectState.projects.length === 0) {
@@ -622,6 +629,7 @@
               {#if renamingProjectId === project.id}
                 <input
                   type="text"
+                  use:focusAndSelect
                   bind:value={renameValue}
                   onkeydown={(e: KeyboardEvent) => {
                     if (e.key === "Enter") confirmRenameProject(project.id);
@@ -629,7 +637,6 @@
                   }}
                   onblur={() => confirmRenameProject(project.id)}
                   class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                  autofocus
                 />
               {:else}
                 <span class="truncate font-medium">{project.name}</span>
@@ -694,10 +701,12 @@
                     <Trash2 size={12} /> Delete
                   </button>
                 </div>
-                <div
+                <button
+                  type="button"
+                  aria-label="Close project menu"
                   class="fixed inset-0 z-10"
                   onclick={() => (showMenu = null)}
-                ></div>
+                ></button>
               {/if}
             </div>
 
@@ -731,6 +740,7 @@
                   {#if renamingSessionId === session.id}
                     <input
                       type="text"
+                      use:focusAndSelect
                       bind:value={renameValue}
                       onkeydown={(e: KeyboardEvent) => {
                         if (e.key === "Enter") confirmRenameSession(session.id);
@@ -738,7 +748,6 @@
                       }}
                       onblur={() => confirmRenameSession(session.id)}
                       class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                      autofocus
                     />
                   {:else}
                     <span

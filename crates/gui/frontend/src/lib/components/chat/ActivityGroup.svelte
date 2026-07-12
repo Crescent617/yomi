@@ -9,9 +9,9 @@
     Wrench,
     XCircle,
   } from "lucide-svelte";
-  import type { Component } from "svelte";
+  import type { ComponentType } from "svelte";
   import type { Message } from "../../state.svelte";
-  import { findThinking, textFromBlocks } from "../../state.svelte";
+  import { findThinking, textFromBlocks } from "../../session";
   import { formatElapsed } from "../../utils";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "../tool/ToolBlock.svelte";
@@ -50,7 +50,7 @@
   ]);
 
   interface Badge {
-    icon: Component;
+    icon: ComponentType;
     count: number;
     label: string;
   }
@@ -143,6 +143,7 @@
       class="flex min-h-8 w-full items-center gap-1 text-left transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       onclick={toggleExpanded}
       aria-expanded={expanded}
+      aria-label={`${expanded ? "Collapse" : "Expand"} activity details, ${stats.actionCount} actions`}
     >
       <span class="flex w-3 shrink-0 items-center justify-center">
         <ChevronDown
@@ -152,18 +153,7 @@
         />
       </span>
       <span class="flex min-w-0 flex-1 items-center gap-2">
-        <span class="shrink-0 text-xs font-medium text-foreground"
-          >Activity</span
-        >
-        <span class="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {stats.actionCount}
-        </span>
-        <span class="shrink-0 text-muted-foreground/40" aria-hidden="true"
-          >·</span
-        >
-        <span
-          class="hidden min-w-0 items-center gap-2 text-muted-foreground sm:flex"
-        >
+        <span class="min-w-0 items-center gap-2 text-muted-foreground sm:flex">
           {#each stats.badges as badge (badge.label)}
             <span
               class="inline-flex shrink-0 items-center gap-1 text-[11px]"
@@ -197,6 +187,7 @@
             <ThinkingBlock
               content={item.content}
               elapsed_ms={item.elapsed_ms}
+              isRunning={isActiveActivity && index === trailItems.length - 1}
               isFirst={index === 0}
               isLast={index === trailItems.length - 1}
             />

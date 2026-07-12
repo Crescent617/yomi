@@ -29,28 +29,33 @@
 
   let { editingJob, onClose, onSaved }: Props = $props();
 
-  let name = $state(editingJob?.name ?? "");
-  let schedule = $state(editingJob?.schedule ?? "");
+  // The modal is remounted on each open, so the prop intentionally only
+  // initializes the editable form state.
+  // svelte-ignore state_referenced_locally
+  const initialEditingJob = editingJob;
+  let name = $state(initialEditingJob?.name ?? "");
+  let schedule = $state(initialEditingJob?.schedule ?? "");
   let actionType = $state<"send_message" | "shell">(
-    editingJob?.action.type === "shell" ? "shell" : "send_message",
+    initialEditingJob?.action.type === "shell" ? "shell" : "send_message",
   );
-  let use_new_session = $state(!editingJob);
-  let session_id = $state(editingJob?.action.session_id ?? "");
-  let content = $state(editingJob?.action.content ?? "");
-  let command = $state(editingJob?.action.command ?? "");
-  let working_dir = $state(editingJob?.action.working_dir ?? "");
-  let max_runs = $state<string | number>(editingJob?.max_runs ?? "");
+  let use_new_session = $state(!initialEditingJob);
+  let session_id = $state(initialEditingJob?.action.session_id ?? "");
+  let content = $state(initialEditingJob?.action.content ?? "");
+  let command = $state(initialEditingJob?.action.command ?? "");
+  let working_dir = $state(initialEditingJob?.action.working_dir ?? "");
+  let max_runs = $state<string | number>(initialEditingJob?.max_runs ?? "");
   let expires_at = $state(
-    editingJob?.expires_at
-      ? utcToLocalDatetimeLocal(editingJob.expires_at)
+    initialEditingJob?.expires_at
+      ? utcToLocalDatetimeLocal(initialEditingJob.expires_at)
       : "",
   );
 
   let projects = $state<ProjectInfo[]>([]);
   let selected_project_id = $state("");
   let showAdvanced = $state(
-    Boolean(editingJob) &&
-      (editingJob?.max_runs !== null || editingJob?.expires_at !== null),
+    Boolean(initialEditingJob) &&
+      (initialEditingJob?.max_runs !== null ||
+        initialEditingJob?.expires_at !== null),
   );
   let loadingProjects = $state(false);
   let saving = $state(false);

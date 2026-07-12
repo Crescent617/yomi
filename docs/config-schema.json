@@ -46,11 +46,17 @@
               "maximum": 1.0,
               "default": 0.8
             },
-            "keep_recent": {
-              "description": "Number of recent messages to preserve during compaction.",
+            "keep_recent_messages": {
+              "description": "Number of recent messages to preserve during full compaction.",
               "type": "integer",
               "minimum": 0,
-              "default": 6
+              "default": 0
+            },
+            "keep_recent_tool_results": {
+              "description": "Number of recent messages whose tool results survive micro-compaction.",
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
             },
             "summary_max_tokens": {
               "description": "Max tokens allocated for generating a summary during full compaction.",

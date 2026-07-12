@@ -85,6 +85,7 @@ pub enum MouseAction {
 #[allow(clippy::large_enum_variant)]
 pub enum HistoryMessage {
     User(Vec<ContentBlock>),
+    Steer(Vec<ContentBlock>),
     Assistant {
         content: String,
         thinking: Option<String>,
@@ -311,6 +312,12 @@ impl ChatView {
 
     pub fn add_user_message(&mut self, content_blocks: Vec<ContentBlock>) {
         self.messages.push(HistoryMessage::User(content_blocks));
+        self.push_new_msg_cache();
+    }
+
+    pub fn add_steer_message(&mut self, content_blocks: Vec<ContentBlock>) {
+        self.flush_streaming();
+        self.messages.push(HistoryMessage::Steer(content_blocks));
         self.push_new_msg_cache();
     }
 
@@ -1401,6 +1408,17 @@ impl Component for ChatView {
                     }
                 }
             }
+            attr::ADD_STEER_MESSAGE => {
+                if let AttrValue::String(blocks_json) = value {
+                    if let Ok(content_blocks) =
+                        serde_json::from_str::<Vec<ContentBlock>>(&blocks_json)
+                    {
+                        self.add_steer_message(content_blocks);
+                    } else {
+                        self.add_steer_message(vec![ContentBlock::Text { text: blocks_json }]);
+                    }
+                }
+            }
             attr::ADD_ERROR_MESSAGE => {
                 if let AttrValue::String(error) = value {
                     self.add_error_message(error);
@@ -1585,6 +1603,11 @@ impl ChatViewComponent {
             SessionMessage::User(user_msg) => {
                 if !user_msg.content.is_empty() {
                     self.component.add_user_message(user_msg.content.clone());
+                }
+            }
+            SessionMessage::Steer(steer_msg) => {
+                if !steer_msg.content.is_empty() {
+                    self.component.add_steer_message(steer_msg.content.clone());
                 }
             }
             SessionMessage::Assistant(assistant_msg) => {

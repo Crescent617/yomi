@@ -9,6 +9,8 @@
 
 /// Attribute for adding a user message.
 pub const ADD_USER_MESSAGE: &str = "add_user_message";
+/// Attribute for adding a steer message.
+pub const ADD_STEER_MESSAGE: &str = "add_steer_message";
 /// Attribute for adding an assistant message.
 pub const ADD_ASSISTANT_MSG: &str = "add_assistant_message";
 /// Attribute for adding an error message.

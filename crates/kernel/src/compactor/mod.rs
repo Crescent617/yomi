@@ -15,8 +15,10 @@ use tokio_util::sync::CancellationToken;
 pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.8;
 /// Default context window size
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
-/// Number of recent messages to keep during compaction
+/// Number of recent messages to keep during full compaction
 const KEEP_RECENT_MESSAGES: usize = 0;
+/// Number of recent messages whose tool results survive micro-compaction
+const KEEP_RECENT_TOOL_RESULTS: usize = 5;
 /// Max tokens for summary generation
 const SUMMARY_MAX_TOKENS: u32 = 8192; // 8k tokens for summary
 
@@ -105,8 +107,10 @@ fn set_token_usage_on_last(messages: &mut [Arc<Message>]) {
 pub struct Compactor {
     /// Ratio (0.0–1.0) of the context window at which compaction is triggered
     pub threshold_ratio: f32,
-    /// Number of recent messages to preserve
-    pub keep_recent: usize,
+    /// Number of recent messages to preserve during full compaction
+    pub keep_recent_messages: usize,
+    /// Number of recent messages whose tool results survive micro-compaction
+    pub keep_recent_tool_results: usize,
     /// Max tokens for summary
     pub summary_max_tokens: u32,
 }
@@ -115,7 +119,8 @@ impl Default for Compactor {
     fn default() -> Self {
         Self {
             threshold_ratio: DEFAULT_THRESHOLD_RATIO,
-            keep_recent: KEEP_RECENT_MESSAGES,
+            keep_recent_messages: KEEP_RECENT_MESSAGES,
+            keep_recent_tool_results: KEEP_RECENT_TOOL_RESULTS,
             summary_max_tokens: SUMMARY_MAX_TOKENS,
         }
     }
@@ -123,10 +128,16 @@ impl Default for Compactor {
 
 impl Compactor {
     /// Create a new compactor with custom settings
-    pub const fn new(threshold_ratio: f32, keep_recent: usize, summary_max_tokens: u32) -> Self {
+    pub const fn new(
+        threshold_ratio: f32,
+        keep_recent_messages: usize,
+        keep_recent_tool_results: usize,
+        summary_max_tokens: u32,
+    ) -> Self {
         Self {
             threshold_ratio,
-            keep_recent,
+            keep_recent_messages,
+            keep_recent_tool_results,
             summary_max_tokens,
         }
     }
@@ -177,7 +188,7 @@ impl Compactor {
     pub fn micro_compact(&self, messages: &[Arc<Message>]) -> Option<Vec<Arc<Message>>> {
         const CLEARED_MARKER: &str = "[Old tool result content cleared]";
 
-        let keep_start = messages.len().saturating_sub(self.keep_recent);
+        let keep_start = messages.len().saturating_sub(self.keep_recent_tool_results);
         if keep_start == 0 {
             return None;
         }
@@ -237,7 +248,7 @@ impl Compactor {
             .cloned()
             .partition(|m| m.role == Role::System);
 
-        if non_system.len() <= self.keep_recent {
+        if non_system.len() <= self.keep_recent_messages {
             // Not enough non-system messages to compact, keep everything as-is
             // Note: We still filter out system messages here
             return Ok(CompactionResult::new(
@@ -246,13 +257,19 @@ impl Compactor {
             ));
         }
 
-        let split_point = non_system.len() - self.keep_recent;
+        let split_point = non_system.len() - self.keep_recent_messages;
         let to_summarize = &non_system[..split_point];
         let recent: Vec<Arc<Message>> = non_system[split_point..].to_vec();
 
         // Generate summary using API
-        let (summary_text, token_usage) =
-            generate_summary(to_summarize, provider, model_config, cancel_token).await?;
+        let (summary_text, token_usage) = generate_summary(
+            to_summarize,
+            provider,
+            model_config,
+            self.summary_max_tokens,
+            cancel_token,
+        )
+        .await?;
 
         // Create summary message as user role so it survives session restore
         let summary = Message::user(summary_text);
@@ -315,6 +332,7 @@ async fn generate_summary(
     messages: &[Arc<Message>],
     provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
+    summary_max_tokens: u32,
     cancel_token: Option<CancellationToken>,
 ) -> Result<(String, crate::provider::TokenUsage), CompactionError> {
     use crate::agent::MessageBuffer;
@@ -332,7 +350,7 @@ async fn generate_summary(
 
     // Create a config with limited max_tokens for summary
     let summary_config = ModelConfig {
-        max_tokens: Some(SUMMARY_MAX_TOKENS),
+        max_tokens: Some(summary_max_tokens),
         ..model_config.clone()
     };
 
@@ -369,7 +387,7 @@ async fn generate_summary(
     };
 
     // Collect response with cancellation check
-    let mut summary = String::with_capacity(SUMMARY_MAX_TOKENS as usize);
+    let mut summary = String::new();
     let mut token_usage = crate::provider::TokenUsage::default();
 
     loop {

@@ -307,8 +307,8 @@ impl Agent {
                         // steer 插队
                         let steers = self.mailbox.try_pull_steer(20).await;
                         if !steers.is_empty() {
-                            self.inject_user_message(steers).await?;
-                            continue; // inject_user_message 已经 transition_to(Streaming)
+                            self.inject_user_message(steers, true).await?;
+                            continue; // inject_user_message already transitioned to Streaming
                         }
                         // 取一条普通消息
                         match self.mailbox.try_pull(1).await.into_iter().next() {
@@ -344,7 +344,7 @@ impl Agent {
                         // steer 插队
                         let steers = self.mailbox.try_pull_steer(20).await;
                         if !steers.is_empty() {
-                            self.inject_user_message(steers).await?;
+                            self.inject_user_message(steers, true).await?;
                         }
                         self.handle_streaming_with_retry().await
                     }
@@ -481,11 +481,20 @@ impl Agent {
         &self,
         message_id: &crate::types::MessageId,
         content: &[crate::types::ContentBlock],
+        is_steer: bool,
     ) {
-        self.emit(Event::User(crate::event::UserEvent::Message {
-            message_id: message_id.clone(),
-            content: content.to_vec(),
-        }));
+        let event = if is_steer {
+            crate::event::UserEvent::Steer {
+                message_id: message_id.clone(),
+                content: content.to_vec(),
+            }
+        } else {
+            crate::event::UserEvent::Message {
+                message_id: message_id.clone(),
+                content: content.to_vec(),
+            }
+        };
+        self.emit(Event::User(event));
     }
 
     /// Push a message to buffer and emit the storage event (assistant/tool messages).
@@ -499,7 +508,12 @@ impl Agent {
 
     /// Push a user message: emit frontend event, then push to buffer.
     fn push_user_message(&mut self, msg: Message) {
-        self.emit_user_message_event(&msg.id, &msg.content);
+        let is_steer = msg
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.get(crate::types::IS_STEER_META_KEY))
+            .is_some_and(|value| value == "true");
+        self.emit_user_message_event(&msg.id, &msg.content, is_steer);
         self.push_message(msg);
     }
 
@@ -616,8 +630,8 @@ impl Agent {
 
     async fn handle_input(&mut self, input: AgentInput) -> Result<(), AgentError> {
         match input {
-            AgentInput::User { content } => self.inject_user_message(content).await,
-            AgentInput::Steer(blocks) => self.inject_user_message(blocks).await,
+            AgentInput::User { content } => self.inject_user_message(content, false).await,
+            AgentInput::Steer(blocks) => self.inject_user_message(blocks, true).await,
             AgentInput::Shutdown => {
                 tracing::info!("received close signal");
                 if let Some(turn) = self.current_turn.take() {
@@ -682,6 +696,7 @@ impl Agent {
     async fn inject_user_message(
         &mut self,
         mut content: Vec<ContentBlock>,
+        is_steer: bool,
     ) -> Result<(), AgentError> {
         self.cancel_token.reset_if_cancelled();
         if let Some(ref interceptor) = self.shared.message_interceptor {
@@ -691,7 +706,13 @@ impl Agent {
             };
             interceptor.intercept(&mut content, &ctx).await;
         }
-        let msg = Message::with_blocks(Role::User, content);
+        let mut msg = Message::with_blocks(Role::User, content);
+        if is_steer {
+            msg.metadata = Some(std::collections::HashMap::from([(
+                crate::types::IS_STEER_META_KEY.to_string(),
+                "true".to_string(),
+            )]));
+        }
 
         // Note: checkpoint record will be created when turn starts (in start_turn_if_needed)
         // We only persist the message here, the turn object is created later
@@ -1187,8 +1208,7 @@ impl Agent {
             if decision.continue_session {
                 let steer_blocks = decision.steer_blocks.unwrap_or(Vec::new());
                 if !steer_blocks.is_empty() {
-                    let msg = Message::with_blocks(Role::User, steer_blocks);
-                    self.push_user_message(msg);
+                    self.inject_user_message(steer_blocks, true).await?;
                 }
                 tracing::info!(
                     "PreStop hooks decided to continue session, transitioning to Streaming"

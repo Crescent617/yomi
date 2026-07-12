@@ -17,6 +17,7 @@ import {
 import {
   sendDesktopNotification,
   refreshCheckpoints,
+  appendSessionMessages,
   loadSessionMessages,
 } from "./session";
 
@@ -387,7 +388,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
         const seen = new Set(session.messages.map((m) => m.id));
         const deduped = buf.filter((m) => !seen.has(m.id));
         if (deduped.length > 0) {
-          session.messages = [...session.messages, ...deduped];
+          appendSessionMessages(session, deduped);
         }
         streamingMessages[session.id] = [];
       }
@@ -413,44 +414,41 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       if ("cancelled" in stopReason) {
         const op = stopReason.cancelled.operation;
         const msg = op ? `Cancelled: ${op}` : "Cancelled";
-        session.messages = [
-          ...session.messages,
+        appendSessionMessages(session, [
           {
             id: crypto.randomUUID(),
             type: "error",
             content: msg,
             created_at: new Date().toISOString(),
           },
-        ];
+        ]);
         showNotification(msg, "warning");
         sendDesktopNotification("Yomi", msg, session.id);
         return true;
       } else if ("failed" in stopReason) {
         const errorMsg =
           "Task failed: " + (stopReason.failed.error ?? "Unknown");
-        session.messages = [
-          ...session.messages,
+        appendSessionMessages(session, [
           {
             id: crypto.randomUUID(),
             type: "error",
             content: errorMsg,
             created_at: new Date().toISOString(),
           },
-        ];
+        ]);
         showNotification(errorMsg, "warning");
         sendDesktopNotification("Yomi", errorMsg, session.id);
         return true;
       } else if ("max_iterations" in stopReason) {
         const msg = `Max iterations reached (${stopReason.max_iterations.reached})`;
-        session.messages = [
-          ...session.messages,
+        appendSessionMessages(session, [
           {
             id: crypto.randomUUID(),
             type: "error",
             content: msg,
             created_at: new Date().toISOString(),
           },
-        ];
+        ]);
         showNotification(msg, "warning");
         sendDesktopNotification("Yomi", msg, session.id);
         return true;
@@ -464,21 +462,20 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
       const seen = new Set(session.messages.map((m) => m.id));
       const deduped = buf.filter((m) => !seen.has(m.id));
       if (deduped.length > 0) {
-        session.messages = [...session.messages, ...deduped];
+        appendSessionMessages(session, deduped);
       }
       streamingMessages[session.id] = [];
     }
     const errorStr = event.error.error ?? "Unknown";
     const errorMsg = "Agent error: " + errorStr;
-    session.messages = [
-      ...session.messages,
+    appendSessionMessages(session, [
       {
         id: crypto.randomUUID(),
         type: "error",
         content: errorMsg,
         created_at: new Date().toISOString(),
       },
-    ];
+    ]);
     // Non-recoverable errors are NOT always followed by a Stopped::Failed
     // lifecycle event (the kernel may recover to Idle), so surface both.
     const level = event.error.is_recoverable ? "warning" : "error";
@@ -490,15 +487,14 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   } else if (event.retrying) {
     const retry = event.retrying;
     const msg = `Agent retrying (${retry.attempt}/${retry.max_attempts})`;
-    session.messages = [
-      ...session.messages,
+    appendSessionMessages(session, [
       {
         id: crypto.randomUUID(),
         type: "error",
         content: msg,
         created_at: new Date().toISOString(),
       },
-    ];
+    ]);
     showNotification(msg, "warning");
     return true;
   } else if (event.permission_request) {
@@ -573,12 +569,27 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
 function handleUserEvent(session: SessionState, event: UserEvent): boolean {
   if (event.message) {
     const msg = event.message;
-    session.messages.push({
+    appendSessionMessages(session, [
+      {
+        id: msg.message_id,
+        type: "user",
+        content: msg.content ?? [],
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    session.updated_at = new Date().toISOString();
+    return true;
+  }
+  if (event.steer) {
+    const msg = event.steer;
+    const buf = streamingMessages[session.id] ?? [];
+    buf.push({
       id: msg.message_id,
-      type: "user",
+      type: "steer",
       content: msg.content ?? [],
       created_at: new Date().toISOString(),
     });
+    streamingMessages[session.id] = buf;
     session.updated_at = new Date().toISOString();
     return true;
   }

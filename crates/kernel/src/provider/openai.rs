@@ -252,7 +252,7 @@ impl Provider for OpenAIProvider {
                                 )));
                             }
 
-                            let items = assembler.process(&event.data)?;
+                            let items = assembler.process(&event.data);
                             if !items.is_empty() {
                                 // Reset content timer when we actually produce items
                                 return Ok(Some((
@@ -346,12 +346,12 @@ impl MsgChunkAssembler {
     ///
     /// Content (text/thinking) is emitted immediately as it arrives.
     /// Tool calls are accumulated; completed calls are emitted when we detect they're finished.
-    fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
+    fn process(&mut self, data: &str) -> Vec<ModelStreamItem> {
         let response: OpenAIStreamResponse = match serde_json::from_str(data) {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Failed to parse SSE chunk: {e} - data: {data}");
-                return Ok(Vec::new());
+                return Vec::new();
             }
         };
 
@@ -457,7 +457,7 @@ impl MsgChunkAssembler {
             ));
         }
 
-        Ok(items)
+        items
     }
 
     /// Called when the stream ends. Returns all remaining complete tool calls and a Complete marker.

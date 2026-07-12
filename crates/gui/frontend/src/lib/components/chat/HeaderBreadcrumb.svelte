@@ -10,11 +10,11 @@
   } from "lucide-svelte";
   import type { SessionState } from "../../state.svelte";
   import {
-    activateSession,
     getSession,
     projectState,
     showNotification,
   } from "../../state.svelte";
+  import { activateSession } from "../../session";
   import * as api from "../../api";
   import { formatTimeAgo } from "../../utils";
 
@@ -276,7 +276,6 @@
                   if (event.key === "Escape") renaming = false;
                 }}
                 class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                autofocus
               />
               <button
                 type="button"

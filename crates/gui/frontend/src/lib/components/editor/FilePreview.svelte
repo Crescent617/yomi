@@ -3,6 +3,7 @@
   import { ChevronRight, Pencil, MessageSquare } from "lucide-svelte";
   import { fsProvider } from "../../fs/factory";
   import type { FileEntry } from "../../fs/provider";
+  import LoadingSkeleton from "../ui/LoadingSkeleton.svelte";
   import { detectLang } from "../../utils";
 
   let {
@@ -88,7 +89,12 @@
   <!-- Content -->
   <div class="flex-1 overflow-auto p-4">
     {#if loading}
-      <div class="text-muted-foreground text-sm">Loading...</div>
+      <div class="space-y-3" role="status" aria-label="Loading file preview">
+        <LoadingSkeleton class="h-3 w-2/3" />
+        <LoadingSkeleton class="h-3 w-full" />
+        <LoadingSkeleton class="h-3 w-5/6" />
+        <LoadingSkeleton class="h-3 w-3/4" />
+      </div>
     {:else if error}
       <div class="text-destructive text-sm">{error}</div>
     {:else}

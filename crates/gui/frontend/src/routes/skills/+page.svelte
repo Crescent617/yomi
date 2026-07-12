@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import * as api from "../../lib/api";
   import { sessionState } from "../../lib/state.svelte";
+  import LoadingIndicator from "../../lib/components/ui/LoadingIndicator.svelte";
+  import LoadingSkeleton from "../../lib/components/ui/LoadingSkeleton.svelte";
   import { Wrench, RefreshCw } from "lucide-svelte";
 
   let skills = $state<api.SkillInfo[]>([]);
@@ -41,15 +43,27 @@
     </h1>
     <button
       onclick={refresh}
-      class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border hover:bg-secondary transition-colors text-sm"
+      disabled={loading}
+      class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border hover:bg-secondary transition-colors text-sm disabled:cursor-wait disabled:opacity-60"
     >
-      <RefreshCw size={14} />
+      {#if loading}
+        <LoadingIndicator size="sm" label="Refreshing skills" />
+      {:else}
+        <RefreshCw size={14} />
+      {/if}
       Refresh
     </button>
   </div>
 
-  {#if loading}
-    <div class="text-muted-foreground">Loading skills...</div>
+  {#if loading && skills.length === 0}
+    <div class="space-y-3" role="status" aria-label="Loading skills">
+      {#each Array(3) as _, index (index)}
+        <div class="space-y-2 rounded-lg border border-border p-4">
+          <LoadingSkeleton class="h-4 w-32" />
+          <LoadingSkeleton class="h-3 w-3/4" />
+        </div>
+      {/each}
+    </div>
   {:else if error}
     <div class="text-destructive">{error}</div>
   {:else if skills.length === 0}

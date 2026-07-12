@@ -156,3 +156,39 @@ fn test_update_subagent_no_match() {
         panic!("Expected subagent");
     }
 }
+
+#[test]
+fn test_steer_renderer_uses_envelope_icon() {
+    let message = HistoryMessage::Steer(vec![ContentBlock::Text {
+        text: "change direction".to_string(),
+    }]);
+
+    let text: String = super::super::message_renderer::render_message(&message, 80)
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    assert_eq!(unicode_width::UnicodeWidthStr::width("✉ "), 2);
+    assert_eq!(text, "✉ change direction");
+}
+
+#[test]
+fn test_add_steer_flushes_streaming_before_message() {
+    let mut cv = ChatView::new();
+    cv.start_streaming();
+    cv.append_streaming_content("partial response");
+
+    cv.add_steer_message(vec![ContentBlock::Text {
+        text: "change direction".to_string(),
+    }]);
+
+    assert!(matches!(
+        cv.messages.as_slice(),
+        [
+            HistoryMessage::Assistant { content, .. },
+            HistoryMessage::Steer(blocks),
+        ] if content == "partial response"
+            && matches!(blocks.as_slice(), [ContentBlock::Text { text }] if text == "change direction")
+    ));
+}

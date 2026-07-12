@@ -1,7 +1,10 @@
 use super::*;
 
-use crate::types::{MessageId, MessageTokenUsage};
-use std::sync::Arc;
+use crate::provider::{ModelStream, ProviderError};
+use crate::types::{MessageId, MessageTokenUsage, ToolDefinition};
+use async_trait::async_trait;
+use futures::stream;
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_calculate_tokens_with_usage() {
@@ -25,10 +28,37 @@ fn test_calculate_tokens_with_usage() {
 }
 
 #[test]
+fn test_compactor_defaults_split_recent_windows() {
+    let compactor = Compactor::default();
+
+    assert_eq!(compactor.keep_recent_messages, 0);
+    assert_eq!(compactor.keep_recent_tool_results, 5);
+}
+
+#[test]
+fn test_micro_compact_uses_tool_result_window_only() {
+    let compactor = Compactor::new(0.5, 99, 0, 1000);
+    let messages = vec![Arc::new(Message::tool_result(
+        MessageId::default(),
+        "call",
+        "Result",
+    ))];
+
+    let compacted = compactor
+        .micro_compact(&messages)
+        .expect("tool result should be cleared");
+
+    assert_eq!(
+        compacted[0].text_content(),
+        "[Old tool result content cleared]"
+    );
+}
+
+#[test]
 fn test_micro_compact() {
     use std::sync::Arc;
 
-    let compactor = Compactor::new(0.5, 2, 1000); // threshold=100 (when context_window=200), keep last 2 messages
+    let compactor = Compactor::new(0.5, 0, 2, 1000); // threshold=100, preserve tool results in last 2 messages
     let messages: Vec<Arc<Message>> = vec![
         Arc::new(Message::user("Task 1")),
         Arc::new(Message::tool_result(
@@ -41,7 +71,7 @@ fn test_micro_compact() {
             MessageId::default(),
             "call-2",
             "Result 2",
-        )), // kept (index 3, in keep_recent)
+        )), // kept (index 3, in keep_recent_tool_results)
         Arc::new(Message::user("Current task")), // kept (index 4)
     ];
 
@@ -53,11 +83,55 @@ fn test_micro_compact() {
         new_messages[1].text_content(),
         "[Old tool result content cleared]"
     );
-    // Recent tool result should be preserved (keep_recent = 2)
+    // Recent tool result should be preserved (keep_recent_tool_results = 2)
     assert_eq!(new_messages[3].text_content(), "Result 2");
     assert_eq!(new_messages[4].text_content(), "Current task");
 
     // Second compaction should return None (already cleared)
     let compacted_again = compactor.micro_compact(&new_messages);
     assert!(compacted_again.is_none());
+}
+
+#[derive(Debug)]
+struct RecordingProvider {
+    max_tokens: Arc<Mutex<Option<u32>>>,
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+    async fn stream(
+        &self,
+        _messages: &[Arc<Message>],
+        _tools: &[Arc<ToolDefinition>],
+        config: &ModelConfig,
+    ) -> Result<ModelStream, ProviderError> {
+        *self.max_tokens.lock().expect("max tokens lock") = config.max_tokens;
+        Ok(Box::pin(stream::iter(vec![
+            Ok(ModelStreamItem::Chunk(crate::event::ContentChunk::Text(
+                "summary".to_string(),
+            ))),
+            Ok(ModelStreamItem::Complete),
+        ])))
+    }
+
+    fn name(&self) -> &'static str {
+        "recording"
+    }
+}
+
+#[tokio::test]
+async fn test_full_compact_uses_configured_summary_max_tokens() {
+    let max_tokens = Arc::new(Mutex::new(None));
+    let provider: Arc<dyn Provider> = Arc::new(RecordingProvider {
+        max_tokens: Arc::clone(&max_tokens),
+    });
+    let compactor = Compactor::new(0.5, 0, 5, 1_234);
+    let messages = vec![Arc::new(Message::user("compact me"))];
+
+    compactor
+        .full_compact(&messages, provider, &ModelConfig::default(), None)
+        .await
+        .expect("full compaction should succeed");
+
+    assert_eq!(*max_tokens.lock().expect("max tokens lock"), Some(1_234));
 }

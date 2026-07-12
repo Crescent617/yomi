@@ -8,6 +8,22 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::GuiError;
 use crate::state::AppState;
 
+fn replace_user_event_content(
+    event_value: &mut serde_json::Value,
+    pointer: &str,
+    content: &[ContentBlock],
+) {
+    if let Some(blocks) = event_value
+        .pointer_mut(pointer)
+        .and_then(|value| value.as_array_mut())
+    {
+        *blocks = content
+            .iter()
+            .map(|block| serde_json::to_value(block).unwrap_or_default())
+            .collect();
+    }
+}
+
 fn parse_level(s: &str) -> Result<Level, GuiError> {
     match s.to_lowercase().as_str() {
         "safe" => Ok(Level::Safe),
@@ -82,17 +98,14 @@ pub async fn subscribe(
             let event = envelope.event;
             let mut event_value = serde_json::to_value(&event).unwrap_or_default();
 
-            if let Event::User(UserEvent::Message { ref content, .. }) = event {
-                if let Some(blocks) = event_value
-                    .pointer_mut("/user/message/content")
-                    .and_then(|v| v.as_array_mut())
-                {
-                    let converted: Vec<serde_json::Value> = content
-                        .iter()
-                        .map(|b| serde_json::to_value(b).unwrap_or_default())
-                        .collect();
-                    *blocks = converted;
+            match event {
+                Event::User(UserEvent::Message { ref content, .. }) => {
+                    replace_user_event_content(&mut event_value, "/user/message/content", content);
                 }
+                Event::User(UserEvent::Steer { ref content, .. }) => {
+                    replace_user_event_content(&mut event_value, "/user/steer/content", content);
+                }
+                _ => {}
             }
 
             let payload = serde_json::json!({

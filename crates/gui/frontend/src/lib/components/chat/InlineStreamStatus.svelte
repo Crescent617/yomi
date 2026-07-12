@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Message, SessionState } from "../../state.svelte";
-  import { findThinking, hasText } from "../../state.svelte";
+  import { findThinking, hasText } from "../../session";
 
   let {
     session,

@@ -123,6 +123,12 @@ body {
     "calt" 1;
 }
 
+/* Mermaid leaves an empty body-level tooltip after rendering. Keep it from
+   extending the document until it has content to show. */
+.mermaidTooltip:empty {
+  display: none;
+}
+
 /* ── Thin scrollbars everywhere ── */
 * {
   scrollbar-width: thin;

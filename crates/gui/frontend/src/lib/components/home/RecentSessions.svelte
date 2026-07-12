@@ -5,11 +5,13 @@
   import {
     projectState,
     sessionState,
+    showNotification,
+  } from "../../state.svelte";
+  import {
     activateSession,
     refreshCheckpoints,
     createSessionState,
-    showNotification,
-  } from "../../state.svelte";
+  } from "../../session";
   import { formatTimeAgo, projectColor } from "../../utils";
   import { clock } from "../../clock.svelte";
   import { MessageSquare, History } from "lucide-svelte";
