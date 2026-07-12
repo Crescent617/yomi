@@ -1,3 +1,8 @@
+<script context="module" lang="ts">
+  const loadedProjects = new Set<string>();
+  const projectLoadPromises = new Map<string, Promise<boolean>>();
+</script>
+
 <script lang="ts">
   import { onMount } from "svelte";
   import {
@@ -86,17 +91,17 @@
     }
   });
 
-  /** Auto-expand the 3 most recently active projects and load their sessions. */
-  function autoExpandRecent() {
+  /** Auto-expand the 3 most recently active projects after loading their sessions. */
+  async function autoExpandRecent() {
     const recentIds = [...projectState.projects]
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
       .slice(0, 3)
       .map((p) => p.id);
     if (recentIds.length > 0) {
-      expanded = Object.fromEntries(recentIds.map((id) => [id, true]));
-      for (const id of recentIds) {
-        loadSessions(id);
-      }
+      const loaded = await Promise.all(recentIds.map((id) => loadSessions(id)));
+      expanded = Object.fromEntries(
+        recentIds.filter((_, index) => loaded[index]).map((id) => [id, true]),
+      );
     }
   }
 
@@ -133,52 +138,84 @@
   }
 
   async function toggle(project_id: string) {
-    expanded[project_id] = !expanded[project_id];
     if (expanded[project_id]) {
-      await loadSessions(project_id);
+      expanded[project_id] = false;
+      return;
     }
+    if (loading[project_id]) return;
+    const loaded = await loadSessions(project_id);
+    if (loaded) expanded[project_id] = true;
   }
 
-  async function loadSessions(project_id: string) {
-    if (loading[project_id]) return;
+  async function loadSessions(
+    project_id: string,
+    load_more = false,
+  ): Promise<boolean> {
+    if (!load_more && loadedProjects.has(project_id)) return true;
 
+    const existing = projectLoadPromises.get(project_id);
+    if (existing) {
+      loading[project_id] = true;
+      try {
+        return await existing;
+      } finally {
+        loading[project_id] = false;
+      }
+    }
+
+    const request = (async () => {
+      try {
+        if (!load_more) delete sessionCursors[project_id];
+        const cursor = load_more ? sessionCursors[project_id] : undefined;
+        const result = await api.listSessions(project_id, cursor, 5);
+        for (const s of result.sessions) {
+          const existing = sessionState.sessions.find(
+            (sess) => sess.id === s.id,
+          );
+          if (!existing) {
+            sessionState.sessions.push(
+              createSessionState({
+                id: s.id,
+                project_path: s.project_path ?? "",
+                project_id: s.project_id,
+                alias: s.title ?? "Untitled",
+                updated_at: s.updated_at ?? s.created_at,
+                permission_level: s.auto_approve_level ?? "caution",
+                model_key: s.model_key,
+              }),
+            );
+          } else {
+            existing.alias = s.title ?? existing.alias ?? "Untitled";
+            existing.permission_level =
+              s.auto_approve_level ?? existing.permission_level;
+            existing.updated_at =
+              s.updated_at ?? s.created_at ?? existing.updated_at;
+            existing.model_key = s.model_key ?? existing.model_key;
+          }
+        }
+        loadedProjects.add(project_id);
+        if (result.next_cursor) {
+          sessionCursors[project_id] = result.next_cursor;
+        } else {
+          delete sessionCursors[project_id];
+        }
+        return true;
+      } catch (e: unknown) {
+        if (!load_more) delete sessionCursors[project_id];
+        console.error(
+          "Failed to load sessions:",
+          e instanceof Error ? e.message : e,
+        );
+        return false;
+      } finally {
+        projectLoadPromises.delete(project_id);
+      }
+    })();
+
+    projectLoadPromises.set(project_id, request);
     loading[project_id] = true;
     try {
-      const cursor = sessionCursors[project_id];
-      const result = await api.listSessions(project_id, cursor, 5);
-      for (const s of result.sessions) {
-        const existing = sessionState.sessions.find((sess) => sess.id === s.id);
-        if (!existing) {
-          sessionState.sessions.push(
-            createSessionState({
-              id: s.id,
-              project_path: s.project_path ?? "",
-              project_id: s.project_id,
-              alias: s.title ?? "Untitled",
-              updated_at: s.updated_at ?? s.created_at,
-              permission_level: s.auto_approve_level ?? "caution",
-              model_key: s.model_key,
-            }),
-          );
-        } else {
-          existing.alias = s.title ?? existing.alias ?? "Untitled";
-          existing.permission_level =
-            s.auto_approve_level ?? existing.permission_level;
-          existing.updated_at =
-            s.updated_at ?? s.created_at ?? existing.updated_at;
-          existing.model_key = s.model_key ?? existing.model_key;
-        }
-      }
-      if (result.next_cursor) {
-        sessionCursors[project_id] = result.next_cursor;
-      } else {
-        delete sessionCursors[project_id];
-      }
-    } catch (e: unknown) {
-      console.error(
-        "Failed to load sessions:",
-        e instanceof Error ? e.message : e,
-      );
+      return await request;
     } finally {
       loading[project_id] = false;
     }
@@ -263,6 +300,7 @@
         if (removedIds.has(sid)) delete pinnedSessionMeta[sid];
       }
       delete sessionCursors[id];
+      loadedProjects.delete(id);
       loadPinnedSessions();
       if (
         sessionState.activeSessionId &&
@@ -610,6 +648,8 @@
             <button
               class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
               onclick={() => toggle(project.id)}
+              aria-expanded={Boolean(expanded[project.id])}
+              aria-controls={`project-sessions-${project.id}`}
             >
               {#if expanded[project.id]}
                 <FolderOpen
@@ -720,7 +760,9 @@
 
           {#if expanded[project.id]}
             <div
+              id={`project-sessions-${project.id}`}
               class="ml-2 space-y-0.5 pb-1"
+              aria-busy={Boolean(loading[project.id])}
               transition:slide={{ duration: 200 }}
             >
               {#each getSessions(project.id) as session (session.id)}
@@ -866,7 +908,8 @@
               {#if project.id in sessionCursors}
                 <button
                   class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={() => loadSessions(project.id)}
+                  onclick={() => loadSessions(project.id, true)}
+                  disabled={Boolean(loading[project.id])}
                 >
                   Load more...
                 </button>
