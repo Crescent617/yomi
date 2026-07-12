@@ -58,19 +58,6 @@ export function closeBrowser(session_id: string) {
   }
 }
 
-// ── Session display / queries ────────────────────────────────────────────
-
-export function getDisplayMessages(session_id: string) {
-  const session = getSession(session_id);
-  if (!session) return [];
-  const streamBuf = streamingMessages[session_id] ?? [];
-  if (streamBuf.length === 0) return session.messages;
-
-  const seen = new Set(session.messages.map((m) => m.id));
-  const deduped = streamBuf.filter((m) => !seen.has(m.id));
-  return [...session.messages, ...deduped];
-}
-
 export function syncSessionStatus(session_id: string, info: { phase: string }) {
   const session = getSession(session_id);
   if (!session) return;
@@ -121,6 +108,7 @@ export function createSessionState(
   return {
     project_path: "",
     messages: [],
+    message_rewrite_revision: 0,
     phase: "idle",
     is_running: false,
     checkpoints: [],
@@ -134,6 +122,22 @@ export function createSessionState(
     todos: [],
     ...partial,
   };
+}
+
+export function replaceSessionMessages(
+  session: SessionState,
+  messages: Message[],
+): void {
+  session.messages = messages;
+  session.message_rewrite_revision += 1;
+}
+
+export function appendSessionMessages(
+  session: SessionState,
+  messages: Message[],
+): void {
+  if (messages.length === 0) return;
+  session.messages.push(...messages);
 }
 
 export function setActiveSession(id: string | null) {
@@ -371,6 +375,15 @@ export function loadSessionMessages(
         });
         break;
       }
+      case "steer": {
+        parsedMessages.push({
+          id: m.id,
+          type: "steer",
+          content: m.content ?? [],
+          created_at: m.created_at,
+        });
+        break;
+      }
       case "assistant": {
         parsedMessages.push({
           id: m.id,
@@ -418,6 +431,6 @@ export function loadSessionMessages(
     }
   }
 
-  session.messages = parsedMessages;
+  replaceSessionMessages(session, parsedMessages);
   session.token_usage = latestTokenUsage;
 }

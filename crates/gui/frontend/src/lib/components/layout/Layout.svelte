@@ -99,12 +99,12 @@
         >
           {#if !appState.sidebarCollapsed}
             <ProjectSidebar collapsed={false} />
-            <div
+            <button
+              type="button"
               class="absolute right-0 top-0 bottom-0 w-[2px] cursor-col-resize hover:bg-primary/50 z-10"
               onmousedown={startDragLeft}
-              role="separator"
               aria-label="Resize sidebar"
-            ></div>
+            ></button>
           {/if}
         </aside>
 

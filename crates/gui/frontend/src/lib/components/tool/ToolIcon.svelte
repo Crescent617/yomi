@@ -31,7 +31,7 @@
     `${className} ${isRunning ? "animate-pulse" : ""}`.trim(),
   );
 
-  const name = toolName.toLowerCase();
+  const name = $derived(toolName.toLowerCase());
 </script>
 
 {#if name === "read" || name === "read_file"}

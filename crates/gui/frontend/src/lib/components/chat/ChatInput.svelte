@@ -15,9 +15,8 @@
     sessionState,
     getActiveSession,
     showNotification,
-    refreshSessions,
-    textFromBlocks,
   } from "../../state.svelte";
+  import { refreshSessions, textFromBlocks } from "../../session";
   import { SLASH_COMMANDS } from "../../commands";
   import type { FileEntry } from "../../fs/provider";
   import { open } from "@tauri-apps/plugin-dialog";

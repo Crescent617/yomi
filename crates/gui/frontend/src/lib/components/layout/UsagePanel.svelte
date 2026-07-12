@@ -4,6 +4,9 @@
   import * as api from "../../api";
   import type { ModelInfo, ModelUsage } from "../../api";
   import { getActiveSession } from "../../state.svelte";
+  import InlineLoadingStatus from "../ui/InlineLoadingStatus.svelte";
+  import PageLoading from "../ui/PageLoading.svelte";
+  import UsagePageSkeleton from "./UsagePageSkeleton.svelte";
   import {
     ArrowUpRight,
     ArrowDownLeft,
@@ -577,16 +580,17 @@
           <h2 class="text-lg font-semibold">Usage</h2>
           <span class="text-xs text-muted-foreground ml-1">· last 365 days</span
           >
+          {#if loading && config}
+            <InlineLoadingStatus label="Refreshing" />
+          {/if}
         </div>
       </div>
     </div>
 
-    {#if loading}
-      <div class="flex-1 flex items-center justify-center">
-        <div
-          class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"
-        ></div>
-      </div>
+    {#if loading && !config}
+      <PageLoading label="Loading usage data">
+        <UsagePageSkeleton />
+      </PageLoading>
     {:else if !config}
       <div
         class="flex-1 flex items-center justify-center text-muted-foreground"

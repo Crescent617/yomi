@@ -1,0 +1,165 @@
+import type { KernelEvent } from "./state.svelte";
+
+const MAX_QUEUED_ITEMS = 1024;
+const MAX_QUEUED_CHARS = 256 * 1024;
+const TIMEOUT_MS = 100;
+
+export interface KernelEventEnvelope {
+  session_id: string;
+  event_id?: string;
+  event: unknown;
+}
+
+type DeltaKind = "text" | "thinking";
+
+type BufferedEvent = {
+  envelope: KernelEventEnvelope;
+  kind: DeltaKind;
+  message_id: string;
+  chars: number;
+  items: number;
+};
+
+type Dispatch = (envelope: KernelEventEnvelope) => void;
+
+function getDelta(envelope: KernelEventEnvelope): {
+  kind: DeltaKind;
+  message_id: string;
+  value: string;
+} | null {
+  const event = envelope.event as KernelEvent;
+  if (
+    event === null ||
+    typeof event !== "object" ||
+    !("model" in event) ||
+    !event.model.chunk
+  ) {
+    return null;
+  }
+
+  const { message_id, content } = event.model.chunk;
+  if (typeof content.text === "string") {
+    return { kind: "text", message_id, value: content.text };
+  }
+  if (typeof content.thinking?.thinking === "string") {
+    return {
+      kind: "thinking",
+      message_id,
+      value: content.thinking.thinking,
+    };
+  }
+  return null;
+}
+
+function cloneEnvelope(envelope: KernelEventEnvelope): KernelEventEnvelope {
+  return structuredClone(envelope);
+}
+
+function appendDelta(
+  buffered: BufferedEvent,
+  value: string,
+  event_id?: string,
+) {
+  const event = buffered.envelope.event as KernelEvent;
+  const content = "model" in event ? event.model.chunk?.content : undefined;
+  if (!content) return;
+
+  if (buffered.kind === "text") {
+    content.text = (content.text ?? "") + value;
+  } else if (content.thinking) {
+    content.thinking.thinking = (content.thinking.thinking ?? "") + value;
+  }
+  buffered.envelope.event_id = event_id;
+  buffered.chars += value.length;
+  buffered.items += 1;
+}
+
+export class EventFrameBuffer {
+  private queue: BufferedEvent[] = [];
+  private queuedItems = 0;
+  private queuedChars = 0;
+  private frameId: number | null = null;
+  private timeoutId: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+
+  constructor(private readonly dispatch: Dispatch) {}
+
+  enqueue(envelope: KernelEventEnvelope) {
+    if (this.disposed) return;
+
+    const delta = getDelta(envelope);
+    if (!delta) {
+      this.flush();
+      this.dispatch(envelope);
+      return;
+    }
+
+    const last = this.queue[this.queue.length - 1];
+    if (
+      last &&
+      (last.envelope.session_id !== envelope.session_id ||
+        last.message_id !== delta.message_id ||
+        last.kind !== delta.kind)
+    ) {
+      this.flush();
+    }
+
+    const mergeTarget = this.queue[this.queue.length - 1];
+    if (mergeTarget) {
+      appendDelta(mergeTarget, delta.value, envelope.event_id);
+    } else {
+      this.queue.push({
+        envelope: cloneEnvelope(envelope),
+        kind: delta.kind,
+        message_id: delta.message_id,
+        chars: delta.value.length,
+        items: 1,
+      });
+    }
+
+    this.queuedItems += 1;
+    this.queuedChars += delta.value.length;
+    if (
+      this.queuedItems >= MAX_QUEUED_ITEMS ||
+      this.queuedChars >= MAX_QUEUED_CHARS
+    ) {
+      this.flush();
+    } else {
+      this.scheduleFlush();
+    }
+  }
+
+  flush() {
+    this.cancelScheduledFlush();
+    const queue = this.queue;
+    this.queue = [];
+    this.queuedItems = 0;
+    this.queuedChars = 0;
+    for (const item of queue) {
+      this.dispatch(item.envelope);
+    }
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.flush();
+    this.disposed = true;
+  }
+
+  private scheduleFlush() {
+    if (this.frameId !== null || this.timeoutId !== null) return;
+    this.frameId = requestAnimationFrame(() => this.flush());
+    this.timeoutId = setTimeout(() => this.flush(), TIMEOUT_MS);
+  }
+
+  private cancelScheduledFlush() {
+    if (this.frameId !== null) {
+      cancelAnimationFrame(this.frameId);
+      this.frameId = null;
+    }
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+  }
+}

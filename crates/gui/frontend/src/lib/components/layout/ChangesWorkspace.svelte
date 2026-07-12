@@ -652,10 +652,10 @@
               {#each diffFiles as file, i (file.newPath || file.oldPath || i)}
                 <div class="mb-4 overflow-hidden">
                   {#if viewMode === "unified"}
-                    <div class="font-mono text-xs leading-relaxed">
+                    <div class="font-mono text-xs leading-5">
                       {#each file.hunks as hunk, i (i)}
                         <div
-                          class="flex items-center gap-2 px-2 py-0.5 {lineBg(
+                          class="flex items-center {lineBg(
                             'hunk',
                           )} border-b border-border/50"
                         >
@@ -670,11 +670,7 @@
                           <span class="text-[10px]">{hunk.header}</span>
                         </div>
                         {#each hunk.lines as line, i (i)}
-                          <div
-                            class="flex items-start gap-2 px-2 py-0.5 {lineBg(
-                              line.type,
-                            )}"
-                          >
+                          <div class="flex items-start {lineBg(line.type)}">
                             <span
                               class="w-10 shrink-0 text-right text-[10px] text-muted-foreground select-none tabular-nums {lineNumberBg(
                                 line.type,
@@ -712,10 +708,10 @@
                     </div>
                   {:else}
                     <!-- Split view -->
-                    <div class="font-mono text-xs leading-relaxed">
+                    <div class="font-mono text-xs leading-5">
                       {#each file.hunks as hunk, i (i)}
                         <div
-                          class="flex items-center gap-2 px-2 py-0.5 {lineBg(
+                          class="flex items-center {lineBg(
                             'hunk',
                           )} border-b border-border/50"
                         >
@@ -726,7 +722,7 @@
                             class="flex border-b border-border/5 divide-x divide-border/70"
                           >
                             <div
-                              class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {leftLineBg(
+                              class="flex-1 min-w-0 flex items-start {leftLineBg(
                                 line.type,
                               )}"
                             >
@@ -750,7 +746,7 @@
                               </span>
                             </div>
                             <div
-                              class="flex-1 min-w-0 flex items-start gap-2 px-2 py-0.5 {rightLineBg(
+                              class="flex-1 min-w-0 flex items-start {rightLineBg(
                                 line.type,
                               )}"
                             >

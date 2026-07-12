@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SessionState } from "../../state.svelte";
-  import { getSession, activateSession } from "../../state.svelte";
+  import { getSession } from "../../state.svelte";
+  import { activateSession } from "../../session";
   import { ArrowUpRight, Bot } from "lucide-svelte";
 
   let { session }: { session: SessionState } = $props();

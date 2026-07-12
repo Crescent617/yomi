@@ -77,6 +77,11 @@ export interface UserMessage extends BaseMessage {
   content: TaggedContentBlock[];
 }
 
+export interface SteerMessage extends BaseMessage {
+  type: "steer";
+  content: TaggedContentBlock[];
+}
+
 export interface BotMessage extends BaseMessage {
   type: "assistant";
   content: TaggedContentBlock[];
@@ -104,7 +109,12 @@ export interface ErrorMessage extends BaseMessage {
   content: string;
 }
 
-export type Message = UserMessage | BotMessage | ToolMessage | ErrorMessage;
+export type Message =
+  | UserMessage
+  | SteerMessage
+  | BotMessage
+  | ToolMessage
+  | ErrorMessage;
 
 export interface ProjectState {
   id: string;
@@ -154,6 +164,7 @@ export interface SessionState {
   alias?: string;
   parent_session_id?: string;
   messages: Message[];
+  message_rewrite_revision: number;
   phase: string;
   is_running: boolean;
   checkpoints: Checkpoint[];
@@ -299,6 +310,10 @@ export interface UserEvent {
     message_id: string;
     content: TaggedContentBlock[];
   };
+  steer?: {
+    message_id: string;
+    content: TaggedContentBlock[];
+  };
 }
 
 export type KernelEvent =
@@ -377,29 +392,3 @@ export function getActiveSession(): SessionState | null {
     ? (getSession(sessionState.activeSessionId) ?? null)
     : null;
 }
-
-// ── Re-exports from submodules (so existing imports don't break) ─────────
-
-export {
-  textFromBlocks,
-  hasText,
-  findThinking,
-  openBrowser,
-  closeBrowser,
-  getDisplayMessages,
-  syncSessionStatus,
-  sendDesktopNotification,
-  setActiveSession,
-  upsertSession,
-  createSessionState,
-  loadSessionData,
-  activateSession,
-  refreshCheckpoints,
-  refreshSessions,
-  loadPinnedSessions,
-  openFileTab,
-  closeTab,
-  loadSessionMessages,
-} from "./session";
-
-export { handleEvent } from "./events";

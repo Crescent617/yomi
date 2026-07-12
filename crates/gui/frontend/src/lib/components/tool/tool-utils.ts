@@ -1,5 +1,5 @@
 import { formatElapsed } from "../../utils";
-import { activateSession as stateActivateSession } from "../../state.svelte";
+import { activateSession as stateActivateSession } from "../../session";
 
 export function statusColor(status: string): string {
   switch (status) {

@@ -11,6 +11,7 @@ pub const PROJ_PREFIX: &str = "proj_";
 pub const MSG_PREFIX: &str = "msg_";
 pub const CRON_PREFIX: &str = "cron_";
 pub const EVT_PREFIX: &str = "evt_";
+pub const IS_STEER_META_KEY: &str = "is_steer";
 
 // ─── Macro: generate a distinct newtype for each ID ───────────────────────
 
@@ -929,5 +930,7 @@ impl From<reqwest::Error> for KernelError {
 }
 
 pub mod session_message;
+#[cfg(test)]
+mod session_message_test;
 pub use session_message::{AssistantMsg, SessionMessage, ToolMsg, UserMsg};
 pub type Result<T> = std::result::Result<T, KernelError>;

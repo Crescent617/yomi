@@ -567,7 +567,10 @@ fn test_assembler_unknown_events_ignored() {
 fn test_assembler_invalid_json_ignored() {
     let mut assembler = ResponseAssembler::new();
     let items = assembler.process("not json").unwrap();
-    assert!(items.is_empty(), "invalid JSON should be ignored with warning");
+    assert!(
+        items.is_empty(),
+        "invalid JSON should be ignored with warning"
+    );
 }
 
 #[test]

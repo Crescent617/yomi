@@ -2,7 +2,8 @@
   import { FolderTree } from "lucide-svelte";
   import FileTree from "./FileTree.svelte";
   import type { FileEntry } from "../../fs/provider";
-  import { getActiveSession, openFileTab } from "../../state.svelte";
+  import { getActiveSession } from "../../state.svelte";
+  import { openFileTab } from "../../session";
 
   const activeSession = $derived(getActiveSession());
 

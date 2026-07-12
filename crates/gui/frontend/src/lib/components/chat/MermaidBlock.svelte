@@ -9,6 +9,7 @@
     RefreshCw,
     TriangleAlert,
   } from "lucide-svelte";
+  import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
   import { renderMermaid } from "../../mermaid";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidPreview from "./MermaidPreview.svelte";
@@ -16,32 +17,51 @@
   let { source }: { source: string } = $props();
 
   let container = $state<HTMLDivElement | null>(null);
+  let block = $state<HTMLDivElement | null>(null);
   let svg = $state("");
   let error = $state("");
-  let loading = $state(true);
+  let renderStarted = $state(false);
+  let loading = $state(false);
+  let isNearViewport = false;
   let showSource = $state(false);
   let previewOpen = $state(false);
   let copied = $state(false);
   let renderVersion = 0;
+  let themeVersion = 0;
+  let renderedThemeVersion = -1;
+  let renderController: AbortController | undefined;
+  let observer: IntersectionObserver | undefined;
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
+  function ensureRendered() {
+    if (!isNearViewport || loading) return;
+    if (svg && renderedThemeVersion === themeVersion) return;
+    renderStarted = true;
+    void render();
+  }
+
   async function render() {
+    renderController?.abort();
+    const controller = new AbortController();
+    renderController = controller;
     const version = ++renderVersion;
     loading = true;
     error = "";
     try {
-      const result = await renderMermaid(source);
+      const result = await renderMermaid(source, controller.signal);
       if (version !== renderVersion) return;
       svg = result.svg;
+      renderedThemeVersion = themeVersion;
       requestAnimationFrame(() => {
         if (version === renderVersion && container && result.bindFunctions) {
           result.bindFunctions(container);
         }
       });
     } catch (cause) {
-      if (version !== renderVersion) return;
+      if (version !== renderVersion || controller.signal.aborted) return;
       svg = "";
-      error = cause instanceof Error ? cause.message : "Unable to render diagram.";
+      error =
+        cause instanceof Error ? cause.message : "Unable to render diagram.";
     } finally {
       if (version === renderVersion) loading = false;
     }
@@ -59,22 +79,60 @@
   }
 
   function onThemeChanged() {
-    void render();
+    themeVersion += 1;
+    renderController?.abort();
+    loading = false;
+    if (isNearViewport) ensureRendered();
+  }
+
+  function scrollRoot(element: HTMLElement): Element | null {
+    let parent = element.parentElement;
+    while (parent) {
+      const { overflowY } = getComputedStyle(parent);
+      if (overflowY === "auto" || overflowY === "scroll") return parent;
+      parent = parent.parentElement;
+    }
+    return null;
   }
 
   onMount(() => {
-    void render();
     window.addEventListener("theme-changed", onThemeChanged);
+    if (!block || typeof IntersectionObserver === "undefined") {
+      isNearViewport = true;
+      ensureRendered();
+      return;
+    }
+
+    observer = new IntersectionObserver(
+      ([entry]) => {
+        isNearViewport = entry.isIntersecting;
+        if (isNearViewport) {
+          ensureRendered();
+        } else if (loading) {
+          renderController?.abort();
+          loading = false;
+        }
+      },
+      { root: scrollRoot(block), rootMargin: "0px" },
+    );
+    observer.observe(block);
   });
 
   onDestroy(() => {
+    observer?.disconnect();
+    renderController?.abort();
     renderVersion += 1;
     if (copyTimer) clearTimeout(copyTimer);
-    window.removeEventListener("theme-changed", onThemeChanged);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("theme-changed", onThemeChanged);
+    }
   });
 </script>
 
-<div class="mermaid-block group relative my-2 overflow-hidden rounded-md bg-code-bg">
+<div
+  bind:this={block}
+  class="mermaid-block group relative my-2 h-80 overflow-hidden rounded-md bg-code-bg"
+>
   <div
     class="absolute right-1.5 top-1.5 z-10 flex items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
   >
@@ -117,19 +175,43 @@
     <div class="mermaid-source">
       <CodeBlock code={source} language="mermaid" />
     </div>
-  {:else if loading}
+  {:else if svg}
     <div
-      class="flex min-h-28 items-center justify-center gap-2 p-4 text-xs text-muted-foreground"
-      role="status"
+      bind:this={container}
+      class="mermaid-canvas h-full overflow-auto p-3 pt-8"
+      role="img"
+      aria-label="Mermaid diagram"
     >
-      <RefreshCw class="size-3.5 animate-spin text-primary" />
-      Rendering diagram…
+      <div class="mermaid-diagram">
+        {@html svg}
+      </div>
     </div>
+    {#if loading}
+      <div
+        class="pointer-events-none absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-sm bg-background/80 px-1.5 py-1 text-[10px] text-muted-foreground backdrop-blur-sm"
+        role="status"
+      >
+        <RefreshCw class="size-3 animate-spin text-primary" />
+        Updating…
+      </div>
+    {/if}
+  {:else if !renderStarted || (!error && !loading)}
+    <LoadingPlaceholder
+      label="Diagram ready when visible"
+      description="Rendering is deferred to keep scrolling smooth."
+      active={false}
+    />
+  {:else if loading}
+    <LoadingPlaceholder label="Rendering diagram" />
   {:else if error}
-    <div class="flex min-h-28 flex-col items-center justify-center gap-2 p-4 text-center">
+    <div
+      class="flex h-full flex-col items-center justify-center gap-2 p-4 text-center"
+    >
       <TriangleAlert class="size-4 text-error" />
       <div>
-        <p class="text-xs font-medium text-foreground">Diagram couldn’t be rendered</p>
+        <p class="text-xs font-medium text-foreground">
+          Diagram couldn’t be rendered
+        </p>
         <p class="mt-0.5 text-[11px] text-muted-foreground">{error}</p>
       </div>
       <button
@@ -139,17 +221,6 @@
       >
         View source
       </button>
-    </div>
-  {:else}
-    <div
-      bind:this={container}
-      class="mermaid-canvas overflow-auto p-3 pt-8"
-      role="img"
-      aria-label="Mermaid diagram"
-    >
-      <div class="mermaid-diagram">
-        {@html svg}
-      </div>
     </div>
   {/if}
 </div>
@@ -162,11 +233,18 @@
   .mermaid-block :global(.code-block) {
     margin: 0;
   }
+  .mermaid-source {
+    overflow-y: auto;
+  }
+  .mermaid-source,
+  .mermaid-source :global(.code-block) {
+    height: 100%;
+  }
   .mermaid-source :global(.code-block > button) {
     display: none;
   }
   .mermaid-canvas {
-    max-height: 420px;
+    max-height: 100%;
   }
   .mermaid-diagram {
     width: 100%;
@@ -177,7 +255,7 @@
     width: auto;
     max-width: 100%;
     height: auto;
-    max-height: 372px;
+    max-height: 272px;
     margin-inline: auto;
   }
   .mermaid-canvas :global(text),

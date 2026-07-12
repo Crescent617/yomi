@@ -69,6 +69,7 @@ fn diff_lines(old_str: &str, new_str: &str) -> Vec<(&'static str, String)> {
 pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'static>>> {
     match msg {
         HistoryMessage::User(blocks) => render_user(blocks),
+        HistoryMessage::Steer(blocks) => render_steer(blocks),
         HistoryMessage::Assistant {
             content,
             thinking,
@@ -162,6 +163,33 @@ fn render_user(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
                 line_idx += 1;
             }
             _ => {}
+        }
+    }
+    lines
+}
+
+fn render_steer(content_blocks: &[ContentBlock]) -> Vec<Arc<Line<'static>>> {
+    let mut lines = Vec::new();
+    let mut first = true;
+    for block in content_blocks {
+        let ContentBlock::Text { text } = block else {
+            continue;
+        };
+        for line in text.lines() {
+            let prefix = if first { "✉ " } else { "  " };
+            lines.push(Arc::new(Line::from(vec![
+                Span::styled(
+                    prefix,
+                    Style::default()
+                        .fg(colors::accent_user())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    preprocess(line),
+                    Style::default().fg(colors::text_secondary()),
+                ),
+            ])));
+            first = false;
         }
     }
     lines
@@ -803,7 +831,9 @@ pub fn render_thinking_lines(
 }
 pub fn get_message_raw_content(msg: &HistoryMessage) -> String {
     match msg {
-        HistoryMessage::User(blocks) => extract_text_from_blocks(blocks),
+        HistoryMessage::User(blocks) | HistoryMessage::Steer(blocks) => {
+            extract_text_from_blocks(blocks)
+        }
         HistoryMessage::Assistant {
             content, thinking, ..
         } => {
@@ -861,6 +891,11 @@ pub fn get_message_pretty_json(msg: &HistoryMessage) -> String {
     let serializable = match msg {
         HistoryMessage::User(blocks) => SerializableMessage {
             role: "user".to_string(),
+            content: Some(extract_text_from_blocks(blocks)),
+            ..Default::default()
+        },
+        HistoryMessage::Steer(blocks) => SerializableMessage {
+            role: "steer".to_string(),
             content: Some(extract_text_from_blocks(blocks)),
             ..Default::default()
         },

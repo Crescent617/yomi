@@ -4,22 +4,26 @@
     projectState,
     getSession,
     getActiveSession,
+    showNotification,
+    streamingMessages,
+  } from "../../state.svelte";
+  import {
     activateSession,
     openBrowser,
     closeBrowser,
     closeTab,
-    showNotification,
     loadSessionMessages,
-    streamingMessages,
     syncSessionStatus,
     refreshCheckpoints,
+    appendSessionMessages,
     createSessionState,
-  } from "../../state.svelte";
+  } from "../../session";
   import * as api from "../../api";
   import { collapseHome } from "../../utils";
   import TabBar from "../layout/TabBar.svelte";
   import MessageList from "./MessageList.svelte";
   import ChatInput from "./ChatInput.svelte";
+  import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
   import FilePreview from "../editor/FilePreview.svelte";
   import FileEditor from "../editor/FileEditor.svelte";
   import HeaderBreadcrumb from "./HeaderBreadcrumb.svelte";
@@ -428,7 +432,7 @@
           });
         const buf = streamingMessages[id] ?? [];
         if (buf.length > 0) {
-          session.messages = [...session.messages, ...buf];
+          appendSessionMessages(session, buf);
           streamingMessages[id] = [];
         }
         await activateSession(id);
@@ -998,10 +1002,12 @@
                   <Zap size={12} /> Open in Zed
                 </button>
               </div>
-              <div
+              <button
+                type="button"
+                aria-label="Close open menu"
                 class="fixed inset-0 z-10"
                 onclick={() => (openDropdownOpen = false)}
-              ></div>
+              ></button>
             {/if}
           </div>
         {/if}
@@ -1064,7 +1070,6 @@
                 placeholder="Ask anything... (type @ to reference files, / for commands)"
                 rows={3}
                 disabled={submitting}
-                autofocus
                 class="w-full resize-none bg-transparent text-base placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
               ></textarea>
               {#if homeInlineImages.length > 0}
@@ -1308,7 +1313,9 @@
                 <!-- Permission level -->
                 <PermissionSelector
                   value={(permission_level as PermissionLevel) || "caution"}
-                  onSelect={(level) => (permission_level = level)}
+                  onSelect={(level) => {
+                    permission_level = level;
+                  }}
                 />
                 <ModelSelector bind:this={modelSelectorRef} />
               </div>
@@ -1423,7 +1430,11 @@
               ></iframe>
             </div>
           {/if}
-          <div class="flex-1 relative min-h-0" onclick={handleChatClick}>
+          <div
+            class="flex-1 relative min-h-0"
+            onclick={handleChatClick}
+            role="presentation"
+          >
             <MessageList />
           </div>
           <div class="shrink-0 w-full">
@@ -1491,11 +1502,11 @@
         </div>
       {/if}
     {:else}
-      <div
-        class="flex items-center justify-center h-full text-muted-foreground"
-      >
-        Loading session...
-      </div>
+      <LoadingPlaceholder
+        label="Loading session"
+        description="Preparing messages and activity."
+        class="h-full"
+      />
     {/if}
   </div>
 </div>

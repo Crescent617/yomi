@@ -270,6 +270,13 @@ export interface SessionMessageUser {
   created_at: string;
 }
 
+export interface SessionMessageSteer {
+  kind: "steer";
+  id: string;
+  content: TaggedContentBlock[];
+  created_at: string;
+}
+
 export interface SessionMessageAssistant {
   kind: "assistant";
   id: string;
@@ -298,6 +305,7 @@ export interface SessionMessageTool {
 
 export type SessionMessage =
   | SessionMessageUser
+  | SessionMessageSteer
   | SessionMessageAssistant
   | SessionMessageTool;
 

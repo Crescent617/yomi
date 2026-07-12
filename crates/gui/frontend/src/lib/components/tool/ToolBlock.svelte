@@ -62,9 +62,10 @@
       class="absolute left-1/2 top-[18px] z-10 flex size-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background"
     >
       {#if tool.status === "running"}
-        <span class="relative flex size-1.5">
-          <span
-            class="absolute size-full animate-ping rounded-full bg-primary/60"
+        <span class="relative flex size-1.5 items-center justify-center">
+          <span class="absolute size-2 animate-ping rounded-full bg-primary/70"
+          ></span>
+          <span class="absolute size-2.5 rounded-full bg-primary/25 blur-[2px]"
           ></span>
           <span class="relative size-1.5 rounded-full bg-primary"></span>
         </span>

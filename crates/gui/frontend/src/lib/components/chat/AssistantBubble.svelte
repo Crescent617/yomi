@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { textFromBlocks, hasText } from "../../state.svelte";
+  import { textFromBlocks, hasText } from "../../session";
   import type { BotMessage } from "../../state.svelte";
   import TextBlock from "./TextBlock.svelte";
 

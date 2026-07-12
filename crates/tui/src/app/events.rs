@@ -81,6 +81,19 @@ impl Model {
                         self.state.should_redraw = true;
                     }
                 }
+                Event::User(kernel::event::UserEvent::Steer { content, .. }) => {
+                    let blocks_json = serde_json::to_string(&content).unwrap_or_default();
+                    if let Err(e) = self.app.attr(
+                        &Id::ChatView,
+                        Attribute::Custom(attr::ADD_STEER_MESSAGE),
+                        AttrValue::String(blocks_json),
+                    ) {
+                        tracing::error!("Failed to add steer message to ChatView: {}", e);
+                    } else {
+                        self.scroll_chat_to_bottom();
+                        self.state.should_redraw = true;
+                    }
+                }
                 Event::Model(kernel::event::ModelEvent::Chunk { content, .. }) => {
                     self.state.is_streaming = true;
                     // Clear tool call delta when receiving regular content

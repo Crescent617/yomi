@@ -6,7 +6,7 @@ import {
   errorMessage,
   type CronJob,
 } from "./api";
-import { sendDesktopNotification } from "./state.svelte";
+import { sendDesktopNotification } from "./session";
 
 export class AutomationStore {
   jobs = $state<CronJob[]>([]);

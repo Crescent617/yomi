@@ -12,6 +12,7 @@ use crate::types::{
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionMessage {
     User(UserMsg),
+    Steer(UserMsg),
     Assistant(AssistantMsg),
     Tool(ToolMsg),
 }
@@ -85,11 +86,21 @@ impl SessionMessage {
         for msg in messages {
             match msg.role {
                 Role::User => {
-                    result.push(SessionMessage::User(UserMsg {
+                    let user_msg = UserMsg {
                         id: msg.id,
                         content: msg.content,
                         created_at: msg.created_at,
-                    }));
+                    };
+                    let is_steer = msg
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get(crate::types::IS_STEER_META_KEY))
+                        .is_some_and(|value| value == "true");
+                    result.push(if is_steer {
+                        SessionMessage::Steer(user_msg)
+                    } else {
+                        SessionMessage::User(user_msg)
+                    });
                 }
                 Role::Assistant => {
                     result.push(SessionMessage::Assistant(AssistantMsg {
@@ -147,7 +158,7 @@ impl SessionMessage {
     /// Concatenate all text content from the message blocks.
     pub fn text_content(&self) -> String {
         match self {
-            SessionMessage::User(msg) => msg.text_content(),
+            SessionMessage::User(msg) | SessionMessage::Steer(msg) => msg.text_content(),
             SessionMessage::Assistant(msg) => msg.text_content(),
             SessionMessage::Tool(msg) => msg.text_content(),
         }

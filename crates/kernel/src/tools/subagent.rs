@@ -27,7 +27,7 @@ struct RunSubagentParams {
 
 /// Prefix `text` with the subagent session id so callers can correlate results.
 fn agent_prefix(sid: &SessionId, text: impl std::fmt::Display) -> String {
-    format!("[agent_id: {sid}]\n{text}")
+    format!("[agent_id: {sid}] {text}")
 }
 
 impl SubagentTool {
@@ -459,15 +459,15 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     let steer = match &status {
                         SubAgentStatus::Completed => agent_prefix(
                             &session_id,
-                            format!("Task '{description}' completed:\n\n{output}"),
+                            format!("Task '{description}' completed:\n{output}"),
                         ),
                         SubAgentStatus::Failed(e) => agent_prefix(
                             &session_id,
-                            format!("Task '{description}' failed:\n\n{output}\n\n[error: {e}]"),
+                            format!("Task '{description}' failed:\n{output}\n[error: {e}]"),
                         ),
                         SubAgentStatus::Cancelled => agent_prefix(
                             &session_id,
-                            format!("Task '{description}' cancelled:\n\n{output}\n\n[cancelled]"),
+                            format!("Task '{description}' cancelled:\n{output}\n[cancelled]"),
                         ),
                     };
                     if let Err(e) = self_clone.input_bus.publish(

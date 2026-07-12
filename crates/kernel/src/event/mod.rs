@@ -86,6 +86,11 @@ pub enum UserEvent {
         message_id: MessageId,
         content: Vec<crate::types::ContentBlock>,
     },
+    /// User instruction injected while the agent is already running.
+    Steer {
+        message_id: MessageId,
+        content: Vec<crate::types::ContentBlock>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

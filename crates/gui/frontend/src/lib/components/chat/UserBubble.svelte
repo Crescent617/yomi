@@ -1,90 +1,21 @@
 <script lang="ts">
-  import { textFromBlocks } from "../../state.svelte";
+  import { textFromBlocks } from "../../session";
   import type { UserMessage } from "../../state.svelte";
-  import { Marked } from "marked";
   import { resolveAssetUrl } from "../../utils";
   import OperationBar from "./OperationBar.svelte";
+  import { userTextForHeight } from "./user-text";
+  import UserText from "./UserText.svelte";
 
   let { message, session_id }: { message: UserMessage; session_id: string } =
     $props();
 
-  const md = new Marked();
-  md.setOptions({ gfm: true, breaks: true });
-
-  const rawRendered = $derived(
-    md.parse(textFromBlocks(message.content), { async: false }) as string,
-  );
-
-  const allowedTags = new Set([
-    "p",
-    "strong",
-    "b",
-    "em",
-    "a",
-    "code",
-    "pre",
-    "ul",
-    "ol",
-    "li",
-    "blockquote",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "br",
-    "hr",
-    "div",
-    "span",
-    "img",
-    "table",
-    "thead",
-    "tbody",
-    "tr",
-    "th",
-    "td",
-    "sup",
-    "sub",
-    "del",
-    "s",
-  ]);
-  const rendered = $derived(
-    rawRendered.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*[^>]*>/g, (match) => {
-      // Extract tag name
-      const tagMatch = match.match(/^<\/?([a-zA-Z][a-zA-Z0-9]*)/);
-      if (!tagMatch) return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      const tag = tagMatch[1].toLowerCase();
-      if (!allowedTags.has(tag)) {
-        return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      }
-      // Sanitize dangerous attributes: javascript: URLs, event handlers, data URIs
-      return match
-        .replace(
-          /\s+(href|src|action|background|formaction|poster|xlink:href)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi,
-          (attrMatch, attrName) => {
-            const value = attrMatch
-              .split("=")
-              .slice(1)
-              .join("=")
-              .trim()
-              .replace(/^["']|["']$/g, "");
-            if (/^javascript:/i.test(value) || /^data:/i.test(value)) {
-              return ` ${attrName}="#"`;
-            }
-            return attrMatch;
-          },
-        )
-        .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, "");
-    }),
-  );
+  const text = $derived(textFromBlocks(message.content));
+  const measuredText = $derived(userTextForHeight(text));
 
   let expanded = $state(false);
 
   const isLong = $derived(
-    textFromBlocks(message.content).split("\n").length > 5 ||
-      textFromBlocks(message.content).length > 400 ||
-      textFromBlocks(message.content).includes("```"),
+    measuredText.split("\n").length > 5 || measuredText.length > 400,
   );
 
   const hasImages = $derived(
@@ -94,7 +25,7 @@
 
 <div class="flex justify-end group">
   <div
-    class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm user-text space-y-2 relative"
+    class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm space-y-2 relative"
   >
     <!-- Images -->
     {#if hasImages}
@@ -105,14 +36,20 @@
               {#await resolveAssetUrl(block.image_url.url)}
                 <div
                   class="w-[200px] h-[200px] rounded-lg bg-muted animate-pulse"
-                />
+                ></div>
               {:then src}
-                <img
-                  {src}
-                  alt="Uploaded image"
-                  class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                <button
+                  type="button"
+                  class="rounded-lg"
+                  aria-label="Open uploaded image in a new tab"
                   onclick={() => window.open(src, "_blank")}
-                />
+                >
+                  <img
+                    {src}
+                    alt="Uploaded attachment"
+                    class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                  />
+                </button>
               {:catch}
                 <div
                   class="w-[200px] h-[200px] rounded-lg bg-muted flex items-center justify-center text-xs text-muted-foreground"
@@ -121,12 +58,18 @@
                 </div>
               {/await}
             {:else}
-              <img
-                src={block.image_url.url}
-                alt="Uploaded image"
-                class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+              <button
+                type="button"
+                class="rounded-lg"
+                aria-label="Open uploaded image in a new tab"
                 onclick={() => window.open(block.image_url!.url, "_blank")}
-              />
+              >
+                <img
+                  src={block.image_url.url}
+                  alt="Uploaded attachment"
+                  class="max-w-[200px] max-h-[200px] rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                />
+              </button>
             {/if}
           {/if}
         {/each}
@@ -134,10 +77,10 @@
     {/if}
 
     <!-- Text content -->
-    {#if textFromBlocks(message.content).trim()}
+    {#if text.trim()}
       <div class="relative" class:message-collapsed={isLong && !expanded}>
         <div class:truncate={isLong && !expanded}>
-          {@html rendered}
+          <UserText {text} />
         </div>
         {#if isLong && !expanded}
           <div
@@ -171,94 +114,6 @@
       opacity: 1;
       transform: translateX(0);
     }
-  }
-
-  .user-text :global(h1) {
-    font-size: 1.25rem;
-    font-weight: 700;
-    margin: 0.5rem 0;
-  }
-  .user-text :global(h2) {
-    font-size: 1.125rem;
-    font-weight: 600;
-    margin: 0.4rem 0;
-  }
-  .user-text :global(h3) {
-    font-size: 1rem;
-    font-weight: 600;
-    margin: 0.3rem 0;
-  }
-  .user-text :global(p) {
-    margin: 0.25rem 0;
-  }
-  .user-text :global(ul) {
-    list-style-type: disc;
-    padding-left: 1.25rem;
-    margin: 0.25rem 0;
-  }
-  .user-text :global(ol) {
-    list-style-type: decimal;
-    padding-left: 1.25rem;
-    margin: 0.25rem 0;
-  }
-  .user-text :global(li) {
-    margin: 0.125rem 0;
-  }
-  .user-text :global(pre) {
-    background: hsl(var(--muted));
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-    overflow-x: auto;
-    margin: 0.25rem 0;
-  }
-  .user-text :global(code) {
-    font-family: ui-monospace, monospace;
-    font-size: 0.875rem;
-  }
-  .user-text :global(pre code) {
-    background: transparent;
-    padding: 0;
-  }
-  .user-text :global(:not(pre) > code) {
-    background: hsl(var(--muted));
-    padding: 0.125rem 0.25rem;
-    border-radius: 0.25rem;
-  }
-  .user-text :global(blockquote) {
-    border-left: 3px solid hsl(var(--border));
-    padding-left: 0.75rem;
-    margin: 0.25rem 0;
-    color: hsl(var(--muted-foreground));
-  }
-  .user-text :global(hr) {
-    border: 0;
-    border-top: 1px solid hsl(var(--border));
-    margin: 0.5rem 0;
-  }
-  .user-text :global(table) {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 0.25rem 0;
-  }
-  .user-text :global(th),
-  .user-text :global(td) {
-    border: 1px solid hsl(var(--border));
-    padding: 0.25rem 0.5rem;
-    text-align: left;
-  }
-  .user-text :global(th) {
-    background: hsl(var(--muted));
-    font-weight: 600;
-  }
-  .user-text :global(a) {
-    color: hsl(var(--primary));
-    text-decoration: underline;
-  }
-  .user-text :global(strong) {
-    font-weight: 700;
-  }
-  .user-text :global(em) {
-    font-style: italic;
   }
 
   .truncate {
