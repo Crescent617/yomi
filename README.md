@@ -108,6 +108,8 @@ yomi -y
 
 ## License
 
+Copyright (C) 2026 [Huaru Li](mailto:crescent617@outlook.com). See [NOTICE](NOTICE) for the copyright notice.
+
 This project is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`) - see the [LICENSE](LICENSE) file for details.
 
 You may use this project commercially, but distributing modified versions or making modified versions available to users over a network requires offering the corresponding source code under the same license.
