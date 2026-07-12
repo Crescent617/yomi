@@ -30,6 +30,16 @@ fn agent_prefix(sid: &SessionId, text: impl std::fmt::Display) -> String {
     format!("[agent_id: {sid}] {text}")
 }
 
+fn subagent_prompt(prompt: String, mode: SubAgentMode, parent_session_id: &SessionId) -> String {
+    if mode == SubAgentMode::Sync {
+        return prompt;
+    }
+
+    format!(
+        "You are running asynchronously. Your parent agent ID is `{parent_session_id}`. Use the `post_message` tool with this ID to coordinate with the parent agent, ask for help, or report important progress.\n\n{prompt}"
+    )
+}
+
 impl SubagentTool {
     pub fn new(
         shared: Arc<AgentShared>,
@@ -246,6 +256,10 @@ impl Tool for SubagentTool {
 - Complex analysis that would clutter context
 - Tasks that can be parallelized — call this tool multiple times in one response to launch independent subagents concurrently
 
+## Execution Mode
+- Use `wait_for_completion: true` when you need to wait for this execution to finish before continuing. You can still use the returned agent ID with `post_message` for later follow-up.
+- Use `wait_for_completion: false` for background or concurrent collaboration. You can continue working while the agent runs; the agent receives your ID so it can proactively contact you with `post_message`.
+
 ## When NOT to Use
 - Read a specific file → use read tool
 - Search code → use grep tool
@@ -273,12 +287,8 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 },
                 "wait_for_completion": {
                     "type": "boolean",
-                    "description": "Whether to wait for the subagent to finish before returning. Default true (sync). Set to false to launch in background and receive the result as a follow-up message.",
+                    "description": "Whether you wait for this execution to finish before continuing. Use true when you need the result before continuing; the returned agent ID remains available for later post_message follow-up. Use false for background or concurrent collaboration so you can continue working while the agent runs and both agents can communicate with post_message.",
                     "default": true
-                },
-                "agent_id": {
-                    "type": "string",
-                    "description": "Optional existing subagent session ID to reuse (e.g., 'sub_xxx'). Omit to create a new agent. Reusing preserves the agent's memory and state across calls."
                 }
             },
             "required": ["description", "prompt"]
@@ -303,19 +313,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             SubAgentMode::Async
         };
 
-        let agent_id = args["agent_id"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .map(SessionId::from);
-
-        // TODO(#subagent-resume): When agent_id is not provided and this call
-        // is being re-executed after a crash (e.g. parent resumed with
-        // pending_tool_calls), look up the history message_store by
-        // ctx.tool_call_id to find a prior Role::Internal message whose
-        // metadata contains "subagent_session_id", then reuse that id
-        // instead of creating a new one.
-
-        tracing::info!("spawning sub-agent (reuse: {})", agent_id.is_some());
+        tracing::info!("spawning sub-agent");
 
         // Prevent recursive spawning
         if self.parent_session_id.starts_with(crate::types::SUB_PREFIX) {
@@ -324,36 +322,8 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             ));
         }
 
-        // Validate agent_id if provided
-        if let Some(ref sid) = agent_id {
-            if !sid.starts_with(crate::types::SUB_PREFIX) {
-                return Ok(ToolOutput::error(format!(
-                    "agent_id '{}' is not a valid subagent session id (must start with '{}')",
-                    sid,
-                    crate::types::SUB_PREFIX
-                )));
-            }
-            let exists = if let Some(ref store) = self.shared.session_store {
-                store.get(sid).await.is_ok_and(|opt| opt.is_some())
-            } else if let Some(ref store) = self.shared.message_store {
-                store
-                    .get(sid.as_str())
-                    .await
-                    .is_ok_and(|msgs| !msgs.is_empty())
-            } else {
-                false
-            };
-            if !exists {
-                return Ok(ToolOutput::error(format!(
-                    "agent_id '{sid}' does not refer to an existing subagent session"
-                )));
-            }
-        }
-
-        // Reuse existing session or create a new one
-        let session_id = agent_id.clone().unwrap_or_else(SessionId::new_subagent);
-        let is_reuse = agent_id.is_some();
-        let prompt_clone = prompt.clone();
+        let session_id = SessionId::new_subagent();
+        let prompt = subagent_prompt(prompt, mode, &self.parent_session_id);
 
         // Emit metadata event immediately so UI can show jump link before subagent finishes
         if let Some(ref bus) = self.shared.event_bus {
@@ -381,47 +351,45 @@ Brief the agent like a smart colleague who just walked in — it has no context.
             }
         }
 
-        // Persist subagent session to database only when creating a new session.
+        // Persist the new subagent session to the database.
         // Store failures are non-fatal: warn and continue so the subagent can still run.
-        if !is_reuse {
-            if let Some(ref store) = self.shared.session_store {
-                let parent = match store.get(&self.parent_session_id).await {
-                    Ok(Some(info)) => Some(info),
-                    Ok(None) => {
-                        tracing::warn!(
-                            "parent session {} not found; creating subagent session without \
-                             inherited metadata",
-                            self.parent_session_id.0
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to get parent session metadata: {}", e);
-                        None
-                    }
-                };
-                let (project_id, working_dir, auto_approve_level, model_key) =
-                    parent.map_or((None, None, None, None), |p| {
-                        (
-                            p.project_id,
-                            p.working_dir,
-                            p.auto_approve_level,
-                            p.model_key,
-                        )
-                    });
-                if let Err(e) = store
-                    .create(
-                        &session_id,
-                        project_id.as_ref(),
-                        working_dir.as_deref(),
-                        auto_approve_level.as_deref(),
-                        Some(&self.parent_session_id),
-                        model_key.as_deref(),
-                    )
-                    .await
-                {
-                    tracing::warn!("failed to create subagent session record: {}", e);
+        if let Some(ref store) = self.shared.session_store {
+            let parent = match store.get(&self.parent_session_id).await {
+                Ok(Some(info)) => Some(info),
+                Ok(None) => {
+                    tracing::warn!(
+                        "parent session {} not found; creating subagent session without \
+                         inherited metadata",
+                        self.parent_session_id.0
+                    );
+                    None
                 }
+                Err(e) => {
+                    tracing::warn!("failed to get parent session metadata: {}", e);
+                    None
+                }
+            };
+            let (project_id, working_dir, auto_approve_level, model_key) =
+                parent.map_or((None, None, None, None), |p| {
+                    (
+                        p.project_id,
+                        p.working_dir,
+                        p.auto_approve_level,
+                        p.model_key,
+                    )
+                });
+            if let Err(e) = store
+                .create(
+                    &session_id,
+                    project_id.as_ref(),
+                    working_dir.as_deref(),
+                    auto_approve_level.as_deref(),
+                    Some(&self.parent_session_id),
+                    model_key.as_deref(),
+                )
+                .await
+            {
+                tracing::warn!("failed to create subagent session record: {}", e);
             }
         }
         if let Some(ref store) = self.shared.session_store {
@@ -432,7 +400,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
 
         let params = RunSubagentParams {
             session_id: session_id.clone(),
-            prompt: prompt_clone,
+            prompt,
         };
 
         let result = match mode {
@@ -488,7 +456,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     }
                     SubAgentStatus::Failed(e) => {
                         if output.is_empty() {
-                            ToolOutput::error(e.clone())
+                            ToolOutput::error(agent_prefix(&session_id, e))
                         } else {
                             ToolOutput::text(agent_prefix(
                                 &session_id,
@@ -513,3 +481,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_test.rs"]
+mod tests;

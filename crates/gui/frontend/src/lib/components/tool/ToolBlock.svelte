@@ -28,9 +28,11 @@
   const label = $derived(
     isSubagent
       ? "Agent"
-      : tool.tool_name
-        ? tool.tool_name.charAt(0).toUpperCase() + tool.tool_name.slice(1)
-        : "Tool",
+      : tool.tool_name === "post_message"
+        ? "Post message"
+        : tool.tool_name
+          ? tool.tool_name.charAt(0).toUpperCase() + tool.tool_name.slice(1)
+          : "Tool",
   );
 
   function statusDotClass(status: string): string {

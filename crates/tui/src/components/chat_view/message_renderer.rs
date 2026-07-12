@@ -20,9 +20,9 @@ use kernel::tools::{
     ASK_USER_TOOL_NAME,
 };
 use kernel::tools::{
-    EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, READ_TOOL_NAME, REMINDER_TOOL_NAME,
-    SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SLEEP_TOOL_NAME, SUBAGENT_TOOL_NAME,
-    TODO_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
+    EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, POST_MESSAGE_TOOL_NAME, READ_TOOL_NAME,
+    REMINDER_TOOL_NAME, SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SLEEP_TOOL_NAME,
+    SUBAGENT_TOOL_NAME, TODO_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
 };
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
@@ -423,31 +423,57 @@ fn render_tool(
                             ])));
                         }
                     }
-                } else {
-                    lines.push(Arc::new(Line::from(vec![
-                        Span::styled(
-                            chars::MSG_INDENT_GUIDE,
-                            Style::default().fg(colors::text_secondary()),
-                        ),
-                        Span::styled(
-                            "Arguments:",
-                            Style::default()
-                                .fg(colors::text_secondary())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ])));
-                    for line in args.lines() {
-                        lines.push(Arc::new(Line::from(vec![
-                            Span::styled(
-                                chars::MSG_INDENT2_GUIDE,
-                                Style::default().fg(colors::text_secondary()),
-                            ),
-                            Span::styled(
-                                preprocess(line),
-                                Style::default().fg(colors::text_secondary()),
-                            ),
-                        ])));
+                } else if tool_name == POST_MESSAGE_TOOL_NAME {
+                    let mut rendered = false;
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
+                        if let (Some(agent_id), Some(title), Some(content)) = (
+                            parsed["agent_id"].as_str(),
+                            parsed["title"].as_str(),
+                            parsed["content"].as_str(),
+                        ) {
+                            rendered = true;
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled(
+                                    chars::MSG_INDENT_GUIDE,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
+                                Span::styled("To ", Style::default().fg(colors::text_secondary())),
+                                Span::styled(
+                                    sanitize_single_line(&preprocess(agent_id)),
+                                    Style::default().fg(colors::accent_system()),
+                                ),
+                            ])));
+                            lines.push(Arc::new(Line::from(vec![
+                                Span::styled(
+                                    chars::MSG_INDENT_GUIDE,
+                                    Style::default().fg(colors::text_secondary()),
+                                ),
+                                Span::styled(
+                                    sanitize_single_line(&preprocess(title)),
+                                    Style::default()
+                                        .fg(colors::text_primary())
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                            ])));
+                            for line in content.lines() {
+                                lines.push(Arc::new(Line::from(vec![
+                                    Span::styled(
+                                        chars::MSG_INDENT_GUIDE,
+                                        Style::default().fg(colors::text_secondary()),
+                                    ),
+                                    Span::styled(
+                                        preprocess(line),
+                                        Style::default().fg(colors::text_primary()),
+                                    ),
+                                ])));
+                            }
+                        }
                     }
+                    if !rendered {
+                        render_raw_tool_arguments(&mut lines, args);
+                    }
+                } else {
+                    render_raw_tool_arguments(&mut lines, args);
                 }
             }
         }
@@ -966,6 +992,7 @@ pub fn tool_icon(tool_name: &str) -> &'static str {
         SKILL_TOOL_NAME => "⚡",
         WEBFETCH_TOOL_NAME => "󰖟 ",
         WEBSEARCH_TOOL_NAME => " ",
+        POST_MESSAGE_TOOL_NAME => "󰍩 ",
         REMINDER_TOOL_NAME => "󰀠 ",
         SLEEP_TOOL_NAME => "󰒲 ",
         // Task tools
@@ -976,6 +1003,33 @@ pub fn tool_icon(tool_name: &str) -> &'static str {
         | TODO_TOOL_NAME => " ",
         ASK_USER_TOOL_NAME => " ",
         _ => " ",
+    }
+}
+
+fn render_raw_tool_arguments(lines: &mut Vec<Arc<Line<'static>>>, args: &str) {
+    lines.push(Arc::new(Line::from(vec![
+        Span::styled(
+            chars::MSG_INDENT_GUIDE,
+            Style::default().fg(colors::text_secondary()),
+        ),
+        Span::styled(
+            "Arguments:",
+            Style::default()
+                .fg(colors::text_secondary())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])));
+    for line in args.lines() {
+        lines.push(Arc::new(Line::from(vec![
+            Span::styled(
+                chars::MSG_INDENT2_GUIDE,
+                Style::default().fg(colors::text_secondary()),
+            ),
+            Span::styled(
+                preprocess(line),
+                Style::default().fg(colors::text_secondary()),
+            ),
+        ])));
     }
 }
 
@@ -1018,8 +1072,13 @@ pub fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String
             .map(f)
             .or_else(|| value["path"].as_str().map(f)),
         SUBAGENT_TOOL_NAME => value["description"].as_str().map(f),
+        POST_MESSAGE_TOOL_NAME => value["agent_id"].as_str().map(f),
         _ => None,
     };
 
     target.map(|t| truncate_by_chars(&sanitize_single_line(&t), MAX_LEN))
 }
+
+#[cfg(test)]
+#[path = "message_renderer_test.rs"]
+mod tests;

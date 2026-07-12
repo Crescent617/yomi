@@ -53,6 +53,8 @@ export function extractTarget(tool_name: string, args: string): string {
       case "agent":
       case "subagent":
         return parsed.description ?? "";
+      case "post_message":
+        return parsed.agent_id ?? "";
       default:
         return "";
     }
@@ -91,6 +93,28 @@ export function extraMeta(tool_name: string, args: string): string {
   } catch {
     return "";
   }
+}
+
+export interface PostMessageArgs {
+  agent_id: string;
+  title: string;
+  content: string;
+}
+
+export function parsePostMessageArgs(args: string): PostMessageArgs | null {
+  try {
+    const parsed = JSON.parse(args);
+    if (
+      typeof parsed.agent_id === "string" &&
+      typeof parsed.title === "string" &&
+      typeof parsed.content === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 export interface EditArgs {
