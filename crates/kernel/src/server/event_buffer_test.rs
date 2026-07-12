@@ -1,6 +1,7 @@
 use crate::event::{ContentChunk, Event, InternalEvent, ModelEvent};
 use crate::server::event_buffer::EventBuffer;
-use crate::types::{EventId, MessageId, SessionId};
+use crate::server::should_clear_event_buffer;
+use crate::types::{EventId, Message, MessageId, Role, SessionId};
 use crate::wire::Envelope;
 
 fn make_event(sid: &str, event: Event) -> Envelope {
@@ -9,6 +10,27 @@ fn make_event(sid: &str, event: Event) -> Envelope {
         event_id: EventId::new(),
         event,
     }
+}
+
+fn message_added(role: Role) -> Event {
+    Event::Internal(InternalEvent::MessageAdded {
+        message: std::sync::Arc::new(Message {
+            role,
+            ..Default::default()
+        }),
+    })
+}
+
+#[test]
+fn test_message_added_clears_event_buffer_for_non_tool_roles() {
+    for role in [Role::System, Role::User, Role::Assistant, Role::Internal] {
+        assert!(should_clear_event_buffer(&message_added(role)));
+    }
+}
+
+#[test]
+fn test_tool_message_added_does_not_clear_event_buffer() {
+    assert!(!should_clear_event_buffer(&message_added(Role::Tool)));
 }
 
 #[test]

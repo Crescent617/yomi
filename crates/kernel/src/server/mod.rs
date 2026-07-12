@@ -1,7 +1,7 @@
 use crate::event::{AgentEvent, AgentStatus, Event, InternalEvent};
 use crate::kernel::Kernel;
 use crate::transport::{recv_frame, send_frame};
-use crate::types::Result;
+use crate::types::{Result, Role};
 use crate::wire::WireMsg;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +10,13 @@ use tokio::sync::mpsc;
 mod dispatcher;
 mod event_buffer;
 use event_buffer::{EventBuffer, SessionSubscribers};
+
+fn should_clear_event_buffer(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Internal(InternalEvent::MessageAdded { message }) if message.role != Role::Tool
+    )
+}
 
 /// Kernel daemon server. Bridges external connections to the local Kernel.
 #[derive(Clone)]
@@ -95,14 +102,15 @@ impl KernelServer {
                         // Buffer first, then forward.
                         event_buffer.push(envelope.clone());
 
-                        match &envelope.event {
-                            Event::Internal(InternalEvent::MessageAdded { .. }) => {
-                                event_buffer.clear(&sid);
-                            }
-                            Event::Agent(AgentEvent::Lifecycle { state: AgentStatus::Stopped { .. } }) => {
-                                event_buffer.remove(&sid);
-                            }
-                            _ => {}
+                        if should_clear_event_buffer(&envelope.event) {
+                            event_buffer.clear(&sid);
+                        } else if matches!(
+                            &envelope.event,
+                            Event::Agent(AgentEvent::Lifecycle {
+                                state: AgentStatus::Stopped { .. }
+                            })
+                        ) {
+                            event_buffer.remove(&sid);
                         }
 
                         session_subscribers.publish(&sid, &envelope);
