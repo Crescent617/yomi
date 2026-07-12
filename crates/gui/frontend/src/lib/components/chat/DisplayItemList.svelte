@@ -1,6 +1,7 @@
 <script lang="ts">
   import { textFromBlocks, hasText } from "../../session";
-  import type { KeyedDisplayItem } from "./display-items";
+  import type { DisplayItem } from "./display-items";
+  import { keyDisplayItems } from "./display-items";
   import UserBubble from "./UserBubble.svelte";
   import AssistantBubble from "./AssistantBubble.svelte";
   import SteerBlock from "./SteerBlock.svelte";
@@ -13,9 +14,11 @@
     items,
     session_id,
   }: {
-    items: KeyedDisplayItem[];
+    items: DisplayItem[];
     session_id: string;
   } = $props();
+
+  const keyedItems = $derived(keyDisplayItems(items));
 </script>
 
 {#snippet messageTimestamp(createdAt: string | undefined, isStreaming: boolean)}
@@ -28,7 +31,7 @@
   {/if}
 {/snippet}
 
-{#each items as item (item.key)}
+{#each keyedItems as item (item.key)}
   {#if item.type === "error_group"}
     <div class="group relative">
       <ErrorBubble messages={item.messages} />

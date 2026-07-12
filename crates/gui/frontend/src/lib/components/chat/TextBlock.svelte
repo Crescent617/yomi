@@ -10,7 +10,7 @@
     $props();
 
   let el: HTMLDivElement | null = null;
-  let parser: ReturnType<typeof smd.parser> | null = null;
+  let parser: ReturnType<typeof smd.parser> | null | undefined;
   let lastContent = "";
   let enhanceFrame: number | null = null;
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
@@ -83,11 +83,11 @@
     enhanceFrame = null;
   }
 
-  function flushParser() {
-    if (parser) {
-      smd.parser_end(parser);
-      parser = null;
-    }
+  function finalizeParser() {
+    if (!parser) return;
+    smd.parser_end(parser);
+    parser = null;
+    scheduleCodeBlockEnhancement();
   }
 
   function resetParser(content: string) {
@@ -102,7 +102,8 @@
 
   onDestroy(() => {
     cancelCodeBlockEnhancement();
-    flushParser();
+    if (parser) smd.parser_end(parser);
+    parser = null;
     clearMountedCodeBlocks();
     el = null;
   });
@@ -112,26 +113,26 @@
     const curr = content;
     const streaming = isStreaming;
 
-    if (!parser) {
+    if (parser === undefined) {
       resetParser(curr);
-      if (!streaming) {
-        flushParser();
-        scheduleCodeBlockEnhancement();
-      }
-    } else if (streaming) {
-      if (curr.length < lastContent.length) {
-        resetParser(curr);
-      } else if (curr.length > lastContent.length) {
-        smd.parser_write(parser, curr.slice(lastContent.length));
-        lastContent = curr;
-      }
-    } else {
-      // Completed content is authoritative and may replace a streamed prefix.
-      // Rebuild once rather than comparing the full accumulated text on every frame.
-      if (curr !== lastContent) resetParser(curr);
-      flushParser();
-      scheduleCodeBlockEnhancement();
+      if (!streaming) finalizeParser();
+      return;
     }
+
+    if (curr === lastContent) {
+      if (!streaming) finalizeParser();
+      return;
+    }
+
+    if (streaming && parser && curr.startsWith(lastContent)) {
+      smd.parser_write(parser, curr.slice(lastContent.length));
+      lastContent = curr;
+      return;
+    }
+
+    // Rebuild after replacement, truncation, or a finalized message changing.
+    resetParser(curr);
+    if (!streaming) finalizeParser();
   });
 </script>
 
