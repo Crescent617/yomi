@@ -9,7 +9,12 @@
     CalendarClock,
   } from "lucide-svelte";
   import { appState, requestActivePanel } from "../../state.svelte";
-  import { settings, applyTheme, persistSettings } from "../../settings.svelte";
+  import {
+    guiPreferences,
+    snapshotGuiPreferences,
+    saveGuiPreferences,
+    applyTheme,
+  } from "../../settings.svelte";
 
   const tabs = [
     { id: "chat", icon: MessageSquare, label: "Chat" },
@@ -20,11 +25,12 @@
 
   function toggleTheme() {
     const order = ["light", "dark", "system"] as const;
-    const idx = order.indexOf(settings.theme);
-    const next = order[(idx + 1) % 3];
-    settings.theme = next;
-    applyTheme(next);
-    persistSettings(settings);
+    const idx = order.indexOf(guiPreferences.appearance.theme);
+    const nextTheme = order[(idx + 1) % 3];
+    const next = snapshotGuiPreferences();
+    next.appearance.theme = nextTheme;
+    applyTheme(nextTheme);
+    void saveGuiPreferences(next);
   }
 </script>
 
@@ -55,9 +61,9 @@
            text-muted-foreground hover:text-foreground hover:bg-accent"
     title="Toggle theme"
   >
-    {#if settings.theme === "system"}
+    {#if guiPreferences.appearance.theme === "system"}
       <Monitor class="w-5 h-5" />
-    {:else if settings.theme === "dark"}
+    {:else if guiPreferences.appearance.theme === "dark"}
       <Moon class="w-5 h-5" />
     {:else}
       <Sun class="w-5 h-5" />

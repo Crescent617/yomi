@@ -403,7 +403,7 @@
         </button>
       {/if}
       <FileCode class="w-4 h-4 text-muted-foreground shrink-0" />
-      <span class="text-sm font-medium shrink-0">Config</span>
+      <span class="text-sm font-medium shrink-0">Kernel</span>
       <span class="text-xs text-muted-foreground truncate max-w-[300px]"
         >{filePath}</span
       >

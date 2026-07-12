@@ -2,17 +2,21 @@
   import { onMount } from "svelte";
   import * as api from "../../api";
   import { projectState, appState } from "../../state.svelte";
+  import {
+    guiPreferences,
+    saveGuiPreferences,
+    snapshotGuiPreferences,
+  } from "../../settings.svelte";
   import ProjectSidebar from "./ProjectSidebar.svelte";
   import ChatView from "../chat/ChatView.svelte";
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
   import AutomationPanel from "../automation/AutomationPanel.svelte";
-  import ConfigEditor from "./ConfigEditor.svelte";
+  import ConfigPanel from "./ConfigPanel.svelte";
   import StatusBar from "./StatusBar.svelte";
   import { startClock } from "../../clock.svelte";
 
   let mobileSidebarOpen = $state(false);
-  let leftSidebarWidth = $state(256);
   let isDraggingLeft = $state(false);
 
   onMount(() => {
@@ -44,7 +48,10 @@
   }
 
   function toggleLeftSidebar() {
-    appState.sidebarCollapsed = !appState.sidebarCollapsed;
+    guiPreferences.layout.sidebarCollapsed =
+      !guiPreferences.layout.sidebarCollapsed;
+    const next = snapshotGuiPreferences();
+    void saveGuiPreferences(next);
   }
 
   function handleToggleLeft() {
@@ -58,20 +65,24 @@
   function startDragLeft(e: MouseEvent) {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = leftSidebarWidth;
+    const startWidth = guiPreferences.layout.sidebarWidth;
     isDraggingLeft = true;
-    if (appState.sidebarCollapsed) {
-      appState.sidebarCollapsed = false;
+    if (guiPreferences.layout.sidebarCollapsed) {
+      guiPreferences.layout.sidebarCollapsed = false;
     }
 
     function onMove(ev: MouseEvent) {
       const delta = ev.clientX - startX;
-      leftSidebarWidth = Math.max(160, Math.min(400, startWidth + delta));
+      guiPreferences.layout.sidebarWidth = Math.max(
+        160,
+        Math.min(400, startWidth + delta),
+      );
     }
     function onUp() {
       isDraggingLeft = false;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      void saveGuiPreferences(snapshotGuiPreferences());
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -90,14 +101,16 @@
         <!-- Desktop inline sidebar -->
         <aside
           class="hidden lg:flex flex-col border-border bg-card/70 shrink-0 relative overflow-hidden
-                 {appState.sidebarCollapsed ? '' : 'border-r'}
+                 {guiPreferences.layout.sidebarCollapsed ? '' : 'border-r'}
                  {isDraggingLeft
             ? ''
             : 'transition-[width] duration-200 ease-out'}"
-          style="width: {appState.sidebarCollapsed ? 0 : leftSidebarWidth}px"
-          aria-hidden={appState.sidebarCollapsed}
+          style="width: {guiPreferences.layout.sidebarCollapsed
+            ? 0
+            : guiPreferences.layout.sidebarWidth}px"
+          aria-hidden={guiPreferences.layout.sidebarCollapsed}
         >
-          {#if !appState.sidebarCollapsed}
+          {#if !guiPreferences.layout.sidebarCollapsed}
             <ProjectSidebar collapsed={false} />
             <button
               type="button"
@@ -134,7 +147,7 @@
         </div>
 
         <ChatView
-          leftPanelCollapsed={appState.sidebarCollapsed}
+          leftPanelCollapsed={guiPreferences.layout.sidebarCollapsed}
           onToggleLeftPanel={handleToggleLeft}
         />
       {:else if appState.activePanel === "usage"}
@@ -142,7 +155,7 @@
       {:else if appState.activePanel === "automation"}
         <AutomationPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "config"}
-        <ConfigEditor onToggleLeftPanel={toggleMobileSidebar} />
+        <ConfigPanel onToggleLeftPanel={toggleMobileSidebar} />
       {/if}
     </div>
     <StatusBar />

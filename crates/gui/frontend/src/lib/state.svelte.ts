@@ -6,6 +6,7 @@ import {
 import type { TaggedContentBlock } from "./types";
 import { listen } from "@tauri-apps/api/event";
 import { pushToast } from "./toast.svelte";
+import { guiPreferences } from "./settings.svelte";
 
 // ── Kernel notification listener ─────────────────────────────────────────
 
@@ -386,6 +387,7 @@ export const appState = $state({
   rightPanelCollapsed: true,
   activePanel: "chat" as ActivePanel,
   config_dirty: false,
+  app_config_dirty: false,
   config_restart_required: false,
   config_applied: false,
 });
@@ -394,7 +396,7 @@ export function requestActivePanel(panel: ActivePanel): boolean {
   if (panel === appState.activePanel) return true;
   if (
     appState.activePanel === "config" &&
-    appState.config_dirty &&
+    (appState.config_dirty || appState.app_config_dirty) &&
     typeof window !== "undefined" &&
     !window.confirm("You have unsaved config changes. Leave without saving?")
   ) {
@@ -428,6 +430,7 @@ export function showNotification(
   text: string,
   level: "info" | "success" | "warning" | "error" = "info",
 ) {
+  if (!guiPreferences.notifications.enabled) return;
   pushToast(text, level);
 }
 
