@@ -131,8 +131,9 @@ impl Conductor {
                                     metadata: Some(metadata),
                                     ..Default::default()
                                 });
-                                // Emit MessageAdded so the event buffer is cleared,
-                                // and let the MessageAdded handler handle persistence.
+                                // Persist tool metadata through the same MessageAdded path as
+                                // other messages. Internal metadata is not a conversation
+                                // boundary, so the server keeps its replay buffer intact.
                                 let envelope = crate::event::Envelope::new(
                                     sid.clone(),
                                     crate::event::Event::Internal(

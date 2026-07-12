@@ -45,6 +45,7 @@ pub fn run() {
             commands::project::rename_project,
             commands::project::delete_project,
             commands::session::list_sessions,
+            commands::session::list_subagents,
             commands::session::create_session,
             commands::session::restore_session,
             commands::session::fork_session,

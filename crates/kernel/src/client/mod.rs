@@ -122,6 +122,10 @@ pub trait KernelApi: Send + Sync {
         before: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<PaginatedSessions>;
+    async fn list_subagents(
+        &self,
+        parent_session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SubagentResponse>>;
     async fn get_checkpoints(
         &self,
         session_id: &SessionId,
@@ -356,6 +360,13 @@ impl KernelApi for Kernel {
         limit: usize,
     ) -> Result<PaginatedSessions> {
         Self::list_sessions(self, project_id, before, limit).await
+    }
+
+    async fn list_subagents(
+        &self,
+        parent_session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SubagentResponse>> {
+        Self::list_subagents(self, parent_session_id).await
     }
 
     async fn get_checkpoints(
@@ -1286,6 +1297,18 @@ impl KernelApi for RemoteKernel {
             .await?;
         let sessions: PaginatedSessions = serde_json::from_value(result)?;
         Ok(sessions)
+    }
+
+    async fn list_subagents(
+        &self,
+        parent_session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SubagentResponse>> {
+        let result = self
+            .call(ReqMethod::ListSubagents {
+                parent_session_id: parent_session_id.0.to_string(),
+            })
+            .await?;
+        Ok(serde_json::from_value(result)?)
     }
 
     async fn get_checkpoints(

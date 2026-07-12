@@ -142,6 +142,19 @@ pub struct SessionResponse {
     pub model_key: Option<String>,
 }
 
+/// Direct subagent session details with derived runtime status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SubagentResponse {
+    pub id: SessionId,
+    pub alias: Option<String>,
+    pub parent_session_id: SessionId,
+    pub phase: String,
+    pub is_running: bool,
+    pub model_key: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 impl Default for SessionResponse {
     fn default() -> Self {
         Self {
@@ -929,6 +942,8 @@ impl From<reqwest::Error> for KernelError {
     }
 }
 
+#[cfg(test)]
+mod response_test;
 pub mod session_message;
 #[cfg(test)]
 mod session_message_test;

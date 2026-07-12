@@ -611,6 +611,36 @@ impl Kernel {
         })
     }
 
+    /// List direct subagent children with their current runtime phase.
+    pub async fn list_subagents(
+        &self,
+        parent_session_id: &SessionId,
+    ) -> Result<Vec<crate::types::SubagentResponse>> {
+        let subagents = self
+            .session_store()
+            .await
+            .list_subagents(parent_session_id)
+            .await?;
+        Ok(subagents
+            .into_iter()
+            .map(|info| {
+                let session = self.session_response(info);
+                let is_running = session.phase != "idle";
+                crate::types::SubagentResponse {
+                    id: session.id,
+                    alias: session.title,
+                    parent_session_id: session
+                        .parent_id
+                        .expect("list_subagents only returns sessions with a parent"),
+                    phase: session.phase,
+                    is_running,
+                    model_key: session.model_key,
+                    created_at: session.created_at,
+                }
+            })
+            .collect())
+    }
+
     /// Return the number of sessions currently live in memory.
     pub fn live_session_count(&self) -> usize {
         self.conductor.active_count()
@@ -679,17 +709,24 @@ impl Kernel {
 
     /// Get full session info merged with runtime phase
     pub async fn get_session(&self, sid: &SessionId) -> Result<crate::types::SessionResponse> {
-        let phase = match self.conductor.get_state(sid) {
+        let info = self.session_store().await.get(sid).await?;
+        let info = info.ok_or_else(|| crate::types::SessionError::NotFound {
+            session_id: sid.0.to_string(),
+        })?;
+        Ok(self.session_response(info))
+    }
+
+    fn session_response(
+        &self,
+        info: crate::storage::session::SessionInfo,
+    ) -> crate::types::SessionResponse {
+        let phase = match self.conductor.get_state(&info.id) {
             Some(AgentState::Streaming) => "streaming",
             Some(AgentState::ExecutingTool) => "executing_tool",
             Some(AgentState::Compacting) => "compacting",
             Some(AgentState::Idle) | None => "idle",
         };
-        let info = self.session_store().await.get(sid).await?;
-        let info = info.ok_or_else(|| crate::types::SessionError::NotFound {
-            session_id: sid.0.to_string(),
-        })?;
-        Ok(crate::types::SessionResponse {
+        crate::types::SessionResponse {
             id: info.id,
             phase: phase.to_string(),
             title: info.title,
@@ -701,7 +738,7 @@ impl Kernel {
             updated_at: info.updated_at,
             auto_approve_level: info.auto_approve_level,
             model_key: info.model_key,
-        })
+        }
     }
 
     /// Send a multi-modal message with content blocks

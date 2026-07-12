@@ -118,6 +118,24 @@ export interface SessionInfo {
   model_key?: string;
 }
 
+export interface SubagentInfo {
+  id: string;
+  parent_session_id: string;
+  alias: string | null;
+  phase: string;
+  is_running: boolean;
+  created_at: string;
+  model_key: string | null;
+}
+
+export async function listSubagents(
+  parent_session_id: string,
+): Promise<SubagentInfo[]> {
+  return invokeCmd<SubagentInfo[]>("list_subagents", {
+    parent_session_id,
+  });
+}
+
 export interface PinnedSessionDetail {
   session_id: string;
   title?: string;

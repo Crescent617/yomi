@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    Bot,
     Check,
     CheckCircle2,
     ChevronDown,
@@ -11,13 +12,19 @@
     Square,
     Target,
   } from "lucide-svelte";
+  import { onMount } from "svelte";
   import { getActiveSession, showNotification } from "../../state.svelte";
   import * as api from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import RunningSubagents from "./RunningSubagents.svelte";
+  import { runningSubagents } from "./running-subagents";
 
   const activeSession = $derived(getActiveSession());
   const goal = $derived(activeSession?.goal ?? null);
   const todoItems = $derived(activeSession?.todos ?? []);
+  const activeSubagents = $derived(
+    runningSubagents(activeSession?.subagents ?? []),
+  );
   const totalCount = $derived(todoItems.length);
   const completedCount = $derived(
     todoItems.filter((item) => item.status === "completed").length,
@@ -29,7 +36,9 @@
     totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0,
   );
   const shouldShow = $derived(
-    Boolean(goal) || (totalCount > 0 && completedCount < totalCount),
+    Boolean(goal) ||
+      (totalCount > 0 && completedCount < totalCount) ||
+      activeSubagents.length > 0,
   );
 
   let expanded = $state(false);
@@ -38,6 +47,42 @@
   let pendingAction = $state<"pause" | "resume" | "edit" | "stop" | null>(null);
   let stopConfirmOpen = $state(false);
   let activeSessionId = $state<string | null>(null);
+  let summaryButton = $state<HTMLButtonElement | null>(null);
+  let detailsPanel = $state<HTMLDivElement | null>(null);
+
+  function closePanel(restoreFocus = false) {
+    if (!expanded) return;
+    expanded = false;
+    if (restoreFocus) summaryButton?.focus();
+  }
+
+  onMount(() => {
+    function handlePointerDown(event: PointerEvent) {
+      if (!expanded || stopConfirmOpen || !(event.target instanceof Node))
+        return;
+      if (
+        summaryButton?.contains(event.target) ||
+        detailsPanel?.contains(event.target)
+      ) {
+        return;
+      }
+      closePanel(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (expanded && !stopConfirmOpen && event.key === "Escape") {
+        event.preventDefault();
+        closePanel(true);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  });
 
   $effect(() => {
     const sessionId = activeSession?.id ?? null;
@@ -153,27 +198,36 @@
   <div class="sticky top-0 z-20 shrink-0 bg-background/95 backdrop-blur-sm">
     <div class="container mx-auto px-4 py-2 lg:px-6">
       <section
-        class="overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
+        class="relative rounded-lg border border-border/70 bg-background shadow-sm"
         aria-labelledby="task-dock-title"
       >
         <button
+          bind:this={summaryButton}
           type="button"
           onclick={() => (expanded = !expanded)}
-          class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          class="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-colors hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           aria-expanded={expanded}
           aria-controls="task-dock-details"
         >
           <div
-            class="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"
+            class="flex size-6 shrink-0 items-center justify-center rounded-md {goal ||
+            totalCount > 0
+              ? 'bg-primary/10 text-primary'
+              : 'bg-info/10 text-info'}"
           >
-            <Target class="size-3.5" />
+            {#if goal || totalCount > 0}
+              <Target class="size-3.5" />
+            {:else}
+              <Bot class="size-3.5" />
+            {/if}
           </div>
           <div class="flex min-w-0 flex-1 items-center gap-2">
             <h2
               id="task-dock-title"
               class="min-w-0 truncate text-sm font-medium"
             >
-              {goal?.description ?? "Progress"}
+              {goal?.description ??
+                (activeSubagents.length > 0 ? "Running agents" : "Progress")}
             </h2>
             {#if inProgressItem}
               <span class="text-muted-foreground/50" aria-hidden="true">·</span>
@@ -181,6 +235,10 @@
               <span class="min-w-0 truncate text-xs text-muted-foreground">
                 {inProgressItem.content}
               </span>
+            {/if}
+            {#if activeSubagents.length > 0}
+              <span class="text-muted-foreground/50" aria-hidden="true">·</span>
+              <RunningSubagents subagents={activeSubagents} compact />
             {/if}
             {#if goal}
               <span
@@ -215,7 +273,11 @@
         </button>
 
         {#if expanded}
-          <div id="task-dock-details" class="border-t border-border">
+          <div
+            bind:this={detailsPanel}
+            id="task-dock-details"
+            class="absolute inset-x-0 top-full z-30 mt-1 max-h-[min(70vh,32rem)] overflow-y-auto rounded-lg border border-border bg-background shadow-lg"
+          >
             {#if goal}
               <section class="px-3 py-3" aria-labelledby="task-goal-heading">
                 <div class="flex items-center justify-between gap-3">
@@ -249,7 +311,10 @@
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault();
                           void submitEditGoal();
-                        } else if (event.key === "Escape") cancelEditGoal();
+                        } else if (event.key === "Escape") {
+                          event.stopPropagation();
+                          cancelEditGoal();
+                        }
                       }}
                     ></textarea>
                     <div class="mt-2 flex justify-end gap-1.5">
@@ -279,6 +344,10 @@
                   </p>
                 {/if}
               </section>
+            {/if}
+
+            {#if activeSubagents.length > 0}
+              <RunningSubagents subagents={activeSubagents} />
             {/if}
 
             {#if totalCount > 0}
