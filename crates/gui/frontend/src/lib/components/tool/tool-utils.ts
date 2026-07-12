@@ -53,7 +53,7 @@ export function extractTarget(tool_name: string, args: string): string {
       case "agent":
       case "subagent":
         return parsed.description ?? "";
-      case "post_message":
+      case "postmessage":
         return parsed.agent_id ?? "";
       default:
         return "";
