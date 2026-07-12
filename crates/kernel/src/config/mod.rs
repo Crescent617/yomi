@@ -66,6 +66,8 @@ pub mod env_names {
     pub const MAX_TOOL_OUTPUT_LENGTH: &str = env_name!("MAX_TOOL_OUTPUT_LENGTH");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
+    /// Serper.dev API key (optional, no prefix)
+    pub const SERPER_API_KEY: &str = "SERPER_API_KEY";
     /// Brave Search API key (optional, no prefix)
     pub const BRAVE_API_KEY: &str = "BRAVE_API_KEY";
     /// `SearXNG` instance base URL (optional, no prefix)
