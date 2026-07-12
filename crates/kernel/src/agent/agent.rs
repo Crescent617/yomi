@@ -1191,13 +1191,24 @@ impl Agent {
         }
 
         // No tool calls and no finish reason: the model likely stopped mid-stream
-        // (e.g., hit max_tokens). Auto-inject a "continue" user message to resume.
-        if matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+        // (e.g., hit max_tokens). Auto-inject one "continue" user message to resume.
+        // If the latest user message is already that synthetic message, stop instead
+        // of entering an unbounded continuation loop.
+        if matches!(finish_reason, None | Some(FinishReason::MaxTokens))
+            && !last_user_message_is_continue(self.message_buffer.messages())
+        {
             tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
             let msg = Message::user("continue");
             self.push_user_message(msg);
             self.context.transition_to(AgentState::Streaming);
             return Ok(());
+        }
+
+        if matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+            tracing::warn!(
+                ?finish_reason,
+                "model stopped again after auto-continue; not continuing a second time"
+            );
         }
 
         // No tool calls: check PreStop hooks for goal auto-continue
@@ -1267,6 +1278,14 @@ impl Agent {
             }
         }
     }
+}
+
+fn last_user_message_is_continue(messages: &[Arc<Message>]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .is_some_and(|message| message.text_content().trim() == "continue")
 }
 
 async fn wait_for_retry(cancel_token: &CancelToken, delay: Duration) -> Result<(), AgentError> {

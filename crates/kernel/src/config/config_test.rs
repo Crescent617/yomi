@@ -139,6 +139,20 @@ fn test_config_serialization_roundtrip() {
 }
 
 #[test]
+fn test_tasks_fast_model_from_toml() {
+    let toml = r#"
+[tasks]
+fast_model = "fast"
+
+[[models]]
+name = "fast"
+model_id = "gpt-4.1-mini"
+"#;
+    let parsed: Config = toml::from_str(toml).unwrap();
+    assert_eq!(parsed.tasks.fast_model.as_deref(), Some("fast"));
+}
+
+#[test]
 fn test_config_model_headers_roundtrip() {
     let mut config = Config::default();
     config.models[0]

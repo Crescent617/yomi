@@ -1,6 +1,7 @@
 //! Application layer - kernel and conductor management
 
 pub mod conductor;
+mod tasks;
 pub use conductor::Conductor;
 
 use crate::agent::{AgentConfig, AgentInput, AgentShared, AgentState};
@@ -44,6 +45,8 @@ pub struct Kernel {
     agent_config: AgentConfig,
     /// Read-only model registry (`BTreeMap` for ordering), built from Config.models
     models: Arc<std::collections::BTreeMap<String, crate::provider::ModelConfig>>,
+    /// Configuration for lightweight model-backed tasks.
+    tasks_config: crate::config::TasksConfig,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
@@ -156,6 +159,7 @@ impl Kernel {
         enable_cron: bool,
         channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
         models: Vec<crate::provider::ModelConfig>,
+        tasks_config: crate::config::TasksConfig,
     ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -252,6 +256,7 @@ impl Kernel {
             storage: storage.clone(),
             agent_config,
             models: models_map,
+            tasks_config,
             project_store,
             pinned_session_store,
             cron_store,
@@ -748,22 +753,26 @@ impl Kernel {
         session_id: &SessionId,
         blocks: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
-        let title = normalize_session_title(&text_from_blocks(&blocks));
-        if !title.is_empty() {
-            let _ = self
-                .session_store()
-                .await
-                .update_title(session_id, &title)
-                .await;
-            let noti = crate::notification::Notification::TitleUpdated {
-                session_id: session_id.clone(),
-                title: title.clone(),
-            };
-            let _ = self.notification_bus.send(noti);
-        }
+        let title_input = tasks::session_title::input_from_blocks(&blocks);
         self.input_bus
             .publish(session_id.clone(), AgentInput::User { content: blocks })
             .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
+
+        if let Some(query) = title_input {
+            let fallback = normalize_session_title(&query);
+            if !fallback.is_empty() {
+                if let Err(error) = self.rename_session(session_id, fallback).await {
+                    tracing::warn!(
+                        session_id = %session_id.0,
+                        %error,
+                        "failed to set fallback session title"
+                    );
+                }
+            }
+            if tasks::session_title::should_generate(&query) {
+                self.spawn_session_title_generation(session_id.clone(), query);
+            }
+        }
         Ok(())
     }
 
@@ -1353,8 +1362,4 @@ impl crate::cron::CronExecutor for Kernel {
 fn normalize_session_title(title: &str) -> String {
     let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
     title.chars().take(20).collect::<String>()
-}
-
-fn text_from_blocks(blocks: &[crate::types::ContentBlock]) -> String {
-    blocks.iter().filter_map(|b| b.as_text()).collect()
 }

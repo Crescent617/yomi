@@ -33,32 +33,19 @@
   }
 </script>
 
-<div class="flex h-full flex-col bg-background">
-  <header
-    class="flex min-h-14 items-center gap-3 border-b border-border bg-background px-3 sm:px-4"
-  >
-    <button
-      type="button"
-      onclick={onToggleLeftPanel}
-      class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:hidden"
-      aria-label="Show navigation"
-    >
-      <Menu size={18} />
-    </button>
-    <div class="min-w-0 flex-1">
-      <h1 class="truncate text-sm font-semibold text-foreground">
-        Configuration
-      </h1>
-      <p class="hidden truncate text-xs text-muted-foreground sm:block">
-        Application preferences and agent runtime settings
-      </p>
-    </div>
-  </header>
-
+<div class="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
   <nav
     class="flex shrink-0 items-center gap-1 border-b border-border bg-card/25 px-3 py-2 sm:px-4"
     aria-label="Configuration sections"
   >
+    <button
+      type="button"
+      onclick={onToggleLeftPanel}
+      class="mr-1 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground md:hidden"
+      aria-label="Show navigation"
+    >
+      <Menu size={18} />
+    </button>
     <button
       type="button"
       onclick={() => selectSection("application")}

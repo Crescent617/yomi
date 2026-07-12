@@ -1,0 +1,11 @@
+Generate a concise title for a chat session from the user's latest query.
+
+Rules:
+- Write the title in the same language as the user's query.
+- If the query mixes languages, use its predominant language.
+- Capture the user's primary intent accurately and clearly.
+- Prefer a witty, playful, or lively phrasing when it feels natural, but never sacrifice clarity.
+- Keep the title within 20 characters, including spaces and punctuation.
+- Do not answer the query.
+- Do not use quotes, markdown, labels, or ending punctuation.
+- Output only the title text and absolutely nothing else. Do not include explanations, prefixes, or formatting.

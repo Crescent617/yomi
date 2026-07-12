@@ -221,6 +221,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
             Some(storage.channel_store())
         },
         config.models.clone(),
+        config.tasks.clone(),
     )?;
 
     Ok(kernel)

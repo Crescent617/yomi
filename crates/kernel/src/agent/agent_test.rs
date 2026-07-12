@@ -1,6 +1,31 @@
-use super::wait_for_retry;
+use super::{last_user_message_is_continue, wait_for_retry};
 use crate::agent::{AgentError, CancelToken};
+use crate::types::Message;
+use std::sync::Arc;
 use std::time::Duration;
+
+#[test]
+fn auto_continue_is_limited_until_next_user_message() {
+    let mut messages = vec![
+        Arc::new(Message::system("system")),
+        Arc::new(Message::user("original request")),
+        Arc::new(Message::assistant("partial response")),
+    ];
+    assert!(!last_user_message_is_continue(&messages));
+
+    messages.push(Arc::new(Message::user("continue")));
+    messages.push(Arc::new(Message::assistant("still partial")));
+    assert!(last_user_message_is_continue(&messages));
+
+    messages.push(Arc::new(Message::user("new request")));
+    assert!(!last_user_message_is_continue(&messages));
+}
+
+#[test]
+fn auto_continue_check_uses_trimmed_user_text() {
+    let messages = vec![Arc::new(Message::user("  continue\n"))];
+    assert!(last_user_message_is_continue(&messages));
+}
 
 #[tokio::test]
 async fn retry_delay_completes_without_cancellation() {
