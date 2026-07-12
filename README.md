@@ -72,6 +72,100 @@ export ANTHROPIC_BASE_URL=https://xxx
 export ANTHROPIC_MODEL=xxx
 ```
 
+### Web Search
+
+Yomi's `webSearch` tool supports the following search backends:
+
+| Provider | Configuration |
+| --- | --- |
+| [Serper](https://serper.dev/) | `SERPER_API_KEY` |
+| [Brave Search](https://brave.com/search/api/) | `BRAVE_API_KEY` |
+| [SearXNG](https://docs.searxng.org/) | `SEARXNG_URL` or `search_provider_url` |
+
+Configure a provider in `~/.yomi/config.toml`:
+
+```toml
+# serper, brave, or searxng
+search_provider = "searxng"
+search_provider_url = "http://127.0.0.1:8080"
+```
+
+Environment variables are also supported:
+
+```bash
+# Serper
+export SERPER_API_KEY="..."
+
+# Brave Search
+export BRAVE_API_KEY="..."
+
+# SearXNG
+export SEARXNG_URL="http://127.0.0.1:8080"
+```
+
+The GUI loads environment variables from `~/.env` at startup (`%USERPROFILE%\\.env` on Windows). This is useful when launching the desktop app without a terminal:
+
+```dotenv
+SERPER_API_KEY=...
+# or
+BRAVE_API_KEY=...
+# or
+SEARXNG_URL=http://127.0.0.1:8080
+```
+
+Restart the GUI after editing this file.
+
+#### SearXNG with Docker
+
+SearXNG is the recommended self-hosted option. This minimal Compose setup binds the service to localhost only.
+
+Create `compose.yaml`:
+
+```yaml
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    restart: unless-stopped
+```
+
+Start it once to create the configuration directory:
+
+```bash
+docker compose up -d
+```
+
+Yomi requests SearXNG results with `format=json`. SearXNG commonly enables only HTML by default, so add `json` to `searxng/settings.yml` while preserving the other settings:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Restart SearXNG after changing the file:
+
+```bash
+docker compose restart searxng
+```
+
+Verify that JSON search is enabled:
+
+```bash
+curl --fail --get 'http://127.0.0.1:8080/search' \
+  --data-urlencode 'q=yomi' \
+  --data-urlencode 'format=json'
+```
+
+The response should be JSON containing a `results` array. A `403 Forbidden` response usually means `json` is missing from `search.formats`.
+
+For detailed installation and troubleshooting guidance, see [`docs/AGENTS.md`](docs/AGENTS.md) and the [official SearXNG container documentation](https://docs.searxng.org/admin/installation-docker.html).
+
 ### Usage
 
 #### GUI Mode
