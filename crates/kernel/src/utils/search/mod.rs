@@ -1,8 +1,9 @@
-//! Search engine utilities — unified trait and multi-engine merging.
+//! Search engine utilities — unified trait and serial fallback.
 //!
 //! Each engine is a struct implementing the [`SearchEngine`] trait.
 //! The [`available_engines`] helper builds the runtime list from environment
-//! variables. [`merge_results`] interleaves and deduplicates results by URL.
+//! variables. Search engines are tried serially in priority order until one
+//! returns results.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ pub mod bing;
 pub mod brave;
 pub mod ddg;
 pub mod searxng;
+pub mod serper;
 
 /// A single search result, engine-agnostic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,26 +48,32 @@ pub fn encode_query(query: &str) -> String {
 /// Build the list of engines to use based on environment variables.
 ///
 /// Priority:
-/// 1. Configured engines (Brave, `SearXNG`) — if their env vars are set.
-///    Both generic names (e.g. `BRAVE_API_KEY`) and `YOMI_`-prefixed names
-///    are supported.
-/// 2. Free engines (`DuckDuckGo`, Bing) — always included as fallback.
+/// 1. `SearXNG`, when configured.
+/// 2. Serper.dev, when configured.
+/// 3. Brave, when configured.
+/// 4. `DuckDuckGo`, then Bing, as free fallbacks.
 pub(crate) fn available_engines() -> Vec<Box<dyn SearchEngine>> {
     use crate::config::env_names;
     use crate::utils::env::env_first;
 
     let mut engines: Vec<Box<dyn SearchEngine>> = Vec::new();
 
-    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY, env_names::YOMI_BRAVE_API_KEY]) {
-        if !key.trim().is_empty() {
-            engines.push(Box::new(brave::BraveEngine::new(key)));
-        }
-    }
-
     if let Some(url) = env_first(&[env_names::SEARXNG_URL, env_names::YOMI_SEARXNG_URL]) {
         let url = url.trim();
         if !url.is_empty() {
             engines.push(Box::new(searxng::SearxngEngine::new(url.to_string())));
+        }
+    }
+
+    if let Some(key) = env_first(&[env_names::SERPER_API_KEY]) {
+        if !key.trim().is_empty() {
+            engines.push(Box::new(serper::SerperEngine::new(key)));
+        }
+    }
+
+    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY, env_names::YOMI_BRAVE_API_KEY]) {
+        if !key.trim().is_empty() {
+            engines.push(Box::new(brave::BraveEngine::new(key)));
         }
     }
 
@@ -103,9 +111,10 @@ pub fn merge_results(sources: &[Vec<SearchResult>], limit: usize) -> Vec<SearchR
     merged
 }
 
-/// Query all engines in parallel, merge and deduplicate.
+/// Query engines serially in priority order, returning the first non-empty result set.
 ///
-/// If every engine fails, returns an error with each engine's failure reason.
+/// If every engine fails or returns no results, returns an error with each engine's
+/// failure reason.
 pub async fn search_all(
     engines: &[Box<dyn SearchEngine>],
     query: &str,
@@ -115,43 +124,21 @@ pub async fn search_all(
         return Err("No search sources are available".to_string());
     }
 
-    let mut errors: Vec<String> = Vec::new();
-    let mut all_results: Vec<Vec<SearchResult>> = Vec::new();
-
-    let futures: Vec<_> = engines
-        .iter()
-        .map(|engine| async move {
-            match engine.search(query, limit).await {
-                Ok(res) => Ok(res),
-                Err(e) => Err(format!("{}: {e}", engine.name())),
-            }
-        })
-        .collect();
-
-    let outcomes = futures::future::join_all(futures).await;
-
-    for outcome in outcomes {
-        match outcome {
-            Ok(results) => all_results.push(results),
-            Err(err) => errors.push(err),
+    let mut errors = Vec::new();
+    for engine in engines {
+        match engine.search(query, limit).await {
+            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(_) => errors.push(format!("{}: no results", engine.name())),
+            Err(error) => errors.push(format!("{}: {error}", engine.name())),
         }
     }
 
-    if all_results.is_empty() {
-        let msg = if errors.len() == 1 {
-            errors.into_iter().next().unwrap()
-        } else {
-            format!("All sources failed: {}", errors.join("; "))
-        };
-        return Err(msg);
-    }
-
-    let merged = merge_results(&all_results, limit);
-    if merged.is_empty() {
-        return Err("No search results found".to_string());
-    }
-
-    Ok(merged)
+    let message = if errors.len() == 1 {
+        errors.into_iter().next().unwrap()
+    } else {
+        format!("All sources failed: {}", errors.join("; "))
+    };
+    Err(message)
 }
 
 /// Fetch raw page content from a URL and convert to clean text.

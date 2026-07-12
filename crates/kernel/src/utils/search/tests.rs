@@ -1,4 +1,23 @@
 use super::*;
+use std::sync::{Arc, Mutex};
+
+struct StubEngine {
+    name: &'static str,
+    outcome: Result<Vec<SearchResult>, String>,
+    calls: Arc<Mutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl SearchEngine for StubEngine {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    async fn search(&self, _query: &str, _limit: usize) -> Result<Vec<SearchResult>, String> {
+        self.calls.lock().unwrap().push(self.name);
+        self.outcome.clone()
+    }
+}
 
 #[test]
 fn test_encode_query() {
@@ -71,6 +90,63 @@ fn test_format_results() {
     assert!(output.contains("Full content for page 1"));
     assert!(output.contains("Source: ddg"));
     assert!(output.contains("Source: bing"));
+}
+
+#[tokio::test]
+async fn search_all_stops_after_first_success() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let engines: Vec<Box<dyn SearchEngine>> = vec![
+        Box::new(StubEngine {
+            name: "searxng",
+            outcome: Err("unavailable".to_string()),
+            calls: Arc::clone(&calls),
+        }),
+        Box::new(StubEngine {
+            name: "serper",
+            outcome: Ok(vec![SearchResult {
+                title: "result".to_string(),
+                url: "https://example.com".to_string(),
+                snippet: String::new(),
+                source: "serper",
+            }]),
+            calls: Arc::clone(&calls),
+        }),
+        Box::new(StubEngine {
+            name: "ddg",
+            outcome: Err("must not run".to_string()),
+            calls: Arc::clone(&calls),
+        }),
+    ];
+
+    let results = search_all(&engines, "query", 5).await.unwrap();
+
+    assert_eq!(results[0].source, "serper");
+    assert_eq!(*calls.lock().unwrap(), vec!["searxng", "serper"]);
+}
+
+#[tokio::test]
+async fn search_all_falls_back_after_empty_results() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let engines: Vec<Box<dyn SearchEngine>> = vec![
+        Box::new(StubEngine {
+            name: "searxng",
+            outcome: Ok(Vec::new()),
+            calls: Arc::clone(&calls),
+        }),
+        Box::new(StubEngine {
+            name: "bing",
+            outcome: Err("blocked".to_string()),
+            calls: Arc::clone(&calls),
+        }),
+    ];
+
+    let error = search_all(&engines, "query", 5).await.unwrap_err();
+
+    assert_eq!(*calls.lock().unwrap(), vec!["searxng", "bing"]);
+    assert_eq!(
+        error,
+        "All sources failed: searxng: no results; bing: blocked"
+    );
 }
 
 // -- Integration tests requiring network --

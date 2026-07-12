@@ -440,7 +440,7 @@
           class="inline-flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning transition-colors hover:border-warning/40 hover:bg-warning/15 disabled:pointer-events-none disabled:opacity-50"
         >
           <RefreshCw class="w-3 h-3 {restarting ? 'animate-spin' : ''}" />
-          {restarting ? "Restarting…" : "Restart Daemon"}
+          {restarting ? "Restarting…" : "Restart"}
         </button>
       </span>
     </div>
@@ -616,7 +616,7 @@
 
   <ConfirmDialog
     open={restartConfirmOpen}
-    title="Restart Daemon"
+    title="Restart"
     message={restartMessage}
     confirmText="Restart"
     onConfirm={doRestartDaemon}
