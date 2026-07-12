@@ -1,5 +1,36 @@
 const openingFence = /^( {0,3})(`{3,}|~{3,})[^\S\r\n]*(.*)$/;
 
+/** Whether the current stream ends exactly after a valid closing backtick fence. */
+export function endsWithClosedBacktickFence(markdown: string): boolean {
+  const lastLineStart = markdown.lastIndexOf("\n") + 1;
+  const lastLine = markdown.slice(lastLineStart).replace(/\r$/, "");
+  if (!/^ {0,3}`{3,}[^\S\r\n]*$/.test(lastLine)) return false;
+
+  const lines = markdown.split(/\r?\n/);
+  let openLength: number | undefined;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (openLength === undefined) {
+      const match = openingFence.exec(line);
+      if (!match || match[2][0] !== "`") continue;
+      const info = match[3].trimStart();
+      if (info.includes("`")) continue;
+      openLength = match[2].length;
+      continue;
+    }
+
+    const candidate = line.trimStart();
+    const indent = line.length - candidate.length;
+    const closing = candidate.trimEnd() === "`".repeat(openLength);
+    if (indent > 3 || !closing) continue;
+    if (index === lines.length - 1) return true;
+    openLength = undefined;
+  }
+
+  return false;
+}
+
 /** Count Mermaid fenced code blocks whose closing fence has arrived. */
 export function countClosedMermaidFences(markdown: string): number {
   const lines = markdown.split(/\r?\n/);

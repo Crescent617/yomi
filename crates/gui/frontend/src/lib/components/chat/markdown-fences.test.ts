@@ -1,5 +1,20 @@
 import { describe, expect, test } from "vitest";
-import { countClosedMermaidFences } from "./markdown-fences";
+import {
+  countClosedMermaidFences,
+  endsWithClosedBacktickFence,
+} from "./markdown-fences";
+
+describe("endsWithClosedBacktickFence", () => {
+  test("recognizes a closing fence at the stream boundary", () => {
+    expect(endsWithClosedBacktickFence("```ts\nconst value = 1;\n```")).toBe(
+      true,
+    );
+    expect(endsWithClosedBacktickFence("````ts\nvalue\n```")).toBe(false);
+    expect(endsWithClosedBacktickFence("```ts\nvalue\n````")).toBe(false);
+    expect(endsWithClosedBacktickFence("~~~ts\nvalue\n~~~")).toBe(false);
+    expect(endsWithClosedBacktickFence("```ts\nvalue\n```\nafter")).toBe(false);
+  });
+});
 
 describe("countClosedMermaidFences", () => {
   test("counts only closed Mermaid fences", () => {

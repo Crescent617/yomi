@@ -5,7 +5,7 @@
   import * as smd from "streaming-markdown";
   import CodeBlock from "./CodeBlock.svelte";
   import MermaidBlock from "./MermaidBlock.svelte";
-  import { countClosedMermaidFences } from "./markdown-fences";
+  import { endsWithClosedBacktickFence } from "./markdown-fences";
 
   let { content, isStreaming }: { content: string; isStreaming?: boolean } =
     $props();
@@ -13,32 +13,37 @@
   let el: HTMLDivElement | null = null;
   let parser: ReturnType<typeof smd.parser> | null | undefined;
   let lastContent = "";
+  let parserHasSyntheticNewline = false;
   let enhanceFrame: number | null = null;
-  let enhancedMermaidCount = 0;
   let mountedCodeBlocks: ReturnType<typeof mount>[] = [];
 
   function clearMountedCodeBlocks() {
     for (const component of mountedCodeBlocks) void unmount(component);
     mountedCodeBlocks = [];
-    enhancedMermaidCount = 0;
   }
 
   function createRenderer() {
     if (!el)
       throw new Error("Cannot create a Markdown renderer without a root");
-    return smd.default_renderer(el);
+    const renderer = smd.default_renderer(el);
+    const endToken = renderer.end_token;
+    renderer.end_token = (data) => {
+      const closedToken = data.nodes[data.index];
+      endToken(data);
+      if (closedToken?.parentElement?.tagName === "PRE") {
+        closedToken.parentElement.dataset.closedCodeBlock = "true";
+      }
+    };
+    return renderer;
   }
 
   function enhanceCodeBlocks() {
     if (!el) return;
-    const closedMermaidCount = isStreaming
-      ? countClosedMermaidFences(content)
-      : Number.POSITIVE_INFINITY;
-    let mermaidsToEnhance = Math.max(
-      0,
-      closedMermaidCount - enhancedMermaidCount,
-    );
-    const blocks = [...el.querySelectorAll<HTMLElement>("pre > code")];
+    const blocks = [
+      ...el.querySelectorAll<HTMLElement>(
+        "pre[data-closed-code-block='true'] > code",
+      ),
+    ];
 
     for (const codeElement of blocks) {
       const pre = codeElement.parentElement;
@@ -46,42 +51,35 @@
       const languageClass = [...codeElement.classList].find((name) =>
         name.startsWith("language-"),
       );
-      // streaming-markdown emits the fence info as a direct class ("mermaid"),
-      // while other renderers commonly emit "language-mermaid".
+      // streaming-markdown emits the fence info as a direct class, while other
+      // renderers commonly emit "language-*".
       const rawLanguage = (
         languageClass?.slice("language-".length) ||
         codeElement.classList[0] ||
         "text"
       ).toLowerCase();
       const code = codeElement.textContent ?? "";
-
-      if (isStreaming && rawLanguage !== "mermaid") continue;
-      if (isStreaming && mermaidsToEnhance === 0) continue;
-
       const target = document.createElement("div");
       pre.replaceWith(target);
 
       if (rawLanguage === "mermaid") {
-        mermaidsToEnhance -= 1;
-        enhancedMermaidCount += 1;
         mountedCodeBlocks.push(
           mount(MermaidBlock, {
             target,
             props: { source: code },
           }),
         );
-        continue;
+      } else {
+        mountedCodeBlocks.push(
+          mount(CodeBlock, {
+            target,
+            props: {
+              code,
+              language: rawLanguage === "text" ? "Code" : rawLanguage,
+            },
+          }),
+        );
       }
-
-      mountedCodeBlocks.push(
-        mount(CodeBlock, {
-          target,
-          props: {
-            code,
-            language: rawLanguage === "text" ? "Code" : rawLanguage,
-          },
-        }),
-      );
     }
   }
 
@@ -99,6 +97,12 @@
     enhanceFrame = null;
   }
 
+  function flushBoundaryFence(content: string) {
+    if (!parser || !endsWithClosedBacktickFence(content)) return;
+    smd.parser_write(parser, "\n");
+    parserHasSyntheticNewline = true;
+  }
+
   function finalizeParser() {
     if (!parser) return;
     smd.parser_end(parser);
@@ -114,6 +118,8 @@
     parser = smd.parser(createRenderer());
     smd.parser_write(parser, content);
     lastContent = content;
+    parserHasSyntheticNewline = false;
+    if (isStreaming) flushBoundaryFence(content);
   }
 
   onDestroy(() => {
@@ -142,8 +148,20 @@
     }
 
     if (streaming && parser && curr.startsWith(lastContent)) {
-      smd.parser_write(parser, curr.slice(lastContent.length));
+      let delta = curr.slice(lastContent.length);
+      if (parserHasSyntheticNewline) {
+        if (delta.startsWith("\r\n")) delta = delta.slice(2);
+        else if (delta.startsWith("\n")) delta = delta.slice(1);
+        else {
+          resetParser(curr);
+          scheduleCodeBlockEnhancement();
+          return;
+        }
+        parserHasSyntheticNewline = false;
+      }
+      smd.parser_write(parser, delta);
       lastContent = curr;
+      flushBoundaryFence(curr);
       scheduleCodeBlockEnhancement();
       return;
     }
@@ -208,7 +226,7 @@
     color: hsl(var(--primary) / 0.8);
     font-weight: 600;
   }
-  .text-block :global(pre) {
+  .text-block :global(pre:not(.shiki):not(.code-block-pre)) {
     position: relative;
     background: var(--code-bg);
     border: 1px solid hsl(var(--border) / 0.7);

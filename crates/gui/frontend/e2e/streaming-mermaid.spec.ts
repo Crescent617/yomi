@@ -6,7 +6,7 @@ test("renders a Mermaid fence as soon as it closes while streaming", async ({
   await page.goto("/");
 
   const result = await page.evaluate(async () => {
-    const { mount, tick } = await import("svelte");
+    const { mount, tick } = await import("/@id/svelte");
     const state = await import("/src/lib/state.svelte.ts");
     const sessionLib = await import("/src/lib/session.ts");
     const events = await import("/src/lib/events.ts");
