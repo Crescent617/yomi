@@ -6,6 +6,7 @@
   import InlineStreamStatus from "./InlineStreamStatus.svelte";
   import DisplayItemList from "./DisplayItemList.svelte";
   import { DisplayItemProjection } from "./display-items";
+  import { guiPreferences } from "../../settings.svelte";
 
   const activeSession = $derived(getActiveSession());
   const displayItemProjection = new DisplayItemProjection();
@@ -90,7 +91,7 @@
     const resizeObserver = new ResizeObserver(() => {
       // ResizeObserver runs before paint. Scroll synchronously so the streaming
       // status stays anchored instead of moving for one frame before the RAF.
-      if (followLatest) setScrollToBottom();
+      if (followLatest && guiPreferences.chat.autoScroll) setScrollToBottom();
       else updateBottomState();
     });
     resizeObserver.observe(messageContent);
