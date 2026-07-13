@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.14] - 2026-07-13
+
+### Changed
+- 优化 Session 时间分组标题为紧凑的居中分隔线样式。
+- 收紧 Session 操作菜单右侧间距，并隐藏侧边栏列表滚动条。
+
+### Fixed
+- 修复时间分组标题吸顶时与列表顶部之间的缝隙。
+
 ## [0.5.13] - 2026-07-13
 
 ### Added
