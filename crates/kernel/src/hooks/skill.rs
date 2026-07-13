@@ -124,7 +124,7 @@ impl SkillHookHandler {
         for (idx, cfg) in configs.into_iter().enumerate() {
             if cfg.handler_type == "command" && !allow_commands {
                 tracing::warn!(
-                    "Skill '{}' command hook blocked: allow_command_hooks is disabled",
+                    "Skill '{}' command hook blocked: hooks feature is disabled",
                     skill_name
                 );
                 continue;

@@ -189,6 +189,53 @@ fn test_config_serialization_roundtrip() {
 }
 
 #[test]
+fn features_default_to_disabled() {
+    let features = FeaturesConfig::default();
+
+    assert!(!features.hooks_enabled());
+    assert!(!features.update_session_title_enabled());
+}
+
+#[test]
+fn features_inherit_all_and_allow_explicit_overrides() {
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+all = true
+update_session_title = false
+",
+    )
+    .unwrap();
+
+    assert!(parsed.features.hooks_enabled());
+    assert!(!parsed.features.update_session_title_enabled());
+
+    let overridden: Config = toml::from_str(
+        r"
+[features]
+all = true
+hooks = false
+",
+    )
+    .unwrap();
+    assert!(!overridden.features.hooks_enabled());
+}
+
+#[test]
+fn individual_feature_can_be_enabled_when_all_is_disabled() {
+    let parsed: Config = toml::from_str(
+        r"
+[features]
+update_session_title = true
+",
+    )
+    .unwrap();
+
+    assert!(!parsed.features.hooks_enabled());
+    assert!(parsed.features.update_session_title_enabled());
+}
+
+#[test]
 fn test_tasks_fast_model_from_toml() {
     let toml = r#"
 [tasks]

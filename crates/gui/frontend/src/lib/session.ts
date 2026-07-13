@@ -46,20 +46,6 @@ export function findThinking(
 
 // ── Browser helpers ──────────────────────────────────────────────────────
 
-export function openBrowser(session_id: string, url: string) {
-  const session = getSession(session_id);
-  if (session) {
-    session.browserUrl = url;
-  }
-}
-
-export function closeBrowser(session_id: string) {
-  const session = getSession(session_id);
-  if (session) {
-    session.browserUrl = undefined;
-  }
-}
-
 export function syncSessionStatus(session_id: string, info: { phase: string }) {
   const session = getSession(session_id);
   if (!session) return;

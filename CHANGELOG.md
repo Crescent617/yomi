@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.8] - Unreleased
+## [0.5.9] - 2026-07-13
+
+### Added
+- 配置通用环境变量注入、功能开关和轻量任务模型。
+- 自动生成会话标题，并协调后台任务状态。
+
+### Changed
+- GUI 配置编辑器与文档结构精简。
+- GUI 链接统一使用系统默认应用打开。
+
+### Fixed
+- 工具描述和链接打开错误处理。
+
+## [0.5.8] - 2025-07-13
 
 ### Added
 - `UI config` 支持：应用配置面板，可调整各类设置。

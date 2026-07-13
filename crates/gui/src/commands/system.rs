@@ -315,17 +315,19 @@ pub async fn set_session_model(
         .map_err(GuiError::kernel)
 }
 
+/// Open a URL or file path in its default application.
+/// Uses `open_url` for web URLs (http/https/mailto), `open_path` for everything else.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn open_in_browser(url: String) -> Result<(), GuiError> {
-    tauri_plugin_opener::open_path(&url, None::<&str>)
-        .map_err(|e| GuiError::unknown(format!("Failed to open browser: {e}")))?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn open_in_explorer(path: String) -> Result<(), GuiError> {
-    tauri_plugin_opener::open_path(&path, None::<&str>)
-        .map_err(|e| GuiError::unknown(format!("Failed to open explorer: {e}")))?;
+pub async fn open_default(target: String) -> Result<(), GuiError> {
+    let result = if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+    {
+        tauri_plugin_opener::open_url(&target, None::<&str>)
+    } else {
+        tauri_plugin_opener::open_path(&target, None::<&str>)
+    };
+    result.map_err(|e| GuiError::unknown(format!("Failed to open: {e}")))?;
     Ok(())
 }
 
@@ -364,13 +366,6 @@ pub async fn open_in_zed(path: String) -> Result<(), GuiError> {
             .spawn()
             .map_err(|e| GuiError::unknown(format!("Failed to open Zed: {e}")))?;
     }
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn open_in_editor(path: String) -> Result<(), GuiError> {
-    tauri_plugin_opener::open_path(&path, None::<&str>)
-        .map_err(|e| GuiError::unknown(format!("Failed to open editor: {e}")))?;
     Ok(())
 }
 

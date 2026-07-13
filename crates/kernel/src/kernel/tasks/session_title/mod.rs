@@ -23,8 +23,8 @@ pub(in crate::kernel) fn input_from_blocks(blocks: &[ContentBlock]) -> Option<St
     (!text.is_empty()).then_some(text)
 }
 
-pub(in crate::kernel) fn should_generate(query: &str) -> bool {
-    query.chars().count() > MIN_GENERATION_CHARS
+pub(in crate::kernel) fn should_generate(query: &str, update_session_title: bool) -> bool {
+    update_session_title && query.chars().count() > MIN_GENERATION_CHARS
 }
 
 impl Kernel {

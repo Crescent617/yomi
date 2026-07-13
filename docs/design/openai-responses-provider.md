@@ -210,7 +210,7 @@ input_tokens_details.cached_tokens    → TokenUsage.cached_tokens
 | `crates/kernel/src/lib.rs` | `create_provider_for_model` 加一个 match 分支；re-export |
 | `crates/kernel/src/config/config_test.rs` | 补 parse/display 测试 |
 | `docs/config-schema.json` | provider enum 加 `"openai_response"` |
-| `docs/config.md` | 补充说明 |
+| `docs/CONFIG.md` | 补充说明 |
 
 GUI/TUI 无需改动：model picker 读的是 `models` 列表的 `name`，不感知 provider 类型。
 

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Activity, Wifi, WifiOff } from "lucide-svelte";
-  import { sessionState, appState } from "../../state.svelte";
+  import { Activity, Github, Wifi, WifiOff } from "lucide-svelte";
+  import { sessionState, appState, showNotification } from "../../state.svelte";
+  import { errorMessage, openDefault } from "../../api";
   import { getVersion } from "@tauri-apps/api/app";
   import { onMount } from "svelte";
 
@@ -57,7 +58,23 @@
       {/if}
     </div>
     {#if version}
-      <span class="text-muted-foreground/70 text-[10px]">v{version}</span>
+      <a
+        href="https://github.com/Crescent617/yomi"
+        class="text-muted-foreground/70 hover:text-foreground flex items-center gap-1 text-[10px] transition-colors"
+        title="Open Yomi on GitHub"
+        onclick={(event) => {
+          event.preventDefault();
+          void openDefault(event.currentTarget.href).catch((error) => {
+            showNotification(
+              `Failed to open link: ${errorMessage(error)}`,
+              "error",
+            );
+          });
+        }}
+      >
+        <Github class="w-3 h-3" aria-hidden="true" />
+        <span>v{version}</span>
+      </a>
     {/if}
   </div>
 </div>

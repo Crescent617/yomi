@@ -158,7 +158,7 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
 
     let mut agent = config.agent.clone();
     agent.skills = skills;
-    agent.allow_command_hooks = config.features.allow_command_hooks;
+    agent.allow_command_hooks = config.features.hooks_enabled();
     agent
 }
 
@@ -213,8 +213,8 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         skill_folders,
         config
             .features
-            .hooks
-            .then(|| hooks::build_registry(&config.hooks, config.features.allow_command_hooks)),
+            .hooks_enabled()
+            .then(|| hooks::build_registry(&config.hooks, config.features.hooks_enabled())),
         enable_cron,
         if config.channels.is_empty() {
             None
@@ -223,6 +223,7 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         },
         config.models.clone(),
         config.tasks.clone(),
+        config.features.update_session_title_enabled(),
     )?;
 
     Ok(kernel)

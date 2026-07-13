@@ -47,6 +47,8 @@ pub struct Kernel {
     models: Arc<std::collections::BTreeMap<String, crate::provider::ModelConfig>>,
     /// Configuration for lightweight model-backed tasks.
     tasks_config: crate::config::TasksConfig,
+    /// Whether model-backed session title generation is enabled.
+    update_session_title: bool,
     /// Project store for project operations
     project_store: Arc<dyn ProjectStore>,
     /// Pinned session store for sidebar pinning and emoji.
@@ -160,6 +162,7 @@ impl Kernel {
         channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
         models: Vec<crate::provider::ModelConfig>,
         tasks_config: crate::config::TasksConfig,
+        update_session_title: bool,
     ) -> Result<Arc<Self>> {
         let session_store = storage.session_store();
         let message_store = storage.message_store();
@@ -257,6 +260,7 @@ impl Kernel {
             agent_config,
             models: models_map,
             tasks_config,
+            update_session_title,
             project_store,
             pinned_session_store,
             cron_store,
@@ -769,7 +773,7 @@ impl Kernel {
                     );
                 }
             }
-            if tasks::session_title::should_generate(&query) {
+            if tasks::session_title::should_generate(&query, self.update_session_title) {
                 self.spawn_session_title_generation(session_id.clone(), query);
             }
         }

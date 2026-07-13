@@ -60,8 +60,6 @@ pub mod env_names {
     pub const MAX_CHECKPOINTS: &str = env_name!("MAX_CHECKPOINTS");
     /// Tool blocklist (comma-separated regex patterns)
     pub const TOOL_BLOCKLIST: &str = env_name!("TOOL_BLOCKLIST");
-    /// Allow command hooks to execute (default false for security)
-    pub const ALLOW_COMMAND_HOOKS: &str = env_name!("ALLOW_COMMAND_HOOKS");
     /// Maximum tool output length in bytes (default `40_000`)
     pub const MAX_TOOL_OUTPUT_LENGTH: &str = env_name!("MAX_TOOL_OUTPUT_LENGTH");
     /// Path to a configuration file to use instead of the default
@@ -175,11 +173,24 @@ impl std::fmt::Display for ModelProvider {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct FeaturesConfig {
-    /// Enable `PreToolUse` / `PostToolUse` lifecycle hooks.
-    pub hooks: bool,
-    /// Allow command hooks (`sh -c` / `cmd /C`) to execute.
-    /// Disabled by default for security — must be explicitly enabled.
-    pub allow_command_hooks: bool,
+    /// Enable all features unless a feature is explicitly overridden.
+    pub all: bool,
+    /// Enable lifecycle hooks, including command hooks.
+    pub hooks: Option<bool>,
+    /// Generate a session title with a model after receiving a user message.
+    pub update_session_title: Option<bool>,
+}
+
+impl FeaturesConfig {
+    #[must_use]
+    pub fn hooks_enabled(&self) -> bool {
+        self.hooks.unwrap_or(self.all)
+    }
+
+    #[must_use]
+    pub fn update_session_title_enabled(&self) -> bool {
+        self.update_session_title.unwrap_or(self.all)
+    }
 }
 
 /// Configuration for lightweight model-backed tasks.
@@ -484,11 +495,6 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-        }
-
-        // Allow command hooks (security flag, default false)
-        if let Some(val) = env_bool_opt(env_names::ALLOW_COMMAND_HOOKS) {
-            self.features.allow_command_hooks = val;
         }
 
         // Maximum tool output length
