@@ -620,6 +620,29 @@ impl Kernel {
         })
     }
 
+    /// List running sessions from the authoritative in-memory agent registry,
+    /// hydrated with persisted session metadata.
+    pub async fn list_running_sessions(&self) -> Result<Vec<crate::types::RunningSessionResponse>> {
+        let snapshots = self.conductor.running_sessions();
+        let store = self.session_store().await;
+        let mut sessions = Vec::with_capacity(snapshots.len());
+        for snapshot in snapshots {
+            let Some(info) = store.get(&snapshot.session_id).await? else {
+                // A newly spawned subagent can briefly precede its persisted row.
+                continue;
+            };
+            sessions.push(crate::types::RunningSessionResponse {
+                id: info.id,
+                parent_id: info.parent_id,
+                title: info.title,
+                project_id: info.project_id,
+                phase: agent_state_phase(snapshot.state).to_string(),
+            });
+        }
+        sessions.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        Ok(sessions)
+    }
+
     /// List direct subagent children with their current runtime phase.
     pub async fn list_subagents(
         &self,
@@ -729,12 +752,11 @@ impl Kernel {
         &self,
         info: crate::storage::session::SessionInfo,
     ) -> crate::types::SessionResponse {
-        let phase = match self.conductor.get_state(&info.id) {
-            Some(AgentState::Streaming) => "streaming",
-            Some(AgentState::ExecutingTool) => "executing_tool",
-            Some(AgentState::Compacting) => "compacting",
-            Some(AgentState::Idle) | None => "idle",
-        };
+        let phase = agent_state_phase(
+            self.conductor
+                .get_state(&info.id)
+                .unwrap_or(AgentState::Idle),
+        );
         crate::types::SessionResponse {
             id: info.id,
             phase: phase.to_string(),
@@ -1359,6 +1381,15 @@ impl crate::cron::CronExecutor for Kernel {
             }
         }
         Ok(())
+    }
+}
+
+fn agent_state_phase(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Streaming => "streaming",
+        AgentState::ExecutingTool => "executing_tool",
+        AgentState::Compacting => "compacting",
+        AgentState::Idle => "idle",
     }
 }
 

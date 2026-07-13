@@ -35,6 +35,17 @@ pub async fn list_sessions(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn list_running_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<kernel::types::RunningSessionResponse>, GuiError> {
+    state
+        .kernel
+        .list_running_sessions()
+        .await
+        .map_err(GuiError::kernel)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_subagents(
     state: State<'_, AppState>,
     parent_session_id: String,

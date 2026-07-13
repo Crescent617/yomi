@@ -142,6 +142,17 @@ pub struct SessionResponse {
     pub model_key: Option<String>,
 }
 
+/// A session that is actively executing in the kernel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RunningSessionResponse {
+    pub id: SessionId,
+    pub parent_id: Option<SessionId>,
+    pub title: Option<String>,
+    pub project_id: Option<ProjectId>,
+    pub phase: String,
+}
+
 /// Direct subagent session details with derived runtime status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

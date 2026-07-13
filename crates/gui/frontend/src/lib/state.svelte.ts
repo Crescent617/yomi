@@ -1,6 +1,12 @@
-import type { Checkpoint, GitInfo, SubagentInfo } from "./api";
+import type {
+  Checkpoint,
+  GitInfo,
+  RunningSessionInfo,
+  SubagentInfo,
+} from "./api";
 import {
   getSession as fetchSession,
+  listRunningSessions as fetchRunningSessions,
   listSubagents as fetchSubagents,
 } from "./api";
 import type { TaggedContentBlock } from "./types";
@@ -12,6 +18,30 @@ import { guiPreferences } from "./settings.svelte";
 
 const subagentRefreshes = new Map<string, Promise<void>>();
 const dirtySubagentParents = new Set<string>();
+let runningSessionsRefresh: Promise<void> | null = null;
+let runningSessionsDirty = false;
+
+export const runningSessions = $state<RunningSessionInfo[]>([]);
+
+export function refreshRunningSessions(): Promise<void> {
+  runningSessionsDirty = true;
+  if (runningSessionsRefresh) return runningSessionsRefresh;
+
+  runningSessionsRefresh = (async () => {
+    try {
+      while (runningSessionsDirty) {
+        runningSessionsDirty = false;
+        const sessions = await fetchRunningSessions();
+        runningSessions.splice(0, runningSessions.length, ...sessions);
+      }
+    } catch {
+      // Keep the last authoritative snapshot; the next status change retries.
+    } finally {
+      runningSessionsRefresh = null;
+    }
+  })();
+  return runningSessionsRefresh;
+}
 
 export function refreshSubagents(parent_session_id: string): Promise<void> {
   dirtySubagentParents.add(parent_session_id);
@@ -53,8 +83,8 @@ function refreshSubagentParent(session_id: string) {
     });
 }
 
-export function startNotificationListener(): Promise<() => void> {
-  return listen(
+export async function startNotificationListener(): Promise<() => void> {
+  const unlisten = await listen(
     "kernel:noti",
     (e: {
       payload: {
@@ -71,7 +101,15 @@ export function startNotificationListener(): Promise<() => void> {
           session.phase = status;
           session.is_running = status !== "idle" && status !== "closed";
         }
+        if (
+          status === "idle" &&
+          !session_id.startsWith("sub_") &&
+          sessionState.activeSessionId !== session_id
+        ) {
+          unreadSessions[session_id] = true;
+        }
         if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
+        void refreshRunningSessions();
       }
       if (payload.title_updated) {
         const { session_id, title } = payload.title_updated;
@@ -84,6 +122,8 @@ export function startNotificationListener(): Promise<() => void> {
       }
     },
   );
+  await refreshRunningSessions();
+  return unlisten;
 }
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -416,6 +456,8 @@ export const sessionState = $state({
   sessions: [] as SessionState[],
   activeSessionId: null as string | null,
 });
+
+export const unreadSessions = $state<Record<string, boolean>>({});
 
 export const pinnedSessionMeta = $state(
   {} as Record<string, { pinned_at: string }>,

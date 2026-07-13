@@ -28,6 +28,11 @@ pub struct Conductor {
     notification_bus: Arc<NotificationBus>,
 }
 
+pub struct ActiveSessionSnapshot {
+    pub session_id: SessionId,
+    pub state: AgentState,
+}
+
 struct ActiveAgent {
     handle: JoinHandle<()>,
     cancel_token: crate::agent::CancelToken,
@@ -178,6 +183,23 @@ impl Conductor {
 
     pub fn active_count(&self) -> usize {
         self.active.len()
+    }
+
+    /// Snapshot sessions whose agent task is still live and not idle.
+    pub fn running_sessions(&self) -> Vec<ActiveSessionSnapshot> {
+        self.active
+            .iter()
+            .filter_map(|agent| {
+                if agent.handle.is_finished() {
+                    return None;
+                }
+                let state = *agent.state.lock().unwrap_or_else(|e| e.into_inner());
+                (state != AgentState::Idle).then(|| ActiveSessionSnapshot {
+                    session_id: agent.key().clone(),
+                    state,
+                })
+            })
+            .collect()
     }
 
     /// Update the permission level for a live session (real-time).
@@ -377,8 +399,12 @@ impl Conductor {
 
         let session_id = sid.0.clone();
         let loop_span = tracing::info_span!("agent_loop", session_id = %session_id);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(
             async move {
+                if start_rx.await.is_err() {
+                    return;
+                }
                 tracing::info!("agent loop started");
                 let _ = agent.start_loop().await;
                 tracing::info!("agent loop ended");
@@ -395,6 +421,7 @@ impl Conductor {
                 permission_state: shared.permission_state.clone(),
             },
         );
+        let _ = start_tx.send(());
     }
 
     /// Create and populate the file state store for this session

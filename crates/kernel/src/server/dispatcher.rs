@@ -174,6 +174,10 @@ impl KernelServer {
                 let result = self.kernel.list_sessions(pid.as_ref(), before, limit).await;
                 rpc_body("list_sessions_failed", result)
             }
+            ReqMethod::ListRunningSessions => rpc_body(
+                "list_running_sessions_failed",
+                self.kernel.list_running_sessions().await,
+            ),
             ReqMethod::ListSubagents { parent_session_id } => rpc_body(
                 "list_subagents_failed",
                 self.kernel

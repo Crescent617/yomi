@@ -9,6 +9,7 @@ import {
   sessionState,
   showNotification,
   streamingMessages,
+  unreadSessions,
   type Message,
   type SessionState,
 } from "./state.svelte";
@@ -148,6 +149,7 @@ export function setActiveSession(id: string | null) {
     }
   }
   sessionState.activeSessionId = id;
+  if (id) delete unreadSessions[id];
 }
 
 export function upsertSession(session: SessionState) {
