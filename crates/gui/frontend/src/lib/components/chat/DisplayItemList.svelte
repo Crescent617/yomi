@@ -38,7 +38,11 @@
     </div>
   {:else if item.type === "message"}
     {@const msg = item.message}
-    <div class="group relative" class:my-2={msg.type === "user"}>
+    <div
+      class="group relative"
+      class:my-2={msg.type === "user"}
+      data-user-query-id={msg.type === "user" ? msg.id : undefined}
+    >
       {#if msg.type === "user"}
         <UserBubble message={msg} {session_id} />
       {:else if msg.type === "steer"}

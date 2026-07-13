@@ -7,6 +7,8 @@
   import DisplayItemList from "./DisplayItemList.svelte";
   import { DisplayItemProjection } from "./display-items";
   import { guiPreferences } from "../../settings.svelte";
+  import QueryNavigator from "./QueryNavigator.svelte";
+  import { userQueryMarkers } from "./query-navigator";
 
   const activeSession = $derived(getActiveSession());
   const displayItemProjection = new DisplayItemProjection();
@@ -26,12 +28,17 @@
     );
   });
   const displayMessages = $derived(displaySections.tailMessages);
+  const queryMarkers = $derived(
+    userQueryMarkers(activeSession?.messages ?? []),
+  );
 
   let scrollContainer = $state<HTMLDivElement | null>(null);
   let messageContent = $state<HTMLDivElement | null>(null);
   let isNearBottom = $state(true);
   let followLatest = $state(true);
   let scrollFrame: number | null = null;
+  let programmaticScrollTimer: ReturnType<typeof setTimeout> | null = null;
+  let isProgrammaticScroll = false;
 
   // Browser scroll measurements are expressed in CSS pixels. Keep these
   // named so layout styling can continue to use the Tailwind/rem scale.
@@ -53,12 +60,27 @@
 
   function setScrollToBottom(behavior: "auto" | "smooth" = "auto") {
     if (!scrollContainer) return;
+    isProgrammaticScroll = true;
+    if (programmaticScrollTimer !== null) clearTimeout(programmaticScrollTimer);
     scrollContainer.scrollTo({
       top: scrollContainer.scrollHeight,
       behavior,
     });
+    programmaticScrollTimer = setTimeout(
+      () => {
+        programmaticScrollTimer = null;
+        isProgrammaticScroll = false;
+        updateBottomState();
+      },
+      behavior === "smooth" ? 500 : 0,
+    );
     isNearBottom = true;
     followLatest = true;
+  }
+
+  function handleQueryJump() {
+    followLatest = false;
+    isNearBottom = false;
   }
 
   export function scrollToBottom() {
@@ -82,7 +104,20 @@
     }
   });
 
+  // A sent user message is an explicit request to resume following the latest
+  // output, even when the user was previously reading older messages.
+  $effect(() => {
+    const session = activeSession;
+    const latestUserMessage = session?.messages.findLast(
+      (message) => message.type === "user",
+    );
+    if (!session || !latestUserMessage || !scrollContainer) return;
+    followLatest = true;
+    scheduleScrollToBottom();
+  });
+
   function onScroll() {
+    if (isProgrammaticScroll) return;
     updateBottomState();
   }
 
@@ -98,6 +133,8 @@
     return () => {
       resizeObserver.disconnect();
       if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+      if (programmaticScrollTimer !== null)
+        clearTimeout(programmaticScrollTimer);
     };
   });
 </script>
@@ -107,7 +144,7 @@
     <div
       bind:this={scrollContainer}
       onscroll={onScroll}
-      class="h-full overflow-y-auto"
+      class="h-full overflow-y-auto [overflow-anchor:none]"
     >
       <TaskDock />
       <div
@@ -132,6 +169,12 @@
         </div>
       </div>
     </div>
+    <QueryNavigator
+      {scrollContainer}
+      {messageContent}
+      queries={queryMarkers}
+      onJump={handleQueryJump}
+    />
     {#if !isNearBottom}
       <button
         type="button"

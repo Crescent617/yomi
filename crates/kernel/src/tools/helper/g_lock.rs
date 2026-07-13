@@ -33,10 +33,14 @@ impl Drop for GLockGuard {
     fn drop(&mut self) {
         // Release the mutex guard first so try_lock can succeed
         self.guard.take();
-        // If no other task is holding or waiting for this key, clean up the entry
-        if self.mutex.try_lock().is_ok() {
-            G_LOCKS.remove(&self.key);
-        }
+        // Remove only when this guard and the map are the last owners. Holding
+        // the DashMap shard lock prevents a new caller from cloning this mutex
+        // between the ownership check and removal.
+        G_LOCKS.remove_if(&self.key, |_, mutex| {
+            Arc::ptr_eq(mutex, &self.mutex)
+                && Arc::strong_count(mutex) == 2
+                && mutex.try_lock().is_ok()
+        });
     }
 }
 
@@ -85,6 +89,24 @@ pub async fn g_lock(key: impl Into<String>) -> GLockGuard {
         mutex,
         guard: Some(guard),
     }
+}
+
+/// Try to acquire an exclusive lock on a key without waiting.
+///
+/// Returns `None` when another task already holds the lock.
+pub fn g_try_lock(key: impl Into<String>) -> Option<GLockGuard> {
+    let key = key.into();
+    let mutex = G_LOCKS
+        .entry(key.clone())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone();
+    let guard = mutex.clone().try_lock_owned().ok()?;
+
+    Some(GLockGuard {
+        key,
+        mutex,
+        guard: Some(guard),
+    })
 }
 
 /// Acquire a key lock with timeout.

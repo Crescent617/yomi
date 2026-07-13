@@ -143,7 +143,7 @@
 
 <div
   bind:this={menuRef}
-  class="relative flex min-w-0 items-center gap-1 text-sm"
+  class="relative flex min-w-0 items-center gap-0 text-sm"
 >
   <button
     type="button"
@@ -151,7 +151,7 @@
       event.stopPropagation();
       menu = menu === "project" ? null : "project";
     }}
-    class="flex min-w-0 max-w-44 items-center gap-1 rounded-md px-1.5 py-1 font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    class="flex min-w-0 max-w-44 items-center gap-1 rounded-sm px-1 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     aria-expanded={menu === "project"}
     title="Switch project"
   >
@@ -161,7 +161,9 @@
   </button>
 
   {#each chain as item (item.id)}
-    <ChevronRight class="size-3.5 shrink-0 text-muted-foreground/40" />
+    <span class="px-0.5 text-xs text-muted-foreground/40" aria-hidden="true"
+      >/</span
+    >
     {#if item.id === session.id}
       <button
         type="button"
@@ -169,7 +171,7 @@
           event.stopPropagation();
           void openSessions(session.project_id ?? selectedProjectId);
         }}
-        class="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1.5 py-1 font-semibold text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        class="flex min-w-0 max-w-64 items-center gap-1 rounded-sm px-1 py-0.5 font-semibold text-foreground transition-colors hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-expanded={menu === "session"}
         title="Switch session"
       >
@@ -180,7 +182,7 @@
       <button
         type="button"
         onclick={() => selectSession(item.id)}
-        class="max-w-40 truncate rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        class="max-w-40 truncate rounded-sm px-1 py-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
         title={`Open ${item.alias ?? item.id.slice(-8)}`}
       >
         {item.alias ?? item.id.slice(-8)}

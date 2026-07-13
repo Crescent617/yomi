@@ -67,7 +67,7 @@
 {#if visibleToasts.length > 0}
   <div
     bind:this={container}
-    class="pointer-events-auto fixed right-4 top-12 z-[9999] w-[min(22rem,calc(100vw-2rem))]"
+    class="pointer-events-auto fixed right-4 top-8 z-[9999] w-[min(22rem,calc(100vw-2rem))]"
     class:space-y-2={expanded}
     onmouseenter={handleMouseEnter}
     onmouseleave={handleMouseLeave}
