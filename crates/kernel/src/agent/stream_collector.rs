@@ -71,10 +71,10 @@ impl StreamCollectorState {
 
     pub(crate) fn handle_response_meta(
         &mut self,
-        response_id: String,
+        response_id: Option<String>,
         finish_reason: Option<FinishReason>,
     ) {
-        self.response_id = Some(response_id);
+        self.response_id = response_id;
         self.finish_reason = finish_reason;
     }
 

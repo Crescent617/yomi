@@ -245,6 +245,37 @@ fn test_input_item_wire_format() {
     assert_eq!(json["content"][0]["type"], "input_text");
 }
 
+#[test]
+fn test_request_max_output_tokens_is_optional() {
+    let request = ResponsesRequest {
+        model: "gpt-test".into(),
+        input: Vec::new(),
+        instructions: None,
+        tools: None,
+        stream: true,
+        store: false,
+        max_output_tokens: None,
+        temperature: None,
+        reasoning: None,
+    };
+    let json = serde_json::to_value(request).unwrap();
+    assert!(json.get("max_output_tokens").is_none());
+
+    let request = ResponsesRequest {
+        model: "gpt-test".into(),
+        input: Vec::new(),
+        instructions: None,
+        tools: None,
+        stream: true,
+        store: false,
+        max_output_tokens: Some(1234),
+        temperature: None,
+        reasoning: None,
+    };
+    let json = serde_json::to_value(request).unwrap();
+    assert_eq!(json["max_output_tokens"], 1234);
+}
+
 // ==== assembler: text streaming ====
 
 #[test]
@@ -293,7 +324,7 @@ fn test_assembler_text_stream() {
         ModelStreamItem::ResponseMeta {
             response_id,
             finish_reason: Some(FinishReason::Stop),
-        } if response_id == "resp_123"
+        } if response_id.as_deref() == Some("resp_123")
     ));
     assert!(matches!(items[2], ModelStreamItem::Complete));
     assert!(assembler.done);
@@ -459,7 +490,7 @@ fn test_assembler_tool_call_from_deltas_when_done_has_no_arguments() {
 }
 
 #[test]
-fn test_assembler_invalid_arguments_fallback_to_string() {
+fn test_assembler_invalid_arguments_are_parse_error() {
     let mut assembler = ResponseAssembler::new();
 
     let _ = assembler
@@ -467,19 +498,17 @@ fn test_assembler_invalid_arguments_fallback_to_string() {
             r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":""}}"#,
         )
         .unwrap();
-    let items = assembler
+    let err = assembler
         .process(
             r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":"not json"}}"#,
         )
-        .unwrap();
-    assert!(
-        matches!(&items[0], ModelStreamItem::ToolCall(c) if c.arguments == Value::String("not json".into()))
-    );
+        .unwrap_err();
+    assert!(matches!(err, ProviderError::Parse(_)));
+    assert!(!err.is_retryable());
 }
 
 #[test]
-fn test_assembler_incomplete_call_flushed_on_finish() {
-    // Stream cut short: added + deltas but no output_item.done
+fn test_assembler_terminal_drops_partial_call() {
     let mut assembler = ResponseAssembler::new();
 
     let _ = assembler
@@ -493,11 +522,25 @@ fn test_assembler_incomplete_call_flushed_on_finish() {
         )
         .unwrap();
 
-    let items = assembler.finish();
-    // ToolCall + Complete
+    let items = assembler
+        .process(r#"{"type":"response.completed","response":{"status":"completed"}}"#)
+        .unwrap();
     assert_eq!(items.len(), 2);
-    assert!(matches!(&items[0], ModelStreamItem::ToolCall(c) if c.id == "call_x"));
+    assert!(!items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
+    assert!(
+        matches!(
+            &items[0],
+            ModelStreamItem::ResponseMeta {
+                response_id: None,
+                finish_reason: Some(FinishReason::Stop),
+            }
+        ),
+        "unexpected terminal items: {items:?}"
+    );
     assert!(matches!(items[1], ModelStreamItem::Complete));
+    assert!(assembler.partial_calls.is_empty());
 }
 
 // ==== assembler: terminal states & errors ====
@@ -529,6 +572,124 @@ fn test_assembler_incomplete_max_tokens() {
 }
 
 #[test]
+fn test_assembler_idless_incomplete_propagates_finish_reason() {
+    let mut assembler = ResponseAssembler::new();
+    let items = assembler
+        .process(
+            r#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        &items[0],
+        ModelStreamItem::ResponseMeta {
+            response_id: None,
+            finish_reason: Some(FinishReason::MaxTokens),
+        }
+    ));
+    assert!(matches!(items[1], ModelStreamItem::Complete));
+}
+
+#[test]
+fn test_terminal_event_type_is_authoritative() {
+    let mut assembler = ResponseAssembler::new();
+    let items = assembler
+        .process(
+            r#"{"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#,
+        )
+        .unwrap();
+
+    assert!(matches!(
+        &items[0],
+        ModelStreamItem::ResponseMeta {
+            response_id: None,
+            finish_reason: Some(FinishReason::Stop),
+        }
+    ));
+}
+
+#[test]
+fn test_incomplete_terminal_drops_partial_call() {
+    let mut assembler = ResponseAssembler::new();
+    assembler
+        .process(
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_x","name":"bash"}}"#,
+        )
+        .unwrap();
+    assembler
+        .process(
+            r#"{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"cmd\":"}"#,
+        )
+        .unwrap();
+
+    let items = assembler
+        .process(
+            r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}"#,
+        )
+        .unwrap();
+
+    assert!(!items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::ResponseMeta {
+            finish_reason: Some(FinishReason::MaxTokens),
+            ..
+        }
+    )));
+    assert!(assembler.partial_calls.is_empty());
+}
+
+#[test]
+fn test_assembler_premature_end_is_retryable_and_does_not_flush_partial_call() {
+    for end in ["EOF", "[DONE]"] {
+        let mut assembler = ResponseAssembler::new();
+        assembler
+            .process(
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_x","name":"bash"}}"#,
+            )
+            .unwrap();
+        assembler
+            .process(
+                r#"{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"cmd\":"}"#,
+            )
+            .unwrap();
+
+        let err = if end == "[DONE]" {
+            assembler.process_stream_data(end).unwrap_err()
+        } else {
+            ResponseAssembler::unexpected_end(end)
+        };
+        assert!(matches!(err, ProviderError::Sse(_)));
+        assert!(err.is_retryable());
+        assert!(err.to_string().contains("before response.completed"));
+        assert!(!assembler.finished);
+        assert_eq!(assembler.partial_calls.len(), 1);
+    }
+}
+
+#[test]
+fn test_assembler_semantic_error_is_not_retryable() {
+    let mut assembler = ResponseAssembler::new();
+    let err = assembler
+        .process(
+            r#"{"type":"response.failed","response":{"status":"failed","error":{"code":"context_length_exceeded","message":"too much input"}}}"#,
+        )
+        .unwrap_err();
+
+    assert!(!err.is_retryable());
+    assert!(matches!(
+        err,
+        ProviderError::Api {
+            code: Some(ref code),
+            retryable: false,
+            ..
+        } if code == "context_length_exceeded"
+    ));
+}
+
+#[test]
 fn test_assembler_failed_event_is_error() {
     let mut assembler = ResponseAssembler::new();
     let result = assembler.process(
@@ -536,7 +697,15 @@ fn test_assembler_failed_event_is_error() {
     );
     let err = result.unwrap_err();
     assert!(err.to_string().contains("boom"));
-    assert!(err.is_retryable(), "SSE errors should be retryable");
+    assert!(err.is_retryable());
+    assert!(matches!(
+        err,
+        ProviderError::Api {
+            code: Some(ref code),
+            retryable: true,
+            ..
+        } if code == "server_error"
+    ));
 }
 
 #[test]
@@ -546,6 +715,15 @@ fn test_assembler_top_level_error_event() {
         .process(r#"{"type":"error","code":"rate_limited","message":"slow down","param":null}"#);
     let err = result.unwrap_err();
     assert!(err.to_string().contains("slow down"));
+    assert!(err.is_retryable());
+    assert!(matches!(
+        err,
+        ProviderError::Api {
+            code: Some(ref code),
+            retryable: true,
+            ..
+        } if code == "rate_limited"
+    ));
 }
 
 #[test]
@@ -564,13 +742,11 @@ fn test_assembler_unknown_events_ignored() {
 }
 
 #[test]
-fn test_assembler_invalid_json_ignored() {
+fn test_assembler_invalid_json_is_parse_error() {
     let mut assembler = ResponseAssembler::new();
-    let items = assembler.process("not json").unwrap();
-    assert!(
-        items.is_empty(),
-        "invalid JSON should be ignored with warning"
-    );
+    let err = assembler.process("not json").unwrap_err();
+    assert!(matches!(err, ProviderError::Parse(_)));
+    assert!(!err.is_retryable());
 }
 
 #[test]

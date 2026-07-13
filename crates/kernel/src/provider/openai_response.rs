@@ -212,7 +212,7 @@ impl Provider for OpenAIResponseProvider {
             },
             stream: true,
             store: false,
-            max_output_tokens: config.max_tokens.or(Some(8192)),
+            max_output_tokens: config.max_tokens,
             temperature,
             reasoning,
         };
@@ -271,17 +271,7 @@ impl Provider for OpenAIResponseProvider {
                     };
                     match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
-                            // Responses API has no "[DONE]" sentinel by spec, but some
-                            // proxies add it; treat it as end-of-stream.
-                            if event.data == "[DONE]" {
-                                let items = assembler.finish();
-                                return Ok(Some((
-                                    items,
-                                    (eventsource, assembler, last_content_time),
-                                )));
-                            }
-
-                            let items = assembler.process(&event.data)?;
+                            let items = assembler.process_stream_data(&event.data)?;
                             if !items.is_empty() {
                                 return Ok(Some((
                                     items,
@@ -292,8 +282,7 @@ impl Provider for OpenAIResponseProvider {
                         }
                         Ok(Ok(None)) => {
                             tracing::debug!("OpenAI Responses stream ended");
-                            let items = assembler.finish();
-                            return Ok(Some((items, (eventsource, assembler, last_content_time))));
+                            return Err(ResponseAssembler::unexpected_end("EOF"));
                         }
                         Ok(Err(e)) => {
                             tracing::error!("OpenAI Responses SSE error: {}", e);
@@ -375,15 +364,22 @@ impl ResponseAssembler {
         }
     }
 
+    fn process_stream_data(
+        &mut self,
+        data: &str,
+    ) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
+        // Responses API has no [DONE] sentinel. If a proxy sends one, it is only
+        // harmless after a terminal event, when this assembler is no longer polled.
+        if data == "[DONE]" {
+            return Err(Self::unexpected_end("[DONE]"));
+        }
+        self.process(data)
+    }
+
     /// Process one SSE event's data payload.
     fn process(&mut self, data: &str) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
-        let event: ResponsesStreamEvent = match serde_json::from_str(data) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!("Failed to parse SSE event: {e} - data: {data}");
-                return Ok(Vec::new());
-            }
-        };
+        let event: ResponsesStreamEvent = serde_json::from_str(data)
+            .map_err(|e| ProviderError::Parse(format!("invalid Responses SSE JSON: {e}")))?;
 
         let mut items = Vec::new();
 
@@ -451,7 +447,7 @@ impl ResponseAssembler {
                 if let Some(item) = event.item {
                     if item.type_.as_deref() == Some("function_call") {
                         let index = event.output_index.unwrap_or(0);
-                        if let Some(call) = self.complete_call(index, item) {
+                        if let Some(call) = self.complete_call(index, item)? {
                             items.push(ModelStreamItem::ToolCall(call));
                             self.saw_function_call = true;
                         }
@@ -460,6 +456,11 @@ impl ResponseAssembler {
             }
             "response.completed" | "response.incomplete" => {
                 self.done = true;
+                let terminal_status = if event.type_ == "response.completed" {
+                    "completed"
+                } else {
+                    "incomplete"
+                };
                 if let Some(resp) = event.response {
                     if let Some(id) = resp.id {
                         self.response_id = Some(id);
@@ -472,21 +473,36 @@ impl ResponseAssembler {
                         ));
                     }
                     self.finish_reason = Some(self.normalize_finish_reason(
-                        resp.status.as_deref(),
+                        Some(terminal_status),
                         resp.incomplete_details.as_ref(),
                     ));
+                } else {
+                    self.finish_reason =
+                        Some(self.normalize_finish_reason(Some(terminal_status), None));
                 }
                 items.extend(self.finish());
             }
             "response.failed" | "error" => {
-                let message = event
-                    .response
-                    .and_then(|r| r.error)
+                let nested_error = event.response.and_then(|r| r.error);
+                let code = nested_error
+                    .as_ref()
+                    .and_then(|e| e.code.clone())
+                    .or(event.code);
+                let message = nested_error
                     .map(|e| e.message)
                     .or(event.message)
                     .unwrap_or_else(|| "unknown error".to_string());
-                tracing::error!("OpenAI Responses API stream error: {}", message);
-                return Err(ProviderError::Sse(format!("Response failed: {message}")));
+                let retryable = Self::is_transient_error_code(code.as_deref());
+                tracing::error!(
+                    "OpenAI Responses API stream error: code={:?}, message={}",
+                    code,
+                    message
+                );
+                return Err(ProviderError::Api {
+                    code,
+                    message,
+                    retryable,
+                });
             }
             // Known-but-ignored lifecycle events: response.in_progress,
             // response.output_text.done, response.content_part.*,
@@ -499,7 +515,11 @@ impl ResponseAssembler {
 
     /// Complete a function call from its `output_item.done` event.
     /// Prefers the final item payload (authoritative), falling back to accumulated deltas.
-    fn complete_call(&mut self, index: u64, item: OutputItem) -> Option<ToolCallRequest> {
+    fn complete_call(
+        &mut self,
+        index: u64,
+        item: OutputItem,
+    ) -> std::result::Result<Option<ToolCallRequest>, ProviderError> {
         let partial = self.partial_calls.remove(&index).unwrap_or_default();
 
         let call_id = item
@@ -516,18 +536,40 @@ impl ResponseAssembler {
             tracing::warn!(
                 "Incomplete function_call item (call_id or name missing), dropping: index={index}"
             );
-            return None;
+            return Ok(None);
         }
 
-        // Parse arguments as JSON, fall back to raw string
-        let arguments =
-            serde_json::from_str(&arguments_str).unwrap_or(Value::String(arguments_str));
+        let arguments = serde_json::from_str(&arguments_str).map_err(|e| {
+            ProviderError::Parse(format!("invalid function call arguments for {name}: {e}"))
+        })?;
 
-        Some(ToolCallRequest {
+        Ok(Some(ToolCallRequest {
             id: call_id,
             name,
             arguments,
-        })
+        }))
+    }
+
+    fn is_transient_error_code(code: Option<&str>) -> bool {
+        matches!(
+            code,
+            Some(
+                "server_error"
+                    | "internal_server_error"
+                    | "rate_limit_exceeded"
+                    | "rate_limited"
+                    | "overloaded"
+                    | "service_unavailable"
+                    | "temporarily_unavailable"
+                    | "timeout"
+            )
+        )
+    }
+
+    fn unexpected_end(end: &str) -> ProviderError {
+        ProviderError::Sse(format!(
+            "protocol error: {end} before response.completed or response.incomplete"
+        ))
     }
 
     fn normalize_finish_reason(
@@ -560,7 +602,7 @@ impl ResponseAssembler {
         }
     }
 
-    /// Emit final items: any leftover tool calls, usage, response meta, and Complete.
+    /// Emit final metadata and Complete after a successful terminal event.
     fn finish(&mut self) -> Vec<ModelStreamItem> {
         if self.finished {
             return Vec::new();
@@ -571,32 +613,17 @@ impl ResponseAssembler {
 
         let mut items = Vec::new();
 
-        // Flush any tool calls that never got an output_item.done (stream cut short)
-        let mut indices: Vec<_> = self.partial_calls.keys().copied().collect();
-        indices.sort_unstable();
-        for idx in indices {
-            if let Some(partial) = self.partial_calls.remove(&idx) {
-                if partial.call_id.is_empty() || partial.name.is_empty() {
-                    continue;
-                }
-                let arguments = serde_json::from_str(&partial.arguments)
-                    .unwrap_or(Value::String(partial.arguments));
-                items.push(ModelStreamItem::ToolCall(ToolCallRequest {
-                    id: partial.call_id,
-                    name: partial.name,
-                    arguments,
-                }));
-                self.saw_function_call = true;
-            }
-        }
+        // Only output_item.done is authoritative enough to emit a tool call.
+        // Drop partial calls so incomplete/truncated arguments are never executed.
+        self.partial_calls.clear();
 
         if let Some(usage) = self.usage.take() {
             items.push(ModelStreamItem::TokenUsage(usage));
         }
 
-        if let Some(response_id) = self.response_id.take() {
+        if self.response_id.is_some() || self.finish_reason.is_some() {
             items.push(ModelStreamItem::ResponseMeta {
-                response_id,
+                response_id: self.response_id.take(),
                 finish_reason: self.finish_reason.take(),
             });
         }
@@ -691,7 +718,8 @@ struct ResponsesStreamEvent {
     output_index: Option<u64>,
     /// Full response snapshot for lifecycle events (created/completed/...)
     response: Option<ResponseObject>,
-    /// Error message for top-level `error` events
+    /// Error code and message for top-level `error` events
+    code: Option<String>,
     message: Option<String>,
 }
 
@@ -707,7 +735,6 @@ struct OutputItem {
 #[derive(Debug, Deserialize)]
 struct ResponseObject {
     id: Option<String>,
-    status: Option<String>,
     usage: Option<ResponsesUsage>,
     incomplete_details: Option<IncompleteDetails>,
     error: Option<ResponseError>,
@@ -720,6 +747,7 @@ struct IncompleteDetails {
 
 #[derive(Debug, Deserialize)]
 struct ResponseError {
+    code: Option<String>,
     message: String,
 }
 

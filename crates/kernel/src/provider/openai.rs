@@ -481,7 +481,7 @@ impl MsgChunkAssembler {
                 .take()
                 .and_then(|s| FinishReason::from_provider_str(&s));
             items.push(ModelStreamItem::ResponseMeta {
-                response_id,
+                response_id: Some(response_id),
                 finish_reason,
             });
         }

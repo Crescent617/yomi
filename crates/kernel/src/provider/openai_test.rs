@@ -403,7 +403,7 @@ fn test_assembler_finish_reason_and_usage_in_same_chunk() {
         ModelStreamItem::ResponseMeta {
             response_id,
             finish_reason: Some(FinishReason::Stop),
-        } if response_id == "chatcmpl-test"
+        } if response_id.as_deref() == Some("chatcmpl-test")
     ));
     assert!(matches!(items[1], ModelStreamItem::Complete));
 }
@@ -433,7 +433,7 @@ fn test_assembler_choice_usage_only() {
         ModelStreamItem::ResponseMeta {
             response_id,
             finish_reason: Some(FinishReason::Stop),
-        } if response_id == "chatcmpl-test"
+        } if response_id.as_deref() == Some("chatcmpl-test")
     ));
     assert!(matches!(items[1], ModelStreamItem::Complete));
 }
@@ -482,6 +482,6 @@ fn test_assembler_usage_without_delta() {
         ModelStreamItem::ResponseMeta {
             response_id,
             finish_reason: Some(FinishReason::MaxTokens),
-        } if response_id == "chatcmpl-test"
+        } if response_id.as_deref() == Some("chatcmpl-test")
     ));
 }

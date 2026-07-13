@@ -86,8 +86,8 @@ pub enum ModelStreamItem {
     /// API response metadata (id, `finish_reason`, etc.)
     /// Emitted when the stream ends with the final chunk's metadata
     ResponseMeta {
-        /// API response ID (e.g., "chatcmpl-xxx")
-        response_id: String,
+        /// API response ID (e.g., "chatcmpl-xxx"), if provided by the API
+        response_id: Option<String>,
         /// Finish reason (normalized across providers)
         finish_reason: Option<FinishReason>,
     },
@@ -208,6 +208,14 @@ pub enum ProviderError {
     #[error("Parse error: {0}")]
     Parse(String),
 
+    /// API response error with provider code and explicit retry classification
+    #[error("API error ({code:?}): {message}")]
+    Api {
+        code: Option<String>,
+        message: String,
+        retryable: bool,
+    },
+
     /// Configuration error
     #[error("Configuration error: {0}")]
     Config(String),
@@ -219,6 +227,7 @@ impl ProviderError {
         match self {
             ProviderError::Http(e) => e.is_retryable(),
             ProviderError::Timeout(_) | ProviderError::Request(_) | ProviderError::Sse(_) => true,
+            ProviderError::Api { retryable, .. } => *retryable,
             ProviderError::Parse(_) | ProviderError::Config(_) => false,
         }
     }

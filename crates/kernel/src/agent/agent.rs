@@ -863,14 +863,6 @@ impl Agent {
             content: end_content,
         }));
 
-        if result.finish_reason.is_none() {
-            tracing::warn!("model response has no finish_reason");
-            self.emit_error(
-                crate::event::ErrorPhase::Streaming,
-                "model response missing finish_reason",
-                true,
-            );
-        }
         self.transition_after_streaming(result.finish_reason).await
     }
 
@@ -963,7 +955,7 @@ impl Agent {
                         }
                         ModelStreamItem::ResponseMeta { response_id, finish_reason } => {
                             tracing::debug!(
-                                "received response meta: id={}, finish_reason={:?}",
+                                "received response meta: id={:?}, finish_reason={:?}",
                                 response_id,
                                 finish_reason
                             );
@@ -1197,10 +1189,9 @@ impl Agent {
             return Ok(());
         }
 
-        // No tool calls and no finish reason: the model likely stopped mid-stream
-        // (e.g., hit max_tokens). Auto-inject one "continue" user message to resume.
-        // The runtime marker is reset only by the next real user message; steer and
-        // goal continuation messages must not open another truncation-recovery slot.
+        // A confirmed output-token truncation gets one automatic continuation per
+        // real user turn. A missing finish reason is a provider protocol error,
+        // not evidence that continuing is safe.
         if should_auto_continue(&mut self.auto_continue_used, finish_reason) {
             tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
             let msg = Message::user("continue");
@@ -1209,10 +1200,25 @@ impl Agent {
             return Ok(());
         }
 
-        if matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+        if finish_reason == Some(FinishReason::MaxTokens) {
             tracing::warn!(
                 ?finish_reason,
                 "model stopped again after auto-continue; not continuing a second time"
+            );
+        }
+
+        if matches!(
+            finish_reason,
+            None | Some(FinishReason::ContentFilter | FinishReason::Unknown)
+        ) {
+            tracing::error!(
+                ?finish_reason,
+                "model stopped with an unexpected finish reason"
+            );
+            self.emit_error(
+                crate::event::ErrorPhase::Streaming,
+                &format!("model stopped with unexpected finish reason: {finish_reason:?}"),
+                false,
             );
         }
 
@@ -1286,7 +1292,7 @@ impl Agent {
 }
 
 fn should_auto_continue(used: &mut bool, finish_reason: Option<FinishReason>) -> bool {
-    if *used || !matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+    if *used || finish_reason != Some(FinishReason::MaxTokens) {
         return false;
     }
     *used = true;
