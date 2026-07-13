@@ -161,6 +161,14 @@ body {
   background: transparent;
 }
 
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
 /* Respect OS motion preferences while preserving visible state changes. */
 @media (prefers-reduced-motion: reduce) {
   html {
