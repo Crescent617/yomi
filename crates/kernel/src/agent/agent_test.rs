@@ -1,30 +1,26 @@
-use super::{last_user_message_is_continue, wait_for_retry};
+use super::{should_auto_continue, wait_for_retry};
 use crate::agent::{AgentError, CancelToken};
-use crate::types::Message;
-use std::sync::Arc;
+use crate::types::FinishReason;
 use std::time::Duration;
 
 #[test]
-fn auto_continue_is_limited_until_next_user_message() {
-    let mut messages = vec![
-        Arc::new(Message::system("system")),
-        Arc::new(Message::user("original request")),
-        Arc::new(Message::assistant("partial response")),
-    ];
-    assert!(!last_user_message_is_continue(&messages));
+fn auto_continue_is_claimed_only_once_until_reset() {
+    let mut used = false;
+    assert!(should_auto_continue(
+        &mut used,
+        Some(FinishReason::MaxTokens)
+    ));
+    assert!(!should_auto_continue(&mut used, None));
 
-    messages.push(Arc::new(Message::user("continue")));
-    messages.push(Arc::new(Message::assistant("still partial")));
-    assert!(last_user_message_is_continue(&messages));
-
-    messages.push(Arc::new(Message::user("new request")));
-    assert!(!last_user_message_is_continue(&messages));
+    used = false;
+    assert!(should_auto_continue(&mut used, None));
 }
 
 #[test]
-fn auto_continue_check_uses_trimmed_user_text() {
-    let messages = vec![Arc::new(Message::user("  continue\n"))];
-    assert!(last_user_message_is_continue(&messages));
+fn auto_continue_ignores_normal_finish_reasons() {
+    let mut used = false;
+    assert!(!should_auto_continue(&mut used, Some(FinishReason::Stop)));
+    assert!(!used);
 }
 
 #[tokio::test]

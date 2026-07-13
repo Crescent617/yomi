@@ -269,7 +269,10 @@ impl ToolRegistry {
             .unwrap_or_else(|| Arc::new(FileStateStore::new()));
 
         // Register Bash tool
-        let bash_ctx = ShellToolCtx::new(config.input_bus.cloned());
+        let bash_ctx = ShellToolCtx::new(
+            config.input_bus.cloned(),
+            Arc::clone(&config.shared.background_tasks),
+        );
         let bash_tool = ShellTool::new().with_ctx(bash_ctx);
         self.register(bash_tool);
 

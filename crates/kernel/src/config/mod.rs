@@ -6,6 +6,7 @@ use crate::utils::env::{env_bool_opt, env_first, env_parse, env_var, parse_numbe
 use crate::utils::path::{default_skill_folders, expand_tilde, DEFAULT_DATA_DIR};
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -42,7 +43,6 @@ pub mod env_names {
 
     /// Logging configuration
     pub const LOG_DIR: &str = env_name!("LOG_DIR");
-    pub const LOG_LEVEL: &str = "RUST_LOG"; // Standard env var, no prefix
 
     /// Skill folders (comma-separated paths)
     pub const SKILL_FOLDERS: &str = env_name!("SKILL_FOLDERS");
@@ -66,16 +66,34 @@ pub mod env_names {
     pub const MAX_TOOL_OUTPUT_LENGTH: &str = env_name!("MAX_TOOL_OUTPUT_LENGTH");
     /// Path to a configuration file to use instead of the default
     pub const CONFIG: &str = env_name!("CONFIG");
+
+    // NOTE: General-purpose environment variables injected at startup when absent from the host. Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
+
     /// Serper.dev API key (optional, no prefix)
     pub const SERPER_API_KEY: &str = "SERPER_API_KEY";
     /// Brave Search API key (optional, no prefix)
     pub const BRAVE_API_KEY: &str = "BRAVE_API_KEY";
     /// `SearXNG` instance base URL (optional, no prefix)
     pub const SEARXNG_URL: &str = "SEARXNG_URL";
-    /// Prefixed Brave Search API key fallback
-    pub const YOMI_BRAVE_API_KEY: &str = env_name!("BRAVE_API_KEY");
-    /// Prefixed `SearXNG` URL fallback
-    pub const YOMI_SEARXNG_URL: &str = env_name!("SEARXNG_URL");
+    /// Kimi Search API key (optional, no prefix)
+    pub const KIMI_AGENT_API_KEY: &str = "KIMI_AGENT_API_KEY";
+    /// Kimi Search endpoint override (optional, no prefix). Defaults to the built-in endpoint if unset.
+    pub const KIMI_SEARCH_ENDPOINT: &str = "KIMI_SEARCH_ENDPOINT";
+    pub const LOG_LEVEL: &str = "RUST_LOG"; // Standard env var, no prefix
+}
+
+fn validate_env_entry(name: &str, value: &str) -> std::result::Result<(), KernelError> {
+    if name.is_empty() || name.contains(['=', '\0']) {
+        return Err(KernelError::config(format!(
+            "Invalid environment variable name: {name:?}"
+        )));
+    }
+    if value.contains('\0') {
+        return Err(KernelError::config(format!(
+            "Environment variable {name:?} contains a NUL byte"
+        )));
+    }
+    Ok(())
 }
 
 /// Provider type
@@ -177,6 +195,9 @@ pub struct TasksConfig {
 #[serde(default)]
 pub struct Config {
     pub agent: AgentConfig,
+    /// General-purpose environment variables injected at startup when absent from the host.
+    /// Keys are used verbatim and do not require the [`crate::ENV_PREFIX`] prefix.
+    pub env: BTreeMap<String, String>,
     pub tasks: TasksConfig,
     pub auto_approve: Level,
     pub data_dir: PathBuf,
@@ -204,6 +225,7 @@ impl Default for Config {
         let data_dir = expand_tilde(DEFAULT_DATA_DIR);
         Self {
             agent: AgentConfig::default(),
+            env: BTreeMap::new(),
             tasks: TasksConfig::default(),
             auto_approve: Level::default(),
             data_dir,
@@ -251,6 +273,21 @@ impl Config {
             return Some(default);
         }
         None
+    }
+
+    /// Inject configured environment variables that are absent from the host process.
+    ///
+    /// Call this during startup, before applying environment overrides or spawning tasks.
+    pub fn inject_env(&self) -> std::result::Result<(), KernelError> {
+        for (name, value) in &self.env {
+            validate_env_entry(name, value)?;
+        }
+        for (name, value) in &self.env {
+            if std::env::var_os(name).is_none() {
+                std::env::set_var(name, value);
+            }
+        }
+        Ok(())
     }
 
     /// Apply environment variable overrides to this config

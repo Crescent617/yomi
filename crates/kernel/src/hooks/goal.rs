@@ -11,11 +11,18 @@ use std::sync::Arc;
 /// to continue streaming and injects the goal continuation prompt as steer blocks.
 pub struct GoalPreStopHandler {
     store: Arc<dyn GoalStore>,
+    background_tasks: Arc<crate::agent::BgTaskTracker>,
 }
 
 impl GoalPreStopHandler {
-    pub fn new(store: Arc<dyn GoalStore>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<dyn GoalStore>,
+        background_tasks: Arc<crate::agent::BgTaskTracker>,
+    ) -> Self {
+        Self {
+            store,
+            background_tasks,
+        }
     }
 }
 
@@ -39,6 +46,14 @@ impl HookHandler for GoalPreStopHandler {
 
     async fn run(&self, ctx: &HookContext) -> Result<HookResult> {
         tracing::info!("running GoalPreStopHandler");
+        let session_id = crate::types::SessionId::from(ctx.session_id.clone());
+        if self.background_tasks.is_running(&session_id) {
+            tracing::info!(
+                session_id = %ctx.session_id,
+                "skipping goal auto-continue while background tasks are running"
+            );
+            return Ok(HookResult::Passthrough);
+        }
         match self.store.load(&ctx.session_id).await {
             Ok(Some(goal)) => {
                 if matches!(goal.status, GoalStatus::Active) {

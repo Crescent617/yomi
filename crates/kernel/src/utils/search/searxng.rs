@@ -1,9 +1,9 @@
 //! `SearXNG` search engine.
 //!
-//! Requires `YOMI_SEARXNG_URL` to be set (e.g. `https://searx.be`).
+//! Requires `SEARXNG_URL` to be set (e.g. `https://searx.be`).
 //! Uses the JSON API endpoint (`/search?format=json`).
 
-use crate::tools::webfetch::get_client;
+use crate::utils::http::client as get_client;
 use crate::utils::search::{SearchEngine, SearchResult};
 use async_trait::async_trait;
 

@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 mod agent;
+mod bg_task;
 mod cancel;
 mod hooks;
 mod interceptor;
@@ -11,6 +12,7 @@ mod types;
 pub use turn::Turn;
 
 pub use agent::{Agent, AgentInput};
+pub use bg_task::{BgTaskGuard, BgTaskTracker};
 pub use cancel::{is_cancelled_error, CancelToken};
 pub use interceptor::{InterceptCtx, Interceptors, TodoReminderInterceptor, UserMsgInterceptor};
 pub use message_buffer::MessageBuffer;

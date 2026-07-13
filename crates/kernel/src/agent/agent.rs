@@ -85,6 +85,8 @@ pub struct Agent {
     current_provider: Option<Arc<dyn crate::provider::Provider>>,
     /// Cached model config for the current model (resolved each turn)
     current_model_config: Option<Arc<crate::provider::ModelConfig>>,
+    /// Whether the current user-initiated run already used its truncation recovery.
+    auto_continue_used: bool,
 }
 
 impl Agent {
@@ -150,6 +152,7 @@ impl Agent {
             &args.skills,
             args.allow_command_hooks,
             shared.goal_store.clone(),
+            Arc::clone(&shared.background_tasks),
         )
         .await;
 
@@ -193,6 +196,7 @@ impl Agent {
             max_tool_output_length: args.max_tool_output_length,
             current_provider: None,
             current_model_config: None,
+            auto_continue_used: false,
         }
     }
 
@@ -630,7 +634,10 @@ impl Agent {
 
     async fn handle_input(&mut self, input: AgentInput) -> Result<(), AgentError> {
         match input {
-            AgentInput::User { content } => self.inject_user_message(content, false).await,
+            AgentInput::User { content } => {
+                self.auto_continue_used = false;
+                self.inject_user_message(content, false).await
+            }
             AgentInput::Steer(blocks) => self.inject_user_message(blocks, true).await,
             AgentInput::Shutdown => {
                 tracing::info!("received close signal");
@@ -1192,11 +1199,9 @@ impl Agent {
 
         // No tool calls and no finish reason: the model likely stopped mid-stream
         // (e.g., hit max_tokens). Auto-inject one "continue" user message to resume.
-        // If the latest user message is already that synthetic message, stop instead
-        // of entering an unbounded continuation loop.
-        if matches!(finish_reason, None | Some(FinishReason::MaxTokens))
-            && !last_user_message_is_continue(self.message_buffer.messages())
-        {
+        // The runtime marker is reset only by the next real user message; steer and
+        // goal continuation messages must not open another truncation-recovery slot.
+        if should_auto_continue(&mut self.auto_continue_used, finish_reason) {
             tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
             let msg = Message::user("continue");
             self.push_user_message(msg);
@@ -1280,12 +1285,12 @@ impl Agent {
     }
 }
 
-fn last_user_message_is_continue(messages: &[Arc<Message>]) -> bool {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::User)
-        .is_some_and(|message| message.text_content().trim() == "continue")
+fn should_auto_continue(used: &mut bool, finish_reason: Option<FinishReason>) -> bool {
+    if *used || !matches!(finish_reason, None | Some(FinishReason::MaxTokens)) {
+        return false;
+    }
+    *used = true;
+    true
 }
 
 async fn wait_for_retry(cancel_token: &CancelToken, delay: Duration) -> Result<(), AgentError> {

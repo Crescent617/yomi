@@ -327,6 +327,7 @@ pub async fn build_hook_registry_with_skills(
     skills: &[std::sync::Arc<crate::skill::Skill>],
     allow_commands: bool,
     goal_store: Option<std::sync::Arc<dyn crate::goal::GoalStore>>,
+    background_tasks: std::sync::Arc<crate::agent::BgTaskTracker>,
 ) -> HookRegistry {
     let mut registry = match base {
         Some(h) => h.clone(),
@@ -350,7 +351,10 @@ pub async fn build_hook_registry_with_skills(
 
     // Register the built-in goal pre-stop hook if a goal store is available.
     if let Some(store) = goal_store {
-        registry.register(std::sync::Arc::new(GoalPreStopHandler::new(store)));
+        registry.register(std::sync::Arc::new(GoalPreStopHandler::new(
+            store,
+            background_tasks,
+        )));
     }
 
     registry

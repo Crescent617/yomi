@@ -107,6 +107,7 @@ pub async fn init_kernel(
             .map_err(|e| KernelError::config(format!("Failed to load config: {e}")))?,
         None => Config::default(),
     };
+    config.inject_env()?;
     config.apply_env_overrides();
     config.finalize();
 

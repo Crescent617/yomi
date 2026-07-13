@@ -150,6 +150,10 @@ fn main() {
     let mut config = kernel::config::Config::discover_file()
         .and_then(|p| kernel::config::Config::from_file(&p).ok())
         .unwrap_or_default();
+    if let Err(e) = config.inject_env() {
+        eprintln!("Failed to inject config environment: {e}");
+    }
+    config.apply_env_overrides();
     config.finalize();
 
     let _guard = kernel::utils::logging::init_logging(&config, "gui", true).unwrap_or_else(|e| {
