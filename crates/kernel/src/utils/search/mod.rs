@@ -71,10 +71,7 @@ pub(crate) fn available_engines() -> Vec<Box<dyn SearchEngine>> {
         let key = key.trim();
         if !key.is_empty() {
             let endpoint = env_first(&[env_names::KIMI_SEARCH_ENDPOINT]);
-            engines.push(Box::new(kimi::KimiEngine::new(
-                key.to_string(),
-                endpoint.map(|s| s.to_string()),
-            )));
+            engines.push(Box::new(kimi::KimiEngine::new(key.to_string(), endpoint)));
         }
     }
 

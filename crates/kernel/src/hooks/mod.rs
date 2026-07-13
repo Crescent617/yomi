@@ -289,7 +289,7 @@ pub fn build_registry(entries: &[HookEntry], allow_commands: bool) -> HookRegist
             "command" | "" => {
                 if !allow_commands {
                     tracing::warn!(
-                        "Command hook '{}' blocked: allow_command_hooks is disabled",
+                        "Command hook '{}' blocked: hooks feature is disabled",
                         entry.name
                     );
                     continue;

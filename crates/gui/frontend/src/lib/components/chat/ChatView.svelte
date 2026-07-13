@@ -9,8 +9,6 @@
   } from "../../state.svelte";
   import {
     activateSession,
-    openBrowser,
-    closeBrowser,
     closeTab,
     loadSessionMessages,
     syncSessionStatus,
@@ -32,7 +30,6 @@
   import QueuedInputBar from "./QueuedInputBar.svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import {
-    ArrowLeft,
     ChevronDown,
     ArrowUp,
     PanelLeftOpen,
@@ -45,7 +42,6 @@
     GitBranch,
     FileDiff,
     Command,
-    Globe,
     FolderOpen,
     Info,
     Loader2,
@@ -702,7 +698,14 @@
         ) {
           e.preventDefault();
           e.stopPropagation();
-          if (activeSession) openBrowser(activeSession.id, href);
+          if (activeSession) {
+            void api.openDefault(href).catch((error) => {
+              showNotification(
+                `Failed to open link: ${api.errorMessage(error)}`,
+                "error",
+              );
+            });
+          }
         }
         return;
       }
@@ -981,7 +984,14 @@
                 <button
                   class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
                   onclick={() => {
-                    api.openInExplorer(activeSession.project_path);
+                    void api
+                      .openDefault(activeSession.project_path)
+                      .catch((error) => {
+                        showNotification(
+                          `Failed to open project: ${api.errorMessage(error)}`,
+                          "error",
+                        );
+                      });
                     openDropdownOpen = false;
                   }}
                 >
@@ -1406,37 +1416,6 @@
       <div class="flex h-full relative">
         <!-- Main chat area -->
         <div class="flex-1 flex flex-col h-full min-w-0 relative">
-          <!-- Browser overlay -->
-          {#if activeSession?.browserUrl}
-            <div class="absolute inset-0 z-50 flex flex-col bg-background">
-              <div
-                class="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30 shrink-0"
-              >
-                <button
-                  type="button"
-                  onclick={() => {
-                    if (activeSession) closeBrowser(activeSession.id);
-                  }}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-sm font-medium text-foreground hover:bg-secondary/80 transition-colors"
-                >
-                  <ArrowLeft class="w-4 h-4" />
-                  Back
-                </button>
-                <div class="flex items-center gap-1 flex-1 min-w-0">
-                  <Globe class="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                  <span class="truncate text-sm text-muted-foreground"
-                    >{activeSession.browserUrl}</span
-                  >
-                </div>
-              </div>
-              <iframe
-                src={activeSession.browserUrl}
-                class="flex-1 w-full border-0"
-                title="Browser"
-                sandbox="allow-scripts allow-same-origin allow-popups"
-              ></iframe>
-            </div>
-          {/if}
           <div
             class="flex-1 relative min-h-0"
             onclick={handleChatClick}

@@ -44,7 +44,7 @@ impl Tool for PostMessageTool {
     }
 
     fn desc(&self) -> &'static str {
-        "Send/Replay a titled message to another agent by its ID. Use this to coordinate work, share findings, request help, or assign tasks to an agent. The recipient receives the message with your current session ID identified as the sender. Messages from other agents have the form `[From Agent: <agent_id>] <title>\\n<content>`."
+        "Send/Replay a titled message to another agent by its ID. Use this to coordinate work, share findings, request help, or assign tasks to an agent. The recipient receives the message with your current session ID identified as the sender. Messages from other agents have the form `[From Agent: <agent_id>] <title>\\n<content>`; set `agent_id` to the sender ID from that prefix when replying."
     }
 
     fn schema(&self) -> Value {

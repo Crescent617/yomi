@@ -44,7 +44,7 @@ tauri-plugin-notification = { workspace = true }
 fix-path-env = { workspace = true }
 
 # rustls crypto provider (required before any TLS operations)
-rustls = { version = "0.23.37", features = ["ring"] }
+rustls = { workspace = true, features = ["ring"] }
 
 # Load ~/.env on startup
 dotenvy = { workspace = true }

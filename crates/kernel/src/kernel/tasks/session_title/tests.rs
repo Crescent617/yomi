@@ -38,11 +38,12 @@ fn input_ignores_empty_text() {
 }
 
 #[test]
-fn generation_requires_more_than_10_chars() {
-    assert!(!should_generate("1234567890"));
-    assert!(should_generate("12345678901"));
-    assert!(!should_generate("你".repeat(10).as_str()));
-    assert!(should_generate("你".repeat(11).as_str()));
+fn generation_requires_feature_and_more_than_10_chars() {
+    assert!(!should_generate("12345678901", false));
+    assert!(!should_generate("1234567890", true));
+    assert!(should_generate("12345678901", true));
+    assert!(!should_generate("你".repeat(10).as_str(), true));
+    assert!(should_generate("你".repeat(11).as_str(), true));
 }
 
 #[test]

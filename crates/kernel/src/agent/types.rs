@@ -23,7 +23,8 @@ pub struct AgentConfig {
     pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
     pub compactor: Compactor,
-    /// Allow command hooks to execute (default false for security)
+    /// Whether command hooks may execute; derived from the hooks feature.
+    #[serde(skip)]
     pub allow_command_hooks: bool,
     /// Maximum tool output length in bytes (default `40_000`)
     pub max_tool_output_length: usize,

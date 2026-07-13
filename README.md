@@ -54,7 +54,7 @@ Or download the latest `.dmg` from the [releases page](https://github.com/cresce
 
 ### Configuration
 
-See [config.md](docs/config.md) for more options.
+See [CONFIG.md](docs/CONFIG.md) for more options.
 
 ```bash
 # General
@@ -143,7 +143,7 @@ curl --fail --get 'http://127.0.0.1:8080/search' \
 
 The response should be JSON containing a `results` array. A `403 Forbidden` response usually means `json` is missing from `search.formats`.
 
-For detailed installation and troubleshooting guidance, see [`docs/AGENTS.md`](docs/AGENTS.md) and the [official SearXNG container documentation](https://docs.searxng.org/admin/installation-docker.html).
+For detailed configuration guidance, see [`docs/CONFIG.md`](docs/CONFIG.md) and the [official SearXNG container documentation](https://docs.searxng.org/admin/installation-docker.html).
 
 ### Usage
 

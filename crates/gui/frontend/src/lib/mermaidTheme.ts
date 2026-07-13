@@ -11,7 +11,10 @@ function cssColor(variable: string): string {
 }
 
 function parseRgb(value: string): Rgb {
-  const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+  const channels = value
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map(Number);
   if (!channels || channels.length < 3) return { r: 0, g: 0, b: 0 };
   return { r: channels[0], g: channels[1], b: channels[2] };
 }

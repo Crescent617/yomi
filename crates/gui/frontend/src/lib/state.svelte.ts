@@ -238,7 +238,6 @@ export interface SessionState {
   goal?: { description: string; status: string } | null;
   todos?: { id: string; content: string; status: string }[];
   subagents: SubagentInfo[];
-  browserUrl?: string;
 }
 
 // ── Kernel event types (deserialized from Rust Event enum) ───────────────

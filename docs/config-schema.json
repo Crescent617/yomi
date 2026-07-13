@@ -67,11 +67,6 @@
           },
           "additionalProperties": false
         },
-        "allow_command_hooks": {
-          "description": "Allow command hooks to execute. Disabled by default for security.",
-          "type": "boolean",
-          "default": false
-        },
         "max_tool_output_length": {
           "description": "Maximum tool output length in bytes.",
           "type": "integer",
@@ -144,15 +139,18 @@
       "description": "Experimental feature flags.",
       "type": "object",
       "properties": {
-        "hooks": {
-          "description": "Enable PreToolUse / PostToolUse lifecycle hooks.",
+        "all": {
+          "description": "Enable every feature that is not explicitly overridden.",
           "type": "boolean",
           "default": false
         },
-        "allow_command_hooks": {
-          "description": "Allow command hooks (sh -c / cmd /C) to execute.",
-          "type": "boolean",
-          "default": false
+        "hooks": {
+          "description": "Enable lifecycle hooks, including shell command hooks. Inherits from all when omitted.",
+          "type": "boolean"
+        },
+        "update_session_title": {
+          "description": "Generate session titles with a model. Inherits from all when omitted.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -258,6 +256,23 @@
         "required": ["name", "platform"],
         "additionalProperties": false
       }
+    },
+    "env": {
+      "description": "General-purpose environment variables injected at startup when absent from the host. Keys are used verbatim and do not require the YOMI_ prefix.",
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    },
+    "tasks": {
+      "description": "Lightweight task configuration (e.g., auto title generation).",
+      "type": "object",
+      "properties": {
+        "fast_model": {
+          "description": "Model key used for lightweight tasks. Falls back to the session model when absent.",
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
     },
     "models": {
       "description": "Multi-model configuration array. At least one model is required.",

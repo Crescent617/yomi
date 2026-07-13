@@ -19,9 +19,9 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 rand = { workspace = true }
 
-lark-websocket-protobuf = "0.1.1"
+lark-websocket-protobuf = { workspace = true }
 
-prost = "0.13"
+prost = { workspace = true }
 
 tokio-util = { workspace = true }
 futures = { workspace = true, features = ["std"] }
