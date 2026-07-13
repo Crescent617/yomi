@@ -100,7 +100,7 @@
                 class="w-3 h-3 text-muted-foreground group-hover:text-primary transition-colors shrink-0"
               />
             {/if}
-            <span class="text-xs font-medium truncate">
+            <span class="text-xs font-medium truncate min-w-0">
               {s.title || "Untitled"}
             </span>
           </span>
@@ -112,7 +112,7 @@
                 class="w-1.5 h-1.5 rounded-full shrink-0"
                 style="background: {projectColor(project.name + project.dir)}"
               ></span>
-              <span class="truncate">{project.name}</span>
+              <span class="truncate min-w-0">{project.name}</span>
               <span>·</span>
             {/if}
             <span class="shrink-0"

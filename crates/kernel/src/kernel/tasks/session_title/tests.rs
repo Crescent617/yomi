@@ -38,12 +38,50 @@ fn input_ignores_empty_text() {
 }
 
 #[test]
-fn generation_requires_feature_and_more_than_10_chars() {
-    assert!(!should_generate("12345678901", false));
-    assert!(!should_generate("1234567890", true));
-    assert!(should_generate("12345678901", true));
-    assert!(!should_generate("你".repeat(10).as_str(), true));
-    assert!(should_generate("你".repeat(11).as_str(), true));
+fn generation_requires_only_the_feature_flag() {
+    assert!(!should_generate(false));
+    assert!(should_generate(true));
+}
+
+#[test]
+fn generation_input_includes_current_title_and_latest_prompt() {
+    assert_eq!(
+        generation_input(Some("代码高亮"), "复制按钮只在 hover 显示"),
+        "Current title:\n代码高亮\n\nLatest user prompt:\n复制按钮只在 hover 显示"
+    );
+    assert_eq!(
+        generation_input(None, "设计代码高亮"),
+        "Latest user prompt:\n设计代码高亮"
+    );
+}
+
+#[test]
+fn fallback_uses_the_latest_query() {
+    assert_eq!(
+        fallback_title("  fix   session title when model fails  "),
+        "fix session title wh"
+    );
+    assert_eq!(fallback_title("你好"), "你好");
+}
+
+#[test]
+fn title_model_config_disables_thinking_and_allows_output() {
+    let source = ModelConfig {
+        max_tokens: Some(1),
+        thinking: ThinkingConfig {
+            enabled: true,
+            budget_tokens: 4096,
+            effort: Some("high".to_string()),
+        },
+        ..ModelConfig::default()
+    };
+
+    let config = title_model_config(&source);
+
+    assert_eq!(config.max_tokens, Some(64));
+    assert!(!config.thinking.enabled);
+    assert_eq!(config.thinking.effort, None);
+    assert_eq!(config.thinking.budget_tokens, 2048);
 }
 
 #[test]

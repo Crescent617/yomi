@@ -25,6 +25,15 @@ async fn test_lock_key_timeout() {
 }
 
 #[tokio::test]
+async fn test_try_lock_returns_none_while_held() {
+    let key = "test_try_lock";
+    let guard = g_try_lock(key).expect("first lock should succeed");
+    assert!(g_try_lock(key).is_none());
+    drop(guard);
+    assert!(g_try_lock(key).is_some());
+}
+
+#[tokio::test]
 async fn test_concurrent_locks_different_keys() {
     let key1 = "test_key_1";
     let key2 = "test_key_2";

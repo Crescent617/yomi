@@ -338,6 +338,7 @@ impl Kernel {
 
     /// Rename a session (update title in storage, normalized: collapse whitespace, truncated to 20 chars).
     pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
+        let _guard = crate::tools::helper::g_lock(session_title_lock_key(id)).await;
         let title = normalize_session_title(&title);
         self.session_store().await.update_title(id, &title).await?;
         let noti = crate::notification::Notification::TitleUpdated {
@@ -779,27 +780,76 @@ impl Kernel {
         session_id: &SessionId,
         blocks: Vec<crate::types::ContentBlock>,
     ) -> Result<()> {
-        let title_input = tasks::session_title::input_from_blocks(&blocks);
+        self.send_message_inner(session_id, blocks, true).await
+    }
+
+    async fn send_message_inner(
+        &self,
+        session_id: &SessionId,
+        blocks: Vec<crate::types::ContentBlock>,
+        update_title: bool,
+    ) -> Result<()> {
+        let title_input = update_title
+            .then(|| tasks::session_title::input_from_blocks(&blocks))
+            .flatten();
         self.input_bus
             .publish(session_id.clone(), AgentInput::User { content: blocks })
             .map_err(|e| KernelError::io(format!("InputBus full: {e}")))?;
 
         if let Some(query) = title_input {
-            let fallback = normalize_session_title(&query);
-            if !fallback.is_empty() {
-                if let Err(error) = self.rename_session(session_id, fallback).await {
-                    tracing::warn!(
-                        session_id = %session_id.0,
-                        %error,
-                        "failed to set fallback session title"
-                    );
-                }
-            }
-            if tasks::session_title::should_generate(&query, self.update_session_title) {
-                self.spawn_session_title_generation(session_id.clone(), query);
-            }
+            self.update_session_title_after_message(session_id.clone(), query);
         }
         Ok(())
+    }
+
+    fn update_session_title_after_message(&self, session_id: SessionId, query: String) {
+        let session_store = self
+            .agent_shared
+            .session_store
+            .clone()
+            .expect("session_store not configured");
+        let notification_bus = Arc::clone(&self.notification_bus);
+        let should_generate = tasks::session_title::should_generate(self.update_session_title);
+
+        if should_generate {
+            self.spawn_session_title_generation(session_id, query);
+            return;
+        }
+
+        tokio::spawn(async move {
+            let Some(_guard) =
+                crate::tools::helper::g_try_lock(session_title_lock_key(&session_id))
+            else {
+                return;
+            };
+            let result = async {
+                let current_title = session_store
+                    .get(&session_id)
+                    .await?
+                    .and_then(|session| session.title);
+                if current_title.is_some() {
+                    return Result::<()>::Ok(());
+                }
+                let fallback = normalize_session_title(&query);
+                if fallback.is_empty() {
+                    return Ok(());
+                }
+                session_store.update_title(&session_id, &fallback).await?;
+                let _ = notification_bus.send(crate::notification::Notification::TitleUpdated {
+                    session_id: session_id.clone(),
+                    title: fallback,
+                });
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                tracing::warn!(
+                    session_id = %session_id.0,
+                    %error,
+                    "failed to set fallback session title"
+                );
+            }
+        });
     }
 
     /// Subscribe to events for a session (to be called by TUI / GUI / remote client).
@@ -1346,7 +1396,7 @@ impl crate::cron::CronExecutor for Kernel {
                 let sid = SessionId::from(session_id.clone());
                 let text = render_template(content);
                 let blocks = vec![ContentBlock::Text { text }];
-                self.send_message(&sid, blocks)
+                self.send_message_inner(&sid, blocks, false)
                     .await
                     .map_err(CronError::Session)?;
             }
@@ -1391,6 +1441,10 @@ fn agent_state_phase(state: AgentState) -> &'static str {
         AgentState::Compacting => "compacting",
         AgentState::Idle => "idle",
     }
+}
+
+fn session_title_lock_key(session_id: &SessionId) -> String {
+    format!("session-title:{}", session_id.0)
 }
 
 /// Normalize session title: collapse whitespace, trim, truncate to 20 chars.

@@ -1,14 +1,13 @@
 use crate::event::ContentChunk;
 use crate::kernel::{normalize_session_title, Kernel};
-use crate::provider::{ModelConfig, ModelStreamItem, Provider};
+use crate::provider::{ModelConfig, ModelStreamItem, Provider, ThinkingConfig};
 use crate::types::{ContentBlock, KernelError, Message, Result, SessionId};
 use futures::TryStreamExt;
 use std::sync::Arc;
 
 const PROMPT: &str = include_str!("prompt.txt");
 const MAX_INPUT_CHARS: usize = 200;
-const MIN_GENERATION_CHARS: usize = 10;
-const MAX_OUTPUT_TOKENS: u32 = 32;
+const MAX_OUTPUT_TOKENS: u32 = 64;
 
 pub(in crate::kernel) fn input_from_blocks(blocks: &[ContentBlock]) -> Option<String> {
     let text = blocks
@@ -23,8 +22,8 @@ pub(in crate::kernel) fn input_from_blocks(blocks: &[ContentBlock]) -> Option<St
     (!text.is_empty()).then_some(text)
 }
 
-pub(in crate::kernel) fn should_generate(query: &str, update_session_title: bool) -> bool {
-    update_session_title && query.chars().count() > MIN_GENERATION_CHARS
+pub(in crate::kernel) fn should_generate(update_session_title: bool) -> bool {
+    update_session_title
 }
 
 impl Kernel {
@@ -44,34 +43,72 @@ impl Kernel {
         let notification_bus = Arc::clone(&self.notification_bus);
 
         tokio::spawn(async move {
+            let Some(_guard) =
+                crate::tools::helper::g_try_lock(super::super::session_title_lock_key(&session_id))
+            else {
+                tracing::debug!(
+                    session_id = %session_id.0,
+                    "skipping overlapping session title generation"
+                );
+                return;
+            };
             let result = async {
-                let (provider, model_config) = match fast_model {
-                    Some(ref key) => match models.get(key) {
-                        Some(config) => (
-                            crate::create_provider_for_model(config)?,
-                            Arc::new(config.clone()),
-                        ),
-                        None => {
-                            tracing::warn!(
-                                fast_model = key,
-                                "tasks.fast_model not found; falling back to session model"
-                            );
-                            agent_shared
-                                .resolve_model(&session_id)
-                                .await
-                                .map_err(KernelError::Agent)?
-                        }
-                    },
-                    None => agent_shared
-                        .resolve_model(&session_id)
-                        .await
-                        .map_err(KernelError::Agent)?,
-                };
+                let current_title = session_store
+                    .get(&session_id)
+                    .await?
+                    .and_then(|session| session.title);
+                if current_title.is_none() {
+                    let fallback = normalize_session_title(&query);
+                    if !fallback.is_empty() {
+                        session_store.update_title(&session_id, &fallback).await?;
+                        let _ = notification_bus.send(
+                            crate::notification::Notification::TitleUpdated {
+                                session_id: session_id.clone(),
+                                title: fallback,
+                            },
+                        );
+                    }
+                }
+                let generated_title = async {
+                    let (provider, model_config) = match fast_model {
+                        Some(ref key) => match models.get(key) {
+                            Some(config) => (
+                                crate::create_provider_for_model(config)?,
+                                Arc::new(config.clone()),
+                            ),
+                            None => {
+                                tracing::warn!(
+                                    fast_model = key,
+                                    "tasks.fast_model not found; falling back to session model"
+                                );
+                                agent_shared
+                                    .resolve_model(&session_id)
+                                    .await
+                                    .map_err(KernelError::Agent)?
+                            }
+                        },
+                        None => agent_shared
+                            .resolve_model(&session_id)
+                            .await
+                            .map_err(KernelError::Agent)?,
+                    };
 
-                let title = generate(provider, &model_config, &query).await?;
-                if title.is_empty() {
-                    tracing::warn!("empty title generated {session_id}");
-                } else {
+                    generate(provider, &model_config, current_title.as_deref(), &query).await
+                }
+                .await;
+
+                let title = match generated_title {
+                    Ok(title) => title,
+                    Err(error) => {
+                        tracing::warn!(
+                            session_id = %session_id.0,
+                            %error,
+                            "session title generation failed; using latest query"
+                        );
+                        fallback_title(&query)
+                    }
+                };
+                if !title.is_empty() {
                     session_store.update_title(&session_id, &title).await?;
                     let _ =
                         notification_bus.send(crate::notification::Notification::TitleUpdated {
@@ -97,16 +134,15 @@ impl Kernel {
 async fn generate(
     provider: Arc<dyn Provider>,
     model_config: &ModelConfig,
+    current_title: Option<&str>,
     query: &str,
 ) -> Result<String> {
+    let input = generation_input(current_title, query);
     let messages = vec![
         Arc::new(Message::system(PROMPT)),
-        Arc::new(Message::user(query)),
+        Arc::new(Message::user(input)),
     ];
-    let config = ModelConfig {
-        max_tokens: Some(MAX_OUTPUT_TOKENS),
-        ..model_config.clone()
-    };
+    let config = title_model_config(model_config);
     let mut stream = provider
         .stream(&messages, &[], &config)
         .await
@@ -130,6 +166,29 @@ async fn generate(
         return Err(KernelError::session("title model returned an empty title"));
     }
     Ok(title)
+}
+
+fn fallback_title(query: &str) -> String {
+    normalize_session_title(query)
+}
+
+fn title_model_config(model_config: &ModelConfig) -> ModelConfig {
+    ModelConfig {
+        max_tokens: Some(MAX_OUTPUT_TOKENS),
+        thinking: ThinkingConfig::default(),
+        ..model_config.clone()
+    }
+}
+
+fn generation_input(current_title: Option<&str>, query: &str) -> String {
+    match current_title.filter(|title| !title.trim().is_empty()) {
+        Some(title) => format!(
+            "Current title:\n{}\n\nLatest user prompt:\n{}",
+            title.trim(),
+            query
+        ),
+        None => format!("Latest user prompt:\n{query}"),
+    }
 }
 
 fn clean_generated_title(output: &str) -> String {
