@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.12] - 2026-07-13
+
+### Added
+- 新增独立的 User Query Navigator，以紧凑短横线快速浏览并定位历史提问。
+
+### Changed
+- Session title 在每条非空用户文本后更新，并结合当前标题与最新意图生成新标题。
+- 精简聊天面包屑与部分列表、Toast 布局细节。
+
+### Fixed
+- 标题模型关闭 thinking、提高输出额度，并在生成失败时回退到最新用户输入。
+- 串行化自动标题与手动改名，避免并发更新相互覆盖。
+- 修复 Query Navigator 跳转后被自动滚回最新消息的问题。
+
 ## [0.5.11] - 2026-07-13
 
 ### Fixed
