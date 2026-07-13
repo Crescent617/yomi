@@ -52,15 +52,9 @@ python scripts/bump-version.py --level minor
 - `Cargo.toml`
 - `crates/gui/tauri.conf.json`
 - `crates/gui/package.json`
+- `crates/gui/package-lock.json`
 - `crates/gui/frontend/package.json`
-
-然后提交 bump 改动：
-
-```bash
-git add Cargo.toml crates/gui/tauri.conf.json crates/gui/package.json crates/gui/frontend/package.json
-NEW_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-git commit -m "chore: bump version to ${NEW_VERSION}"
-```
+- `crates/gui/frontend/package-lock.json`
 
 ### 5. 打 tag
 
