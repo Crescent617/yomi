@@ -250,27 +250,6 @@
           </p>
         </div>
         <div class="divide-y divide-border">
-          <label
-            class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3.5"
-          >
-            <div>
-              <div class="text-sm text-foreground">Sidebar collapsed</div>
-              <div class="text-xs text-muted-foreground">
-                Remember the project sidebar visibility.
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              checked={draft.layout.sidebarCollapsed}
-              onchange={(event) =>
-                preview(
-                  (value) =>
-                    (value.layout.sidebarCollapsed =
-                      event.currentTarget.checked),
-                )}
-              class="h-4 w-4 accent-primary"
-            />
-          </label>
           <div
             class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
           >

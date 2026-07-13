@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { extractTarget, parsePostMessageArgs } from "./tool-utils";
+import {
+  extractTarget,
+  parsePostMessageArgs,
+  postMessageSessionTarget,
+} from "./tool-utils";
 
 const argumentsJson = JSON.stringify({
   agent_id: "sub_123",
@@ -18,6 +22,14 @@ describe("postMessage tool rendering", () => {
       title: "Review complete",
       content: "Found two issues.",
     });
+  });
+
+  test("uses the postMessage recipient as its session target", () => {
+    expect(postMessageSessionTarget("postMessage", argumentsJson)).toBe(
+      "sub_123",
+    );
+    expect(postMessageSessionTarget("read", argumentsJson)).toBeNull();
+    expect(postMessageSessionTarget("postMessage", "{}")).toBeNull();
   });
 
   test("rejects incomplete arguments", () => {

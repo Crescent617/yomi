@@ -8,6 +8,7 @@ const LEGACY_HOME_MODEL_KEY = "home_model";
 
 export type ThemePreference = "light" | "dark" | "system";
 export type FontSizePreference = "xs" | "sm" | "base" | "lg" | "xl";
+export type SidebarViewPreference = "sessions" | "projects";
 
 export interface GuiPreferences {
   schemaVersion: 1;
@@ -18,6 +19,7 @@ export interface GuiPreferences {
   layout: {
     sidebarCollapsed: boolean;
     sidebarWidth: number;
+    sidebar_view: SidebarViewPreference;
   };
   notifications: {
     enabled: boolean;
@@ -45,6 +47,7 @@ export const defaultGuiPreferences: GuiPreferences = {
   layout: {
     sidebarCollapsed: false,
     sidebarWidth: 256,
+    sidebar_view: "projects",
   },
   notifications: {
     enabled: true,
@@ -101,6 +104,11 @@ function normalizeGuiPreferences(
         value?.layout?.sidebarCollapsed ??
         defaultGuiPreferences.layout.sidebarCollapsed,
       sidebarWidth: clampSidebarWidth(value?.layout?.sidebarWidth),
+      sidebar_view:
+        value?.layout?.sidebar_view === "sessions" ||
+        value?.layout?.sidebar_view === "projects"
+          ? value.layout.sidebar_view
+          : defaultGuiPreferences.layout.sidebar_view,
     },
     notifications: {
       enabled:
@@ -147,6 +155,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
         legacySettings.sidebarCollapsed ??
         defaultGuiPreferences.layout.sidebarCollapsed,
       sidebarWidth: defaultGuiPreferences.layout.sidebarWidth,
+      sidebar_view: defaultGuiPreferences.layout.sidebar_view,
     },
     notifications: {
       enabled:

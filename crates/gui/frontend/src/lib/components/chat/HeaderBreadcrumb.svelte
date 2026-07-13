@@ -17,6 +17,7 @@
   import { activateSession } from "../../session";
   import * as api from "../../api";
   import { formatTimeAgo } from "../../utils";
+  import { buildSessionBreadcrumb } from "./session-breadcrumb";
 
   let { session }: { session: SessionState } = $props();
 
@@ -60,19 +61,7 @@
       "Project",
   );
 
-  const chain = $derived.by(() => {
-    const items: SessionState[] = [];
-    let current: SessionState | undefined = session;
-    const seen = new Set<string>();
-    while (current && !seen.has(current.id)) {
-      seen.add(current.id);
-      items.push(current);
-      current = current.parent_session_id
-        ? getSession(current.parent_session_id)
-        : undefined;
-    }
-    return items.reverse();
-  });
+  const chain = $derived(buildSessionBreadcrumb(session, getSession));
 
   const filteredSessions = $derived(
     sessionOptions.filter((option) =>
@@ -175,7 +164,7 @@
         aria-expanded={menu === "session"}
         title="Switch session"
       >
-        <span class="truncate">{item.alias ?? item.id.slice(-8)}</span>
+        <span class="truncate">{item.label}</span>
         <ChevronDown class="size-3 shrink-0 text-muted-foreground" />
       </button>
     {:else}
@@ -183,9 +172,9 @@
         type="button"
         onclick={() => selectSession(item.id)}
         class="max-w-40 truncate rounded-sm px-1 py-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
-        title={`Open ${item.alias ?? item.id.slice(-8)}`}
+        title={`Open ${item.label}`}
       >
-        {item.alias ?? item.id.slice(-8)}
+        {item.label}
       </button>
     {/if}
   {/each}

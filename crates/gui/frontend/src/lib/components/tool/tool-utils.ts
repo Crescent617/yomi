@@ -117,6 +117,14 @@ export function parsePostMessageArgs(args: string): PostMessageArgs | null {
   return null;
 }
 
+export function postMessageSessionTarget(
+  toolName: string,
+  args: string,
+): string | null {
+  if (toolName.toLowerCase() !== "postmessage") return null;
+  return parsePostMessageArgs(args)?.agent_id || null;
+}
+
 export interface EditArgs {
   path: string;
   old_str: string;
@@ -203,6 +211,6 @@ export function diffLines(
 
 export { formatElapsed };
 
-export async function handleJumpToSubagent(sessionId: string) {
+export async function handleJumpToSession(sessionId: string) {
   await stateActivateSession(sessionId);
 }
