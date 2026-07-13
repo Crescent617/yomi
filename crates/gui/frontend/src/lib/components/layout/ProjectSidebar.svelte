@@ -22,6 +22,7 @@
   import StatusDot from "./StatusDot.svelte";
   import {
     sessionState,
+    unreadSessions,
     projectState,
     sessionCursors,
     pinnedSessionMeta,
@@ -107,7 +108,10 @@
 
   function getSessions(project_id: string) {
     return sessionState.sessions
-      .filter((s) => s.project_id === project_id)
+      .filter(
+        (session) =>
+          session.project_id === project_id && !session.parent_session_id,
+      )
       .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
   }
 
@@ -252,6 +256,7 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
+      delete unreadSessions[id];
       delete pinnedSessionMeta[id];
       loadPinnedSessions();
       if (sessionState.activeSessionId === id) setActiveSession(null);
@@ -296,8 +301,9 @@
       sessionState.sessions = sessionState.sessions.filter(
         (s) => s.project_id !== id,
       );
-      for (const sid of Object.keys(pinnedSessionMeta)) {
-        if (removedIds.has(sid)) delete pinnedSessionMeta[sid];
+      for (const sid of removedIds) {
+        delete unreadSessions[sid];
+        delete pinnedSessionMeta[sid];
       }
       delete sessionCursors[id];
       loadedProjects.delete(id);
@@ -546,6 +552,13 @@
                 >{projectName(session?.project_id)}</span
               >
               <div class="flex items-center gap-1.5 shrink-0">
+                {#if unreadSessions[session_id]}
+                  <span
+                    class="h-1.5 w-1.5 rounded-full bg-primary"
+                    aria-label="Unread"
+                    title="Unread"
+                  ></span>
+                {/if}
                 {#if session}
                   <StatusDot phase={session.phase} />
                 {/if}
@@ -627,6 +640,13 @@
               title={session.alias ?? "Untitled"}
             >
               {(session.alias ?? "Untitled").slice(0, 2).toUpperCase()}
+              {#if unreadSessions[session.id]}
+                <span
+                  class="absolute -top-0.5 -left-0.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-card"
+                  aria-label="Unread"
+                  title="Unread"
+                ></span>
+              {/if}
               <span class="absolute -top-0.5 -right-0.5">
                 <StatusDot phase={session.phase} />
               </span>
@@ -800,6 +820,13 @@
                     </span>
                   {/if}
                   <div class="flex items-center gap-1.5 shrink-0">
+                    {#if unreadSessions[session.id]}
+                      <span
+                        class="h-1.5 w-1.5 rounded-full bg-primary"
+                        aria-label="Unread"
+                        title="Unread"
+                      ></span>
+                    {/if}
                     <StatusDot phase={session.phase} />
                     {#if session.updated_at}
                       {@const menuOpen = projectMenu?.session_id === session.id}

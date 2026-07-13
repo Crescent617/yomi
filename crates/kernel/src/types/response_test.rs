@@ -1,4 +1,23 @@
-use super::{SessionId, SubagentResponse};
+use super::{ProjectId, RunningSessionResponse, SessionId, SubagentResponse};
+
+#[test]
+fn running_session_response_serializes_frontend_contract() {
+    let response = RunningSessionResponse {
+        id: SessionId::from("sub_child"),
+        parent_id: Some(SessionId::from("ses_parent")),
+        title: Some("Research".to_string()),
+        project_id: Some(ProjectId::from("project_1")),
+        phase: "executing_tool".to_string(),
+    };
+
+    let value = serde_json::to_value(response).unwrap();
+
+    assert_eq!(value["id"], "sub_child");
+    assert_eq!(value["parent_id"], "ses_parent");
+    assert_eq!(value["title"], "Research");
+    assert_eq!(value["project_id"], "project_1");
+    assert_eq!(value["phase"], "executing_tool");
+}
 
 #[test]
 fn subagent_response_serializes_frontend_contract() {

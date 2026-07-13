@@ -118,6 +118,18 @@ export interface SessionInfo {
   model_key?: string;
 }
 
+export interface RunningSessionInfo {
+  id: string;
+  parent_id: string | null;
+  title: string | null;
+  project_id: string | null;
+  phase: string;
+}
+
+export async function listRunningSessions(): Promise<RunningSessionInfo[]> {
+  return invokeCmd<RunningSessionInfo[]>("list_running_sessions");
+}
+
 export interface SubagentInfo {
   id: string;
   parent_session_id: string;
