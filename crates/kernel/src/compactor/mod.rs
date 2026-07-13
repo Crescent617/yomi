@@ -5,7 +5,7 @@
 //! 2. Full summarization: Use API to generate conversation summary
 
 use crate::provider::{ModelConfig, ModelStreamItem, Provider};
-use crate::types::{ContentBlock, Message, Role};
+use crate::types::{ContentBlock, FinishReason, Message, Role};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -389,6 +389,7 @@ async fn generate_summary(
     // Collect response with cancellation check
     let mut summary = String::new();
     let mut token_usage = crate::provider::TokenUsage::default();
+    let mut finish_reason = None;
 
     loop {
         let item = tokio::select! {
@@ -416,9 +417,25 @@ async fn generate_summary(
             ModelStreamItem::TokenUsage(usage) => {
                 token_usage = usage;
             }
+            ModelStreamItem::ResponseMeta {
+                finish_reason: reason,
+                ..
+            } => {
+                finish_reason = reason;
+            }
             ModelStreamItem::Complete => break,
             _ => {}
         }
+    }
+    if finish_reason != Some(FinishReason::Stop) {
+        return Err(CompactionError::Api(format!(
+            "Summary generation did not finish normally: {finish_reason:?}"
+        )));
+    }
+    if summary.trim().is_empty() {
+        return Err(CompactionError::Api(
+            "Summary generation returned an empty summary".to_string(),
+        ));
     }
     Ok((summary, token_usage))
 }

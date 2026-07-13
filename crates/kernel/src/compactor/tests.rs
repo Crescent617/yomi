@@ -110,6 +110,10 @@ impl Provider for RecordingProvider {
             Ok(ModelStreamItem::Chunk(crate::event::ContentChunk::Text(
                 "summary".to_string(),
             ))),
+            Ok(ModelStreamItem::ResponseMeta {
+                response_id: Some("summary-response".to_string()),
+                finish_reason: Some(crate::types::FinishReason::Stop),
+            }),
             Ok(ModelStreamItem::Complete),
         ])))
     }
@@ -117,6 +121,80 @@ impl Provider for RecordingProvider {
     fn name(&self) -> &'static str {
         "recording"
     }
+}
+
+#[derive(Debug)]
+struct FixedStreamProvider {
+    items: Vec<ModelStreamItem>,
+}
+
+#[async_trait]
+impl Provider for FixedStreamProvider {
+    async fn stream(
+        &self,
+        _messages: &[Arc<Message>],
+        _tools: &[Arc<ToolDefinition>],
+        _config: &ModelConfig,
+    ) -> Result<ModelStream, ProviderError> {
+        Ok(Box::pin(stream::iter(
+            self.items.clone().into_iter().map(Ok),
+        )))
+    }
+
+    fn name(&self) -> &'static str {
+        "fixed-stream"
+    }
+}
+
+#[tokio::test]
+async fn test_full_compact_rejects_truncated_summary() {
+    let provider: Arc<dyn Provider> = Arc::new(FixedStreamProvider {
+        items: vec![
+            ModelStreamItem::Chunk(crate::event::ContentChunk::Text("partial".to_string())),
+            ModelStreamItem::ResponseMeta {
+                response_id: Some("truncated-summary".to_string()),
+                finish_reason: Some(crate::types::FinishReason::MaxTokens),
+            },
+            ModelStreamItem::Complete,
+        ],
+    });
+
+    let error = Compactor::default()
+        .full_compact(
+            &[Arc::new(Message::user("preserve me"))],
+            provider,
+            &ModelConfig::default(),
+            None,
+        )
+        .await
+        .expect_err("truncated summary must not replace history");
+
+    assert!(error.to_string().contains("MaxTokens"));
+}
+
+#[tokio::test]
+async fn test_full_compact_rejects_empty_summary() {
+    let provider: Arc<dyn Provider> = Arc::new(FixedStreamProvider {
+        items: vec![
+            ModelStreamItem::ResponseMeta {
+                response_id: Some("empty-summary".to_string()),
+                finish_reason: Some(crate::types::FinishReason::Stop),
+            },
+            ModelStreamItem::Complete,
+        ],
+    });
+
+    let error = Compactor::default()
+        .full_compact(
+            &[Arc::new(Message::user("preserve me"))],
+            provider,
+            &ModelConfig::default(),
+            None,
+        )
+        .await
+        .expect_err("empty summary must not replace history");
+
+    assert!(error.to_string().contains("empty summary"));
 }
 
 #[tokio::test]

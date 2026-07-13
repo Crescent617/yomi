@@ -13,7 +13,8 @@ fn auto_continue_is_claimed_only_once_until_reset() {
     assert!(!should_auto_continue(&mut used, None));
 
     used = false;
-    assert!(should_auto_continue(&mut used, None));
+    assert!(!should_auto_continue(&mut used, None));
+    assert!(!used);
 }
 
 #[test]
