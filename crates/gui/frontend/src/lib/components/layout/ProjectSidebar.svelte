@@ -607,7 +607,7 @@
 
   {#if !collapsed && pinnedList.length > 0}
     <div
-      class="shrink-0 max-h-[33%] overflow-y-auto px-2 py-1"
+      class="scrollbar-hidden shrink-0 max-h-[33%] overflow-y-auto px-2 py-1"
       onscroll={closeMenus}
     >
       <div
@@ -621,7 +621,7 @@
           {@const active = sessionState.activeSessionId === session_id}
           <div class="relative">
             <div
-              class="group flex w-full items-center gap-2 rounded-sm border-l-2 px-3 py-1 transition-colors {active
+              class="group flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-3 pr-1 transition-colors {active
                 ? 'border-primary bg-primary/8 text-foreground'
                 : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
             >
@@ -753,7 +753,9 @@
   {/if}
 
   <div
-    class="flex-1 min-h-0 overflow-y-auto py-1 {collapsed ? 'px-1' : 'px-2'}"
+    class="scrollbar-hidden flex-1 min-h-0 overflow-y-auto py-1 {collapsed
+      ? 'px-1'
+      : 'px-2'}"
     onscroll={closeMenus}
   >
     {#if collapsed}
@@ -798,14 +800,16 @@
           >
             <h3
               id={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
-              class="sticky top-0 z-10 bg-card/95 px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground backdrop-blur-sm"
+              class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-2 text-[10px] font-medium text-muted-foreground backdrop-blur-sm"
             >
-              {group.label}
+              <span class="h-px w-8 bg-border" aria-hidden="true"></span>
+              <span class="shrink-0">{group.label}</span>
+              <span class="h-px w-8 bg-border" aria-hidden="true"></span>
             </h3>
             <div class="space-y-0.5">
               {#each group.sessions as session (session.id)}
                 <div
-                  class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 px-2 py-1.5 transition-colors {session.id ===
+                  class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
                     ? 'border-primary bg-primary/8 text-foreground'
                     : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
@@ -1116,7 +1120,7 @@
             >
               {#each getSessions(project.id) as session (session.id)}
                 <div
-                  class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 px-2 py-1 transition-colors {session.id ===
+                  class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
                     ? 'border-primary bg-primary/8 text-foreground'
                     : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
