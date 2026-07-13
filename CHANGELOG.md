@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-07-13
+
+### Fixed
+- 修复 Application Config 保存成功后因克隆 Svelte 状态代理而误报失败的问题。
+
 ## [0.5.10] - 2026-07-13
 
 ### Added
