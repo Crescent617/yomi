@@ -415,8 +415,13 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 let cancel = ctx
                     .cancel_token
                     .expect("cancel_token must be available for subagent tool");
+                let tracker_guard = self
+                    .shared
+                    .background_tasks
+                    .start(self.parent_session_id.clone());
                 let self_clone = self.clone();
                 tokio::spawn(async move {
+                    let tracker_guard = tracker_guard;
                     let (output, status) = tokio::select! {
                         biased;
                         () = cancel.cancelled() => {
@@ -424,6 +429,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                         }
                         result = self_clone.run_subagent(params) => result,
                     };
+                    drop(tracker_guard);
                     let steer = match &status {
                         SubAgentStatus::Completed => agent_prefix(
                             &session_id,

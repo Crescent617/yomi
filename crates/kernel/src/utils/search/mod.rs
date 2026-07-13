@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 pub mod bing;
 pub mod brave;
 pub mod ddg;
+pub mod kimi;
 pub mod searxng;
 pub mod serper;
 
@@ -49,19 +50,31 @@ pub fn encode_query(query: &str) -> String {
 ///
 /// Priority:
 /// 1. `SearXNG`, when configured.
-/// 2. Serper.dev, when configured.
-/// 3. Brave, when configured.
-/// 4. `DuckDuckGo`, then Bing, as free fallbacks.
+/// 2. Kimi, when configured.
+/// 3. Serper.dev, when configured.
+/// 4. Brave, when configured.
+/// 5. `DuckDuckGo`, then Bing, as free fallbacks.
 pub(crate) fn available_engines() -> Vec<Box<dyn SearchEngine>> {
     use crate::config::env_names;
     use crate::utils::env::env_first;
 
     let mut engines: Vec<Box<dyn SearchEngine>> = Vec::new();
 
-    if let Some(url) = env_first(&[env_names::SEARXNG_URL, env_names::YOMI_SEARXNG_URL]) {
+    if let Some(url) = env_first(&[env_names::SEARXNG_URL]) {
         let url = url.trim();
         if !url.is_empty() {
             engines.push(Box::new(searxng::SearxngEngine::new(url.to_string())));
+        }
+    }
+
+    if let Some(key) = env_first(&[env_names::KIMI_AGENT_API_KEY]) {
+        let key = key.trim();
+        if !key.is_empty() {
+            let endpoint = env_first(&[env_names::KIMI_SEARCH_ENDPOINT]);
+            engines.push(Box::new(kimi::KimiEngine::new(
+                key.to_string(),
+                endpoint.map(|s| s.to_string()),
+            )));
         }
     }
 
@@ -71,7 +84,7 @@ pub(crate) fn available_engines() -> Vec<Box<dyn SearchEngine>> {
         }
     }
 
-    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY, env_names::YOMI_BRAVE_API_KEY]) {
+    if let Some(key) = env_first(&[env_names::BRAVE_API_KEY]) {
         if !key.trim().is_empty() {
             engines.push(Box::new(brave::BraveEngine::new(key)));
         }
@@ -143,10 +156,9 @@ pub async fn search_all(
 
 /// Fetch raw page content from a URL and convert to clean text.
 pub async fn fetch_content(url: &str) -> Result<String, String> {
-    use crate::tools::webfetch::get_client;
     use crate::utils::strs::truncate_with_suffix;
 
-    let client = get_client();
+    let client = crate::utils::http::client();
 
     let response = client
         .get(url)

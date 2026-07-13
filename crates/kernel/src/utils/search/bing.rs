@@ -3,7 +3,7 @@
 //! This is the original Bing scraping logic, extracted into the util layer.
 //! It uses `+` for spaces (not `%20`) to improve Bing compatibility.
 
-use crate::tools::webfetch::get_client;
+use crate::utils::http::client as get_client;
 use crate::utils::search::{SearchEngine, SearchResult};
 use async_trait::async_trait;
 use base64::Engine as Base64Engine;

@@ -1,3 +1,4 @@
+use super::BgTaskTracker;
 use crate::compactor::Compactor;
 use crate::provider::{ModelConfig, ProviderError};
 use crate::skill::Skill;
@@ -7,7 +8,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
-
 /// Agent configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -349,6 +349,8 @@ pub struct AgentShared {
     pub goal_store: Option<Arc<dyn crate::goal::GoalStore>>,
     /// Global event bus for all agents and sessions
     pub event_bus: Option<Arc<crate::comms::EventBus>>,
+    /// Runtime tracker for asynchronous background work grouped by session.
+    pub background_tasks: Arc<BgTaskTracker>,
 }
 
 impl AgentShared {
@@ -419,6 +421,7 @@ impl AgentShared {
             goal_store: None,
             channel_hub: None,
             event_bus: None,
+            background_tasks: Arc::new(BgTaskTracker::default()),
         }
     }
 
@@ -437,6 +440,7 @@ impl AgentShared {
             goal_store: self.goal_store.clone(),
             channel_hub: self.channel_hub.clone(),
             event_bus: self.event_bus.clone(),
+            background_tasks: Arc::clone(&self.background_tasks),
             ..self.clone()
         }
     }

@@ -1,9 +1,9 @@
 //! Brave Search API engine.
 //!
-//! Requires `YOMI_BRAVE_API_KEY` to be set. Returns structured JSON
+//! Requires `BRAVE_API_KEY` to be set. Returns structured JSON
 //! results without any HTML scraping.
 
-use crate::tools::webfetch::get_client;
+use crate::utils::http::client as get_client;
 use crate::utils::search::{SearchEngine, SearchResult};
 use async_trait::async_trait;
 

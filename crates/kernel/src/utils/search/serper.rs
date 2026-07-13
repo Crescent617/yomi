@@ -2,7 +2,7 @@
 //!
 //! Requires `SERPER_API_KEY` to be set.
 
-use crate::tools::webfetch::get_client;
+use crate::utils::http::client as get_client;
 use crate::utils::search::{SearchEngine, SearchResult};
 use async_trait::async_trait;
 

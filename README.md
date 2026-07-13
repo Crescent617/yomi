@@ -74,43 +74,22 @@ export ANTHROPIC_MODEL=xxx
 
 ### Web Search
 
-Yomi's `webSearch` tool supports the following search backends:
+The `webSearch` tool tries engines in the following priority order. Set the environment variable for the engine(s) you want to enable.
 
-| Provider | Configuration |
-| --- | --- |
-| [Serper](https://serper.dev/) | `SERPER_API_KEY` |
-| [Brave Search](https://brave.com/search/api/) | `BRAVE_API_KEY` |
-| [SearXNG](https://docs.searxng.org/) | `SEARXNG_URL` or `search_provider_url` |
+| Priority | Engine | Environment Variable | Notes |
+| --- | --- | --- | --- |
+| 1 | SearXNG | `SEARXNG_URL` | Self-hosted; recommended. See [SearXNG with Docker](#searxng-with-docker) below. |
+| 2 | Kimi | `KIMI_AGENT_API_KEY` | Optional `KIMI_SEARCH_ENDPOINT` to override the built-in endpoint. |
+| 3 | Serper | `SERPER_API_KEY` | Paid Google Search API. |
+| 4 | Brave | `BRAVE_API_KEY` | Paid Brave Search API. |
+| 5 | DuckDuckGo | — | Free HTML scraping fallback. |
+| 6 | Bing | — | Free HTML scraping fallback. |
 
-Configure a provider in `~/.yomi/config.toml`:
-
-```toml
-# serper, brave, or searxng
-search_provider = "searxng"
-search_provider_url = "http://127.0.0.1:8080"
-```
-
-Environment variables are also supported:
-
-```bash
-# Serper
-export SERPER_API_KEY="..."
-
-# Brave Search
-export BRAVE_API_KEY="..."
-
-# SearXNG
-export SEARXNG_URL="http://127.0.0.1:8080"
-```
-
-The GUI loads environment variables from `~/.env` at startup (`%USERPROFILE%\\.env` on Windows). This is useful when launching the desktop app without a terminal:
+The GUI loads environment variables from `~/.env` at startup (`%USERPROFILE%\.env` on Windows). Example:
 
 ```dotenv
-SERPER_API_KEY=...
-# or
-BRAVE_API_KEY=...
-# or
 SEARXNG_URL=http://127.0.0.1:8080
+KIMI_AGENT_API_KEY=sk-...
 ```
 
 Restart the GUI after editing this file.

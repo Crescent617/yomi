@@ -26,6 +26,7 @@ pub fn load_config(config_path: Option<&PathBuf>) -> Result<Config> {
             .unwrap_or_default()
     };
 
+    config.inject_env()?;
     config.apply_env_overrides();
     config.finalize();
     Ok(config)

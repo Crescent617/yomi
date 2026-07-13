@@ -3,6 +3,7 @@
 pub mod asset;
 pub mod env;
 pub mod html;
+pub mod http;
 pub mod id;
 pub mod image;
 pub mod line_numbers;

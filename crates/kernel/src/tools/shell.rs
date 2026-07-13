@@ -34,11 +34,18 @@ pub const SHELL_TOOL_NAME: &str = "shell";
 #[derive(Clone)]
 pub struct ShellToolCtx {
     input_bus: Option<Arc<InputBus>>,
+    background_tasks: Arc<crate::agent::BgTaskTracker>,
 }
 
 impl ShellToolCtx {
-    pub fn new(input_bus: Option<Arc<InputBus>>) -> Self {
-        Self { input_bus }
+    pub fn new(
+        input_bus: Option<Arc<InputBus>>,
+        background_tasks: Arc<crate::agent::BgTaskTracker>,
+    ) -> Self {
+        Self {
+            input_bus,
+            background_tasks,
+        }
     }
 }
 
@@ -265,7 +272,7 @@ impl ShellTool {
         Ok(ToolOutput::text(output_text))
     }
 
-    /// Execute command in background and notify via `TaskResult` when complete
+    /// Execute command in background and send its completion as a steer message.
     async fn exec_async(
         &self,
         command: &str,
@@ -308,6 +315,9 @@ impl ShellTool {
             .spawn()?;
 
         let pid = child.id().unwrap_or(0);
+        let tracker_guard = ctx
+            .background_tasks
+            .start(SessionId::from(session_id.to_string()));
 
         let task_id_clone = task_id.clone();
         let output_path_clone = output_path;
@@ -349,6 +359,7 @@ impl ShellTool {
                 ),
             };
 
+            drop(tracker_guard);
             if let Err(e) = input_bus.publish(
                 SessionId::from(session_id.clone()),
                 AgentInput::Steer(vec![crate::types::ContentBlock::Text { text }]),

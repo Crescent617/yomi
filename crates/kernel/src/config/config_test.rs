@@ -30,6 +30,56 @@ fn test_env_prefix_constant() {
 }
 
 #[test]
+fn config_env_roundtrip() {
+    let parsed: Config = toml::from_str(
+        r#"
+[env]
+YOMI_TEST_CONFIG_ENV = "configured"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        parsed.env.get("YOMI_TEST_CONFIG_ENV").map(String::as_str),
+        Some("configured")
+    );
+}
+
+#[test]
+fn inject_env_preserves_existing_values() {
+    let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    std::env::set_var(&key, "host");
+    let mut config = Config::default();
+    config.env.insert(key.clone(), "configured".to_string());
+
+    config.inject_env().unwrap();
+
+    assert_eq!(std::env::var(&key).unwrap(), "host");
+    std::env::remove_var(key);
+}
+
+#[test]
+fn inject_env_sets_missing_values() {
+    let key = format!("YOMI_TEST_ENV_{}", crate::types::MessageId::new().as_str());
+    let mut config = Config::default();
+    config.env.insert(key.clone(), "configured".to_string());
+
+    config.inject_env().unwrap();
+
+    assert_eq!(std::env::var(&key).unwrap(), "configured");
+    std::env::remove_var(key);
+}
+
+#[test]
+fn inject_env_rejects_invalid_names() {
+    let mut config = Config::default();
+    config
+        .env
+        .insert("INVALID=NAME".to_string(), "value".to_string());
+    assert!(config.inject_env().is_err());
+}
+
+#[test]
 fn test_provider_parse() {
     assert_eq!(
         "openai".parse::<ModelProvider>().unwrap(),

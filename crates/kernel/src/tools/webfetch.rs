@@ -26,8 +26,6 @@ const MAX_CONTENT_LENGTH: usize = 10 * 1024 * 1024;
 const MAX_URL_LENGTH: usize = 2000;
 // Max markdown output length
 const MAX_RESULT_LENGTH: usize = 10_000;
-// Request timeout
-const FETCH_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Cache entry for fetched content
 #[derive(Clone)]
@@ -55,20 +53,6 @@ static CACHE: std::sync::OnceLock<FetchCache> = std::sync::OnceLock::new();
 
 fn get_cache() -> &'static FetchCache {
     CACHE.get_or_init(create_cache)
-}
-
-/// HTTP client with connection pooling for efficient concurrent requests
-static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-/// Get shared HTTP client instance
-pub fn get_client() -> &'static reqwest::Client {
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(FETCH_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .build()
-            .expect("Failed to build HTTP client")
-    })
 }
 
 /// Tool for fetching web content and extracting article content
@@ -143,7 +127,7 @@ impl WebFetchTool {
                 .await
                 .map_err(|e| format!("Failed to read file: {e}"))?,
             _ => {
-                let response = get_client()
+                let response = crate::utils::http::client()
                     .get(url)
                     .header("Accept", "text/html, text/plain, application/json, */*")
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
