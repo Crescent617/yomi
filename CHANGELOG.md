@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.13] - 2026-07-13
+
+### Added
+- Chat 侧边栏新增全部 Session 视图，并按从 30 分钟到更早月份的人性化时间窗口分组。
+- `postMessage` 工具调用支持直接跳转到目标 Session。
+
+### Changed
+- Session / Project 视图改为图标切换，并持久化侧边栏可见状态、宽度与所选视图。
+- Session 状态、未读提示与操作菜单共用紧凑槽位，Pinned 和 Project 列表交互保持一致。
+
+### Fixed
+- 修复父 Session 尚未加载时的面包屑导航，并避免切换父会话后残留子会话路径。
+- 修复全部 Session 列表重复加载、失败重试与嵌套交互控件问题。
+
 ## [0.5.12] - 2026-07-13
 
 ### Added
