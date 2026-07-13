@@ -47,6 +47,16 @@ dist/
 .env.local
 .env.*.local
 
+### Python ###
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
 # Editor
 .idea/
 .vscode/

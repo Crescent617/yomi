@@ -13,7 +13,9 @@ FILES = {
     "cargo": ROOT / "Cargo.toml",
     "tauri": ROOT / "crates" / "gui" / "tauri.conf.json",
     "gui_pkg": ROOT / "crates" / "gui" / "package.json",
+    "gui_lock": ROOT / "crates" / "gui" / "package-lock.json",
     "frontend_pkg": ROOT / "crates" / "gui" / "frontend" / "package.json",
+    "frontend_lock": ROOT / "crates" / "gui" / "frontend" / "package-lock.json",
 }
 
 
@@ -59,6 +61,16 @@ def set_json_version(path: Path, new: str):
     print(f"  {path.relative_to(ROOT)} → {new}")
 
 
+def set_package_lock_version(path: Path, new: str):
+    text = path.read_text()
+    pattern = r'("version":\s*)"[0-9]+\.[0-9]+\.[0-9]+"'
+    text, replacements = re.subn(pattern, rf'\g<1>"{new}"', text, count=2)
+    if replacements != 2:
+        raise ValueError(f"Expected two project version fields in {path}")
+    path.write_text(text)
+    print(f"  {path.relative_to(ROOT)} → {new}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bump or set project version")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -73,7 +85,9 @@ def main():
     set_cargo_version(FILES["cargo"], new)
     set_json_version(FILES["tauri"], new)
     set_json_version(FILES["gui_pkg"], new)
+    set_package_lock_version(FILES["gui_lock"], new)
     set_json_version(FILES["frontend_pkg"], new)
+    set_package_lock_version(FILES["frontend_lock"], new)
     print("Done.")
 
 
