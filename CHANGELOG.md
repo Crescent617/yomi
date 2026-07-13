@@ -5,13 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2026-07-13
+
+### Added
+- 状态栏展示运行中的主会话与子 Agent，并支持快速跳转。
+- 为后台完成的会话显示未读提示。
+
 ## [0.5.9] - 2026-07-13
 
 ### Added
 - 配置通用环境变量注入、功能开关和轻量任务模型。
 - 自动生成会话标题，并协调后台任务状态。
-- 状态栏展示运行中的主会话与子 Agent，并支持快速跳转。
-- 为后台完成的会话显示未读提示。
 
 ### Changed
 - GUI 配置编辑器与文档结构精简。
