@@ -6,7 +6,8 @@
     extractTarget,
     extraMeta,
     formatElapsed,
-    handleJumpToSubagent,
+    handleJumpToSession,
+    postMessageSessionTarget,
   } from "./tool-utils";
   import ToolIcon from "./ToolIcon.svelte";
   import ToolBody from "./ToolBody.svelte";
@@ -24,6 +25,10 @@
   let expanded = $state(false);
   const target = $derived(extractTarget(tool.tool_name, tool.arguments ?? ""));
   const meta = $derived(extraMeta(tool.tool_name, tool.arguments ?? ""));
+  const postMessageTarget = $derived(
+    postMessageSessionTarget(tool.tool_name, tool.arguments ?? "") ?? undefined,
+  );
+  const sessionTarget = $derived(tool.subagent_session_id ?? postMessageTarget);
   const isSubagent = $derived(Boolean(tool.subagent_session_id));
   const label = $derived(
     isSubagent
@@ -133,13 +138,13 @@
         {/if}
       </button>
 
-      {#if tool.subagent_session_id}
+      {#if sessionTarget}
         <button
           type="button"
-          onclick={() => handleJumpToSubagent(tool.subagent_session_id!)}
+          onclick={() => handleJumpToSession(sessionTarget!)}
           class="group/open inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          title="Open subagent session"
-          aria-label="Open subagent session"
+          title="Open target session"
+          aria-label="Open target session"
         >
           <span class="hidden sm:inline">Open</span>
           <ArrowRight
