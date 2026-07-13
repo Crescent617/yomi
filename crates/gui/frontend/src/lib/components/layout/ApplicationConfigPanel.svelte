@@ -75,7 +75,7 @@
   }
 
   function restore(target: GuiPreferences) {
-    const copy = structuredClone(target);
+    const copy = $state.snapshot(target);
     Object.assign(draft.appearance, copy.appearance);
     Object.assign(draft.layout, copy.layout);
     Object.assign(draft.notifications, copy.notifications);
