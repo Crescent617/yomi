@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { Mail } from "lucide-svelte";
+  import { Bot, Mail } from "lucide-svelte";
+  import { activateSession } from "../../session";
   import { formatMessageTime } from "../../utils";
-  import { userTextForHeight } from "./user-text";
+  import { parseSteerMessage } from "./steer-message";
   import UserText from "./UserText.svelte";
 
   let {
@@ -13,10 +14,26 @@
   } = $props();
 
   let expanded = $state(false);
-  const measuredText = $derived(userTextForHeight(content));
-  const isLong = $derived(
-    measuredText.split("\n").length > 5 || measuredText.length > 400,
-  );
+  let textElement = $state<HTMLDivElement>();
+  let isLong = $state(false);
+  const parsed = $derived(parseSteerMessage(content));
+
+  $effect(() => {
+    void parsed.content;
+    const element = textElement;
+    if (!element) return;
+
+    const measureOverflow = () => {
+      if (!expanded) {
+        isLong = element.scrollHeight > element.clientHeight + 1;
+      }
+    };
+    measureOverflow();
+
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  });
 </script>
 
 <div
@@ -24,11 +41,23 @@
   aria-label="Steer message"
   title="Steer message"
 >
-  <Mail class="mt-0.5 size-3.5 shrink-0 text-info" aria-hidden="true" />
-  <div class="min-w-0 flex-1 text-sm leading-5 text-foreground">
+  <Mail class="mt-0.5 size-3 shrink-0 text-info" aria-hidden="true" />
+  <div class="min-w-0 flex-1 text-xs leading-4 text-foreground">
+    {#if parsed.agentId}
+      <button
+        type="button"
+        class="mb-0.5 inline-flex max-w-full items-center gap-1 rounded-sm text-[11px] font-medium text-info transition-colors hover:text-info/80 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        onclick={() => void activateSession(parsed.agentId!)}
+        title={`Open agent session ${parsed.agentId}`}
+        aria-label={`Open agent session ${parsed.agentId}`}
+      >
+        <Bot class="size-3 shrink-0" aria-hidden="true" />
+        <span class="truncate font-mono">{parsed.agentId}</span>
+      </button>
+    {/if}
     <div class="relative min-w-0" class:message-collapsed={isLong && !expanded}>
-      <div class="min-w-0" class:truncate={isLong && !expanded}>
-        <UserText text={content} compact />
+      <div class="min-w-0" class:truncate={!expanded} bind:this={textElement}>
+        <UserText text={parsed.content} compact />
       </div>
       {#if isLong && !expanded}
         <div
@@ -40,7 +69,7 @@
     {#if isLong}
       <button
         type="button"
-        class="relative z-10 mt-0.5 inline-flex cursor-pointer text-xs font-medium text-info hover:underline"
+        class="relative z-10 mt-0.5 inline-flex cursor-pointer text-[11px] font-medium text-info hover:underline"
         onclick={() => (expanded = !expanded)}
         aria-expanded={expanded}
       >
@@ -51,7 +80,7 @@
   {#if created_at}
     <time
       datetime={created_at}
-      class="ml-auto shrink-0 text-[10px] leading-5 tabular-nums text-muted-foreground/70"
+      class="ml-auto shrink-0 text-[10px] leading-4 tabular-nums text-muted-foreground/70"
     >
       {formatMessageTime(created_at)}
     </time>
@@ -60,7 +89,7 @@
 
 <style>
   .truncate {
-    max-height: 120px;
+    max-height: 2rem;
     overflow: hidden;
   }
 
