@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.16] - 2026-07-14
+
+### Changed
+- 为 Session / Project 视图切换增加滑动指示器和过渡动画。
+- 所有流式错误至少重试一次；可重试错误继续使用完整重试预算。
+
+### Fixed
+- 避免兼容代理返回畸形流式错误时立即终止 Agent。
+
 ## [0.5.14] - 2026-07-13
 
 ### Changed
