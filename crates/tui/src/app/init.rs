@@ -171,6 +171,44 @@ impl Model {
         Ok(())
     }
 
+    /// Initialize running subagent and background shell counts.
+    pub async fn init_activity_status(&mut self) -> Result<()> {
+        let session_id = kernel::types::SessionId::from(self.session_id.clone());
+        self.active_subagents = self
+            .kernel
+            .list_subagents(&session_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|subagent| subagent.is_running)
+            .map(|subagent| subagent.id.to_string())
+            .collect();
+        self.background_shell_count = self
+            .kernel
+            .list_running_sessions()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|session| session.id == session_id)
+            .map_or(0, |session| session.background_shells.len());
+        self.update_activity_status();
+        Ok(())
+    }
+
+    pub(crate) fn update_activity_status(&mut self) {
+        let value = format!(
+            "{}\x00{}",
+            self.active_subagents.len(),
+            self.background_shell_count
+        );
+        let _ = self.app.attr(
+            &Id::StatusBar,
+            Attribute::Custom(attr::SET_ACTIVITY_COUNTS),
+            AttrValue::String(value),
+        );
+        self.state.should_redraw = true;
+    }
+
     /// Initialize context window display in status bar
     pub fn init_ctx_usage(&mut self, tokens: u32, context_window: u32) -> Result<()> {
         let usage_str = format!("{tokens}\x00{context_window}");

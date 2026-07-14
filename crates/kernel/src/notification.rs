@@ -18,13 +18,18 @@ pub enum Notification {
         session_id: SessionId,
         title: String,
     },
+    BackgroundTasksChanged {
+        session_id: SessionId,
+        kind: crate::agent::BackgroundTaskKind,
+        count: usize,
+    },
     ConnectionLost {
         session_id: SessionId,
     },
 }
 
 /// Broadcast bus for notifications.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NotificationBus {
     tx: broadcast::Sender<Notification>,
 }

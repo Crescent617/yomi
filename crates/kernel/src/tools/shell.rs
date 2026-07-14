@@ -317,7 +317,14 @@ impl ShellTool {
         let pid = child.id().unwrap_or(0);
         let tracker_guard = ctx
             .background_tasks
-            .start(SessionId::from(session_id.to_string()));
+            .start_shell(crate::agent::BackgroundShellTask {
+                task_id: task_id.clone(),
+                session_id: SessionId::from(session_id.to_string()),
+                pid,
+                command: command.to_string(),
+                output_path: output_path_str.clone(),
+                started_at: chrono::Utc::now(),
+            });
 
         let task_id_clone = task_id.clone();
         let output_path_clone = output_path;

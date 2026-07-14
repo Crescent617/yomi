@@ -20,6 +20,11 @@ pub enum TaggedEvent {
         session_id: String,
         event: Event,
     },
+    BackgroundTasksChanged {
+        session_id: String,
+        kind: kernel::agent::BackgroundTaskKind,
+        count: usize,
+    },
     Connected,
     ConnectionLost,
 }
@@ -79,6 +84,13 @@ impl EventPump {
         tokio::spawn(async move {
             let sid = SessionId::from(session_id);
             let mut current_rx = Some(initial_rx);
+            let mut notification_rx = match kernel.subscribe_notifications().await {
+                Ok(rx) => Some(rx),
+                Err(e) => {
+                    tracing::warn!("Failed to subscribe to background task notifications: {e}");
+                    None
+                }
+            };
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
             // Connection-state transitions must not be dropped, so use the
@@ -116,6 +128,31 @@ impl EventPump {
                 tokio::select! {
                     biased;
                     () = cancel_for_task.cancelled() => break 'outer,
+
+                    noti = async {
+                        match notification_rx.as_mut() {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        match noti {
+                            Some(kernel::notification::Notification::BackgroundTasksChanged {
+                                session_id,
+                                kind,
+                                count,
+                            }) if session_id == sid => {
+                                if tx.send(TaggedEvent::BackgroundTasksChanged {
+                                    session_id: session_id.to_string(),
+                                    kind,
+                                    count,
+                                }).await.is_err() {
+                                    break 'outer;
+                                }
+                            }
+                            Some(_) => {}
+                            None => notification_rx = None,
+                        }
+                    }
 
                     opt = r.recv() => {
                         match opt {

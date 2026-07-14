@@ -175,18 +175,11 @@ impl std::fmt::Display for ModelProvider {
 pub struct FeaturesConfig {
     /// Enable all features unless a feature is explicitly overridden.
     pub all: bool,
-    /// Enable lifecycle hooks, including command hooks.
-    pub hooks: Option<bool>,
     /// Generate a session title with a model after receiving a user message.
     pub update_session_title: Option<bool>,
 }
 
 impl FeaturesConfig {
-    #[must_use]
-    pub fn hooks_enabled(&self) -> bool {
-        self.hooks.unwrap_or(self.all)
-    }
-
     #[must_use]
     pub fn update_session_title_enabled(&self) -> bool {
         self.update_session_title.unwrap_or(self.all)
@@ -216,9 +209,6 @@ pub struct Config {
     pub log_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_folders: Option<Vec<String>>,
-    /// Global user-level hooks
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub hooks: Vec<crate::hooks::HookEntry>,
     /// Experimental feature flags
     pub features: FeaturesConfig,
     /// Maximum number of checkpoints to retain per session (default: 5)
@@ -242,7 +232,6 @@ impl Default for Config {
             data_dir,
             log_dir: None,
             skill_folders: None,
-            hooks: Vec::new(),
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
             channels: Vec::new(),

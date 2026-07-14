@@ -71,8 +71,6 @@ pub struct Agent {
     working_dir: std::path::PathBuf,
     /// Mailbox for receiving input messages
     mailbox: Arc<Mailbox>,
-    /// Hook registry for `PreToolUse` / `PostToolUse` / `PreStop` lifecycle hooks
-    hook_registry: crate::hooks::HookRegistry,
     /// Checkpoint store for persistence
     checkpoint_store: Arc<dyn crate::checkpoint::CheckpointStore>,
     /// Data directory for checkpoints
@@ -105,13 +103,13 @@ impl Agent {
             |eb| eb.handle(session_id.clone()),
         );
 
-        let session_id_for_hook = session_id.clone();
-        let event_bus_for_hook = event_bus.clone();
+        let session_id_for_state_change = session_id.clone();
+        let event_bus_for_state_change = event_bus.clone();
         let context = AgentExecutionContext::new(
             AgentState::Idle,
             Some(Box::new(move |state: AgentState| {
-                if let Err(e) = event_bus_for_hook.try_send(crate::event::Envelope::new(
-                    session_id_for_hook.clone(),
+                if let Err(e) = event_bus_for_state_change.try_send(crate::event::Envelope::new(
+                    session_id_for_state_change.clone(),
                     Event::Agent(AgentEvent::StateChanged { state }),
                 )) {
                     tracing::warn!("Failed to send StateChanged event for {:?}: {}", state, e);
@@ -147,15 +145,6 @@ impl Agent {
             .with_file_state_store(args.file_state_store.clone()),
         );
 
-        let hook_registry = crate::hooks::build_hook_registry_with_skills(
-            shared.hook_registry.as_deref(),
-            &args.skills,
-            args.allow_command_hooks,
-            shared.goal_store.clone(),
-            Arc::clone(&shared.background_tasks),
-        )
-        .await;
-
         let permission_checker = shared
             .permission_state
             .as_ref()
@@ -189,7 +178,6 @@ impl Agent {
             permission_checker,
             working_dir: args.working_dir,
             mailbox,
-            hook_registry,
             checkpoint_store,
             data_dir,
             current_turn: None,
@@ -1234,37 +1222,40 @@ impl Agent {
             }
         }
 
-        // A normal text response is the only completion that may be continued by
-        // PreStop hooks. Tool calls and abnormal terminal states are handled above.
-        let ctx = crate::hooks::HookContext::pre_stop(&*self.session_id.0, &self.data_dir);
-        let result = self.hook_registry.run_pre_stop(&ctx).await;
-
-        if let crate::hooks::HookResult::PreStop(decision) = result {
-            if decision.continue_session {
-                let steer_blocks = decision.steer_blocks.unwrap_or(Vec::new());
-                if !steer_blocks.is_empty() {
-                    self.inject_user_message(steer_blocks, true).await?;
-                }
-                tracing::info!(
-                    "PreStop hooks decided to continue session, transitioning to Streaming"
-                );
-                self.context.transition_to(AgentState::Streaming);
-                return Ok(());
-            }
-        }
-
-        // No hook or hook says stop
-        // If a goal exists and is not Active, emit GoalUpdated so frontends know
+        // A normal text response with an active goal continues unless background
+        // work is still running. Tool calls and abnormal terminal states are
+        // handled above.
         if let Some(ref store) = self.shared.goal_store {
-            if let Ok(Some(goal)) = store.load(&self.session_id).await {
-                if !matches!(goal.status, crate::goal::GoalStatus::Active) {
+            match store.load(&self.session_id).await {
+                Ok(Some(goal)) if matches!(goal.status, crate::goal::GoalStatus::Active) => {
+                    if self.shared.background_tasks.is_running(&self.session_id) {
+                        tracing::info!(
+                            session_id = %self.session_id,
+                            "skipping goal auto-continue while background tasks are running"
+                        );
+                    } else {
+                        self.inject_user_message(
+                            vec![ContentBlock::Text {
+                                text: goal.build_continue_prompt(),
+                            }],
+                            true,
+                        )
+                        .await?;
+                        tracing::info!("active goal continuing session");
+                        return Ok(());
+                    }
+                }
+                Ok(Some(goal)) => {
                     self.emit(Event::Agent(crate::event::AgentEvent::GoalUpdated {
-                        description: goal.description.clone(),
+                        description: goal.description,
                         status: goal.status.as_str().to_string(),
                     }));
                 }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("failed to load goal state: {e}"),
             }
         }
+
         self.emit_stopped_completed(finish_reason);
         self.context.transition_to(AgentState::Idle);
         Ok(())

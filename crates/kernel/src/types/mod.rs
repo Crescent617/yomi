@@ -151,6 +151,7 @@ pub struct RunningSessionResponse {
     pub title: Option<String>,
     pub project_id: Option<ProjectId>,
     pub phase: String,
+    pub background_shells: Vec<crate::agent::BackgroundShellTask>,
 }
 
 /// Direct subagent session details with derived runtime status.

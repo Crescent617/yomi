@@ -95,46 +95,6 @@
       "type": ["array", "null"],
       "items": { "type": "string" }
     },
-    "hooks": {
-      "description": "Global user-level lifecycle hooks.",
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Unique hook name.",
-            "type": "string"
-          },
-          "event": {
-            "description": "Lifecycle event that triggers the hook.",
-            "type": "string",
-            "enum": ["pre_tool_use", "post_tool_use", "pre_stop"]
-          },
-          "matcher": {
-            "description": "Regex pattern for matching tool names or conditions.",
-            "type": "string"
-          },
-          "type": {
-            "description": "Handler type. 'command' or empty for command hooks.",
-            "type": "string",
-            "default": ""
-          },
-          "command": {
-            "description": "Shell command to execute (always run through sh -c / cmd /C).",
-            "type": "string"
-          },
-          "timeout": {
-            "description": "Command timeout in seconds.",
-            "type": "integer",
-            "minimum": 1,
-            "default": 30
-          }
-        },
-        "required": ["name", "event", "matcher", "command"],
-        "additionalProperties": false
-      },
-      "default": []
-    },
     "features": {
       "description": "Experimental feature flags.",
       "type": "object",
@@ -143,10 +103,6 @@
           "description": "Enable every feature that is not explicitly overridden.",
           "type": "boolean",
           "default": false
-        },
-        "hooks": {
-          "description": "Enable lifecycle hooks, including shell command hooks. Inherits from all when omitted.",
-          "type": "boolean"
         },
         "update_session_title": {
           "description": "Generate session titles with a model. Inherits from all when omitted.",

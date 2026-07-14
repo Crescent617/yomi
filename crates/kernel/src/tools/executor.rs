@@ -139,7 +139,7 @@ fn content_blocks_to_text(blocks: &[crate::types::ToolOutputBlock]) -> String {
 }
 
 /// Execute a single tool and return its raw output.
-/// This is the pure execution primitive — no emit, no hooks, no persistence.
+/// This is the pure execution primitive — no emit or persistence.
 pub async fn execute_single_tool(
     tool: Arc<dyn Tool>,
     arguments: serde_json::Value,

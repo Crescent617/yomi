@@ -420,10 +420,10 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 let cancel = ctx
                     .cancel_token
                     .expect("cancel_token must be available for subagent tool");
-                let tracker_guard = self
-                    .shared
-                    .background_tasks
-                    .start(self.parent_session_id.clone());
+                let tracker_guard = self.shared.background_tasks.start(
+                    self.parent_session_id.clone(),
+                    crate::agent::BackgroundTaskKind::Subagent,
+                );
                 let self_clone = self.clone();
                 tokio::spawn(async move {
                     let tracker_guard = tracker_guard;

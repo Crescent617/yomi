@@ -9,8 +9,6 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
-    /// Raw hooks value from frontmatter (parsed later into `HookRegistry`)
-    pub hooks: Option<serde_yaml::Value>,
     pub source_path: PathBuf,
 }
 
@@ -26,9 +24,6 @@ struct SkillFrontmatter {
     description: String,
     #[serde(default)]
     triggers: Vec<String>,
-    /// Optional hooks declaration (YAML array string or inline table array)
-    #[serde(default)]
-    hooks: Option<serde_yaml::Value>,
 }
 
 /// Skill loader that scans directories for SKILL.md files
@@ -158,7 +153,6 @@ impl SkillLoader {
             name: skill_name,
             description: frontmatter.description,
             triggers: frontmatter.triggers,
-            hooks: frontmatter.hooks,
             source_path: path.to_path_buf(),
         })
     }

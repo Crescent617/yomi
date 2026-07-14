@@ -8,6 +8,16 @@ fn running_session_response_serializes_frontend_contract() {
         title: Some("Research".to_string()),
         project_id: Some(ProjectId::from("project_1")),
         phase: "executing_tool".to_string(),
+        background_shells: vec![crate::agent::BackgroundShellTask {
+            task_id: "sh-1".to_string(),
+            session_id: SessionId::from("sub_child"),
+            pid: 42,
+            command: "cargo test".to_string(),
+            output_path: "/tmp/yomi_sh-1.log".to_string(),
+            started_at: chrono::DateTime::parse_from_rfc3339("2026-07-12T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }],
     };
 
     let value = serde_json::to_value(response).unwrap();
@@ -17,6 +27,9 @@ fn running_session_response_serializes_frontend_contract() {
     assert_eq!(value["title"], "Research");
     assert_eq!(value["project_id"], "project_1");
     assert_eq!(value["phase"], "executing_tool");
+    assert_eq!(value["background_shells"][0]["task_id"], "sh-1");
+    assert_eq!(value["background_shells"][0]["pid"], 42);
+    assert_eq!(value["background_shells"][0]["command"], "cargo test");
 }
 
 #[test]

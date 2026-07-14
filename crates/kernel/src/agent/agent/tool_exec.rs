@@ -10,23 +10,19 @@
 //!   └─ execute_tools()
 //!        ├─ emit ToolEvent::Start     — for every pending call
 //!        ├─ permission check          — split into approved / denied
-//!        ├─ pre hooks                 — may block further calls → denied
 //!        ├─ emit + save denied        — immediately persisted
-//!        ├─ JoinSet (parallel exec)
-//!        │    └─ join_next() loop
-//!        │         ├─ post hook       — per result
-//!        │         ├─ emit End event
-//!        │         └─ push_message()  — immediately persisted
-//!        └─ inject post-hook contexts as user messages
+//!        └─ JoinSet (parallel exec)
+//!             └─ join_next() loop
+//!                  ├─ emit End event
+//!                  └─ push_message()  — immediately persisted
 //! ```
 
-use super::super::hooks::{run_post_tool_hook_single, run_pre_tool_hooks};
 use crate::event::{Event, ToolEvent};
 use crate::tools::executor::{
     build_tool_result, execute_single_tool, log_tool_result, ToolExecutionResult,
 };
 use crate::tools::{Tool, ToolExecCtx};
-use crate::types::{Message, MessageId, Role, ToolCall};
+use crate::types::{MessageId, Role, ToolCall};
 use futures::FutureExt;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -48,7 +44,7 @@ impl Agent {
             return Err(AgentError::Cancelled("tool execution".into()));
         }
 
-        let Some((all_calls, pending)) = self.pending_tool_calls() else {
+        let Some((_, pending)) = self.pending_tool_calls() else {
             // No resumable tool batch found — nothing to do.
             self.context.transition_to(AgentState::Streaming);
             return Ok(());
@@ -60,14 +56,8 @@ impl Agent {
             return Ok(());
         }
 
-        let continue_session = self.execute_tools(&all_calls, pending).await?;
-
-        if continue_session {
-            self.context.transition_to(AgentState::Streaming);
-        } else {
-            tracing::info!("stopping after tool execution (hook requested)");
-            self.context.transition_to(AgentState::Idle);
-        }
+        self.execute_tools(pending).await?;
+        self.context.transition_to(AgentState::Streaming);
         Ok(())
     }
 
@@ -121,17 +111,8 @@ impl Agent {
         Some((all_calls, pending))
     }
 
-    /// Execute `pending_calls` in parallel, with permission checks and hooks.
-    ///
-    /// `all_calls` is needed by post-hooks to look up tool names by call id.
-    ///
-    /// Returns `true` when the session should continue to `Streaming`,
-    /// `false` when a post-hook requested a stop.
-    async fn execute_tools(
-        &mut self,
-        all_calls: &[ToolCall],
-        pending_calls: Vec<ToolCall>,
-    ) -> Result<bool, AgentError> {
+    /// Execute `pending_calls` in parallel, after permission checks.
+    async fn execute_tools(&mut self, pending_calls: Vec<ToolCall>) -> Result<(), AgentError> {
         tracing::info!("Executing {} tool(s) in parallel", pending_calls.len());
 
         // Pre-assign MessageIds so Start/End events share one stable ID.
@@ -140,26 +121,13 @@ impl Agent {
         self.emit_start_events(&pending_calls, &message_ids);
 
         // Permission check → approved / denied split.
-        let (approved, mut denied) = self.check_permissions(&pending_calls, &message_ids).await;
-
-        // Pre hooks may block further calls.
-        let approved = run_pre_tool_hooks(
-            &self.session_id.0,
-            &self.working_dir,
-            &self.hook_registry,
-            approved,
-            &message_ids,
-            &mut denied,
-        )
-        .await;
+        let (approved, denied) = self.check_permissions(&pending_calls, &message_ids).await;
 
         // Persist denied results immediately.
         self.emit_and_save_results(denied);
 
         // Run approved calls concurrently, persisting each result as it arrives.
-        let continue_session = self.run_parallel(approved, all_calls, &message_ids).await?;
-
-        Ok(continue_session)
+        self.run_parallel(approved, &message_ids).await
     }
 
     /// Emit `ToolEvent::Start` for every pending call.
@@ -226,25 +194,19 @@ impl Agent {
         }
     }
 
-    /// Spawn all `approved` calls in a `JoinSet`, then harvest results one by
-    /// one so each is post-hook'd, emitted, and persisted as soon as it's done.
-    ///
-    /// Returns `false` if any post-hook requested the session to stop.
+    /// Spawn all `approved` calls in a `JoinSet`, then emit and persist each
+    /// result as soon as it completes.
     async fn run_parallel(
         &mut self,
         approved: Vec<ToolCall>,
-        all_calls: &[ToolCall],
         message_ids: &BTreeMap<String, MessageId>,
-    ) -> Result<bool, AgentError> {
+    ) -> Result<(), AgentError> {
         if approved.is_empty() {
-            return Ok(true);
+            return Ok(());
         }
 
         let cancel_token = self.create_runtime_token();
         let mut join_set = self.spawn_tool_tasks(approved, message_ids, &cancel_token);
-
-        let mut continue_session = true;
-        let mut hook_contexts_acc = Vec::new();
 
         loop {
             tokio::select! {
@@ -265,27 +227,19 @@ impl Agent {
                         None => break,   // JoinSet exhausted
                         Some(r) => {
                             let Some(result) = Self::unwrap_join_outcome(r) else { continue; };
-                            let (result, cont, ctxs) = self.apply_post_hook(result, all_calls).await;
-                            if !cont { continue_session = false; }
                             log_tool_result(&result);
                             self.emit(Event::Tool(result.event));
                             self.push_message(result.message);
-                            hook_contexts_acc.extend(ctxs);
                         }
                     }
                 }
             }
         }
 
-        // Inject hook contexts only after all tool results are persisted,
-        // keeping the tool-call chain contiguous so sanitize() won't strip it.
-        self.inject_hook_contexts(hook_contexts_acc);
-
-        Ok(continue_session)
+        Ok(())
     }
 
-    /// Spawn one task per approved call.  All cloning of registry/ctx data
-    /// happens here so the tasks are `'static`.
+    /// Spawn one task per approved call.
     fn spawn_tool_tasks(
         &self,
         calls: Vec<ToolCall>,
@@ -381,37 +335,6 @@ impl Agent {
                 tracing::error!("Unexpected JoinError (not a panic or cancel): {e}");
                 None
             }
-        }
-    }
-
-    /// Apply the post-hook for a single result, looking up its tool name from
-    /// `all_calls`.
-    async fn apply_post_hook(
-        &self,
-        result: ToolExecutionResult,
-        all_calls: &[ToolCall],
-    ) -> (ToolExecutionResult, bool, Vec<String>) {
-        let tool_name = all_calls
-            .iter()
-            .find(|c| c.id == result.tool_call_id)
-            .map_or("", |c| c.name.as_str());
-        run_post_tool_hook_single(
-            &self.session_id.0,
-            &self.working_dir,
-            &self.hook_registry,
-            result,
-            tool_name,
-        )
-        .await
-    }
-
-    /// Inject post-hook context strings as independent user messages.
-    ///
-    /// These must be appended *after* all tool results so the tool-call chain
-    /// stays contiguous and `sanitize()` won't strip it.
-    fn inject_hook_contexts(&mut self, ctxs: Vec<String>) {
-        for text in ctxs {
-            self.push_user_message(Message::user(text));
         }
     }
 }

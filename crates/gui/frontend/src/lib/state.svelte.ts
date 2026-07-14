@@ -91,6 +91,11 @@ export async function startNotificationListener(): Promise<() => void> {
         state_changed?: { session_id: string; status: string };
         title_updated?: { session_id: string; title: string };
         connection_lost?: { session_id: string };
+        background_tasks_changed?: {
+          session_id: string;
+          kind: "subagent" | "shell";
+          count: number;
+        };
       };
     }) => {
       const payload = e.payload;
@@ -116,6 +121,9 @@ export async function startNotificationListener(): Promise<() => void> {
         if (session_id.startsWith("sub_")) refreshSubagentParent(session_id);
         const session = getSession(session_id);
         if (session) session.alias = title;
+      }
+      if (payload.background_tasks_changed) {
+        void refreshRunningSessions();
       }
       if (payload.connection_lost) {
         showNotification("Connection lost", "warning");

@@ -163,35 +163,11 @@ SERPER_API_KEY = "..."
 
 ---
 
-### `[hooks]` — 生命周期 Hooks
-
-用户级 hooks，在 Agent 生命周期事件时触发。设置 `features.hooks = true`（或通过 `features.all = true` 继承开启）后生效。开启 hooks 也会允许配置的 shell command hooks 执行。
-
-```toml
-[[hooks]]
-name = "lint-before-bash"
-event = "pre_tool_use"
-matcher = "shell"
-command = "echo 'About to run: {tool_name}'"
-timeout = 30
-```
-
-| 字段 | 类型 | 说明 | 默认值 |
-|---|---|---|---|
-| `name` | string | Hook 名称（唯一） | 必填 |
-| `event` | string | `pre_tool_use` / `post_tool_use` / `pre_stop` | 必填 |
-| `matcher` | string | 匹配正则（如工具名） | 必填 |
-| `command` | string | 执行命令（通过 `sh -c` / `cmd /C`） | 必填 |
-| `timeout` | integer | 超时（秒） | `30` |
-
----
-
 ### `[features]` — 实验特性
 
 | 字段 | 类型 | 说明 | 默认值 |
 |---|---|---|---|
 | `all` | boolean | 开启所有未被单项显式覆盖的 feature | `false` |
-| `hooks` | boolean | 启用生命周期 hooks，包括 shell command hooks | 继承 `all` |
 | `update_session_title` | boolean | 使用模型自动生成会话标题（首条消息 fallback 标题不受影响） | 继承 `all` |
 
 ---

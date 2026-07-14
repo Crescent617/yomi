@@ -37,7 +37,6 @@
 | `goal` | `src/goal/` | 目标自动执行模式：`GoalState`/`GoalStatus` 状态机，支持自动继续（auto-continue） |
 | `checkpoint` | `src/checkpoint/` | 会话检查点与回滚（`RewindTarget`：对话、文件、或两者） |
 | `permissions` | `src/permissions/` | 工具权限分级（safe / caution / dangerous / ask）及 `Checker` 审批逻辑 |
-| `hooks` | `src/hooks/` | 生命周期钩子：`PreToolUse` / `PostToolUse` / `PreStop` / `Skill` / `Goal` / `Command` |
 | `compactor` | `src/compactor/` | 上下文压缩：当消息量接近上下文窗口阈值时自动 summary 压缩 |
 | `config` | `src/config.rs` | TOML 配置 + 环境变量覆盖（前缀 `YOMI_`），支持 `ModelProvider::OpenAI` / `Anthropic` |
 | `prompt` | `src/prompt.rs` | 系统提示构建（`SystemPromptBuilder`） |
@@ -105,7 +104,6 @@ graph TD
         goal["goal"]
         checkpoint["checkpoint"]
         permissions["permissions"]
-        hooks["hooks"]
         compactor["compactor"]
     end
 
@@ -125,7 +123,6 @@ graph TD
     kernel --> goal
     kernel --> checkpoint
     kernel --> permissions
-    kernel --> hooks
     kernel --> compactor
 ```
 
@@ -199,7 +196,6 @@ graph TD
         Task["task::TaskStore<br/>任务管理"]
         Goal["goal::GoalStore<br/>目标自动执行"]
         Checkpoint["checkpoint::CheckpointStore<br/>回滚"]
-        Hooks["hooks::HookRegistry<br/>生命周期钩子"]
         Permissions["permissions::Checker<br/>权限审批"]
     end
 
@@ -239,7 +235,6 @@ graph TD
     Task --> StorageSet
     Goal --> StorageSet
     Checkpoint --> StorageSet
-    Hooks --> Agent
     Permissions --> Agent
     StorageSet --> SQLite
     StorageSet --> JSONL
@@ -367,7 +362,7 @@ sequenceDiagram
 - `Cargo.toml`（workspace 根）
 - `crates/{kernel,cli,gui,tui}/Cargo.toml`
 - `crates/kernel/src/lib.rs`
-- `crates/kernel/src/{agent,comms,event,types,providers,tools,storage,wire,server,client,app,config,channels,cron,goal,task,checkpoint,permissions,hooks,compactor}/mod.rs` 或核心文件
+- `crates/kernel/src/{agent,comms,event,types,providers,tools,storage,wire,server,client,app,config,channels,cron,goal,task,checkpoint,permissions,compactor}/mod.rs` 或核心文件
 - `crates/cli/src/main.rs`
 - `crates/gui/src/main.rs`
 - `crates/tui/src/lib.rs`
