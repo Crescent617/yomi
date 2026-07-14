@@ -131,14 +131,11 @@
     onfocusout={closeWhenFocusLeaves}
   >
     <div
-      class="pointer-events-auto absolute right-0 top-1/2 flex max-h-[min(28rem,calc(100vh-6rem))] -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border/40 bg-background/75 p-1.5 shadow-sm backdrop-blur-md transition-[width,opacity,transform] duration-200 motion-reduce:transition-none"
-      class:w-80={expanded}
-      class:translate-x-0={expanded}
-      class:opacity-100={expanded}
+      class="pointer-events-auto absolute right-0 top-1/2 flex w-80 max-h-[min(28rem,calc(100vh-6rem))] -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border/40 bg-background p-1.5 shadow-sm transition-transform duration-200 ease-out will-change-transform motion-reduce:transition-none {expanded
+        ? 'translate-x-0'
+        : 'translate-x-[calc(100%+0.5rem)]'}"
       class:pointer-events-auto={expanded}
-      class:w-0={!expanded}
-      class:translate-x-2={!expanded}
-      class:opacity-0={!expanded}
+      class:pointer-events-none={!expanded}
       aria-hidden={!expanded}
     >
       <ol class="query-navigator-list min-h-0 space-y-0.5 overflow-y-auto">

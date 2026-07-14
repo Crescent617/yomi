@@ -58,6 +58,10 @@ test("expands an independent user query navigator and jumps to queries", async (
   });
   await expect(navigator).toBeVisible();
   await expect(navigator).toHaveAttribute("data-expanded", "false");
+  const panel = navigator.locator(":scope > div").first();
+  const collapsedPanelWidth = await panel.evaluate((element) =>
+    Math.round(element.getBoundingClientRect().width),
+  );
   await navigator.evaluate((element) => {
     element.setAttribute("data-instance", "before-streaming");
   });
@@ -90,6 +94,13 @@ test("expands an independent user query navigator and jumps to queries", async (
 
   await navigator.dispatchEvent("mouseenter");
   await expect(navigator).toHaveAttribute("data-expanded", "true");
+  await expect
+    .poll(() =>
+      panel.evaluate((element) =>
+        Math.round(element.getBoundingClientRect().width),
+      ),
+    )
+    .toBe(collapsedPanelWidth);
   await expect(page.getByText("User queries", { exact: true })).toHaveCount(0);
   await expect(page.getByText("6 turns", { exact: true })).toHaveCount(0);
 

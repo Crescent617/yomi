@@ -5,17 +5,22 @@
     FilePlus,
     FileMinus,
     FileEdit,
-    PanelLeftOpen,
-    PanelLeftClose,
-    Loader,
+    Files,
     ArrowLeft,
-    ArrowUp,
-    ArrowDown,
+    ChevronLeft,
+    ChevronRight,
     AlertCircle,
     Check,
   } from "lucide-svelte";
+  import type { ThemedToken } from "shiki";
   import type { SessionState } from "../../state.svelte";
   import * as api from "../../api";
+  import DiffCodeLine from "./DiffCodeLine.svelte";
+  import LoadingPlaceholder from "../ui/LoadingPlaceholder.svelte";
+  import {
+    highlightDiffHunks,
+    resolveDiffLanguagePath,
+  } from "./diff-highlight";
 
   let {
     session,
@@ -47,6 +52,8 @@
     oldLine: number | null;
     newLine: number | null;
     text: string;
+    oldTokens?: ThemedToken[];
+    newTokens?: ThemedToken[];
   }
 
   let files = $state<FileSummary[]>([]);
@@ -67,7 +74,20 @@
   let lastWorkingFile: string | null = null;
   let lastStagedFile: string | null = null;
   let _lastRawDiff = "";
-  let showFileTree = $state(true);
+  let filePickerOpen = $state(false);
+  let fileTabsElement = $state<HTMLDivElement>();
+
+  function scrollActiveFileTab() {
+    requestAnimationFrame(() => {
+      fileTabsElement
+        ?.querySelector<HTMLElement>("[aria-current='page']")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "nearest",
+        });
+    });
+  }
 
   const currentFileIndex = $derived(
     activeFilePath
@@ -260,6 +280,8 @@
     if (idx < 0) return;
 
     activeFilePath = filePath;
+    diffFiles = [];
+    scrollActiveFileTab();
     if (showStaged) lastStagedFile = filePath;
     else lastWorkingFile = filePath;
 
@@ -288,7 +310,22 @@
       }
 
       _lastRawDiff = raw;
-      diffFiles = parseDiff(raw);
+      const parsedDiff = parseDiff(raw);
+      await Promise.all(
+        parsedDiff.map((file) =>
+          highlightDiffHunks(
+            file.hunks,
+            resolveDiffLanguagePath(file.oldPath, file.newPath, filePath),
+          ),
+        ),
+      );
+      if (
+        currentDiffVersion === diffLoadVersion &&
+        showStaged === currentStaged &&
+        activeFilePath === filePath
+      ) {
+        diffFiles = parsedDiff;
+      }
     } catch (e) {
       console.error("Failed to load file diff:", e);
       diffFiles = [];
@@ -369,10 +406,6 @@
     }
   }
 
-  function lineText(type: DiffLine["type"]) {
-    return type === "hunk" ? "text-primary" : "text-foreground";
-  }
-
   function lineNumberBg(type: DiffLine["type"]) {
     if (type === "add") return "bg-success/12";
     if (type === "del") return "bg-error/12";
@@ -425,22 +458,6 @@
           Chat
         </button>
       {/if}
-      <button
-        type="button"
-        onclick={() => (showFileTree = !showFileTree)}
-        class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        aria-label={showFileTree
-          ? "Collapse changed files"
-          : "Expand changed files"}
-        aria-pressed={showFileTree}
-        title={showFileTree ? "Collapse changed files" : "Expand changed files"}
-      >
-        {#if showFileTree}
-          <PanelLeftClose size={15} />
-        {:else}
-          <PanelLeftOpen size={15} />
-        {/if}
-      </button>
       <div class="inline-flex rounded-md bg-secondary/60 p-0.5 text-xs">
         <button
           type="button"
@@ -479,150 +496,163 @@
         title="Refresh changes"
         disabled={loading}
       >
-        <RefreshCw size={14} class={loading ? "animate-spin" : ""} />
+        <RefreshCw size={14} />
       </button>
     </div>
   </div>
 
-  {#if files.length > 0}
-    <div class="flex-1 flex flex-col lg:flex-row overflow-hidden">
-      {#if showFileTree}
-        <div
-          class="max-h-44 w-full shrink-0 overflow-auto border-b border-border lg:max-h-full lg:w-64 lg:border-b-0 lg:border-r"
-        >
-          <div
-            class="sticky top-0 z-10 flex h-8 items-center justify-between border-b border-border/70 bg-background px-3"
+  {#if loading && files.length === 0}
+    <LoadingPlaceholder label="Loading changes" class="flex-1" />
+  {:else if files.length > 0}
+    <div class="flex h-10 shrink-0 border-b border-border/70 bg-card/40">
+      <div
+        class="scrollbar-none flex min-w-0 flex-1 overflow-x-auto"
+        bind:this={fileTabsElement}
+        role="tablist"
+        aria-label="Changed files"
+      >
+        {#each files as file (file.path)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={file.path === activeFilePath}
+            aria-current={file.path === activeFilePath ? "page" : undefined}
+            class="relative inline-flex h-full max-w-52 shrink-0 items-center gap-1.5 border-r border-border/60 px-3 text-xs transition-colors {file.path ===
+            activeFilePath
+              ? 'bg-background text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary'
+              : 'text-muted-foreground hover:bg-secondary/40 hover:text-foreground'}"
+            onclick={() => loadFileDiff(file.path)}
+            title={file.path}
           >
-            <span class="text-[11px] font-medium text-muted-foreground"
-              >Changed files</span
-            >
-            <span class="text-[10px] tabular-nums text-muted-foreground"
-              >{files.length}</span
-            >
-          </div>
-          <div class="py-1">
-            {#each files as file (file.path)}
-              <button
-                type="button"
-                class="group flex w-full items-center gap-2 border-l-2 px-2.5 py-1.5 text-left transition-colors {file.path ===
-                activeFilePath
-                  ? 'border-primary bg-primary/8'
-                  : 'border-transparent hover:border-border hover:bg-secondary/30'}"
-                onclick={() => loadFileDiff(file.path)}
-                aria-current={file.path === activeFilePath ? "true" : undefined}
-                title={file.path}
-              >
-                {#if file.status === "added"}
-                  <FilePlus size={14} class="shrink-0 text-success" />
-                {:else if file.status === "deleted"}
-                  <FileMinus size={14} class="shrink-0 text-error" />
-                {:else}
-                  <FileEdit size={14} class="shrink-0 text-warning" />
-                {/if}
-                <span class="min-w-0 flex-1">
-                  <span
-                    class="block truncate text-xs font-medium text-foreground"
-                  >
-                    {fileName(file.path)}
-                  </span>
-                  <span
-                    class="mt-0.5 block truncate text-[10px] text-muted-foreground"
-                  >
-                    {parentPath(file.path)}
-                  </span>
-                </span>
-                <span class="flex w-4 shrink-0 items-center justify-center">
-                  {#if loadingFile === file.path}
-                    <Loader
-                      size={12}
-                      class="animate-spin text-muted-foreground"
-                    />
-                  {/if}
-                </span>
-              </button>
-            {/each}
-          </div>
-        </div>
-      {/if}
+            {#if file.status === "added"}
+              <FilePlus size={13} class="shrink-0 text-success" />
+            {:else if file.status === "deleted"}
+              <FileMinus size={13} class="shrink-0 text-error" />
+            {:else}
+              <FileEdit size={13} class="shrink-0 text-warning" />
+            {/if}
+            <span class="truncate">{fileName(file.path)}</span>
+          </button>
+        {/each}
+      </div>
 
+      <div
+        class="relative z-10 flex shrink-0 items-center gap-1 border-l border-border bg-background px-1.5"
+      >
+        <button
+          type="button"
+          onclick={() => selectRelativeFile(-1)}
+          disabled={currentFileIndex <= 0}
+          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+          aria-label="Previous changed file"
+          title="Previous file · Alt+↑"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <button
+          type="button"
+          onclick={() => selectRelativeFile(1)}
+          disabled={currentFileIndex < 0 ||
+            currentFileIndex >= files.length - 1}
+          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
+          aria-label="Next changed file"
+          title="Next file · Alt+↓"
+        >
+          <ChevronRight size={14} />
+        </button>
+        <div class="relative">
+          <button
+            type="button"
+            onclick={() => (filePickerOpen = !filePickerOpen)}
+            class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            aria-label="All changed files"
+            aria-expanded={filePickerOpen}
+            title="All changed files"
+          >
+            <Files size={14} />
+            <span class="tabular-nums">{files.length}</span>
+          </button>
+          {#if filePickerOpen}
+            <button
+              type="button"
+              aria-label="Close changed files"
+              class="fixed inset-0 z-10"
+              onclick={() => (filePickerOpen = false)}
+            ></button>
+            <div
+              class="absolute right-0 top-full z-20 mt-1 max-h-[min(24rem,60vh)] w-72 overflow-auto rounded-md border border-border bg-popover py-1 shadow-lg"
+            >
+              {#each files as file (file.path)}
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors {file.path ===
+                  activeFilePath
+                    ? 'bg-primary/8'
+                    : 'hover:bg-secondary/50'}"
+                  onclick={() => {
+                    filePickerOpen = false;
+                    void loadFileDiff(file.path);
+                  }}
+                  aria-current={file.path === activeFilePath
+                    ? "page"
+                    : undefined}
+                  title={file.path}
+                >
+                  {#if file.status === "added"}
+                    <FilePlus size={14} class="shrink-0 text-success" />
+                  {:else if file.status === "deleted"}
+                    <FileMinus size={14} class="shrink-0 text-error" />
+                  {:else}
+                    <FileEdit size={14} class="shrink-0 text-warning" />
+                  {/if}
+                  <span class="min-w-0 flex-1">
+                    <span
+                      class="block truncate text-xs font-medium text-foreground"
+                    >
+                      {fileName(file.path)}
+                    </span>
+                    <span
+                      class="mt-0.5 block truncate text-[10px] text-muted-foreground"
+                    >
+                      {parentPath(file.path)}
+                    </span>
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <div class="inline-flex rounded-md bg-secondary/60 p-0.5 text-[11px]">
+          <button
+            type="button"
+            aria-pressed={viewMode === "unified"}
+            class="h-7 rounded-sm px-2 transition-colors {viewMode === 'unified'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (viewMode = "unified")}
+          >
+            Unified
+          </button>
+          <button
+            type="button"
+            aria-pressed={viewMode === "split"}
+            class="h-7 rounded-sm px-2 transition-colors {viewMode === 'split'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => (viewMode = "split")}
+          >
+            Split
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-hidden">
       <div class="flex-1 min-w-0 min-h-[280px] overflow-hidden flex flex-col">
         {#if activeFilePath}
-          <div
-            class="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-3"
-          >
-            <div class="min-w-0">
-              <div class="truncate text-xs font-semibold text-foreground">
-                {fileName(activeFilePath)}
-              </div>
-              <div
-                class="truncate text-[10px] text-muted-foreground"
-                title={activeFilePath}
-              >
-                {activeFilePath.split("/").slice(0, -1).join("/") ||
-                  "Repository root"}
-              </div>
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-              <span class="text-[10px] tabular-nums text-muted-foreground">
-                {currentFileIndex + 1} of {files.length}
-              </span>
-              <div class="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onclick={() => selectRelativeFile(-1)}
-                  disabled={currentFileIndex <= 0}
-                  class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
-                  aria-label="Previous changed file"
-                  title="Previous file · Alt+↑"
-                >
-                  <ArrowUp size={14} />
-                </button>
-                <button
-                  type="button"
-                  onclick={() => selectRelativeFile(1)}
-                  disabled={currentFileIndex < 0 ||
-                    currentFileIndex >= files.length - 1}
-                  class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
-                  aria-label="Next changed file"
-                  title="Next file · Alt+↓"
-                >
-                  <ArrowDown size={14} />
-                </button>
-              </div>
-              <div class="inline-flex rounded-md bg-secondary/60 p-0.5 text-xs">
-                <button
-                  type="button"
-                  aria-pressed={viewMode === "unified"}
-                  class="h-7 rounded-sm px-2 transition-colors {viewMode ===
-                  'unified'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'}"
-                  onclick={() => (viewMode = "unified")}
-                >
-                  Unified
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={viewMode === "split"}
-                  class="h-7 rounded-sm px-2 transition-colors {viewMode ===
-                  'split'
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'}"
-                  onclick={() => (viewMode = "split")}
-                >
-                  Split
-                </button>
-              </div>
-            </div>
-          </div>
-
           <div class="flex-1 overflow-auto">
             {#if loadingFile === activeFilePath}
-              <div
-                class="flex items-center justify-center h-full text-muted-foreground text-sm"
-              >
-                Loading diff...
-              </div>
+              <LoadingPlaceholder label="Loading diff" />
             {:else if diffError}
               <div
                 class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
@@ -699,9 +729,12 @@
                                   ? "-"
                                   : " "}
                             </span>
-                            <span class="whitespace-pre {lineText(line.type)}">
-                              {line.text}
-                            </span>
+                            <DiffCodeLine
+                              tokens={line.type === "del"
+                                ? line.oldTokens
+                                : line.newTokens}
+                              text={line.text}
+                            />
                           </div>
                         {/each}
                       {/each}
@@ -735,14 +768,15 @@
                                   ? (line.oldLine ?? "")
                                   : ""}
                               </span>
-                              <span
-                                class="whitespace-pre {leftLineText(line.type)}"
-                              >
+                              <span class={leftLineText(line.type)}>
                                 {line.type === "add"
                                   ? ""
                                   : line.type === "del"
                                     ? "-"
-                                    : " "}{line.type === "add" ? "" : line.text}
+                                    : " "}<DiffCodeLine
+                                  tokens={line.oldTokens}
+                                  text={line.type === "add" ? "" : line.text}
+                                />
                               </span>
                             </div>
                             <div
@@ -759,16 +793,15 @@
                                   ? (line.newLine ?? "")
                                   : ""}
                               </span>
-                              <span
-                                class="whitespace-pre {rightLineText(
-                                  line.type,
-                                )}"
-                              >
+                              <span class={rightLineText(line.type)}>
                                 {line.type === "del"
                                   ? ""
                                   : line.type === "add"
                                     ? "+"
-                                    : " "}{line.type === "del" ? "" : line.text}
+                                    : " "}<DiffCodeLine
+                                  tokens={line.newTokens}
+                                  text={line.type === "del" ? "" : line.text}
+                                />
                               </span>
                             </div>
                           </div>
@@ -805,12 +838,6 @@
       >
         Try again
       </button>
-    </div>
-  {:else if loading}
-    <div
-      class="flex-1 flex items-center justify-center text-muted-foreground text-sm"
-    >
-      Loading...
     </div>
   {:else}
     <div

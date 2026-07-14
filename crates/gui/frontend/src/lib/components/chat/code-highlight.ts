@@ -1,4 +1,4 @@
-import type { BundledLanguage, Highlighter } from "shiki";
+import type { BundledLanguage, Highlighter, ThemedToken } from "shiki";
 
 const MAX_CACHE_ENTRIES = 128;
 const MAX_HIGHLIGHT_CHARS = 100_000;
@@ -27,6 +27,7 @@ const languageAliases: Record<string, string> = {
 let highlighterPromise: Promise<Highlighter> | undefined;
 const languageLoads = new Map<string, Promise<void>>();
 const highlightCache = new Map<string, Promise<string | null>>();
+const tokenCache = new Map<string, Promise<ThemedToken[][] | null>>();
 
 export function normalizeCodeLanguage(language: string | undefined): string {
   const normalized = language?.trim().toLowerCase() || "text";
@@ -96,12 +97,12 @@ async function renderHighlightedCode(
   }
 }
 
-function setCachedHighlight(key: string, value: Promise<string | null>) {
-  if (highlightCache.size >= MAX_CACHE_ENTRIES) {
-    const oldestKey = highlightCache.keys().next().value;
-    if (oldestKey !== undefined) highlightCache.delete(oldestKey);
+function setCachedValue<T>(cache: Map<string, T>, key: string, value: T) {
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) cache.delete(oldestKey);
   }
-  highlightCache.set(key, value);
+  cache.set(key, value);
 }
 
 /** Highlight once for both themes. Theme changes are handled entirely by CSS. */
@@ -119,6 +120,41 @@ export function highlightCode(
   }
 
   const task = renderHighlightedCode(code, normalizedLanguage);
-  setCachedHighlight(key, task);
+  setCachedValue(highlightCache, key, task);
+  return task;
+}
+
+/** Tokenize code for renderers that need to preserve their own line structure. */
+export function highlightCodeTokens(
+  code: string,
+  language: string | undefined,
+): Promise<ThemedToken[][] | null> {
+  const normalizedLanguage = normalizeCodeLanguage(language);
+  if (!shouldHighlightCode(code, normalizedLanguage)) {
+    return Promise.resolve(null);
+  }
+
+  const key = `${normalizedLanguage}\0${code}`;
+  const cached = tokenCache.get(key);
+  if (cached) {
+    tokenCache.delete(key);
+    tokenCache.set(key, cached);
+    return cached;
+  }
+
+  const task = getHighlighter()
+    .then(async (highlighter) => {
+      await ensureLanguage(highlighter, normalizedLanguage);
+      return highlighter.codeToTokens(code, {
+        lang: normalizedLanguage,
+        themes: {
+          light: "github-light",
+          dark: "github-dark",
+        },
+        defaultColor: "light",
+      }).tokens;
+    })
+    .catch(() => null);
+  setCachedValue(tokenCache, key, task);
   return task;
 }

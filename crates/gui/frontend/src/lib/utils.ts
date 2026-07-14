@@ -29,8 +29,15 @@ export function formatTimeAgo(
 }
 
 export function detectLang(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
+    Dockerfile: "dockerfile",
+    Makefile: "makefile",
+  };
+  const basename = filename.split("/").pop() ?? filename;
+  if (map[basename]) return map[basename];
+
+  const ext = basename.split(".").pop()?.toLowerCase() ?? "";
+  const extensionMap: Record<string, string> = {
     rs: "rust",
     js: "javascript",
     ts: "typescript",
@@ -55,9 +62,8 @@ export function detectLang(filename: string): string {
     sh: "bash",
     bash: "bash",
     zsh: "bash",
-    dockerfile: "dockerfile",
   };
-  return map[ext] ?? "plaintext";
+  return extensionMap[ext] ?? "plaintext";
 }
 
 export function formatElapsed(ms: number): string {
