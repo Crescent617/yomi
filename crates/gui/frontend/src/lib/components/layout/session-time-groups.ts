@@ -3,23 +3,22 @@ export type SessionTimeGroupLabel =
   | "1 hour ago"
   | "3 hours ago"
   | "12 hours ago"
-  | "Today"
   | "Yesterday"
   | "A week ago"
   | "A month ago"
   | "Older";
 
 export interface SessionTimeGroup<T> {
-  label: SessionTimeGroupLabel;
+  label: SessionTimeGroupLabel | null;
   sessions: T[];
 }
 
-const GROUP_LABELS: SessionTimeGroupLabel[] = [
+const GROUP_LABELS: (SessionTimeGroupLabel | null)[] = [
+  null,
   "30 minutes ago",
   "1 hour ago",
   "3 hours ago",
   "12 hours ago",
-  "Today",
   "Yesterday",
   "A week ago",
   "A month ago",
@@ -46,7 +45,7 @@ export function groupSessionsByTime<T extends { updated_at?: string }>(
   const yesterday = localDayOffset(now, 1);
   const sevenDaysAgo = localDayOffset(now, 7);
   const thirtyDaysAgo = localDayOffset(now, 30);
-  const groups = new Map<SessionTimeGroupLabel, T[]>(
+  const groups = new Map<SessionTimeGroupLabel | null, T[]>(
     GROUP_LABELS.map((label) => [label, []]),
   );
 
@@ -54,14 +53,14 @@ export function groupSessionsByTime<T extends { updated_at?: string }>(
     const timestamp = session.updated_at
       ? new Date(session.updated_at).getTime()
       : Number.NaN;
-    let label: SessionTimeGroupLabel = "Older";
+    let label: SessionTimeGroupLabel | null = "Older";
 
     if (Number.isFinite(timestamp)) {
-      if (timestamp >= thirtyMinutesAgo) label = "30 minutes ago";
-      else if (timestamp >= oneHourAgo) label = "1 hour ago";
-      else if (timestamp >= threeHoursAgo) label = "3 hours ago";
-      else if (timestamp >= twelveHoursAgo) label = "12 hours ago";
-      else if (timestamp >= today) label = "Today";
+      if (timestamp >= thirtyMinutesAgo) label = null;
+      else if (timestamp >= oneHourAgo) label = "30 minutes ago";
+      else if (timestamp >= threeHoursAgo) label = "1 hour ago";
+      else if (timestamp >= twelveHoursAgo) label = "3 hours ago";
+      else if (timestamp >= today) label = "12 hours ago";
       else if (timestamp >= yesterday) label = "Yesterday";
       else if (timestamp >= sevenDaysAgo) label = "A week ago";
       else if (timestamp >= thirtyDaysAgo) label = "A month ago";
