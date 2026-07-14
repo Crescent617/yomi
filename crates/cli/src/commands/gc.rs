@@ -2,8 +2,8 @@
 //!
 //! Removes all resources associated with sessions whose `updated_at` is older
 //! than the cutoff: sqlite rows (sessions, channel mappings), message history,
-//! todos, goals, file states and checkpoint directories. Also sweeps orphan
-//! files left behind by past bugs or interrupted writes.
+//! todos, goals, file states, checkpoint directories and unreferenced assets. Also sweeps
+//! orphan files left behind by past bugs or interrupted writes.
 //!
 //! The `token_usage` table is never touched.
 
@@ -69,7 +69,11 @@ fn print_report(report: &GcReport, days: i64) {
     let mode = if report.dry_run { " (dry-run)" } else { "" };
     println!("yomi gc{mode} — sessions older than {days} days\n");
 
-    if report.sessions.is_empty() && report.orphan_files_deleted == 0 {
+    if report.sessions.is_empty()
+        && report.orphan_files_deleted == 0
+        && report.assets_deleted == 0
+        && report.errors.is_empty()
+    {
         println!("  Nothing to collect.");
         return;
     }
@@ -92,6 +96,7 @@ fn print_report(report: &GcReport, days: i64) {
         );
     }
     println!("  orphan files  {:>6}", report.orphan_files_deleted);
+    println!("  assets        {:>6}", report.assets_deleted);
     let reclaim_label = if report.dry_run {
         "est. reclaim"
     } else {
