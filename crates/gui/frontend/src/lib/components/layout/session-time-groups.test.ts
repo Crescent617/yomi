@@ -24,10 +24,10 @@ describe("session time groups", () => {
     );
 
     expect(groups.map((group) => group.label)).toEqual([
+      null,
       "30 minutes ago",
       "1 hour ago",
       "3 hours ago",
-      "12 hours ago",
     ]);
     expect(groups.map((group) => group.sessions.map(({ id }) => id))).toEqual([
       ["thirty"],
@@ -52,7 +52,7 @@ describe("session time groups", () => {
     );
 
     expect(groups.map((group) => group.label)).toEqual([
-      "Today",
+      "12 hours ago",
       "Yesterday",
       "A week ago",
       "A month ago",
@@ -67,9 +67,27 @@ describe("session time groups", () => {
     ]);
   });
 
+  test("places a time divider before sessions older than its boundary", () => {
+    const groups = groupSessionsByTime(
+      [session("newer", minutesAgo(5)), session("older", minutesAgo(45))],
+      NOW,
+    );
+
+    expect(groups).toEqual([
+      {
+        label: null,
+        sessions: [session("newer", minutesAgo(5))],
+      },
+      {
+        label: "30 minutes ago",
+        sessions: [session("older", minutesAgo(45))],
+      },
+    ]);
+  });
+
   test("omits empty groups without reordering sessions", () => {
     const groups = groupSessionsByTime(
-      [session("newer", minutesAgo(5)), session("older", minutesAgo(20))],
+      [session("newer", minutesAgo(35)), session("older", minutesAgo(50))],
       NOW,
     );
 
@@ -77,8 +95,8 @@ describe("session time groups", () => {
       {
         label: "30 minutes ago",
         sessions: [
-          session("newer", minutesAgo(5)),
-          session("older", minutesAgo(20)),
+          session("newer", minutesAgo(35)),
+          session("older", minutesAgo(50)),
         ],
       },
     ]);

@@ -794,18 +794,18 @@
       {/each}
     {:else if sidebarView === "sessions"}
       <div class="space-y-0.5">
-        {#each sessionTimeGroups as group (group.label)}
-          <section
-            aria-labelledby={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
-          >
-            <h3
-              id={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
-              class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-2 text-[10px] font-medium text-muted-foreground backdrop-blur-sm"
-            >
-              <span class="h-px w-8 bg-border" aria-hidden="true"></span>
-              <span class="shrink-0">{group.label}</span>
-              <span class="h-px w-8 bg-border" aria-hidden="true"></span>
-            </h3>
+        {#each sessionTimeGroups as group (group.label ?? "recent")}
+          <section aria-label={group.label ?? "Recent sessions"}>
+            {#if group.label}
+              <h3
+                id={`session-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}
+                class="sticky -top-1 z-10 flex items-center justify-center gap-2 bg-card/95 px-3 py-2 text-[10px] font-medium text-muted-foreground backdrop-blur-sm"
+              >
+                <span class="h-px w-8 bg-border" aria-hidden="true"></span>
+                <span class="shrink-0">{group.label}</span>
+                <span class="h-px w-8 bg-border" aria-hidden="true"></span>
+              </h3>
+            {/if}
             <div class="space-y-0.5">
               {#each group.sessions as session (session.id)}
                 <div
