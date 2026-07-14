@@ -1108,6 +1108,8 @@ impl Agent {
     /// Apply compacted messages: update buffer and persist to storage.
     /// Note: Preserves the system message at the beginning of the buffer.
     async fn apply_compacted_messages(&mut self, messages: Vec<Arc<Message>>) {
+        let pre_len = self.message_buffer.len();
+
         // Reconstruct buffer: keep system messages + compacted messages (filter out any system msgs from compactor)
         let new_messages: Vec<Arc<Message>> = self
             .message_buffer
@@ -1120,10 +1122,12 @@ impl Agent {
             .collect();
         *self.message_buffer.messages_mut() = new_messages;
 
-        // Persist compacted messages (without system messages)
-        self.emit(Event::Internal(
-            crate::event::InternalEvent::MessageReplaced { messages },
-        ));
+        // only full compact persist messages
+        if pre_len > self.message_buffer.len() {
+            self.emit(Event::Internal(
+                crate::event::InternalEvent::MessageReplaced { messages },
+            ));
+        }
     }
 
     /// Check and run compaction if needed
