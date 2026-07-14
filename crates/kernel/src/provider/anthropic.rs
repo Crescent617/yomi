@@ -537,14 +537,13 @@ impl AnthropicStreamState {
                 }
             }
             AnthropicStreamEvent::MessageStop => {
-                // Emit response metadata before Complete (if available)
-                if let Some(response_id) = self.response_id.take() {
-                    let finish_reason = self
-                        .stop_reason
-                        .take()
-                        .and_then(|s| FinishReason::from_provider_str(&s));
+                let finish_reason = self
+                    .stop_reason
+                    .take()
+                    .and_then(|s| FinishReason::from_provider_str(&s));
+                if self.response_id.is_some() || finish_reason.is_some() {
                     items.push(ModelStreamItem::ResponseMeta {
-                        response_id: Some(response_id),
+                        response_id: self.response_id.take(),
                         finish_reason,
                     });
                 }
@@ -596,14 +595,13 @@ impl AnthropicStreamState {
             }
         }
 
-        // Emit response metadata if we have response_id
-        if let Some(response_id) = self.response_id.take() {
-            let finish_reason = self
-                .stop_reason
-                .take()
-                .and_then(|s| FinishReason::from_provider_str(&s));
+        let finish_reason = self
+            .stop_reason
+            .take()
+            .and_then(|s| FinishReason::from_provider_str(&s));
+        if self.response_id.is_some() || finish_reason.is_some() {
             items.push(ModelStreamItem::ResponseMeta {
-                response_id: Some(response_id),
+                response_id: self.response_id.take(),
                 finish_reason,
             });
         }

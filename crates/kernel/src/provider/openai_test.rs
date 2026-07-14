@@ -150,6 +150,30 @@ fn test_assembler_single_tool_call() {
 }
 
 #[test]
+fn test_assembler_tool_completion_reports_tool_calls_finish_reason() {
+    let mut assembler = MsgChunkAssembler::new();
+
+    let delta = create_tool_call_delta(0, Some("call_123"), Some("bash"), Some(r#"{"cmd":"ls"}"#));
+    let json = serde_json::to_string(&create_test_response(delta)).unwrap();
+    assembler.process(&json);
+
+    let terminal = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#;
+    assembler.process(terminal);
+    let items = assembler.finish();
+
+    assert!(items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::ResponseMeta {
+            response_id: None,
+            finish_reason: Some(FinishReason::ToolCalls),
+        }
+    )));
+}
+
+#[test]
 fn test_assembler_multiple_tool_calls() {
     let mut assembler = MsgChunkAssembler::new();
 

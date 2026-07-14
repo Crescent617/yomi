@@ -99,6 +99,47 @@ fn test_stream_state_tool_use() {
 }
 
 #[test]
+fn test_stream_state_tool_use_completion_reports_tool_calls_finish_reason() {
+    let mut state = AnthropicStreamState::new();
+
+    state
+        .process(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_123","name":"bash","input":{}}}"#,
+        )
+        .unwrap();
+    state
+        .process(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"ls\"}"}}"#,
+        )
+        .unwrap();
+
+    let tool_items = state
+        .process(r#"{"type":"content_block_stop","index":0}"#)
+        .unwrap();
+    assert!(tool_items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
+
+    state
+        .process(
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":10}}"#,
+        )
+        .unwrap();
+    let terminal_items = state.process(r#"{"type":"message_stop"}"#).unwrap();
+
+    assert!(terminal_items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::ResponseMeta {
+            response_id: None,
+            finish_reason: Some(FinishReason::ToolCalls),
+        }
+    )));
+    assert!(terminal_items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::Complete)));
+}
+
+#[test]
 fn test_stream_state_message_stop() {
     let mut state = AnthropicStreamState::new();
 

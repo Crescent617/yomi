@@ -474,14 +474,13 @@ impl MsgChunkAssembler {
             }
         }
 
-        // Emit response metadata if we captured response_id
-        if let Some(response_id) = self.response_id.take() {
-            let finish_reason = self
-                .finish_reason
-                .take()
-                .and_then(|s| FinishReason::from_provider_str(&s));
+        let finish_reason = self
+            .finish_reason
+            .take()
+            .and_then(|s| FinishReason::from_provider_str(&s));
+        if self.response_id.is_some() || finish_reason.is_some() {
             items.push(ModelStreamItem::ResponseMeta {
-                response_id: Some(response_id),
+                response_id: self.response_id.take(),
                 finish_reason,
             });
         }

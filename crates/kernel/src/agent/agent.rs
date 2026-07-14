@@ -1174,55 +1174,68 @@ impl Agent {
             .and_then(|m| m.tool_calls.as_ref())
             .is_some();
 
-        if has_tool_calls {
-            let tool_count = self
-                .message_buffer
-                .messages()
-                .last()
-                .and_then(|m| m.tool_calls.as_ref())
-                .map_or(0, |v| v.len());
-            tracing::debug!(
-                "detected {} tool call(s), transitioning to ExecutingTool",
-                tool_count
+        let is_consistent = match finish_reason {
+            Some(FinishReason::ToolCalls) => has_tool_calls,
+            Some(FinishReason::Stop | FinishReason::MaxTokens) => !has_tool_calls,
+            None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => false,
+        };
+
+        if !is_consistent {
+            let error = format!(
+                "inconsistent model stream completion: finish_reason={finish_reason:?}, has_tool_calls={has_tool_calls}"
             );
-            self.context.transition_to(AgentState::ExecutingTool);
+            tracing::error!("{error}");
+            self.emit_error(crate::event::ErrorPhase::Streaming, &error, false);
+            self.emit(Event::Agent(AgentEvent::Lifecycle {
+                state: AgentStatus::Stopped {
+                    reason: StopReason::Failed {
+                        error: error.clone(),
+                    },
+                },
+            }));
+            self.context.transition_to(AgentState::Idle);
             return Ok(());
         }
 
-        // A confirmed output-token truncation gets one automatic continuation per
-        // real user turn. A missing finish reason is a provider protocol error,
-        // not evidence that continuing is safe.
-        if should_auto_continue(&mut self.auto_continue_used, finish_reason) {
-            tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
-            let msg = Message::user("continue");
-            self.push_user_message(msg);
-            self.context.transition_to(AgentState::Streaming);
-            return Ok(());
+        match finish_reason {
+            Some(FinishReason::ToolCalls) => {
+                let tool_count = self
+                    .message_buffer
+                    .messages()
+                    .last()
+                    .and_then(|m| m.tool_calls.as_ref())
+                    .map_or(0, |v| v.len());
+                tracing::debug!(
+                    "detected {} tool call(s), transitioning to ExecutingTool",
+                    tool_count
+                );
+                self.context.transition_to(AgentState::ExecutingTool);
+                return Ok(());
+            }
+            Some(FinishReason::MaxTokens) => {
+                if should_auto_continue(&mut self.auto_continue_used, finish_reason) {
+                    tracing::info!(?finish_reason, "auto-injecting 'continue' user message");
+                    let msg = Message::user("continue");
+                    self.push_user_message(msg);
+                    self.context.transition_to(AgentState::Streaming);
+                } else {
+                    tracing::warn!(
+                        ?finish_reason,
+                        "model stopped again after auto-continue; not continuing a second time"
+                    );
+                    self.emit_stopped_completed(finish_reason);
+                    self.context.transition_to(AgentState::Idle);
+                }
+                return Ok(());
+            }
+            Some(FinishReason::Stop) => {}
+            None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => {
+                unreachable!("inconsistent finish reasons returned above")
+            }
         }
 
-        if finish_reason == Some(FinishReason::MaxTokens) {
-            tracing::warn!(
-                ?finish_reason,
-                "model stopped again after auto-continue; not continuing a second time"
-            );
-        }
-
-        if matches!(
-            finish_reason,
-            None | Some(FinishReason::ContentFilter | FinishReason::Unknown)
-        ) {
-            tracing::error!(
-                ?finish_reason,
-                "model stopped with an unexpected finish reason"
-            );
-            self.emit_error(
-                crate::event::ErrorPhase::Streaming,
-                &format!("model stopped with unexpected finish reason: {finish_reason:?}"),
-                false,
-            );
-        }
-
-        // No tool calls: check PreStop hooks for goal auto-continue
+        // A normal text response is the only completion that may be continued by
+        // PreStop hooks. Tool calls and abnormal terminal states are handled above.
         let ctx = crate::hooks::HookContext::pre_stop(&*self.session_id.0, &self.data_dir);
         let result = self.hook_registry.run_pre_stop(&ctx).await;
 
