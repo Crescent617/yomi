@@ -1,4 +1,4 @@
-use super::{should_auto_continue, wait_for_retry};
+use super::{is_stream_completion_consistent, should_auto_continue, wait_for_retry};
 use crate::agent::{AgentError, CancelToken};
 use crate::types::FinishReason;
 use std::time::Duration;
@@ -22,6 +22,35 @@ fn auto_continue_ignores_normal_finish_reasons() {
     let mut used = false;
     assert!(!should_auto_continue(&mut used, Some(FinishReason::Stop)));
     assert!(!used);
+}
+
+#[test]
+fn pause_and_refusal_are_consistent_terminals_without_tool_calls() {
+    assert!(is_stream_completion_consistent(
+        Some(FinishReason::PauseTurn),
+        false
+    ));
+    assert!(is_stream_completion_consistent(
+        Some(FinishReason::Refusal),
+        false
+    ));
+    assert!(!is_stream_completion_consistent(
+        Some(FinishReason::Refusal),
+        true
+    ));
+}
+
+#[test]
+fn pause_and_refusal_do_not_consume_max_token_auto_continue() {
+    let mut used = false;
+    assert!(!should_auto_continue(
+        &mut used,
+        Some(FinishReason::PauseTurn)
+    ));
+    assert!(!should_auto_continue(
+        &mut used,
+        Some(FinishReason::Refusal)
+    ));
 }
 
 #[tokio::test]

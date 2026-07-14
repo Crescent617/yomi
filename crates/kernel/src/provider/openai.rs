@@ -230,6 +230,9 @@ impl Provider for OpenAIProvider {
             ),
             |(mut eventsource, mut assembler, last_content_time)| async move {
                 loop {
+                    if assembler.finished {
+                        return Ok(None);
+                    }
                     let elapsed = last_content_time.elapsed();
                     // Adjust timeout based on elapsed time since last content
                     let Some(remaining) = IDLE_TIMEOUT.checked_sub(elapsed) else {
@@ -245,7 +248,7 @@ impl Provider for OpenAIProvider {
                     match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
-                                let items = assembler.finish();
+                                let items = assembler.finish_stream("[DONE]")?;
                                 return Ok(Some((
                                     items,
                                     (eventsource, assembler, last_content_time),
@@ -263,9 +266,8 @@ impl Provider for OpenAIProvider {
                             // No content produced, continue loop with same timer
                         }
                         Ok(Ok(None)) => {
-                            // Stream ended normally
-                            tracing::debug!("OpenAI stream ended normally");
-                            let items = assembler.finish();
+                            tracing::error!("OpenAI stream ended before final finish_reason");
+                            let items = assembler.finish_stream("EOF")?;
                             return Ok(Some((items, (eventsource, assembler, last_content_time))));
                         }
                         Ok(Err(e)) => {
@@ -322,6 +324,8 @@ struct MsgChunkAssembler {
     response_id: Option<String>,
     /// Finish reason from the final chunk
     finish_reason: Option<String>,
+    /// Whether the authoritative stream terminator has been processed
+    finished: bool,
 }
 
 /// Accumulated state for a single tool call
@@ -339,6 +343,7 @@ impl MsgChunkAssembler {
             max_seen_index: None,
             response_id: None,
             finish_reason: None,
+            finished: false,
         }
     }
 
@@ -460,7 +465,18 @@ impl MsgChunkAssembler {
         items
     }
 
-    /// Called when the stream ends. Returns all remaining complete tool calls and a Complete marker.
+    fn finish_stream(
+        &mut self,
+        end: &str,
+    ) -> std::result::Result<Vec<ModelStreamItem>, ProviderError> {
+        if self.finish_reason.is_none() {
+            return Err(Self::unexpected_end(end));
+        }
+        self.finished = true;
+        Ok(self.finish())
+    }
+
+    /// Called after an authoritative terminal marker. Returns all remaining complete tool calls and a Complete marker.
     fn finish(&mut self) -> Vec<ModelStreamItem> {
         let mut items = Vec::new();
 
@@ -487,6 +503,10 @@ impl MsgChunkAssembler {
 
         items.push(ModelStreamItem::Complete);
         items
+    }
+
+    fn unexpected_end(end: &str) -> ProviderError {
+        ProviderError::Sse(format!("protocol error: {end} before final finish_reason"))
     }
 
     /// Try to complete a tool call at the given index.

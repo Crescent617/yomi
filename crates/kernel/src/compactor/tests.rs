@@ -173,6 +173,37 @@ async fn test_full_compact_rejects_truncated_summary() {
 }
 
 #[tokio::test]
+async fn test_full_compact_rejects_non_final_anthropic_terminals() {
+    for finish_reason in [
+        crate::types::FinishReason::PauseTurn,
+        crate::types::FinishReason::Refusal,
+    ] {
+        let provider: Arc<dyn Provider> = Arc::new(FixedStreamProvider {
+            items: vec![
+                ModelStreamItem::Chunk(crate::event::ContentChunk::Text("partial".to_string())),
+                ModelStreamItem::ResponseMeta {
+                    response_id: Some("non-final-summary".to_string()),
+                    finish_reason: Some(finish_reason),
+                },
+                ModelStreamItem::Complete,
+            ],
+        });
+
+        let error = Compactor::default()
+            .full_compact(
+                &[Arc::new(Message::user("preserve me"))],
+                provider,
+                &ModelConfig::default(),
+                None,
+            )
+            .await
+            .expect_err("non-final summary must not replace history");
+
+        assert!(error.to_string().contains(&format!("{finish_reason:?}")));
+    }
+}
+
+#[tokio::test]
 async fn test_full_compact_rejects_empty_summary() {
     let provider: Arc<dyn Provider> = Arc::new(FixedStreamProvider {
         items: vec![

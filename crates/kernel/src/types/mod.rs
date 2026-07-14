@@ -208,6 +208,10 @@ pub enum FinishReason {
     ContentFilter,
     /// `ToolCall` finished (custom reason for tool calls)
     ToolCalls,
+    /// Model paused a long-running turn and expects continuation (Anthropic: `pause_turn`)
+    PauseTurn,
+    /// Model refused the request (Anthropic: `refusal`)
+    Refusal,
     /// `Unknown` finish reason
     Unknown,
 }
@@ -223,7 +227,9 @@ impl FinishReason {
             "length" | "max_tokens" => Some(Self::MaxTokens), // length is used by OpenAI, max_tokens by Anthropic
             "content_filter" => Some(Self::ContentFilter),
             "tool_calls" | "tool_use" => Some(Self::ToolCalls), // Custom reasons for tool calls
-            "stop" | "end_turn" => Some(Self::Stop),
+            "stop" | "end_turn" | "stop_sequence" => Some(Self::Stop),
+            "pause_turn" => Some(Self::PauseTurn),
+            "refusal" => Some(Self::Refusal),
             _ => {
                 tracing::warn!("unknown finish_reason {s}");
                 Some(Self::Unknown)

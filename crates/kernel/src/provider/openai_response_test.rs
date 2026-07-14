@@ -508,7 +508,7 @@ fn test_assembler_invalid_arguments_are_parse_error() {
 }
 
 #[test]
-fn test_assembler_terminal_drops_partial_call() {
+fn test_assembler_completed_with_partial_call_is_retryable_protocol_error() {
     let mut assembler = ResponseAssembler::new();
 
     let _ = assembler
@@ -522,25 +522,17 @@ fn test_assembler_terminal_drops_partial_call() {
         )
         .unwrap();
 
-    let items = assembler
+    let err = assembler
         .process(r#"{"type":"response.completed","response":{"status":"completed"}}"#)
-        .unwrap();
-    assert_eq!(items.len(), 2);
-    assert!(!items
-        .iter()
-        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
-    assert!(
-        matches!(
-            &items[0],
-            ModelStreamItem::ResponseMeta {
-                response_id: None,
-                finish_reason: Some(FinishReason::Stop),
-            }
-        ),
-        "unexpected terminal items: {items:?}"
-    );
-    assert!(matches!(items[1], ModelStreamItem::Complete));
-    assert!(assembler.partial_calls.is_empty());
+        .unwrap_err();
+
+    assert!(matches!(err, ProviderError::Sse(_)));
+    assert!(err.is_retryable());
+    assert!(err.to_string().contains("response.completed"));
+    assert!(err.to_string().contains("response.output_item.done"));
+    assert!(!assembler.done);
+    assert!(!assembler.finished);
+    assert_eq!(assembler.partial_calls.len(), 1);
 }
 
 // ==== assembler: terminal states & errors ====
@@ -609,16 +601,68 @@ fn test_terminal_event_type_is_authoritative() {
 }
 
 #[test]
-fn test_incomplete_terminal_drops_partial_call() {
+fn test_incomplete_with_completed_call_preserves_tool_calls() {
     let mut assembler = ResponseAssembler::new();
     assembler
         .process(
-            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_x","name":"bash"}}"#,
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_done","name":"read"}}"#,
+        )
+        .unwrap();
+    let completed_items = assembler
+        .process(
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_done","name":"read","arguments":"{}"}}"#,
+        )
+        .unwrap();
+    assert!(matches!(
+        &completed_items[0],
+        ModelStreamItem::ToolCall(call) if call.id == "call_done"
+    ));
+
+    let items = assembler
+        .process(
+            r#"{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}"#,
+        )
+        .unwrap();
+
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::ResponseMeta {
+            finish_reason: Some(FinishReason::ToolCalls),
+            ..
+        }
+    )));
+    assert!(items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::Complete)));
+    assert!(assembler.partial_calls.is_empty());
+}
+
+#[test]
+fn test_incomplete_with_partial_call_preserves_completed_call_and_discards_partial_call() {
+    let mut assembler = ResponseAssembler::new();
+    assembler
+        .process(
+            r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_done","name":"read"}}"#,
+        )
+        .unwrap();
+    let completed_items = assembler
+        .process(
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_done","name":"read","arguments":"{}"}}"#,
+        )
+        .unwrap();
+    assert!(matches!(
+        &completed_items[0],
+        ModelStreamItem::ToolCall(call) if call.id == "call_done"
+    ));
+
+    assembler
+        .process(
+            r#"{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_partial","name":"bash"}}"#,
         )
         .unwrap();
     assembler
         .process(
-            r#"{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"cmd\":"}"#,
+            r#"{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"cmd\":"}"#,
         )
         .unwrap();
 
@@ -628,17 +672,20 @@ fn test_incomplete_terminal_drops_partial_call() {
         )
         .unwrap();
 
-    assert!(!items
-        .iter()
-        .any(|item| matches!(item, ModelStreamItem::ToolCall(_))));
     assert!(items.iter().any(|item| matches!(
         item,
         ModelStreamItem::ResponseMeta {
-            finish_reason: Some(FinishReason::MaxTokens),
+            finish_reason: Some(FinishReason::ToolCalls),
             ..
         }
     )));
+    assert!(items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::Complete)));
+    assert!(assembler.saw_function_call);
     assert!(assembler.partial_calls.is_empty());
+    assert!(assembler.done);
+    assert!(assembler.finished);
 }
 
 #[test]

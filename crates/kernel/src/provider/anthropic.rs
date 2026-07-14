@@ -299,6 +299,9 @@ impl Provider for AnthropicProvider {
             ),
             |(mut eventsource, mut state, last_content_time)| async move {
                 loop {
+                    if state.done {
+                        return Ok(None);
+                    }
                     let elapsed = last_content_time.elapsed();
                     // Adjust timeout based on elapsed time since last content
                     let Some(remaining) = IDLE_TIMEOUT.checked_sub(elapsed) else {
@@ -314,8 +317,7 @@ impl Provider for AnthropicProvider {
                     match timeout(remaining, eventsource.try_next()).await {
                         Ok(Ok(Some(event))) => {
                             if event.data == "[DONE]" {
-                                let items = state.finish();
-                                return Ok(Some((items, (eventsource, state, last_content_time))));
+                                return Err(AnthropicStreamState::unexpected_end("[DONE]"));
                             }
 
                             let items = state.process(&event.data)?;
@@ -329,9 +331,8 @@ impl Provider for AnthropicProvider {
                             // No content produced, continue loop with same timer
                         }
                         Ok(Ok(None)) => {
-                            tracing::debug!("Anthropic stream ended normally");
-                            let items = state.finish();
-                            return Ok(Some((items, (eventsource, state, last_content_time))));
+                            tracing::error!("Anthropic stream ended before message_stop");
+                            return Err(AnthropicStreamState::unexpected_end("EOF"));
                         }
                         Ok(Err(e)) => {
                             tracing::error!("Anthropic SSE error: {}", e);
@@ -382,8 +383,8 @@ struct AnthropicStreamState {
     response_id: Option<String>,
     /// Stop reason from `message_delta` (e.g., "`end_turn`", "`max_tokens`", "`stop_sequence`")
     stop_reason: Option<String>,
-    /// Whether `TokenUsage` has been emitted
-    token_usage_emitted: bool,
+    /// Whether the authoritative `message_stop` event has been processed
+    done: bool,
 }
 
 struct PartialToolCall {
@@ -403,7 +404,7 @@ impl AnthropicStreamState {
             output_tokens: None,
             response_id: None,
             stop_reason: None,
-            token_usage_emitted: false,
+            done: false,
         }
     }
 
@@ -411,8 +412,9 @@ impl AnthropicStreamState {
         let event: AnthropicStreamEvent = match serde_json::from_str(data) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!("Failed to parse SSE chunk: {e} - data: {data}");
-                return Ok(Vec::new());
+                return Err(ProviderError::Parse(format!(
+                    "invalid Anthropic SSE JSON: {e}"
+                )));
             }
         };
 
@@ -499,7 +501,6 @@ impl AnthropicStreamState {
                 // message_delta provides output_tokens (and may repeat cache info)
                 if let Some(usage) = usage {
                     self.output_tokens = Some(usage.output_tokens);
-                    self.token_usage_emitted = true;
                     let input_tokens = self.input_tokens.unwrap_or(usage.input_tokens);
                     let cache_read = self
                         .cache_read_input_tokens
@@ -537,6 +538,7 @@ impl AnthropicStreamState {
                 }
             }
             AnthropicStreamEvent::MessageStop => {
+                self.done = true;
                 let finish_reason = self
                     .stop_reason
                     .take()
@@ -560,57 +562,8 @@ impl AnthropicStreamState {
         Ok(items)
     }
 
-    fn finish(&mut self) -> Vec<ModelStreamItem> {
-        let mut items = Vec::new();
-
-        // Emit any pending tool call
-        if let Some(tool) = self.current_tool_call.take() {
-            let arguments =
-                serde_json::from_str(&tool.input_json).unwrap_or(Value::String(tool.input_json));
-
-            items.push(ModelStreamItem::ToolCall(ToolCallRequest {
-                id: tool.id,
-                name: tool.name,
-                arguments,
-            }));
-        }
-
-        // Emit token usage if never emitted (e.g. message_delta had no usage)
-        if let Some(input_tokens) = self.input_tokens {
-            if !self.token_usage_emitted {
-                let cache_read = self.cache_read_input_tokens.unwrap_or(0);
-                let prompt_tokens = input_tokens + cache_read;
-                let cached_tokens = if cache_read > 0 {
-                    Some(cache_read)
-                } else {
-                    None
-                };
-                items.push(ModelStreamItem::TokenUsage(
-                    crate::provider::TokenUsage::new(
-                        prompt_tokens,
-                        self.output_tokens.unwrap_or(0),
-                        cached_tokens,
-                    ),
-                ));
-            }
-        }
-
-        let finish_reason = self
-            .stop_reason
-            .take()
-            .and_then(|s| FinishReason::from_provider_str(&s));
-        if self.response_id.is_some() || finish_reason.is_some() {
-            items.push(ModelStreamItem::ResponseMeta {
-                response_id: self.response_id.take(),
-                finish_reason,
-            });
-        }
-
-        if !items.iter().any(|i| matches!(i, ModelStreamItem::Complete)) {
-            items.push(ModelStreamItem::Complete);
-        }
-
-        items
+    fn unexpected_end(end: &str) -> ProviderError {
+        ProviderError::Sse(format!("protocol error: {end} before message_stop"))
     }
 }
 
