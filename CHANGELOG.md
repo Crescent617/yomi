@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.20] - 2026-07-14
+
+### Added
+- 后台 Shell Task 的 Steer 消息使用 `[From Shell: <task_id>]` 标识来源。
+- Status Bar 的后台 Shell 列表支持复制任务日志文件路径。
+
+### Changed
+- Agent 消息统一使用 `[From Agent: <session_id>]`，并继续兼容历史 `agent_id` 格式。
+- Recent Sessions 标题布局更稳定，长标题会正确截断。
+
+### Fixed
+- 修复 Shell 日志复制失败通知的参数顺序，并将成功反馈保留在按钮局部。
+
 ## [0.5.19] - 2026-07-14
 
 ### Changed
