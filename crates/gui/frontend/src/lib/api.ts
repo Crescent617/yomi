@@ -58,6 +58,43 @@ export function errorMessage(e: unknown): string {
   }
 }
 
+export interface DebugFileChunk {
+  content: string;
+  path: string;
+  file_size: number;
+  start_offset: number;
+  end_offset: number;
+  has_earlier: boolean;
+}
+
+export async function listGuiLogs(): Promise<string[]> {
+  return invokeCmd<string[]>("list_gui_logs");
+}
+
+export async function readSessionJsonl(
+  session_id: string,
+  before_offset?: number,
+  after_offset?: number,
+): Promise<DebugFileChunk> {
+  return invokeCmd<DebugFileChunk>("read_session_jsonl", {
+    session_id,
+    before_offset,
+    after_offset,
+  });
+}
+
+export async function readGuiLog(
+  file_name: string,
+  before_offset?: number,
+  after_offset?: number,
+): Promise<DebugFileChunk> {
+  return invokeCmd<DebugFileChunk>("read_gui_log", {
+    file_name,
+    before_offset,
+    after_offset,
+  });
+}
+
 // ── Project API ──────────────────────────────────────────────────────────
 
 export interface ProjectInfo {

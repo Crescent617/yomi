@@ -422,7 +422,7 @@ export type KernelEvent =
 
 // ── Core state ───────────────────────────────────────────────────────────
 
-export type ActivePanel = "chat" | "usage" | "config" | "automation";
+export type ActivePanel = "chat" | "usage" | "debug" | "config" | "automation";
 
 export const appState = $state({
   connectionStatus: "disconnected" as

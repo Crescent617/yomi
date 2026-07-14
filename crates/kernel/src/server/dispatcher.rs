@@ -140,6 +140,16 @@ impl KernelServer {
                     .list_messages(&SessionId::from(session_id))
                     .await,
             ),
+            ReqMethod::ReadSessionJsonl {
+                session_id,
+                before_offset,
+                after_offset,
+            } => rpc_body(
+                "read_session_jsonl_failed",
+                self.kernel
+                    .read_session_jsonl(&SessionId::from(session_id), before_offset, after_offset)
+                    .await,
+            ),
             ReqMethod::GetSession { session_id } => rpc_body(
                 "get_session_failed",
                 self.kernel.get_session(&SessionId::from(session_id)).await,

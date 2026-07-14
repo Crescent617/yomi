@@ -62,6 +62,8 @@ pub struct Kernel {
     shutdown: tokio_util::sync::CancellationToken,
 }
 
+const SESSION_JSONL_CHUNK_BYTES: u64 = 256 * 1024;
+
 impl Kernel {
     /// Get session store from `agent_shared`
     pub async fn session_store(&self) -> Arc<dyn SessionStore> {
@@ -620,6 +622,32 @@ impl Kernel {
 
     /// List running sessions from the authoritative in-memory agent registry,
     /// hydrated with persisted session metadata.
+    pub async fn read_session_jsonl(
+        &self,
+        session_id: &SessionId,
+        before_offset: Option<u64>,
+        after_offset: Option<u64>,
+    ) -> Result<crate::client::SessionJsonlChunk> {
+        let safe_id = session_id.0.replace(['/', '\\'], "_");
+        let path = self
+            .agent_shared
+            .data_dir
+            .join("sessions")
+            .join(format!("{safe_id}.jsonl"));
+        tokio::task::spawn_blocking(move || {
+            crate::utils::file_chunk::read_utf8_file_chunk(
+                &path,
+                before_offset,
+                after_offset,
+                SESSION_JSONL_CHUNK_BYTES,
+                true,
+            )
+        })
+        .await
+        .map_err(|error| KernelError::io(format!("session JSONL reader failed: {error}")))?
+        .map_err(|error| KernelError::io(format!("failed to read session JSONL: {error}")))
+    }
+
     pub async fn list_running_sessions(&self) -> Result<Vec<crate::types::RunningSessionResponse>> {
         let shell_tasks_by_session = self
             .agent_shared

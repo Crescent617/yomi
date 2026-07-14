@@ -2,6 +2,7 @@
   import {
     MessageSquare,
     BarChart3,
+    Bug,
     Settings,
     Sun,
     Moon,
@@ -20,6 +21,7 @@
     { id: "chat", icon: MessageSquare, label: "Chat" },
     { id: "automation", icon: CalendarClock, label: "Automation" },
     { id: "usage", icon: BarChart3, label: "Usage" },
+    { id: "debug", icon: Bug, label: "Debug" },
     { id: "config", icon: Settings, label: "Config" },
   ] as const;
 

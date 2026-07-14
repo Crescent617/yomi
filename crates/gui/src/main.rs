@@ -19,7 +19,8 @@ pub fn run() {
         .setup(|app| {
             let (kernel, data_dir) = tauri::async_runtime::block_on(daemon::get_kernel())
                 .map_err(|e| format!("failed to get kernel: {e}"))?;
-            app.manage(AppState::new(kernel.clone(), data_dir));
+            let gui_log_dir = commands::debug::configured_log_dir();
+            app.manage(AppState::new(kernel.clone(), data_dir, gui_log_dir));
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -87,6 +88,9 @@ pub fn run() {
             commands::checkpoint::rewind,
             commands::skill::list_session_skills,
             commands::skill::reload_config,
+            commands::debug::list_gui_logs,
+            commands::debug::read_session_jsonl,
+            commands::debug::read_gui_log,
             commands::system::read_asset,
             commands::system::ping,
             commands::system::get_daemon_status,

@@ -11,6 +11,7 @@
   import ChatView from "../chat/ChatView.svelte";
   import ActivityBar from "./ActivityBar.svelte";
   import UsagePanel from "./UsagePanel.svelte";
+  import DebugPanel from "./DebugPanel.svelte";
   import AutomationPanel from "../automation/AutomationPanel.svelte";
   import ConfigPanel from "./ConfigPanel.svelte";
   import StatusBar from "./StatusBar.svelte";
@@ -154,6 +155,8 @@
         <UsagePanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "automation"}
         <AutomationPanel onToggleLeftPanel={toggleMobileSidebar} />
+      {:else if appState.activePanel === "debug"}
+        <DebugPanel onToggleLeftPanel={toggleMobileSidebar} />
       {:else if appState.activePanel === "config"}
         <ConfigPanel onToggleLeftPanel={toggleMobileSidebar} />
       {/if}
