@@ -157,7 +157,6 @@ impl Kernel {
         task_store: Option<Arc<crate::tools::task::TaskStore>>,
         compactor: Option<crate::compactor::Compactor>,
         skill_folders: Vec<std::path::PathBuf>,
-        hook_registry: Option<crate::hooks::HookRegistry>,
         enable_cron: bool,
         channel_store: Option<Arc<dyn crate::channels::ChannelStore>>,
         models: Vec<crate::provider::ModelConfig>,
@@ -218,10 +217,6 @@ impl Kernel {
         )
         .with_goal_store(goal_store)
         .with_message_interceptor(todo_interceptor);
-        let agent_shared = match hook_registry {
-            Some(registry) => agent_shared.with_hook_registry(Arc::new(registry)),
-            None => agent_shared,
-        };
 
         let channel_manager =
             channel_store.map(|store| Arc::new(crate::channels::hub::ChannelHub::new(store)));
@@ -235,6 +230,9 @@ impl Kernel {
         let rx = input_bus.subscribe_all();
         let base_prompt = agent_config.system_prompt.clone();
         let notification_bus = Arc::new(crate::notification::NotificationBus::new());
+        agent_shared
+            .background_tasks
+            .set_notification_bus(notification_bus.clone());
         let conductor = Arc::new(Conductor::new(
             agent_shared.clone(),
             agent_config.clone(),
@@ -245,7 +243,6 @@ impl Kernel {
             data_dir_for_conductor,
             notification_bus.clone(),
         ));
-        let agent_config = agent_config;
         let cron_store = if enable_cron {
             Some(storage.cron_store())
         } else {
@@ -624,20 +621,47 @@ impl Kernel {
     /// List running sessions from the authoritative in-memory agent registry,
     /// hydrated with persisted session metadata.
     pub async fn list_running_sessions(&self) -> Result<Vec<crate::types::RunningSessionResponse>> {
-        let snapshots = self.conductor.running_sessions();
+        let shell_tasks_by_session = self
+            .agent_shared
+            .background_tasks
+            .shell_tasks()
+            .into_iter()
+            .fold(
+                std::collections::HashMap::<SessionId, Vec<crate::agent::BackgroundShellTask>>::new(
+                ),
+                |mut tasks, task| {
+                    tasks.entry(task.session_id.clone()).or_default().push(task);
+                    tasks
+                },
+            );
+        let mut states: std::collections::HashMap<SessionId, AgentState> = self
+            .conductor
+            .running_sessions()
+            .into_iter()
+            .map(|snapshot| (snapshot.session_id, snapshot.state))
+            .collect();
+        for session_id in shell_tasks_by_session.keys() {
+            states.entry(session_id.clone()).or_insert(AgentState::Idle);
+        }
+
         let store = self.session_store().await;
-        let mut sessions = Vec::with_capacity(snapshots.len());
-        for snapshot in snapshots {
-            let Some(info) = store.get(&snapshot.session_id).await? else {
+        let mut sessions = Vec::with_capacity(states.len());
+        for (session_id, state) in states {
+            let Some(info) = store.get(&session_id).await? else {
                 // A newly spawned subagent can briefly precede its persisted row.
                 continue;
             };
+            let background_shells = shell_tasks_by_session
+                .get(&info.id)
+                .cloned()
+                .unwrap_or_default();
             sessions.push(crate::types::RunningSessionResponse {
                 id: info.id,
                 parent_id: info.parent_id,
                 title: info.title,
                 project_id: info.project_id,
-                phase: agent_state_phase(snapshot.state).to_string(),
+                phase: agent_state_phase(state).to_string(),
+                background_shells,
             });
         }
         sessions.sort_by(|left, right| left.id.0.cmp(&right.id.0));

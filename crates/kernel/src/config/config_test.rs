@@ -21,7 +21,6 @@ mod test_helpers {
     }
 }
 
-use crate::hooks::{HookEntry, HookEvent};
 use crate::ENV_PREFIX;
 
 #[test]
@@ -165,34 +164,18 @@ fn test_with_data_dir() {
 
 #[test]
 fn test_config_serialization_roundtrip() {
-    let config = Config {
-        hooks: vec![HookEntry {
-            name: "test-hook".to_string(),
-            event: HookEvent::PreToolUse,
-            matcher: "shell".to_string(),
-            handler_type: String::new(),
-            command: "echo test".to_string(),
-            timeout: 10,
-        }],
-        ..Config::default()
-    };
+    let config = Config::default();
     let toml_str = toml::to_string(&config).unwrap();
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
-    // Verify key fields are preserved
     assert_eq!(parsed.models[0].provider, config.models[0].provider);
     assert_eq!(parsed.data_dir, config.data_dir);
-    assert_eq!(parsed.hooks.len(), 1);
-    assert_eq!(parsed.hooks[0].name, "test-hook");
-    assert_eq!(parsed.hooks[0].command, "echo test");
-    assert_eq!(parsed.hooks[0].timeout, 10);
 }
 
 #[test]
 fn features_default_to_disabled() {
     let features = FeaturesConfig::default();
 
-    assert!(!features.hooks_enabled());
     assert!(!features.update_session_title_enabled());
 }
 
@@ -207,18 +190,7 @@ update_session_title = false
     )
     .unwrap();
 
-    assert!(parsed.features.hooks_enabled());
     assert!(!parsed.features.update_session_title_enabled());
-
-    let overridden: Config = toml::from_str(
-        r"
-[features]
-all = true
-hooks = false
-",
-    )
-    .unwrap();
-    assert!(!overridden.features.hooks_enabled());
 }
 
 #[test]
@@ -231,7 +203,6 @@ update_session_title = true
     )
     .unwrap();
 
-    assert!(!parsed.features.hooks_enabled());
     assert!(parsed.features.update_session_title_enabled());
 }
 
@@ -302,18 +273,4 @@ fn test_config_model_accessor() {
     let config = Config::default();
     assert_eq!(config.model().unwrap().provider, config.models[0].provider);
     assert_eq!(config.model().unwrap().model_id, config.models[0].model_id);
-}
-
-#[test]
-fn test_hook_entry_default_timeout() {
-    let entry: HookEntry = toml::from_str(
-        r#"
-            name = "default-timeout-hook"
-            event = "PreToolUse"
-            matcher = "shell"
-            command = "echo ok"
-            "#,
-    )
-    .unwrap();
-    assert_eq!(entry.timeout, 30);
 }

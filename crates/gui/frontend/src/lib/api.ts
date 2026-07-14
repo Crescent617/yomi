@@ -118,12 +118,22 @@ export interface SessionInfo {
   model_key?: string;
 }
 
+export interface BackgroundShellTask {
+  task_id: string;
+  session_id: string;
+  pid: number;
+  command: string;
+  output_path: string;
+  started_at: string;
+}
+
 export interface RunningSessionInfo {
   id: string;
   parent_id: string | null;
   title: string | null;
   project_id: string | null;
   phase: string;
+  background_shells: BackgroundShellTask[];
 }
 
 export async function listRunningSessions(): Promise<RunningSessionInfo[]> {

@@ -191,7 +191,6 @@ pub struct AgentConfig {
     pub skills: Vec<Arc<Skill>>,
     pub tool_blocklist: Vec<String>,
     pub compactor: Compactor,
-    pub allow_command_hooks: bool,
     pub max_tool_output_length: usize,
 }
 
@@ -205,7 +204,6 @@ impl Default for AgentConfig {
             skills: Vec::new(),
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
-            allow_command_hooks: false,
             max_tool_output_length: 40_000,
         }
     }
@@ -227,8 +225,6 @@ pub struct Config {
     pub log_dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_folders: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub hooks: Vec<crate::hooks::HookEntry>,
     pub features: FeaturesConfig,
     pub max_checkpoints: usize,
     #[serde(default)]
@@ -247,7 +243,6 @@ impl Default for Config {
             data_dir,
             log_dir: None,
             skill_folders: None,
-            hooks: Vec::new(),
             features: FeaturesConfig::default(),
             max_checkpoints: 5,
             channels: Vec::new(),
@@ -369,9 +364,6 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-        }
-        if let Some(val) = env_bool_opt(env_names::ALLOW_COMMAND_HOOKS) {
-            self.features.allow_command_hooks = val;
         }
         if let Some(max_len) = env_parse::<usize>(env_names::MAX_TOOL_OUTPUT_LENGTH) {
             self.agent.max_tool_output_length = max_len;
@@ -535,7 +527,6 @@ impl Kernel {
         task_store: Option<Arc<TaskStore>>,
         compactor: Option<Compactor>,
         skill_folders: Vec<PathBuf>,
-        hook_registry: Option<HookRegistry>,
         enable_cron: bool,
         channel_store: Option<Arc<dyn ChannelStore>>,
         models: Vec<ModelConfig>,
@@ -789,7 +780,6 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         Some(task_store),
         Some(config.agent.compactor.clone()),
         skill_folders,
-        hooks,
         enable_cron,
         if config.channels.is_empty() { None } else { Some(storage.channel_store()) },
         config.models.clone(), // Vec<ModelConfig>

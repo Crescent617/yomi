@@ -23,6 +23,24 @@ impl Model {
         loop {
             let event = match self.event_rx.try_recv() {
                 Ok(TaggedEvent::Main(ev)) => ev,
+                Ok(TaggedEvent::BackgroundTasksChanged {
+                    session_id,
+                    kind,
+                    count,
+                }) => {
+                    if session_id == self.session_id {
+                        match kind {
+                            kernel::agent::BackgroundTaskKind::Subagent => {
+                                // Subagent IDs are tracked from their lifecycle events.
+                            }
+                            kernel::agent::BackgroundTaskKind::Shell => {
+                                self.background_shell_count = count;
+                            }
+                        }
+                        self.update_activity_status();
+                    }
+                    continue;
+                }
                 Ok(TaggedEvent::Connected) => {
                     self.show_notification(&crate::components::info_bar::Notification::info(
                         "Connected to daemon",
@@ -189,6 +207,8 @@ impl Model {
                     tool_id, metadata, ..
                 }) => {
                     if let Some(subagent_sid) = metadata.get("subagent_session_id") {
+                        self.active_subagents.insert(subagent_sid.clone());
+                        self.update_activity_status();
                         let description = metadata
                             .get("subagent_description")
                             .cloned()
@@ -609,11 +629,17 @@ impl Model {
     async fn handle_subagent_event(
         &mut self,
         parent_tool_id: &str,
-        _session_id: &str,
+        session_id: &str,
         event: &Event,
     ) {
         use tuirealm::props::{AttrValue, Attribute};
 
+        let is_running = matches!(
+            event,
+            Event::Agent(kernel::event::AgentEvent::Lifecycle {
+                state: kernel::event::AgentStatus::Running,
+            })
+        );
         let is_stopped = matches!(
             event,
             Event::Agent(kernel::event::AgentEvent::Lifecycle {
@@ -630,7 +656,14 @@ impl Model {
             AttrValue::String(payload),
         );
 
+        if is_running {
+            self.active_subagents.insert(session_id.to_string());
+            self.update_activity_status();
+        }
+
         if is_stopped {
+            self.active_subagents.remove(session_id);
+            self.update_activity_status();
             let _ = self.app.attr(
                 &Id::ChatView,
                 Attribute::Custom(attr::FINALIZE_SUBAGENT),

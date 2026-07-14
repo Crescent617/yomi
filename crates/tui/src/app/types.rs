@@ -149,6 +149,10 @@ pub struct Model {
     pub(crate) model_name: String,
     /// Context window size for the current session's model (resolved from session store).
     pub(crate) context_window: u32,
+    /// Direct child subagents currently running.
+    pub(crate) active_subagents: std::collections::HashSet<String>,
+    /// Background shell processes currently running for this session.
+    pub(crate) background_shell_count: usize,
 }
 
 /// Format a session ID for display, truncating long IDs with ellipsis.

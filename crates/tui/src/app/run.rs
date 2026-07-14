@@ -217,6 +217,7 @@ pub async fn run_tui(
     }
 
     model.init_status_bar()?;
+    model.init_activity_status().await?;
     model.init_input_history()?;
     model.init_skills().await?;
     model.init_session_messages().await?;

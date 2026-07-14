@@ -23,9 +23,6 @@ pub struct AgentConfig {
     pub tool_blocklist: Vec<String>,
     /// Compactor configuration for context management
     pub compactor: Compactor,
-    /// Whether command hooks may execute; derived from the hooks feature.
-    #[serde(skip)]
-    pub allow_command_hooks: bool,
     /// Maximum tool output length in bytes (default `40_000`)
     pub max_tool_output_length: usize,
 }
@@ -46,7 +43,6 @@ pub struct AgentSpawnArgs {
     /// Optional file state store (for restoring from previous session)
     pub file_state_store: Option<Arc<crate::tools::helper::FileStateStore>>,
     pub tool_blocklist: Vec<String>,
-    pub allow_command_hooks: bool,
     /// Maximum tool output length in bytes
     pub max_tool_output_length: usize,
     /// Mailbox for receiving input messages. Created by Conductor or subagent caller.
@@ -68,7 +64,6 @@ impl std::fmt::Debug for AgentSpawnArgs {
             .field("cancel_token", &self.cancel_token.is_some())
             .field("file_state_store", &self.file_state_store.is_some())
             .field("tool_blocklist", &self.tool_blocklist)
-            .field("allow_command_hooks", &self.allow_command_hooks)
             .field("max_tool_output_length", &self.max_tool_output_length)
             .field("mailbox", &self.mailbox)
             .field("input_bus", &self.input_bus.is_some())
@@ -96,7 +91,6 @@ impl AgentSpawnArgs {
             cancel_token: None,
             file_state_store: None,
             tool_blocklist: Vec::new(),
-            allow_command_hooks: false,
             max_tool_output_length: 40_000,
             input_bus: None,
             mailbox: mailbox.into(),
@@ -167,13 +161,6 @@ impl AgentSpawnArgs {
         self
     }
 
-    /// Set whether command hooks are allowed to execute
-    #[must_use]
-    pub fn with_allow_command_hooks(mut self, allow: bool) -> Self {
-        self.allow_command_hooks = allow;
-        self
-    }
-
     /// Set the input bus for publishing messages (needed by subagent tool)
     #[must_use]
     pub fn with_input_bus(mut self, input_bus: Arc<crate::comms::InputBus>) -> Self {
@@ -199,7 +186,6 @@ impl Default for AgentConfig {
             skills: Vec::new(),
             tool_blocklist: Vec::new(),
             compactor: Compactor::default(),
-            allow_command_hooks: false,
             max_tool_output_length: 40_000,
         }
     }
@@ -342,8 +328,6 @@ pub struct AgentShared {
     pub data_dir: std::path::PathBuf,
     /// Optional user message interceptor for injecting reminders/context
     pub message_interceptor: Option<Arc<dyn super::UserMsgInterceptor>>,
-    /// Hook registry for lifecycle event handlers
-    pub hook_registry: Option<Arc<crate::hooks::HookRegistry>>,
     /// Channel manager for external platform integrations (Telegram, Feishu, etc.)
     pub channel_hub: Option<Arc<crate::channels::hub::ChannelHub>>,
     /// Optional goal store for autonomous goal-mode execution
@@ -418,7 +402,6 @@ impl AgentShared {
             checkpoint_store,
             data_dir,
             message_interceptor: None,
-            hook_registry: None,
             goal_store: None,
             channel_hub: None,
             event_bus: None,
@@ -460,13 +443,6 @@ impl AgentShared {
     #[must_use]
     pub fn with_goal_store(mut self, store: Arc<dyn crate::goal::GoalStore>) -> Self {
         self.goal_store = Some(store);
-        self
-    }
-
-    /// Set the hook registry
-    #[must_use]
-    pub fn with_hook_registry(mut self, registry: Arc<crate::hooks::HookRegistry>) -> Self {
-        self.hook_registry = Some(registry);
         self
     }
 

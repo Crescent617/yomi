@@ -16,18 +16,16 @@ macro_rules! env_name {
 }
 
 pub mod agent;
+pub mod channels;
 pub mod checkpoint;
 pub mod client;
 pub mod comms;
 pub mod compactor;
 pub mod config;
+pub mod cron;
 pub mod event;
 pub mod goal;
-pub mod hooks;
 pub mod kernel;
-pub use hooks::{HookContext, HookEvent, HookHandler, HookRegistry, HookResult};
-pub mod channels;
-pub mod cron;
 pub mod memory;
 pub mod notification;
 pub mod permission;
@@ -158,7 +156,6 @@ pub fn build_agent_config(config: &Config, base_dir: &Path) -> AgentConfig {
 
     let mut agent = config.agent.clone();
     agent.skills = skills;
-    agent.allow_command_hooks = config.features.hooks_enabled();
     agent
 }
 
@@ -211,10 +208,6 @@ pub async fn build_kernel(config: &Config, enable_cron: bool) -> Result<Arc<Kern
         Some(task_store),
         Some(config.agent.compactor.clone()),
         skill_folders,
-        config
-            .features
-            .hooks_enabled()
-            .then(|| hooks::build_registry(&config.hooks, config.features.hooks_enabled())),
         enable_cron,
         if config.channels.is_empty() {
             None

@@ -70,6 +70,8 @@ pub struct StatusBar {
     scroll_progress: Option<(usize, usize)>,
     /// Model name (shown at right, next to context usage)
     model_name: Option<String>,
+    /// Running subagent and background shell counts.
+    activity_counts: (usize, usize),
 }
 
 impl StatusBar {
@@ -126,8 +128,22 @@ impl StatusBar {
         )
     }
 
-    fn render_center_section() -> Paragraph<'static> {
-        Paragraph::new("")
+    fn render_center_section(&self) -> Paragraph<'static> {
+        Paragraph::new(Self::activity_text(
+            self.activity_counts.0,
+            self.activity_counts.1,
+        ))
+        .style(Style::default().fg(colors::text_secondary()))
+        .alignment(Alignment::Center)
+    }
+
+    fn activity_text(subagents: usize, shells: usize) -> String {
+        match (subagents, shells) {
+            (0, 0) => String::new(),
+            (agents, 0) => format!("Agents {agents}"),
+            (0, shells) => format!("Shells {shells}"),
+            (agents, shells) => format!("Agents {agents} · Shells {shells}"),
+        }
     }
 
     fn render_scroll_progress_section(&self) -> Span<'static> {
@@ -208,7 +224,7 @@ impl Component for StatusBar {
         );
 
         // Center section: empty
-        frame.render_widget(Self::render_center_section(), chunks[1]);
+        frame.render_widget(self.render_center_section(), chunks[1]);
 
         // Right side content: scroll (optional) + model + context (right-aligned)
         let mut right_spans = Vec::new();
@@ -252,6 +268,18 @@ impl Component for StatusBar {
                             (parts[0].parse::<u32>(), parts[1].parse::<u32>())
                         {
                             self.set_ctx_usage(tokens, context_window);
+                        }
+                    }
+                }
+            }
+            Attribute::Custom(attr::SET_ACTIVITY_COUNTS) => {
+                if let AttrValue::String(value_str) = value {
+                    let mut parts = value_str.split('\x00');
+                    if let (Some(subagents), Some(shells)) = (parts.next(), parts.next()) {
+                        if let (Ok(subagents), Ok(shells)) =
+                            (subagents.parse::<usize>(), shells.parse::<usize>())
+                        {
+                            self.activity_counts = (subagents, shells);
                         }
                     }
                 }
@@ -363,3 +391,7 @@ impl AppComponent<Msg, crate::msg::UserEvent> for StatusBarComponent {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "status_bar_test.rs"]
+mod tests;

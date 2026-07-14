@@ -135,6 +135,8 @@ pub const SET_CTX_USAGE: &str = "set_ctx_usage";
 pub const SET_MODEL_NAME: &str = "set_model_name";
 /// Attribute for setting goal info (format: "status\x00description", empty string = no goal).
 pub const SET_GOAL: &str = "set_goal";
+/// Attribute for setting running activity counts (`subagents\x00shells`).
+pub const SET_ACTIVITY_COUNTS: &str = "set_activity_counts";
 /// Attribute for clearing the status message.
 pub const CLEAR_MESSAGE: &str = "clear_message";
 

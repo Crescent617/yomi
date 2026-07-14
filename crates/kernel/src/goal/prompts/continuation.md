@@ -33,11 +33,9 @@ Before deciding that the goal is achieved, treat completion as unproven and veri
 Do not rely on intent, partial progress, memory of earlier work, or a plausible final answer as proof of completion. Marking the goal complete is a claim that the full objective has been finished and can withstand requirement-by-requirement scrutiny. Only mark the goal achieved when current evidence proves every requirement has been satisfied and no required work remains. If the evidence is incomplete, weak, indirect, merely consistent with completion, or leaves any requirement missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call `updateGoal` with status `"completed"`.
 
 Blocked audit:
-- Do not call `updateGoal` with status `"blocked"` the first time a blocker appears.
-- Only use status `"blocked"` when the same blocking condition has repeated for at least 2 consecutive goal turns, counting the original/user-triggered turn and any automatic goal continuations, and you cannot make meaningful progress without user input or an external-state change.
 - If the user resumes a goal that was previously marked `"blocked"`, treat the resumed run as a fresh blocked audit. If the same blocking condition then repeats for at least three consecutive resumed goal turns, call `updateGoal` with status `"blocked"` again.
 - Use status `"blocked"` only when you are truly at an impasse and cannot make meaningful progress without user input or an external-state change.
 - Once the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; call `updateGoal` with status `"blocked"`.
-- Never use status `"blocked"` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
+- Never use status `"blocked"` merely because the work is hard, slow.
 
-Do not call `updateGoal` unless the goal is complete or the strict blocked audit above is satisfied. Do not mark a goal complete merely because you are stopping work.
+Do not call `updateGoal` unless the goal is complete or the strict blocked audit above is satisfied.

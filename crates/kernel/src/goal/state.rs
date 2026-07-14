@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalStatus {
-    /// Goal is actively being pursued (auto-continue via `PreStop` hook)
+    /// Goal is actively being pursued
     Active,
-    /// Goal was paused by user (`PreStop` hook does not auto-continue)
+    /// Goal was paused by user (agent does not auto-continue)
     Paused,
     /// Goal was completed successfully
     Completed,

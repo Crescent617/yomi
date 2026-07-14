@@ -390,7 +390,6 @@ impl Conductor {
         .with_subagent(self.agent_config.enable_subagent)
         .with_file_state_store(Arc::clone(&file_state_store))
         .with_tool_blocklist(self.agent_config.tool_blocklist.clone())
-        .with_allow_command_hooks(self.agent_config.allow_command_hooks)
         .with_max_tool_output_length(self.agent_config.max_tool_output_length)
         .with_cancel_token(cancel_token.clone())
         .with_input_bus(self.input_bus.clone());

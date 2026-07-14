@@ -110,7 +110,6 @@
 - `crates/kernel/src/agent/turn.rs`
 - `crates/kernel/src/tools/*.rs`（所有发事件的 tool）
 - `crates/kernel/src/app/conductor.rs`
-- `crates/kernel/src/hooks/*.rs`
 - `crates/kernel/src/channels/hub.rs`
 - `crates/kernel/src/permissions/checker.rs`
 - `crates/kernel/src/cron/worker.rs`
