@@ -1,8 +1,7 @@
-use crate::tools::helper::{
-    g_lock_timeout, get_mtime, FileStateStore, DEFAULT_LOCK_TIMEOUT, MAX_FILE_SIZE,
-};
+use crate::tools::helper::{get_mtime, FileStateStore, MAX_FILE_SIZE};
 use crate::tools::{FileStateAwareTool, Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::utils::path::expand_tilde;
 use async_trait::async_trait;
 use serde_json::Value;
