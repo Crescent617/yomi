@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.19] - 2026-07-14
+
+### Changed
+- Steer Message 使用更紧凑的字号，并默认显示两行内容。
+
+### Added
+- 解析 Steer Message 开头的 `agent_id`，支持点击跳转到对应 Agent Session。
+
 ## [0.5.18] - 2026-07-14
 
 ### Added
