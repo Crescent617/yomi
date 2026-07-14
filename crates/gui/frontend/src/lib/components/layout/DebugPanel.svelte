@@ -59,10 +59,7 @@
     }
   }
 
-  async function readCurrent(
-    beforeOffset?: number,
-    afterOffset?: number,
-  ): Promise<DebugFileChunk> {
+  async function readCurrent(beforeOffset?: number): Promise<DebugFileChunk> {
     if (source === "session") {
       if (!sessionState.activeSessionId) {
         return {
@@ -77,7 +74,7 @@
       return readSessionJsonl(
         sessionState.activeSessionId,
         beforeOffset,
-        afterOffset,
+        undefined,
       );
     }
     if (!selectedLog) {
@@ -90,7 +87,7 @@
         has_earlier: false,
       };
     }
-    return readGuiLog(selectedLog, beforeOffset, afterOffset);
+    return readGuiLog(selectedLog, beforeOffset, undefined);
   }
 
   function applyChunk(chunk: DebugFileChunk) {
