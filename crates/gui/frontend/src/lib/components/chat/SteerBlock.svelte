@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, Mail, Terminal } from "lucide-svelte";
+  import { Bot, ChevronDown, Mail, Terminal } from "lucide-svelte";
   import { activateSession } from "../../session";
   import { formatMessageTime } from "../../utils";
   import { parseSteerMessage } from "./steer-message";
@@ -74,25 +74,36 @@
         ></div>
       {/if}
     </div>
+  </div>
+  <div class="ml-auto flex shrink-0 items-center gap-0.5">
+    {#if created_at}
+      <time
+        datetime={created_at}
+        class="text-[10px] leading-4 tabular-nums text-muted-foreground/70"
+      >
+        {formatMessageTime(created_at)}
+      </time>
+    {/if}
     {#if isLong}
       <button
         type="button"
-        class="relative z-10 mt-0.5 inline-flex cursor-pointer text-[11px] font-medium text-info hover:underline"
+        class="grid size-4 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-info/10 hover:text-info focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onclick={() => (expanded = !expanded)}
         aria-expanded={expanded}
+        aria-label={expanded
+          ? "Collapse steer message"
+          : "Expand steer message"}
+        title={expanded ? "Collapse" : "Expand"}
       >
-        {expanded ? "Collapse" : "Show full message"}
+        <ChevronDown
+          class="size-3 transition-transform duration-150 {expanded
+            ? 'rotate-180'
+            : ''}"
+          aria-hidden="true"
+        />
       </button>
     {/if}
   </div>
-  {#if created_at}
-    <time
-      datetime={created_at}
-      class="ml-auto shrink-0 text-[10px] leading-4 tabular-nums text-muted-foreground/70"
-    >
-      {formatMessageTime(created_at)}
-    </time>
-  {/if}
 </div>
 
 <style>

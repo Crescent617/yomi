@@ -345,23 +345,23 @@ impl ShellTool {
                 Ok((code, timed_out, cancelled)) => {
                     if cancelled {
                         format!(
-                            "[Task {task_id_clone} (PID: {pid}) cancelled]\nPartial output: {}",
+                            "[Task {task_id_clone} (PID: {pid}) cancelled] · Partial output: {}",
                             output_path_clone.display()
                         )
                     } else if timed_out {
                         format!(
-                            "[Task {task_id_clone} (PID: {pid}) timed out]\nPartial output: {}",
+                            "[Task {task_id_clone} (PID: {pid}) timed out] · Partial output: {}",
                             output_path_clone.display()
                         )
                     } else {
                         format!(
-                            "[Task {task_id_clone} (PID: {pid}) completed]\nExit code: {code}\nOutput: {}",
+                            "[Task {task_id_clone} (PID: {pid}) completed] · Exit code: {code} · Output: {}",
                             output_path_clone.display()
                         )
                     }
                 }
                 Err(e) => format!(
-                    "[Task {task_id_clone} (PID: {pid}) failed]\nError: {e}\nOutput: {}",
+                    "[Task {task_id_clone} (PID: {pid}) failed] · Error: {e} · Output: {}",
                     output_path_clone.display()
                 ),
             };
