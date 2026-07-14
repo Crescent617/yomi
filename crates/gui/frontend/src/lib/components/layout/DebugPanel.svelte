@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { Bug, ChevronUp, Copy, Menu, RefreshCw } from "lucide-svelte";
+  import {
+    Bug,
+    ChevronUp,
+    Copy,
+    Menu,
+    RefreshCw,
+    WrapText,
+  } from "lucide-svelte";
   import { sessionState, showNotification } from "../../state.svelte";
   import {
     errorMessage,
@@ -9,11 +15,7 @@
     readSessionJsonl,
     type DebugFileChunk,
   } from "../../api";
-  import {
-    appendNewContent,
-    formatBytes,
-    prependEarlierContent,
-  } from "./debug-viewer";
+  import { formatBytes, prependEarlierContent } from "./debug-viewer";
 
   let { onToggleLeftPanel }: { onToggleLeftPanel?: () => void } = $props();
 
@@ -31,6 +33,7 @@
   let loadingEarlier = $state(false);
   let refreshQueued = $state(false);
   let error = $state("");
+  let wrapLines = $state(false);
   let loadedKey = $state("");
   let viewer = $state<HTMLPreElement>();
 
@@ -40,15 +43,9 @@
       : `log:${selectedLog}`,
   );
 
-  onMount(() => {
-    void loadLogs().then(() => refresh(true));
-    const interval = window.setInterval(() => void refresh(false), 2000);
-    return () => window.clearInterval(interval);
-  });
-
   $effect(() => {
     const key = currentKey;
-    if (key !== loadedKey) void refresh(true);
+    if (key !== loadedKey) void refresh();
   });
 
   async function loadLogs() {
@@ -96,46 +93,38 @@
     return readGuiLog(selectedLog, beforeOffset, afterOffset);
   }
 
-  function applyChunk(chunk: DebugFileChunk, replace: boolean) {
-    content = replace
-      ? chunk.content
-      : appendNewContent(content, endOffset, chunk);
+  function applyChunk(chunk: DebugFileChunk) {
+    content = chunk.content;
     path = chunk.path;
     fileSize = chunk.file_size;
-    startOffset = replace ? chunk.start_offset : startOffset;
+    startOffset = chunk.start_offset;
     endOffset = chunk.end_offset;
-    hasEarlier = replace ? chunk.has_earlier : hasEarlier;
+    hasEarlier = chunk.has_earlier;
   }
 
-  async function refresh(force: boolean) {
+  async function refresh() {
     if (loading) {
-      if (force) refreshQueued = true;
+      refreshQueued = true;
       return;
     }
-    if (!force && currentKey !== loadedKey) return;
     const key = currentKey;
-    if (source === "logs" && force) await loadLogs();
     loading = true;
     try {
-      const chunk = await readCurrent(undefined, force ? undefined : endOffset);
+      if (source === "logs") await loadLogs();
       if (currentKey !== key) return;
-      const replace =
-        force ||
-        loadedKey !== key ||
-        chunk.file_size < endOffset ||
-        (!!path && chunk.path !== path);
-      applyChunk(chunk, replace);
+      const chunk = await readCurrent();
+      if (currentKey !== key) return;
+      applyChunk(chunk);
       loadedKey = key;
       error = "";
-      if (force)
-        requestAnimationFrame(() => viewer?.scrollTo(0, viewer.scrollHeight));
+      requestAnimationFrame(() => viewer?.scrollTo(0, viewer.scrollHeight));
     } catch (cause) {
       error = errorMessage(cause);
     } finally {
       loading = false;
       if (refreshQueued) {
         refreshQueued = false;
-        void refresh(true);
+        void refresh();
       }
     }
   }
@@ -225,6 +214,20 @@
       {/if}
       <button
         type="button"
+        class="rounded p-1.5 transition-colors {wrapLines
+          ? 'bg-secondary text-foreground'
+          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
+        title={wrapLines ? "Disable line wrapping" : "Enable line wrapping"}
+        aria-label={wrapLines
+          ? "Disable line wrapping"
+          : "Enable line wrapping"}
+        aria-pressed={wrapLines}
+        onclick={() => (wrapLines = !wrapLines)}
+      >
+        <WrapText class="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
         class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-50"
         title="Copy visible content"
         aria-label="Copy visible content"
@@ -239,7 +242,7 @@
         title="Refresh"
         aria-label="Refresh"
         disabled={loading}
-        onclick={() => refresh(true)}
+        onclick={refresh}
       >
         <RefreshCw class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}" />
       </button>
@@ -285,6 +288,8 @@
     {/if}
     <pre
       bind:this={viewer}
-      class="h-full overflow-auto whitespace-pre p-4 font-mono text-[11px] leading-5 text-foreground selection:bg-primary/25">{content}</pre>
+      class="h-full overflow-auto p-4 font-mono text-[11px] leading-5 text-foreground selection:bg-primary/25 {wrapLines
+        ? 'whitespace-pre-wrap break-words'
+        : 'whitespace-pre'}">{content}</pre>
   </div>
 </div>
