@@ -33,6 +33,10 @@
   const shellCount = $derived(runningShells.length);
   const summary = $derived(shellActivitySummary(shellCount));
 
+  $effect(() => {
+    if (shellCount === 0) open = false;
+  });
+
   function sessionTitle(session: (typeof runningSessions)[number]): string {
     return session.title ?? (session.parent_id ? "Subagent" : "Untitled");
   }

@@ -21,7 +21,6 @@ pub enum Notification {
     BackgroundTasksChanged {
         session_id: SessionId,
         kind: crate::agent::BackgroundTaskKind,
-        count: usize,
     },
     ConnectionLost {
         session_id: SessionId,

@@ -22,8 +22,7 @@ pub enum TaggedEvent {
     },
     BackgroundTasksChanged {
         session_id: String,
-        kind: kernel::agent::BackgroundTaskKind,
-        count: usize,
+        shell_count: usize,
     },
     Connected,
     ConnectionLost,
@@ -91,6 +90,9 @@ impl EventPump {
                     None
                 }
             };
+            if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
+                return;
+            }
 
             // Notify TUI that the initial connection is ready (only in daemon mode).
             // Connection-state transitions must not be dropped, so use the
@@ -108,6 +110,16 @@ impl EventPump {
                     match Self::resubscribe(&kernel, &sid, _auto_approve, &cancel_for_task).await {
                         Some(new_rx) => {
                             tracing::info!("EventPump re-subscribed to {}", sid.0);
+                            notification_rx = match kernel.subscribe_notifications().await {
+                                Ok(rx) => Some(rx),
+                                Err(e) => {
+                                    tracing::warn!("Failed to re-subscribe to background task notifications: {e}");
+                                    None
+                                }
+                            };
+                            if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
+                                break 'outer;
+                            }
                             // Notify TUI that connection is back (must not be dropped).
                             if let Err(e) = tx.send(TaggedEvent::Connected).await {
                                 tracing::warn!(
@@ -138,14 +150,9 @@ impl EventPump {
                         match noti {
                             Some(kernel::notification::Notification::BackgroundTasksChanged {
                                 session_id,
-                                kind,
-                                count,
+                                kind: kernel::agent::BackgroundTaskKind::Shell,
                             }) if session_id == sid => {
-                                if tx.send(TaggedEvent::BackgroundTasksChanged {
-                                    session_id: session_id.to_string(),
-                                    kind,
-                                    count,
-                                }).await.is_err() {
+                                if !Self::send_shell_snapshot(&kernel, &sid, &tx).await {
                                     break 'outer;
                                 }
                             }
@@ -251,6 +258,26 @@ impl EventPump {
         });
 
         (Self { cancel }, rx)
+    }
+
+    async fn send_shell_snapshot(
+        kernel: &Arc<dyn KernelApi>,
+        session_id: &SessionId,
+        tx: &mpsc::Sender<TaggedEvent>,
+    ) -> bool {
+        let count = kernel
+            .list_running_sessions()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|session| session.id == *session_id)
+            .map_or(0, |session| session.background_shells.len());
+        tx.send(TaggedEvent::BackgroundTasksChanged {
+            session_id: session_id.to_string(),
+            shell_count: count,
+        })
+        .await
+        .is_ok()
     }
 
     /// Retry subscribe until success or cancellation.  No deadline — the

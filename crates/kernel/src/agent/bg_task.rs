@@ -82,20 +82,18 @@ impl BgTaskTracker {
     }
 
     fn increment(&self, session_id: &SessionId, kind: BackgroundTaskKind) {
-        let count = {
-            let mut count = self.counts.entry((session_id.clone(), kind)).or_insert(0);
-            *count += 1;
-            *count
-        };
-        self.notify(session_id, kind, count);
+        self.counts
+            .entry((session_id.clone(), kind))
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+        self.notify(session_id, kind);
     }
 
-    fn notify(&self, session_id: &SessionId, kind: BackgroundTaskKind, count: usize) {
+    fn notify(&self, session_id: &SessionId, kind: BackgroundTaskKind) {
         if let Some(bus) = self.notification_bus.get() {
             let _ = bus.send(Notification::BackgroundTasksChanged {
                 session_id: session_id.clone(),
                 kind,
-                count,
             });
         }
     }
@@ -115,20 +113,21 @@ impl Drop for BgTaskGuard {
         }
 
         let key = (self.session_id.clone(), self.kind);
-        let count = if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
+        let removed = if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
             self.tracker.counts.entry(key)
         {
             if *entry.get() <= 1 {
                 entry.remove();
-                0
             } else {
                 *entry.get_mut() -= 1;
-                *entry.get()
             }
+            true
         } else {
-            return;
+            false
         };
-        self.tracker.notify(&self.session_id, self.kind, count);
+        if removed {
+            self.tracker.notify(&self.session_id, self.kind);
+        }
     }
 }
 
