@@ -45,7 +45,16 @@ pub async fn store_inline_image(url: &str, data_dir: &Path) -> Option<String> {
     let assets_dir = data_dir.join("assets");
     fs::create_dir_all(&assets_dir).await.ok()?;
     let path = assets_dir.join(format!("{hash}.{ext}"));
-    if !path.exists() {
+    if path.exists() {
+        let touch_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new().write(true).open(touch_path)?;
+            file.set_modified(std::time::SystemTime::now())
+        })
+        .await
+        .ok()?
+        .ok()?;
+    } else {
         fs::write(&path, &bytes).await.ok()?;
     }
     Some(format!("asset://{hash}.{ext}"))

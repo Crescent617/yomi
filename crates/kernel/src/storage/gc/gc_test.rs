@@ -492,3 +492,125 @@ async fn test_gc_works_with_real_checkpoint_store() {
     assert_eq!(report.checkpoint_dirs_deleted, 1);
     assert!(!cp_dir.exists());
 }
+
+async fn create_asset(storage: &StorageSet, name: &str, stale: bool) -> std::path::PathBuf {
+    let assets_dir = storage.data_dir().join("assets");
+    tokio::fs::create_dir_all(&assets_dir).await.unwrap();
+    let path = assets_dir.join(name);
+    tokio::fs::write(&path, b"asset-data").await.unwrap();
+    if stale {
+        let old_time = std::time::SystemTime::now() - std::time::Duration::from_hours(2);
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(old_time).unwrap();
+    }
+    path
+}
+
+async fn write_asset_reference(storage: &StorageSet, id: &SessionId, name: &str) {
+    let path = storage
+        .data_dir()
+        .join("sessions")
+        .join(format!("{}.jsonl", id.0));
+    let message = serde_json::json!({
+        "content": [{"type": "image_url", "image_url": {"url": format!("asset://{name}")}}]
+    });
+    tokio::fs::write(path, format!("{message}\n"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_gc_sweeps_only_stale_unreferenced_assets() {
+    let (_tmp, storage) = setup().await;
+    let live_id = create_full_session(&storage, false).await;
+    write_asset_reference(&storage, &live_id, "shared.png").await;
+
+    let referenced = create_asset(&storage, "shared.png", true).await;
+    let orphan = create_asset(&storage, "orphan.png", true).await;
+    let fresh = create_asset(&storage, "fresh.png", false).await;
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            days: 90,
+            dry_run: false,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.assets_deleted, 1);
+    assert!(referenced.exists());
+    assert!(!orphan.exists());
+    assert!(fresh.exists());
+}
+
+#[tokio::test]
+async fn test_gc_asset_dry_run_ignores_victim_references() {
+    let (_tmp, storage) = setup().await;
+    let old_id = create_full_session(&storage, true).await;
+    write_asset_reference(&storage, &old_id, "expired.png").await;
+    let asset = create_asset(&storage, "expired.png", true).await;
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            days: 90,
+            dry_run: true,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.assets_deleted, 1);
+    assert!(asset.exists(), "dry-run must not delete the asset");
+}
+
+#[tokio::test]
+async fn test_gc_asset_sweep_skips_all_on_malformed_live_history() {
+    let (_tmp, storage) = setup().await;
+    let live_id = create_full_session(&storage, false).await;
+    let message_path = storage
+        .data_dir()
+        .join("sessions")
+        .join(format!("{}.jsonl", live_id.0));
+    tokio::fs::write(message_path, b"not-json\n").await.unwrap();
+    let orphan = create_asset(&storage, "orphan.png", true).await;
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            days: 90,
+            dry_run: false,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.assets_deleted, 0);
+    assert!(orphan.exists());
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("asset sweep skipped")));
+}
+
+#[tokio::test]
+async fn test_gc_no_orphans_keeps_unreferenced_assets() {
+    let (_tmp, storage) = setup().await;
+    let orphan = create_asset(&storage, "orphan.png", true).await;
+
+    let report = storage
+        .gc()
+        .run(&GcOptions {
+            days: 90,
+            sweep_orphans: false,
+            dry_run: false,
+            ..GcOptions::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report.assets_deleted, 0);
+    assert!(orphan.exists());
+}

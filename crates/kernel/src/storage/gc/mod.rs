@@ -8,6 +8,7 @@
 //! - `sessions/goals/{id}.json`
 //! - `sessions/file_states/{id}.jsonl`
 //! - `checkpoints/{id}/` (self-contained directory)
+//! - `assets/{hash}.{ext}` (content-addressed files shared by message histories)
 //!
 //! The `token_usage` table is deliberately **never touched**: usage data is a
 //! cross-session statistics asset (used by `yomi usage`) and has no FK, so
@@ -19,12 +20,15 @@
 
 use crate::types::{Result, SessionId};
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use super::StorageSet;
 
 /// Stale `.tmp` files older than this are removed during the orphan sweep.
 const TMP_STALE_SECS: u64 = 3600;
+/// Fresh assets may not have been persisted into message history yet.
+const ASSET_STALE_SECS: u64 = 3600;
 
 /// Options controlling a gc run
 #[derive(Debug, Clone)]
@@ -69,6 +73,8 @@ pub struct GcReport {
     pub channel_mappings_deleted: u64,
     /// Orphan files deleted during the sweep (incl. stale `.tmp`)
     pub orphan_files_deleted: u64,
+    /// Unreferenced asset files deleted during the orphan sweep
+    pub assets_deleted: u64,
     /// Bytes reclaimed (estimated from file sizes before deletion)
     pub bytes_reclaimed: u64,
     /// Non-fatal errors encountered (gc continues past individual failures)
@@ -124,6 +130,7 @@ impl GarbageCollector {
             }
             if opts.sweep_orphans {
                 self.sweep_orphans(&mut report, true).await;
+                self.sweep_assets(&victims, &mut report, true).await;
             }
             report.sessions = victims;
             return Ok(report);
@@ -135,6 +142,7 @@ impl GarbageCollector {
         // ── Phase 4: orphan sweep ────────────────────────────────────
         if opts.sweep_orphans {
             self.sweep_orphans(&mut report, false).await;
+            self.sweep_assets(&[], &mut report, false).await;
         }
 
         // ── Phase 5: vacuum ──────────────────────────────────────────
@@ -333,6 +341,99 @@ impl GarbageCollector {
             .collect())
     }
 
+    async fn sweep_assets(
+        &self,
+        excluded_sessions: &[SessionId],
+        report: &mut GcReport,
+        dry_run: bool,
+    ) {
+        let assets_dir = self.storage.data_dir().join("assets");
+        if !assets_dir.is_dir() {
+            return;
+        }
+
+        let excluded: HashSet<&str> = excluded_sessions.iter().map(SessionId::as_str).collect();
+        let live = match self.live_session_ids().await {
+            Ok(live) => live,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("asset sweep skipped: failed to list sessions: {e}"));
+                return;
+            }
+        };
+        let message_paths: Vec<_> = live
+            .iter()
+            .filter(|id| !excluded.contains(id.as_str()))
+            .map(|id| self.sessions_dir().join(format!("{id}.jsonl")))
+            .collect();
+
+        let referenced =
+            match tokio::task::spawn_blocking(move || collect_asset_refs(&message_paths)).await {
+                Ok(Ok(referenced)) => referenced,
+                Ok(Err(e)) => {
+                    report.errors.push(format!("asset sweep skipped: {e}"));
+                    return;
+                }
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("asset sweep skipped: scanner failed: {e}"));
+                    return;
+                }
+            };
+
+        let Ok(mut entries) = tokio::fs::read_dir(&assets_dir).await else {
+            report.errors.push(format!(
+                "asset sweep skipped: cannot read {}",
+                assets_dir.display()
+            ));
+            return;
+        };
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("asset sweep stopped while reading directory: {e}"));
+                    break;
+                }
+            };
+            let path = entry.path();
+            if !path.is_file() || !is_stale(&path, ASSET_STALE_SECS).await {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if referenced.contains(name) {
+                continue;
+            }
+
+            if dry_run {
+                if let Ok(meta) = entry.metadata().await {
+                    report.assets_deleted += 1;
+                    report.bytes_reclaimed += meta.len();
+                }
+            } else {
+                // The asset may have been reused after the directory scan.
+                if !is_stale(&path, ASSET_STALE_SECS).await {
+                    continue;
+                }
+                match remove_file_sized(&path).await {
+                    Ok(Some(size)) => {
+                        report.assets_deleted += 1;
+                        report.bytes_reclaimed += size;
+                    }
+                    Ok(None) => {}
+                    Err(e) => report.errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+        }
+    }
+
     async fn vacuum(&self) -> Result<()> {
         sqlx::query("VACUUM")
             .execute(self.storage.pool())
@@ -343,6 +444,67 @@ impl GarbageCollector {
             .await
             .map_err(|e| super::storage_err(format!("wal checkpoint failed: {e}")))?;
         Ok(())
+    }
+}
+
+fn collect_asset_refs(paths: &[PathBuf]) -> std::io::Result<HashSet<String>> {
+    let mut referenced = HashSet::new();
+    for path in paths {
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!("cannot read {}: {e}", path.display()),
+                ));
+            }
+        };
+        for (line_number, line) in BufReader::new(file).lines().enumerate() {
+            let line = line.map_err(|e| {
+                std::io::Error::new(e.kind(), format!("cannot read {}: {e}", path.display()))
+            })?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(&line).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot parse {} line {}: {e}",
+                        path.display(),
+                        line_number + 1
+                    ),
+                )
+            })?;
+            collect_asset_refs_from_value(&value, &mut referenced);
+        }
+    }
+    Ok(referenced)
+}
+
+fn collect_asset_refs_from_value(value: &serde_json::Value, referenced: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::String(value) => {
+            if let Some(name) = value.strip_prefix("asset://") {
+                if !name.is_empty()
+                    && Path::new(name).file_name().and_then(|part| part.to_str()) == Some(name)
+                {
+                    referenced.insert(name.to_string());
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_asset_refs_from_value(value, referenced);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values() {
+                collect_asset_refs_from_value(value, referenced);
+            }
+        }
+        _ => {}
     }
 }
 
