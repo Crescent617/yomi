@@ -55,6 +55,22 @@ pub use write::{WriteTool, WRITE_TOOL_NAME};
 /// Tells the agent to end its turn immediately and wait for the result notification.
 pub const ASYNC_LAUNCH_GUIDE: &str = "After launching, end your current turn immediately — do not sleep, poll, or re-launch. The result will be sent automatically when complete.";
 
+/// Prefix content sent from one agent so receivers can identify and reply to it.
+pub(crate) fn format_agent_message(
+    agent_id: impl std::fmt::Display,
+    content: impl std::fmt::Display,
+) -> String {
+    format!("[From Agent: {agent_id}] {content}")
+}
+
+/// Prefix system output from a background shell task.
+pub(crate) fn format_shell_message(
+    task_id: impl std::fmt::Display,
+    content: impl std::fmt::Display,
+) -> String {
+    format!("[From Shell: {task_id}] {content}")
+}
+
 /// Context provided to tools during execution
 pub struct ToolExecCtx<'a> {
     /// The ID of this tool call

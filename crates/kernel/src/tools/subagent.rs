@@ -1,7 +1,7 @@
 use crate::agent::{AgentShared, SubAgentMode};
 use crate::comms::InputBus;
 use crate::event::{AgentEvent, AgentStatus, Event, StopReason};
-use crate::tools::{Tool, ToolExecCtx};
+use crate::tools::{format_agent_message, Tool, ToolExecCtx};
 use crate::types::{ContentBlock, EventId, KernelError, Result, SessionId, ToolOutput};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -27,7 +27,7 @@ struct RunSubagentParams {
 
 /// Prefix `text` with the subagent session id so callers can correlate results.
 fn agent_prefix(sid: &SessionId, text: impl std::fmt::Display) -> String {
-    format!("[agent_id: {sid}] {text}")
+    format_agent_message(sid, text)
 }
 
 fn subagent_prompt(prompt: String, mode: SubAgentMode, parent_session_id: &SessionId) -> String {

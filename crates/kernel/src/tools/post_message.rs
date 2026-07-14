@@ -34,7 +34,7 @@ struct PostMessageArgs {
 }
 
 fn format_message(from: &str, title: &str, content: &str) -> String {
-    format!("[From Agent: {from}] {title}\n{content}")
+    crate::tools::format_agent_message(from, format_args!("{title}\n{content}"))
 }
 
 #[async_trait]

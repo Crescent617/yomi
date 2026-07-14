@@ -1,4 +1,4 @@
-use super::{subagent_prompt, SubagentTool, SUBAGENT_TOOL_NAME};
+use super::{agent_prefix, subagent_prompt, SubagentTool, SUBAGENT_TOOL_NAME};
 use crate::agent::{AgentShared, SubAgentMode};
 use crate::comms::{EventBus, InputBus};
 use crate::permission::{Level, PermissionState};
@@ -129,6 +129,14 @@ async fn subagent_inherits_current_runtime_auto_approve_level() {
         )
         .unwrap();
     exec.await.unwrap().unwrap();
+}
+
+#[test]
+fn agent_results_use_the_shared_from_agent_prefix() {
+    assert_eq!(
+        agent_prefix(&SessionId::from("sub_123"), "Review complete"),
+        "[From Agent: sub_123] Review complete"
+    );
 }
 
 #[test]
