@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.18] - 2026-07-14
+
+### Added
+- Diff 代码按文件语言进行语法高亮，支持 Unified / Split 和亮暗主题。
+
+### Changed
+- Diff 文件导航改为横向 Tab，并保留溢出文件列表和前后切换。
+- Diff 加载状态统一使用内容区的 Loading Placeholder。
+- Query Navigator 使用固定宽度的横向滑入动画。
+
+### Fixed
+- 修复切换 Diff 文件后仅首个文件显示语法高亮的问题。
+
 ## [0.5.17] - 2026-07-14
 
 ### Changed
