@@ -140,6 +140,66 @@ fn test_stream_state_tool_use_completion_reports_tool_calls_finish_reason() {
 }
 
 #[test]
+fn test_anthropic_stop_reason_normalization() {
+    for (provider_reason, expected) in [
+        ("stop_sequence", FinishReason::Stop),
+        ("pause_turn", FinishReason::PauseTurn),
+        ("refusal", FinishReason::Refusal),
+    ] {
+        let mut state = AnthropicStreamState::new();
+        state
+            .process(&format!(
+                r#"{{"type":"message_delta","delta":{{"stop_reason":"{provider_reason}","stop_sequence":null}}}}"#
+            ))
+            .unwrap();
+        let items = state.process(r#"{"type":"message_stop"}"#).unwrap();
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            ModelStreamItem::ResponseMeta {
+                finish_reason: Some(reason),
+                ..
+            } if *reason == expected
+        )));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, ModelStreamItem::Complete)));
+    }
+}
+
+#[test]
+fn test_premature_end_is_retryable_and_does_not_flush_partial_tool_call() {
+    let mut state = AnthropicStreamState::new();
+    state
+        .process(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_123","name":"bash","input":{}}}"#)
+        .unwrap();
+    state
+        .process(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":"}}"#)
+        .unwrap();
+
+    for end in ["EOF", "[DONE]"] {
+        let err = AnthropicStreamState::unexpected_end(end);
+        assert!(matches!(err, ProviderError::Sse(_)));
+        assert!(err.is_retryable());
+    }
+    assert!(state.current_tool_call.is_some());
+    assert!(!state.done);
+}
+
+#[test]
+fn test_unknown_anthropic_content_block_is_a_parse_error() {
+    let mut state = AnthropicStreamState::new();
+    let error = state
+        .process(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srv_1","name":"web_search","input":{}}}"#,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, ProviderError::Parse(_)));
+    assert!(!error.is_retryable());
+}
+
+#[test]
 fn test_stream_state_message_stop() {
     let mut state = AnthropicStreamState::new();
 

@@ -322,10 +322,48 @@ fn test_assembler_redacted_thinking() {
 }
 
 #[test]
+fn test_assembler_premature_end_is_retryable_and_does_not_flush_partial_call() {
+    let mut assembler = MsgChunkAssembler::new();
+    let delta = create_tool_call_delta(0, Some("call_123"), Some("bash"), Some("{\"cmd\":"));
+    assembler.process(&serde_json::to_string(&create_test_response(delta)).unwrap());
+
+    let err = assembler.finish_stream("EOF").unwrap_err();
+    assert!(matches!(err, ProviderError::Sse(_)));
+    assert!(err.is_retryable());
+    assert!(!assembler.finished);
+    assert_eq!(assembler.partials.len(), 1);
+}
+
+#[test]
+fn test_assembler_done_sentinel_requires_finish_reason() {
+    let mut assembler = MsgChunkAssembler::new();
+    let err = assembler.finish_stream("[DONE]").unwrap_err();
+    assert!(matches!(err, ProviderError::Sse(_)));
+    assert!(err.is_retryable());
+    assert!(!assembler.finished);
+}
+#[test]
+fn test_assembler_done_sentinel_after_finish_reason_completes() {
+    let mut assembler = MsgChunkAssembler::new();
+    assembler.process(r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#);
+
+    let items = assembler.finish_stream("[DONE]").unwrap();
+    assert!(assembler.finished);
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::ResponseMeta {
+            finish_reason: Some(FinishReason::Stop),
+            ..
+        }
+    )));
+    assert!(items
+        .iter()
+        .any(|item| matches!(item, ModelStreamItem::Complete)));
+}
+
+#[test]
 fn test_assembler_empty_content_filtered() {
     let mut assembler = MsgChunkAssembler::new();
-
-    // Empty content should be filtered out
     let delta = OpenAIDelta {
         content: Some(String::new()),
         thinking: None,

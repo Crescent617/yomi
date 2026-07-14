@@ -454,14 +454,10 @@ impl ResponseAssembler {
                     }
                 }
             }
-            "response.completed" | "response.incomplete" => {
+            "response.incomplete" => {
                 self.done = true;
-                let terminal_status = if event.type_ == "response.completed" {
-                    "completed"
-                } else {
-                    "incomplete"
-                };
-                if let Some(resp) = event.response {
+                let response = event.response;
+                if let Some(resp) = response {
                     if let Some(id) = resp.id {
                         self.response_id = Some(id);
                     }
@@ -473,13 +469,44 @@ impl ResponseAssembler {
                         ));
                     }
                     self.finish_reason = Some(self.normalize_finish_reason(
-                        Some(terminal_status),
+                        Some("incomplete"),
                         resp.incomplete_details.as_ref(),
                     ));
                 } else {
                     self.finish_reason =
-                        Some(self.normalize_finish_reason(Some(terminal_status), None));
+                        Some(self.normalize_finish_reason(Some("incomplete"), None));
                 }
+                // An authoritative incomplete response may contain completed calls followed by
+                // a truncated call. Preserve the completed calls and discard any partial one.
+                if self.saw_function_call {
+                    self.partial_calls.clear();
+                    self.finish_reason = Some(FinishReason::ToolCalls);
+                }
+                items.extend(self.finish());
+            }
+            "response.completed" => {
+                if !self.partial_calls.is_empty() {
+                    return Err(ProviderError::Sse(format!(
+                        "protocol error: {} arrived before response.output_item.done for {} function call(s)",
+                        event.type_,
+                        self.partial_calls.len()
+                    )));
+                }
+
+                self.done = true;
+                if let Some(resp) = event.response {
+                    if let Some(id) = resp.id {
+                        self.response_id = Some(id);
+                    }
+                    if let Some(usage) = resp.usage {
+                        self.usage = Some(crate::provider::TokenUsage::new(
+                            usage.input_tokens,
+                            usage.output_tokens,
+                            usage.cached_tokens(),
+                        ));
+                    }
+                }
+                self.finish_reason = Some(self.normalize_finish_reason(Some("completed"), None));
                 items.extend(self.finish());
             }
             "response.failed" | "error" => {

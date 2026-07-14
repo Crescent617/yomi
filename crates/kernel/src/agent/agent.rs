@@ -1162,18 +1162,13 @@ impl Agent {
             .and_then(|m| m.tool_calls.as_ref())
             .is_some();
 
-        let is_consistent = match finish_reason {
-            Some(FinishReason::ToolCalls) => has_tool_calls,
-            Some(FinishReason::Stop | FinishReason::MaxTokens) => !has_tool_calls,
-            None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => false,
-        };
+        let is_consistent = is_stream_completion_consistent(finish_reason, has_tool_calls);
 
         if !is_consistent {
             let error = format!(
                 "inconsistent model stream completion: finish_reason={finish_reason:?}, has_tool_calls={has_tool_calls}"
             );
             tracing::error!("{error}");
-            self.emit_error(crate::event::ErrorPhase::Streaming, &error, false);
             self.emit(Event::Agent(AgentEvent::Lifecycle {
                 state: AgentStatus::Stopped {
                     reason: StopReason::Failed {
@@ -1214,6 +1209,24 @@ impl Agent {
                     self.emit_stopped_completed(finish_reason);
                     self.context.transition_to(AgentState::Idle);
                 }
+                return Ok(());
+            }
+            Some(FinishReason::PauseTurn) => {
+                let error = "Anthropic pause_turn requires preserving server-side tool state, which is not supported";
+                tracing::error!("{error}");
+                self.emit(Event::Agent(AgentEvent::Lifecycle {
+                    state: AgentStatus::Stopped {
+                        reason: StopReason::Failed {
+                            error: error.to_string(),
+                        },
+                    },
+                }));
+                self.context.transition_to(AgentState::Idle);
+                return Ok(());
+            }
+            Some(FinishReason::Refusal) => {
+                self.emit_stopped_completed(finish_reason);
+                self.context.transition_to(AgentState::Idle);
                 return Ok(());
             }
             Some(FinishReason::Stop) => {}
@@ -1292,6 +1305,22 @@ impl Agent {
                 }
             }
         }
+    }
+}
+
+fn is_stream_completion_consistent(
+    finish_reason: Option<FinishReason>,
+    has_tool_calls: bool,
+) -> bool {
+    match finish_reason {
+        Some(FinishReason::ToolCalls) => has_tool_calls,
+        Some(
+            FinishReason::Stop
+            | FinishReason::MaxTokens
+            | FinishReason::PauseTurn
+            | FinishReason::Refusal,
+        ) => !has_tool_calls,
+        None | Some(FinishReason::ContentFilter | FinishReason::Unknown) => false,
     }
 }
 
