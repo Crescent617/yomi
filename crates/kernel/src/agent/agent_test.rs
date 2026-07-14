@@ -1,4 +1,7 @@
-use super::{is_stream_completion_consistent, should_auto_continue, wait_for_retry};
+use super::{
+    is_stream_completion_consistent, should_auto_continue, should_retry_streaming_error,
+    wait_for_retry,
+};
 use crate::agent::{AgentError, CancelToken};
 use crate::types::FinishReason;
 use std::time::Duration;
@@ -51,6 +54,18 @@ fn pause_and_refusal_do_not_consume_max_token_auto_continue() {
         &mut used,
         Some(FinishReason::Refusal)
     ));
+}
+
+#[test]
+fn non_retryable_streaming_error_gets_one_recovery_attempt() {
+    assert!(should_retry_streaming_error(0, false));
+    assert!(!should_retry_streaming_error(1, false));
+}
+
+#[test]
+fn retryable_streaming_error_uses_full_retry_budget() {
+    assert!(should_retry_streaming_error(0, true));
+    assert!(should_retry_streaming_error(10, true));
 }
 
 #[tokio::test]

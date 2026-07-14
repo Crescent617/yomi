@@ -1290,7 +1290,7 @@ impl Agent {
                         .fail_agent("Streaming failed after max retries", e)
                         .await;
                 }
-                Err(e) if !e.is_retryable() => {
+                Err(e) if !should_retry_streaming_error(attempt, e.is_retryable()) => {
                     return self
                         .fail_agent("Streaming failed with non-retryable error", e)
                         .await;
@@ -1306,6 +1306,10 @@ impl Agent {
             }
         }
     }
+}
+
+fn should_retry_streaming_error(attempt: u32, retryable: bool) -> bool {
+    retryable || attempt == 0
 }
 
 fn is_stream_completion_consistent(

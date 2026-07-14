@@ -50,7 +50,7 @@
     snapshotGuiPreferences,
     type SidebarViewPreference,
   } from "../../settings.svelte";
-  import { slide } from "svelte/transition";
+  import { slide, fly } from "svelte/transition";
   let { collapsed = false }: { collapsed?: boolean } = $props();
 
   // Playful label for the new-chat button, rolled once per mount.
@@ -720,17 +720,24 @@
   {#if !collapsed}
     <div class="shrink-0 px-2 pb-1" aria-label="Session view">
       <div
-        class="grid h-8 grid-cols-2 gap-0.5 rounded-md bg-secondary/60 p-0.5"
+        class="relative grid h-8 grid-cols-2 gap-0.5 rounded-md bg-secondary/60 p-0.5"
       >
+        <span
+          class="pointer-events-none absolute bottom-0.5 left-0.5 top-0.5 w-[calc(50%-0.1875rem)] rounded-[4px] bg-background shadow-sm transition-transform duration-200 ease-out motion-reduce:transition-none {sidebarView ===
+          'projects'
+            ? 'translate-x-[calc(100%+0.125rem)]'
+            : 'translate-x-0'}"
+          aria-hidden="true"
+        ></span>
         <button
           type="button"
           aria-pressed={sidebarView === "sessions"}
           aria-label="Sessions"
           title="Sessions"
-          class="flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
+          class="relative z-10 flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
           'sessions'
-            ? 'bg-background text-foreground shadow-sm'
-            : 'text-muted-foreground hover:bg-background/40 hover:text-foreground'}"
+            ? 'text-foreground'
+            : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => switchSidebarView("sessions")}
         >
           <MessageSquare size={15} />
@@ -740,10 +747,10 @@
           aria-pressed={sidebarView === "projects"}
           aria-label="Projects"
           title="Projects"
-          class="flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
+          class="relative z-10 flex min-w-0 items-center justify-center rounded-[4px] px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {sidebarView ===
           'projects'
-            ? 'bg-background text-foreground shadow-sm'
-            : 'text-muted-foreground hover:bg-background/40 hover:text-foreground'}"
+            ? 'text-foreground'
+            : 'text-muted-foreground hover:text-foreground'}"
           onclick={() => switchSidebarView("projects")}
         >
           <Folder size={15} />
@@ -793,7 +800,7 @@
         </div>
       {/each}
     {:else if sidebarView === "sessions"}
-      <div class="space-y-0.5">
+      <div class="space-y-0.5" in:fly={{ x: -8, duration: 160, opacity: 0.3 }}>
         {#each sessionTimeGroups as group (group.label ?? "recent")}
           <section aria-label={group.label ?? "Recent sessions"}>
             {#if group.label}
@@ -988,285 +995,288 @@
         {/if}
       </div>
     {:else}
-      {#each sortedProjects as project (project.id)}
-        {@const isActive =
-          getSession(sessionState.activeSessionId ?? "")?.project_id ===
-          project.id}
-        <div class="border-b border-border/40 pb-0.5 mb-0.5">
-          <div
-            class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
-              ? 'text-foreground bg-secondary/35'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/25'}"
-          >
-            <button
-              class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
-              onclick={() => toggle(project.id)}
-              aria-expanded={Boolean(expanded[project.id])}
-              aria-controls={`project-sessions-${project.id}`}
+      <div in:fly={{ x: 8, duration: 160, opacity: 0.3 }}>
+        {#each sortedProjects as project (project.id)}
+          {@const isActive =
+            getSession(sessionState.activeSessionId ?? "")?.project_id ===
+            project.id}
+          <div class="border-b border-border/40 pb-0.5 mb-0.5">
+            <div
+              class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
+                ? 'text-foreground bg-secondary/35'
+                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/25'}"
             >
-              {#if expanded[project.id]}
-                <FolderOpen
-                  size={13}
-                  class="shrink-0 {isActive
-                    ? 'text-primary'
-                    : 'text-muted-foreground'}"
-                />
-              {:else}
-                <Folder
-                  size={13}
-                  class="shrink-0 {isActive
-                    ? 'text-primary'
-                    : 'text-muted-foreground'}"
-                />
-              {/if}
-              {#if renamingProjectId === project.id}
-                <input
-                  type="text"
-                  use:focusAndSelect
-                  bind:value={renameValue}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === "Enter") confirmRenameProject(project.id);
-                    if (e.key === "Escape") renamingProjectId = null;
-                  }}
-                  onblur={() => confirmRenameProject(project.id)}
-                  class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                />
-              {:else}
-                <span class="truncate font-medium">{project.name}</span>
-              {/if}
-              {#if getSessions(project.id).some((s) => s.phase !== "idle" && s.phase !== "closed")}
-                {@const projectRunning = getSessions(project.id).some(
-                  (s) =>
-                    s.phase === "streaming" ||
-                    s.phase === "executing_tool" ||
-                    s.phase === "compacting",
-                )}
-                <!-- Aggregate: attention (waiting) wins over running -->
-                <StatusDot
-                  phase={getSessions(project.id).some(
+              <button
+                class="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                onclick={() => toggle(project.id)}
+                aria-expanded={Boolean(expanded[project.id])}
+                aria-controls={`project-sessions-${project.id}`}
+              >
+                {#if expanded[project.id]}
+                  <FolderOpen
+                    size={13}
+                    class="shrink-0 {isActive
+                      ? 'text-primary'
+                      : 'text-muted-foreground'}"
+                  />
+                {:else}
+                  <Folder
+                    size={13}
+                    class="shrink-0 {isActive
+                      ? 'text-primary'
+                      : 'text-muted-foreground'}"
+                  />
+                {/if}
+                {#if renamingProjectId === project.id}
+                  <input
+                    type="text"
+                    use:focusAndSelect
+                    bind:value={renameValue}
+                    onkeydown={(e: KeyboardEvent) => {
+                      if (e.key === "Enter") confirmRenameProject(project.id);
+                      if (e.key === "Escape") renamingProjectId = null;
+                    }}
+                    onblur={() => confirmRenameProject(project.id)}
+                    class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                {:else}
+                  <span class="truncate font-medium">{project.name}</span>
+                {/if}
+                {#if getSessions(project.id).some((s) => s.phase !== "idle" && s.phase !== "closed")}
+                  {@const projectRunning = getSessions(project.id).some(
                     (s) =>
-                      s.phase !== "idle" &&
-                      s.phase !== "closed" &&
-                      s.phase !== "streaming" &&
-                      s.phase !== "executing_tool" &&
-                      s.phase !== "compacting",
-                  )
-                    ? "waiting"
-                    : projectRunning
-                      ? "streaming"
-                      : "idle"}
-                />
-              {/if}
-            </button>
+                      s.phase === "streaming" ||
+                      s.phase === "executing_tool" ||
+                      s.phase === "compacting",
+                  )}
+                  <!-- Aggregate: attention (waiting) wins over running -->
+                  <StatusDot
+                    phase={getSessions(project.id).some(
+                      (s) =>
+                        s.phase !== "idle" &&
+                        s.phase !== "closed" &&
+                        s.phase !== "streaming" &&
+                        s.phase !== "executing_tool" &&
+                        s.phase !== "compacting",
+                    )
+                      ? "waiting"
+                      : projectRunning
+                        ? "streaming"
+                        : "idle"}
+                  />
+                {/if}
+              </button>
 
-            <div class="relative">
+              <div class="relative">
+                <button
+                  class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
+                  onclick={(e: Event) => {
+                    e.stopPropagation();
+                    showMenu = showMenu === project.id ? null : project.id;
+                  }}
+                >
+                  <MoreVertical size={12} />
+                </button>
+                {#if showMenu === project.id}
+                  <div
+                    class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1"
+                  >
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                      onclick={(e: Event) => {
+                        e.stopPropagation();
+                        renamingProjectId = project.id;
+                        renameValue = project.name;
+                        showMenu = null;
+                      }}
+                    >
+                      <Pencil size={12} /> Rename
+                    </button>
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                      onclick={(e: Event) => {
+                        e.stopPropagation();
+                        requestDeleteProject(project.id);
+                      }}
+                    >
+                      <Trash2 size={12} /> Delete
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Close project menu"
+                    class="fixed inset-0 z-10"
+                    onclick={() => (showMenu = null)}
+                  ></button>
+                {/if}
+              </div>
+
               <button
                 class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
-                onclick={(e: Event) => {
-                  e.stopPropagation();
-                  showMenu = showMenu === project.id ? null : project.id;
-                }}
+                onclick={() => quickCreateSession(project.id)}
               >
-                <MoreVertical size={12} />
+                <Plus size={12} />
               </button>
-              {#if showMenu === project.id}
-                <div
-                  class="absolute right-0 top-full mt-1 z-20 w-32 rounded-md border border-border bg-popover shadow-md py-1"
-                >
-                  <button
-                    class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                    onclick={(e: Event) => {
-                      e.stopPropagation();
-                      renamingProjectId = project.id;
-                      renameValue = project.name;
-                      showMenu = null;
-                    }}
-                  >
-                    <Pencil size={12} /> Rename
-                  </button>
-                  <button
-                    class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
-                    onclick={(e: Event) => {
-                      e.stopPropagation();
-                      requestDeleteProject(project.id);
-                    }}
-                  >
-                    <Trash2 size={12} /> Delete
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  aria-label="Close project menu"
-                  class="fixed inset-0 z-10"
-                  onclick={() => (showMenu = null)}
-                ></button>
-              {/if}
             </div>
 
-            <button
-              class="shrink-0 p-0.5 rounded hover:bg-secondary/80 transition-colors"
-              onclick={() => quickCreateSession(project.id)}
-            >
-              <Plus size={12} />
-            </button>
-          </div>
-
-          {#if expanded[project.id]}
-            <div
-              id={`project-sessions-${project.id}`}
-              class="ml-2 space-y-0.5 pb-1"
-              aria-busy={Boolean(loading[project.id])}
-              transition:slide={{ duration: 200 }}
-            >
-              {#each getSessions(project.id) as session (session.id)}
-                <div
-                  class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-2 pr-0.5 transition-colors {session.id ===
-                  sessionState.activeSessionId
-                    ? 'border-primary bg-primary/8 text-foreground'
-                    : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
-                >
-                  {#if renamingSessionId === session.id}
-                    <input
-                      type="text"
-                      use:focusAndSelect
-                      bind:value={renameValue}
-                      onkeydown={(e: KeyboardEvent) => {
-                        if (e.key === "Enter") confirmRenameSession(session.id);
-                        if (e.key === "Escape") renamingSessionId = null;
-                      }}
-                      onblur={() => confirmRenameSession(session.id)}
-                      class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                  {:else}
-                    <button
-                      type="button"
-                      class="min-w-0 flex-1 truncate text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      title={session.alias ?? "Untitled"}
-                      onclick={() => activateSession(session.id)}
-                    >
-                      {session.alias ?? "Untitled"}
-                    </button>
-                  {/if}
-                  <div class="flex shrink-0 items-center gap-1.5">
-                    {#if session.updated_at}
-                      <span
-                        class="text-[10px] text-muted-foreground"
-                        title={new Date(session.updated_at).toLocaleString()}
-                      >
-                        {formatTimeAgo(session.updated_at, clock.now)}
-                      </span>
-                    {/if}
-                    <div class="relative h-5 w-5 shrink-0">
-                      <div
-                        class="absolute inset-0 flex items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
-                        session.id
-                          ? 'opacity-0'
-                          : 'group-hover:opacity-0'}"
-                      >
-                        {#if unreadSessions[session.id]}
-                          <span
-                            class="h-1.5 w-1.5 rounded-full bg-primary"
-                            aria-label="Unread"
-                            title="Unread"
-                          ></span>
-                        {/if}
-                        <StatusDot phase={session.phase} />
-                      </div>
+            {#if expanded[project.id]}
+              <div
+                id={`project-sessions-${project.id}`}
+                class="ml-2 space-y-0.5 pb-1"
+                aria-busy={Boolean(loading[project.id])}
+                transition:slide={{ duration: 200 }}
+              >
+                {#each getSessions(project.id) as session (session.id)}
+                  <div
+                    class="group relative flex w-full items-center gap-2 rounded-sm border-l-2 py-1 pl-2 pr-0.5 transition-colors {session.id ===
+                    sessionState.activeSessionId
+                      ? 'border-primary bg-primary/8 text-foreground'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground'}"
+                  >
+                    {#if renamingSessionId === session.id}
+                      <input
+                        type="text"
+                        use:focusAndSelect
+                        bind:value={renameValue}
+                        onkeydown={(e: KeyboardEvent) => {
+                          if (e.key === "Enter")
+                            confirmRenameSession(session.id);
+                          if (e.key === "Escape") renamingSessionId = null;
+                        }}
+                        onblur={() => confirmRenameSession(session.id)}
+                        class="flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    {:else}
                       <button
                         type="button"
-                        aria-label="Session actions"
-                        title="Session actions"
-                        class="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity hover:bg-secondary/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {projectMenu?.session_id ===
-                        session.id
-                          ? 'opacity-100'
-                          : 'group-hover:opacity-100'}"
-                        onclick={(e: MouseEvent) =>
-                          openMenu(e, "session", session.id)}
+                        class="min-w-0 flex-1 truncate text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        title={session.alias ?? "Untitled"}
+                        onclick={() => activateSession(session.id)}
                       >
-                        <MoreVertical size={12} />
+                        {session.alias ?? "Untitled"}
                       </button>
-                    </div>
-                    {#if projectMenu?.session_id === session.id}
-                      <div
-                        class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
-                        style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
-                      >
-                        <button
-                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            togglePin(session.id);
-                            projectMenu = null;
-                          }}
+                    {/if}
+                    <div class="flex shrink-0 items-center gap-1.5">
+                      {#if session.updated_at}
+                        <span
+                          class="text-[10px] text-muted-foreground"
+                          title={new Date(session.updated_at).toLocaleString()}
                         >
-                          {#if session.is_pinned}
-                            <PinOff size={12} /> Unpin
-                          {:else}
-                            <Pin size={12} /> Pin to top
+                          {formatTimeAgo(session.updated_at, clock.now)}
+                        </span>
+                      {/if}
+                      <div class="relative h-5 w-5 shrink-0">
+                        <div
+                          class="absolute inset-0 flex items-center justify-center gap-1 transition-opacity {projectMenu?.session_id ===
+                          session.id
+                            ? 'opacity-0'
+                            : 'group-hover:opacity-0'}"
+                        >
+                          {#if unreadSessions[session.id]}
+                            <span
+                              class="h-1.5 w-1.5 rounded-full bg-primary"
+                              aria-label="Unread"
+                              title="Unread"
+                            ></span>
                           {/if}
-                        </button>
+                          <StatusDot phase={session.phase} />
+                        </div>
                         <button
-                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            renamingSessionId = session.id;
-                            renameValue = session.alias ?? "Untitled";
-                            projectMenu = null;
-                          }}
+                          type="button"
+                          aria-label="Session actions"
+                          title="Session actions"
+                          class="absolute inset-0 flex items-center justify-center rounded opacity-0 transition-opacity hover:bg-secondary/80 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring {projectMenu?.session_id ===
+                          session.id
+                            ? 'opacity-100'
+                            : 'group-hover:opacity-100'}"
+                          onclick={(e: MouseEvent) =>
+                            openMenu(e, "session", session.id)}
                         >
-                          <Pencil size={12} /> Rename
-                        </button>
-                        <button
-                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            copySessionId(session.id);
-                            projectMenu = null;
-                          }}
-                        >
-                          <Copy size={12} /> Copy ID
-                        </button>
-                        <button
-                          class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
-                          onclick={(e: Event) => {
-                            e.stopPropagation();
-                            requestDeleteSession(session.id);
-                            projectMenu = null;
-                          }}
-                        >
-                          <Trash2 size={12} /> Delete
+                          <MoreVertical size={12} />
                         </button>
                       </div>
-                    {/if}
+                      {#if projectMenu?.session_id === session.id}
+                        <div
+                          class="fixed z-50 w-36 rounded-md border border-border bg-popover shadow-md py-1"
+                          style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
+                        >
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              togglePin(session.id);
+                              projectMenu = null;
+                            }}
+                          >
+                            {#if session.is_pinned}
+                              <PinOff size={12} /> Unpin
+                            {:else}
+                              <Pin size={12} /> Pin to top
+                            {/if}
+                          </button>
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              renamingSessionId = session.id;
+                              renameValue = session.alias ?? "Untitled";
+                              projectMenu = null;
+                            }}
+                          >
+                            <Pencil size={12} /> Rename
+                          </button>
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              copySessionId(session.id);
+                              projectMenu = null;
+                            }}
+                          >
+                            <Copy size={12} /> Copy ID
+                          </button>
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              requestDeleteSession(session.id);
+                              projectMenu = null;
+                            }}
+                          >
+                            <Trash2 size={12} /> Delete
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
                   </div>
-                </div>
-              {/each}
-              {#if loading[project.id]}
-                <div class="px-3 py-1.5 text-xs text-muted-foreground">
-                  Loading...
-                </div>
-              {:else if getSessions(project.id).length === 0}
-                <button
-                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={() => quickCreateSession(project.id)}
-                  title="Create a session in this project"
-                >
-                  No sessions — click to create
-                </button>
-              {/if}
-              {#if project.id in sessionCursors}
-                <button
-                  class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
-                  onclick={() => loadSessions(project.id, true)}
-                  disabled={Boolean(loading[project.id])}
-                >
-                  Load more...
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/each}
+                {/each}
+                {#if loading[project.id]}
+                  <div class="px-3 py-1.5 text-xs text-muted-foreground">
+                    Loading...
+                  </div>
+                {:else if getSessions(project.id).length === 0}
+                  <button
+                    class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
+                    onclick={() => quickCreateSession(project.id)}
+                    title="Create a session in this project"
+                  >
+                    No sessions — click to create
+                  </button>
+                {/if}
+                {#if project.id in sessionCursors}
+                  <button
+                    class="w-full text-left px-3 py-1.5 text-xs italic text-muted-foreground hover:text-foreground transition-colors"
+                    onclick={() => loadSessions(project.id, true)}
+                    disabled={Boolean(loading[project.id])}
+                  >
+                    Load more...
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
     {/if}
   </div>
 </div>
