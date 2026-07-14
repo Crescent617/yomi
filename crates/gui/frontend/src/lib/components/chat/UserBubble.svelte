@@ -25,7 +25,7 @@
 
 <div class="flex justify-end group">
   <div
-    class="max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm space-y-2 relative"
+    class="min-w-0 max-w-[80%] lg:max-w-[70%] rounded-2xl rounded-br-sm bg-secondary px-4 py-3 text-sm space-y-2 relative"
   >
     <!-- Images -->
     {#if hasImages}
@@ -78,8 +78,11 @@
 
     <!-- Text content -->
     {#if text.trim()}
-      <div class="relative" class:message-collapsed={isLong && !expanded}>
-        <div class:truncate={isLong && !expanded}>
+      <div
+        class="relative min-w-0"
+        class:message-collapsed={isLong && !expanded}
+      >
+        <div class="min-w-0" class:truncate={isLong && !expanded}>
           <UserText {text} />
         </div>
         {#if isLong && !expanded}

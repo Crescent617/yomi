@@ -26,8 +26,8 @@
 >
   <Mail class="mt-0.5 size-3.5 shrink-0 text-info" aria-hidden="true" />
   <div class="min-w-0 flex-1 text-sm leading-5 text-foreground">
-    <div class="relative" class:message-collapsed={isLong && !expanded}>
-      <div class:truncate={isLong && !expanded}>
+    <div class="relative min-w-0" class:message-collapsed={isLong && !expanded}>
+      <div class="min-w-0" class:truncate={isLong && !expanded}>
         <UserText text={content} compact />
       </div>
       {#if isLong && !expanded}
