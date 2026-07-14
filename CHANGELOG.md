@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.17] - 2026-07-14
+
+### Changed
+- 收紧纯 Session 列表中的时间分割线高度。
+
+### Fixed
+- 超长单行 User Message 和 Steer Message 现在会在消息区域内自动换行。
+
 ## [0.5.16] - 2026-07-14
 
 ### Changed
