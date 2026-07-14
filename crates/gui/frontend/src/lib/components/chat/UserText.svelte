@@ -31,7 +31,7 @@
 
 <svelte:window onscroll={hideTooltip} onresize={hideTooltip} />
 
-<span class="whitespace-pre-wrap">
+<span class="whitespace-pre-wrap [overflow-wrap:anywhere]">
   {#each segments as segment, index (`${segment.type}-${index}`)}
     {#if segment.type === "text"}
       {segment.content}
