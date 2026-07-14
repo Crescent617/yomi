@@ -894,8 +894,8 @@ impl KernelError {
     }
 }
 
-impl From<crate::tools::helper::GLockError> for KernelError {
-    fn from(e: crate::tools::helper::GLockError) -> Self {
+impl From<crate::utils::g_lock::GLockError> for KernelError {
+    fn from(e: crate::utils::g_lock::GLockError) -> Self {
         Self::Tool(e.to_string())
     }
 }

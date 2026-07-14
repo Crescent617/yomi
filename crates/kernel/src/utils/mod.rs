@@ -2,6 +2,7 @@
 
 pub mod asset;
 pub mod env;
+pub mod g_lock;
 pub mod html;
 pub mod http;
 pub mod id;

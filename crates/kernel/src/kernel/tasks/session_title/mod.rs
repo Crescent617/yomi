@@ -44,7 +44,7 @@ impl Kernel {
 
         tokio::spawn(async move {
             let Some(_guard) =
-                crate::tools::helper::g_try_lock(super::super::session_title_lock_key(&session_id))
+                crate::utils::g_lock::g_try_lock(super::super::session_title_lock_key(&session_id))
             else {
                 tracing::debug!(
                     session_id = %session_id.0,

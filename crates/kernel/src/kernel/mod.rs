@@ -335,7 +335,7 @@ impl Kernel {
 
     /// Rename a session (update title in storage, normalized: collapse whitespace, truncated to 20 chars).
     pub async fn rename_session(&self, id: &SessionId, title: String) -> Result<()> {
-        let _guard = crate::tools::helper::g_lock(session_title_lock_key(id)).await;
+        let _guard = crate::utils::g_lock::g_lock(session_title_lock_key(id)).await;
         let title = normalize_session_title(&title);
         self.session_store().await.update_title(id, &title).await?;
         let noti = crate::notification::Notification::TitleUpdated {
@@ -842,7 +842,7 @@ impl Kernel {
 
         tokio::spawn(async move {
             let Some(_guard) =
-                crate::tools::helper::g_try_lock(session_title_lock_key(&session_id))
+                crate::utils::g_lock::g_try_lock(session_title_lock_key(&session_id))
             else {
                 return;
             };

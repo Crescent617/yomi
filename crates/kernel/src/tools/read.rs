@@ -1,9 +1,7 @@
-use crate::tools::helper::{
-    g_lock_timeout, get_mtime, maybe_truncate_output, FileStateStore, DEFAULT_LOCK_TIMEOUT,
-    MAX_FILE_SIZE,
-};
+use crate::tools::helper::{get_mtime, maybe_truncate_output, FileStateStore, MAX_FILE_SIZE};
 use crate::tools::{Tool, ToolExecCtx};
 use crate::types::{KernelError, Result, ToolOutput};
+use crate::utils::g_lock::{g_lock_timeout, DEFAULT_LOCK_TIMEOUT};
 use crate::utils::image::{image_to_data_url, is_image_extension, MAX_IMAGE_SIZE};
 use crate::utils::line_numbers::add_line_numbers;
 use crate::utils::path::expand_tilde;
