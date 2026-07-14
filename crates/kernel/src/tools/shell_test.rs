@@ -1,4 +1,13 @@
 use super::strip_ansi;
+use crate::tools::format_shell_message;
+
+#[test]
+fn background_shell_messages_use_shell_source_prefix() {
+    assert_eq!(
+        format_shell_message("sh_123", "[Task sh_123 completed]"),
+        "[From Shell: sh_123] [Task sh_123 completed]"
+    );
+}
 
 #[test]
 fn test_strip_ansi_colors() {

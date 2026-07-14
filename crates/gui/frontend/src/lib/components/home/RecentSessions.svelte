@@ -87,10 +87,12 @@
           type="button"
           onclick={() => resume(s)}
           disabled={opening !== null}
-          class="group flex flex-col gap-1 rounded-md border border-border/80 bg-card/40 px-3 py-2 text-left
-                 hover:border-primary/40 hover:bg-card transition-all disabled:opacity-60 min-w-0"
+          class="group flex w-full min-w-0 flex-col gap-1 overflow-hidden rounded-md border border-border/80 bg-card/40 px-3 py-2 text-left
+                 hover:border-primary/40 hover:bg-card transition-all disabled:opacity-60"
         >
-          <span class="flex items-center gap-1.5 min-w-0">
+          <span
+            class="flex w-full min-w-0 items-center gap-1.5 overflow-hidden"
+          >
             {#if opening === s.id}
               <span
                 class="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0"
@@ -100,7 +102,10 @@
                 class="w-3 h-3 text-muted-foreground group-hover:text-primary transition-colors shrink-0"
               />
             {/if}
-            <span class="text-xs font-medium truncate min-w-0">
+            <span
+              class="block min-w-0 flex-1 truncate text-sm font-medium"
+              title={s.title || "Untitled"}
+            >
               {s.title || "Untitled"}
             </span>
           </span>

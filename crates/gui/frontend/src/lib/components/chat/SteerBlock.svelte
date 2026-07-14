@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, Mail } from "lucide-svelte";
+  import { Bot, Mail, Terminal } from "lucide-svelte";
   import { activateSession } from "../../session";
   import { formatMessageTime } from "../../utils";
   import { parseSteerMessage } from "./steer-message";
@@ -43,17 +43,25 @@
 >
   <Mail class="mt-0.5 size-3 shrink-0 text-info" aria-hidden="true" />
   <div class="min-w-0 flex-1 text-xs leading-4 text-foreground">
-    {#if parsed.agentId}
+    {#if parsed.source?.type === "agent"}
       <button
         type="button"
         class="mb-0.5 inline-flex max-w-full items-center gap-1 rounded-sm text-[11px] font-medium text-info transition-colors hover:text-info/80 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onclick={() => void activateSession(parsed.agentId!)}
-        title={`Open agent session ${parsed.agentId}`}
-        aria-label={`Open agent session ${parsed.agentId}`}
+        onclick={() => void activateSession(parsed.source!.id)}
+        title={`Open agent session ${parsed.source.id}`}
+        aria-label={`Open agent session ${parsed.source.id}`}
       >
         <Bot class="size-3 shrink-0" aria-hidden="true" />
-        <span class="truncate font-mono">{parsed.agentId}</span>
+        <span class="truncate font-mono">{parsed.source.id}</span>
       </button>
+    {:else if parsed.source?.type === "shell"}
+      <span
+        class="mb-0.5 inline-flex max-w-full items-center gap-1 text-[11px] font-medium text-info"
+        title={`Background shell ${parsed.source.id}`}
+      >
+        <Terminal class="size-3 shrink-0" aria-hidden="true" />
+        <span class="truncate font-mono">{parsed.source.id}</span>
+      </span>
     {/if}
     <div class="relative min-w-0" class:message-collapsed={isLong && !expanded}>
       <div class="min-w-0" class:truncate={!expanded} bind:this={textElement}>

@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Activity, Github, Terminal, Wifi, WifiOff } from "lucide-svelte";
+  import {
+    Activity,
+    Check,
+    Copy,
+    Github,
+    Terminal,
+    Wifi,
+    WifiOff,
+  } from "lucide-svelte";
   import {
     appState,
     projectState,
@@ -17,6 +25,8 @@
 
   let version = $state("");
   let open = $state(false);
+  let copiedOutputPath = $state<string | null>(null);
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
   let buttonRef = $state<HTMLButtonElement>();
   let cardRef = $state<HTMLDivElement>();
 
@@ -24,6 +34,9 @@
     getVersion()
       .then((v) => (version = v))
       .catch(() => {});
+    return () => {
+      if (copyResetTimer) clearTimeout(copyResetTimer);
+    };
   });
 
   const runningShells = $derived(
@@ -62,6 +75,20 @@
     const target = event.target as Node;
     if (open && !buttonRef?.contains(target) && !cardRef?.contains(target)) {
       open = false;
+    }
+  }
+
+  async function copyOutputPath(outputPath: string) {
+    try {
+      await navigator.clipboard.writeText(outputPath);
+      copiedOutputPath = outputPath;
+      if (copyResetTimer) clearTimeout(copyResetTimer);
+      copyResetTimer = setTimeout(() => (copiedOutputPath = null), 1500);
+    } catch (error) {
+      showNotification(
+        `Failed to copy shell log path: ${errorMessage(error)}`,
+        "error",
+      );
     }
   }
 
@@ -116,33 +143,52 @@
             <div class="max-h-80 overflow-y-auto py-1">
               {#each runningShells as item (item.shell.task_id)}
                 {@const project = projectName(item.session.project_id)}
-                <button
-                  type="button"
-                  class="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-secondary/50"
-                  onclick={() => openSession(item.session.id)}
+                <div
+                  class="flex w-full items-start gap-2 px-3 py-2 transition-colors hover:bg-secondary/50"
                 >
-                  <Terminal class="mt-0.5 h-3.5 w-3.5 shrink-0 text-info" />
-                  <span class="min-w-0 flex-1">
-                    <span
-                      class="block truncate font-mono text-xs font-medium"
-                      title={item.shell.command}
-                    >
-                      {item.shell.command}
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-start gap-2 text-left"
+                    onclick={() => openSession(item.session.id)}
+                    title="Open session"
+                  >
+                    <Terminal class="mt-0.5 h-3.5 w-3.5 shrink-0 text-info" />
+                    <span class="min-w-0 flex-1">
+                      <span
+                        class="block truncate font-mono text-xs font-medium"
+                        title={item.shell.command}
+                      >
+                        {item.shell.command}
+                      </span>
+                      <span
+                        class="block truncate text-[10px] text-muted-foreground"
+                      >
+                        PID {item.shell.pid} · {elapsedLabel(
+                          item.shell.started_at,
+                          clock.now,
+                        )} · {project ?? sessionTitle(item.session)}
+                      </span>
                     </span>
-                    <span
-                      class="block truncate text-[10px] text-muted-foreground"
-                      title={item.shell.output_path}
-                    >
-                      PID {item.shell.pid} · {elapsedLabel(
-                        item.shell.started_at,
-                        clock.now,
-                      )} · {project ?? sessionTitle(item.session)}
-                    </span>
-                  </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    onclick={() => void copyOutputPath(item.shell.output_path)}
+                    title={`Copy log path: ${item.shell.output_path}`}
+                    aria-label={`Copy log path for ${item.shell.task_id}`}
+                  >
+                    {#if copiedOutputPath === item.shell.output_path}
+                      <Check class="h-3 w-3 text-success" />
+                      <span>Copied</span>
+                    {:else}
+                      <Copy class="h-3 w-3" />
+                      <span>Log</span>
+                    {/if}
+                  </button>
                   <span
-                    class="mt-1.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-info"
+                    class="mt-2 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-info"
                   ></span>
-                </button>
+                </div>
               {/each}
             </div>
           </div>

@@ -366,6 +366,8 @@ impl ShellTool {
                 ),
             };
 
+            let text = crate::tools::format_shell_message(task_id_clone, text);
+
             drop(tracker_guard);
             if let Err(e) = input_bus.publish(
                 SessionId::from(session_id.clone()),
