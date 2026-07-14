@@ -9,16 +9,23 @@ pub struct AppState {
     /// Mutable because a daemon restart may reload a config with a
     /// different `data_dir`.
     pub data_dir: std::sync::Arc<std::sync::RwLock<std::path::PathBuf>>,
+    /// Fixed at GUI startup because the tracing appender cannot be reconfigured.
+    pub gui_log_dir: std::path::PathBuf,
     pub active_session: Arc<Mutex<Option<String>>>,
     pub event_tasks: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
 }
 
 impl AppState {
     /// Creates a new `AppState` backed by the given `KernelApi`.
-    pub fn new(kernel: Arc<dyn KernelApi>, data_dir: std::path::PathBuf) -> Self {
+    pub fn new(
+        kernel: Arc<dyn KernelApi>,
+        data_dir: std::path::PathBuf,
+        gui_log_dir: std::path::PathBuf,
+    ) -> Self {
         Self {
             kernel,
             data_dir: std::sync::Arc::new(std::sync::RwLock::new(data_dir)),
+            gui_log_dir,
             active_session: Arc::new(Mutex::new(None)),
             event_tasks: Arc::new(Mutex::new(HashMap::new())),
         }

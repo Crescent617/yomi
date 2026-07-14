@@ -43,6 +43,9 @@ pub struct PaginatedSessions {
     pub next_cursor: Option<String>,
 }
 
+/// Raw, unformatted byte range from a session JSONL file.
+pub type SessionJsonlChunk = crate::utils::file_chunk::FileChunk;
+
 /// Unified API for both local (in-process) and remote (IPC) kernels.
 #[async_trait]
 pub trait KernelApi: Send + Sync {
@@ -110,6 +113,12 @@ pub trait KernelApi: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<Vec<crate::types::SessionMessage>>;
+    async fn read_session_jsonl(
+        &self,
+        session_id: &SessionId,
+        before_offset: Option<u64>,
+        after_offset: Option<u64>,
+    ) -> Result<SessionJsonlChunk>;
     async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse>;
     async fn subscribe_session_events(
         &self,
@@ -344,6 +353,15 @@ impl KernelApi for Kernel {
 
     async fn get_session(&self, session_id: &SessionId) -> Result<crate::types::SessionResponse> {
         Ok(Self::get_session(self, session_id).await?)
+    }
+
+    async fn read_session_jsonl(
+        &self,
+        session_id: &SessionId,
+        before_offset: Option<u64>,
+        after_offset: Option<u64>,
+    ) -> Result<SessionJsonlChunk> {
+        Self::read_session_jsonl(self, session_id, before_offset, after_offset).await
     }
 
     async fn subscribe_session_events(
@@ -1276,6 +1294,22 @@ impl KernelApi for RemoteKernel {
             .await?;
         let session: crate::types::SessionResponse = serde_json::from_value(result)?;
         Ok(session)
+    }
+
+    async fn read_session_jsonl(
+        &self,
+        session_id: &SessionId,
+        before_offset: Option<u64>,
+        after_offset: Option<u64>,
+    ) -> Result<SessionJsonlChunk> {
+        let result = self
+            .call(ReqMethod::ReadSessionJsonl {
+                session_id: session_id.0.to_string(),
+                before_offset,
+                after_offset,
+            })
+            .await?;
+        Ok(serde_json::from_value(result)?)
     }
 
     async fn subscribe_session_events(
