@@ -369,7 +369,11 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                     None
                 }
             };
-            let (project_id, working_dir, auto_approve_level, model_key) =
+            let runtime_auto_approve_level = match self.shared.permission_state.as_ref() {
+                Some(state) => Some(state.get_auto_approve_level().await.to_string()),
+                None => None,
+            };
+            let (project_id, working_dir, persisted_auto_approve_level, model_key) =
                 parent.map_or((None, None, None, None), |p| {
                     (
                         p.project_id,
@@ -378,6 +382,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                         p.model_key,
                     )
                 });
+            let auto_approve_level = runtime_auto_approve_level.or(persisted_auto_approve_level);
             if let Err(e) = store
                 .create(
                     &session_id,
@@ -408,7 +413,7 @@ Brief the agent like a smart colleague who just walked in — it has no context.
                 let result_text = agent_prefix(
                     &session_id,
                     format!(
-                        "Subagent with task '{description}' spawned in async mode. {} Results will be sent automatically when complete.",
+                        "Subagent with task '{description}' spawned in background. {} Results will be sent automatically when complete.",
                         crate::tools::ASYNC_LAUNCH_GUIDE
                     ),
                 );
