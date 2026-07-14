@@ -183,14 +183,7 @@ impl Model {
             .filter(|subagent| subagent.is_running)
             .map(|subagent| subagent.id.to_string())
             .collect();
-        self.background_shell_count = self
-            .kernel
-            .list_running_sessions()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|session| session.id == session_id)
-            .map_or(0, |session| session.background_shells.len());
+        self.background_shell_count = 0;
         self.update_activity_status();
         Ok(())
     }

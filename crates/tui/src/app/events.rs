@@ -25,18 +25,10 @@ impl Model {
                 Ok(TaggedEvent::Main(ev)) => ev,
                 Ok(TaggedEvent::BackgroundTasksChanged {
                     session_id,
-                    kind,
-                    count,
+                    shell_count,
                 }) => {
                     if session_id == self.session_id {
-                        match kind {
-                            kernel::agent::BackgroundTaskKind::Subagent => {
-                                // Subagent IDs are tracked from their lifecycle events.
-                            }
-                            kernel::agent::BackgroundTaskKind::Shell => {
-                                self.background_shell_count = count;
-                            }
-                        }
+                        self.background_shell_count = shell_count;
                         self.update_activity_status();
                     }
                     continue;

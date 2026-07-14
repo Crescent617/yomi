@@ -94,7 +94,6 @@ export async function startNotificationListener(): Promise<() => void> {
         background_tasks_changed?: {
           session_id: string;
           kind: "subagent" | "shell";
-          count: number;
         };
       };
     }) => {
@@ -122,10 +121,11 @@ export async function startNotificationListener(): Promise<() => void> {
         const session = getSession(session_id);
         if (session) session.alias = title;
       }
-      if (payload.background_tasks_changed) {
+      if (payload.background_tasks_changed?.kind === "shell") {
         void refreshRunningSessions();
       }
       if (payload.connection_lost) {
+        runningSessions.splice(0, runningSessions.length);
         showNotification("Connection lost", "warning");
       }
     },
