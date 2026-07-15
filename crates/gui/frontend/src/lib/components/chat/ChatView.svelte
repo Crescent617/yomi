@@ -416,11 +416,14 @@
           );
         }
       }
+      const phaseRevisionAtRequest = sessionState.sessions.find(
+        (session) => session.id === id,
+      )?.phase_revision;
       const sessionInfo = await api.getSession(id);
       const msgs = await api.getMessages(id);
       const session = sessionState.sessions.find((s) => s.id === id);
-      if (session) {
-        syncSessionStatus(id, sessionInfo);
+      if (session && phaseRevisionAtRequest !== undefined) {
+        syncSessionStatus(id, sessionInfo, phaseRevisionAtRequest);
         loadSessionMessages(id, msgs);
         refreshCheckpoints(id);
         api

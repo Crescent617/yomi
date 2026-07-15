@@ -51,6 +51,7 @@
     projectSessionsForList,
   } from "./session-time-groups";
   import { createFromSessionParams } from "./session-create";
+  import { isActiveSessionPhase } from "../../session-phase";
   import { clock } from "../../clock.svelte";
   import {
     guiPreferences,
@@ -1099,6 +1100,16 @@
           {@const isActive =
             getSession(sessionState.activeSessionId ?? "")?.project_id ===
             project.id}
+          {@const projectSessions = getSessions(project.id)}
+          {@const projectRunning = projectSessions.some((session) =>
+            isActiveSessionPhase(session.phase),
+          )}
+          {@const projectWaiting = projectSessions.some(
+            (session) =>
+              session.phase !== "idle" &&
+              session.phase !== "closed" &&
+              !isActiveSessionPhase(session.phase),
+          )}
           <div class="border-b border-border/40 pb-0.5 mb-0.5">
             <div
               class="flex items-center gap-1.5 w-full px-2 py-1.5 text-xs transition-colors select-none {isActive
@@ -1141,28 +1152,10 @@
                 {:else}
                   <span class="truncate font-medium">{project.name}</span>
                 {/if}
-                {#if getSessions(project.id).some((s) => s.phase !== "idle" && s.phase !== "closed")}
-                  {@const projectRunning = getSessions(project.id).some(
-                    (s) =>
-                      s.phase === "streaming" ||
-                      s.phase === "executing_tool" ||
-                      s.phase === "compacting",
-                  )}
-                  <!-- Aggregate: attention (waiting) wins over running -->
-                  <StatusDot
-                    phase={getSessions(project.id).some(
-                      (s) =>
-                        s.phase !== "idle" &&
-                        s.phase !== "closed" &&
-                        s.phase !== "streaming" &&
-                        s.phase !== "executing_tool" &&
-                        s.phase !== "compacting",
-                    )
-                      ? "waiting"
-                      : projectRunning
-                        ? "streaming"
-                        : "idle"}
-                  />
+                {#if projectWaiting}
+                  <StatusDot phase="waiting" />
+                {:else if projectRunning}
+                  <StatusDot phase="streaming" />
                 {/if}
               </button>
 

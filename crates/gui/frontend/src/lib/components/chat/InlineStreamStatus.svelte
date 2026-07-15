@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message, SessionState } from "../../state.svelte";
   import { findThinking, hasText } from "../../session";
+  import { isActiveSessionPhase } from "../../session-phase";
 
   let {
     session,
@@ -58,12 +59,7 @@
     currentToolName ? capitalize(currentToolName) : null,
   );
 
-  const visible = $derived(
-    session.is_running ||
-      session.phase === "streaming" ||
-      session.phase === "executing_tool" ||
-      session.phase === "compacting",
-  );
+  const visible = $derived(isActiveSessionPhase(session.phase));
 </script>
 
 {#if visible}

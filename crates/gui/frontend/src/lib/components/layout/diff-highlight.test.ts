@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { HighlightedDiffHunk } from "./diff-highlight";
 import {
   diffSources,
   highlightDiffHunks,
@@ -20,11 +21,11 @@ describe("diffSources", () => {
     });
   });
   test("highlights independently selected files with different languages", async () => {
-    const first = {
-      lines: [{ type: "add" as const, text: "const value: number = 1;" }],
+    const first: HighlightedDiffHunk = {
+      lines: [{ type: "add", text: "const value: number = 1;" }],
     };
-    const second = {
-      lines: [{ type: "add" as const, text: "fn value() -> i32 { 1 }" }],
+    const second: HighlightedDiffHunk = {
+      lines: [{ type: "add", text: "fn value() -> i32 { 1 }" }],
     };
 
     await highlightDiffHunks([first], "src/first.ts");

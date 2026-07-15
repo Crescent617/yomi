@@ -14,6 +14,7 @@ import {
   type Message,
   type SessionState,
 } from "./state.svelte";
+import { applySessionPhaseIfUnchanged } from "./session-phase";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -48,11 +49,14 @@ export function findThinking(
 
 // ── Browser helpers ──────────────────────────────────────────────────────
 
-export function syncSessionStatus(session_id: string, info: { phase: string }) {
+export function syncSessionStatus(
+  session_id: string,
+  info: { phase: string },
+  revisionAtRequest: number,
+) {
   const session = getSession(session_id);
   if (!session) return;
-  session.phase = info.phase;
-  session.is_running = info.phase !== "idle" && info.phase !== "closed";
+  applySessionPhaseIfUnchanged(session, info.phase, revisionAtRequest);
 }
 
 // ── Notifications ────────────────────────────────────────────────────────
@@ -100,7 +104,7 @@ export function createSessionState(
     messages: [],
     message_rewrite_revision: 0,
     phase: "idle",
-    is_running: false,
+    phase_revision: 0,
     checkpoints: [],
     tabs: [{ id: "chat", type: "chat", label: "Chat", pinned: true }],
     active_tab_id: "chat",
@@ -168,6 +172,7 @@ export function upsertSession(session: SessionState) {
 }
 
 async function hydrateSession(sessionId: string, session: SessionState) {
+  const phaseRevisionAtRequest = session.phase_revision;
   const [info, msgs, goal, todos] = await Promise.all([
     api.getSession(sessionId),
     api.getMessages(sessionId),
@@ -186,7 +191,7 @@ async function hydrateSession(sessionId: string, session: SessionState) {
   session.updated_at = info.updated_at;
   session.goal = goal;
   session.todos = todos.todos;
-  syncSessionStatus(sessionId, info);
+  syncSessionStatus(sessionId, info, phaseRevisionAtRequest);
   loadSessionMessages(sessionId, msgs);
 }
 

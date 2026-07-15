@@ -14,6 +14,7 @@ import {
   type UserEvent,
   type KernelEvent,
 } from "./state.svelte";
+import { ensureSessionPhase, setSessionPhase } from "./session-phase";
 import {
   sendDesktopNotification,
   refreshCheckpoints,
@@ -130,6 +131,10 @@ export function handleEvent(
 // ── Model events ───────────────────────────────────────────────────────
 
 function handleModelEvent(session: SessionState, event: ModelChunk): boolean {
+  if (event.chunk || event.tool_call_delta) {
+    ensureSessionPhase(session, "streaming");
+  }
+
   if (event.token_usage) {
     const u = event.token_usage;
     session.token_usage = {
@@ -369,20 +374,17 @@ function handleToolEvent(session: SessionState, event: ToolEvent): boolean {
 
 function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
   if (event.state_changed) {
-    session.phase = event.state_changed.state;
-    session.is_running = session.phase !== "idle" && session.phase !== "closed";
+    setSessionPhase(session, event.state_changed.state);
     return true;
   }
 
   if (event.lifecycle) {
     const state = event.lifecycle.state;
     if (state === "running") {
-      session.phase = "streaming";
-      session.is_running = true;
+      setSessionPhase(session, "streaming");
       return true;
     } else if (typeof state === "object" && state.stopped) {
-      session.phase = "idle";
-      session.is_running = false;
+      setSessionPhase(session, "idle");
       const buf = streamingMessages[session.id] ?? [];
       if (buf.length > 0) {
         const seen = new Set(session.messages.map((m) => m.id));
@@ -540,8 +542,7 @@ function handleAgentEvent(session: SessionState, event: AgentEvent): boolean {
     return true;
   } else if (event.message_replaced !== undefined) {
     streamingMessages[session.id] = [];
-    session.phase = "idle";
-    session.is_running = false;
+    setSessionPhase(session, "idle");
     api
       .getMessages(session.id)
       .then((msgs) => loadSessionMessages(session.id, msgs))

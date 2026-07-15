@@ -9,26 +9,28 @@ describe("isAgentActivity", () => {
         type: "tool",
         tool_call_id: "call-agent",
         tool_name: "agent",
-        status: "executing",
+        status: "running",
         arguments: "{}",
         result: [],
+        created_at: new Date().toISOString(),
       }),
     ).toBe(true);
   });
 
-  test("recognizes legacy agent activity by subagent session metadata", () => {
+  test("does not use subagent metadata to classify another tool", () => {
     expect(
       isAgentActivity({
-        id: "tool-legacy",
+        id: "tool-with-metadata",
         type: "tool",
-        tool_call_id: "call-legacy",
-        tool_name: "sub_agent",
+        tool_call_id: "call-with-metadata",
+        tool_name: "shell",
         status: "completed",
         arguments: "{}",
         result: [],
         subagent_session_id: "sess_child",
+        created_at: new Date().toISOString(),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   test("does not classify regular tools as agents", () => {
@@ -41,6 +43,7 @@ describe("isAgentActivity", () => {
         status: "completed",
         arguments: "{}",
         result: [],
+        created_at: new Date().toISOString(),
       }),
     ).toBe(false);
   });

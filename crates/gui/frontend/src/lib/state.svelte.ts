@@ -19,6 +19,11 @@ import {
   seedRunningSessionStatuses,
   type SessionCompletionNotification,
 } from "./notification-center";
+import {
+  captureSessionPhaseRevisions,
+  reconcileRunningSessionPhases,
+  setSessionPhase,
+} from "./session-phase";
 
 // ── Kernel notification listener ─────────────────────────────────────────
 
@@ -39,11 +44,27 @@ export function refreshRunningSessions(): Promise<void> {
     try {
       while (runningSessionsDirty) {
         runningSessionsDirty = false;
+        const revisionsAtRequest = captureSessionPhaseRevisions(
+          sessionState.sessions,
+        );
         const sessions = await fetchRunningSessions();
+        const revisionsChanged = sessionState.sessions.some(
+          (session) =>
+            session.phase_revision !== revisionsAtRequest.get(session.id),
+        );
+        if (runningSessionsDirty || revisionsChanged) {
+          runningSessionsDirty = true;
+          continue;
+        }
         runningSessions.splice(0, runningSessions.length, ...sessions);
+        reconcileRunningSessionPhases(
+          sessionState.sessions,
+          sessions,
+          revisionsAtRequest,
+        );
         seedRunningSessionStatuses(
           lastKnownSessionStatus,
-          sessions.map((session) => session.session_id),
+          sessions.map((session) => session.id),
         );
       }
     } catch {
@@ -99,18 +120,14 @@ async function recordSessionCompletion(
   sessionId: string,
   completedAt: string,
 ): Promise<void> {
-  let session = getSession(sessionId);
-  if (!session) {
+  const loadedSession = getSession(sessionId);
+  let title = loadedSession?.alias;
+  let projectId = loadedSession?.project_id;
+  if (!loadedSession) {
     try {
       const info = await fetchSession(sessionId);
-      session = createSessionState({
-        id: info.id,
-        project_path: info.working_dir ?? "",
-        project_id: info.project_id ?? undefined,
-        alias: info.title ?? "Untitled session",
-        permission_level: info.auto_approve_level ?? "caution",
-        model_key: info.model_key ?? undefined,
-      });
+      title = info.title ?? undefined;
+      projectId = info.project_id ?? undefined;
     } catch {
       // The session may have been deleted before its completion event arrived.
       return;
@@ -120,8 +137,8 @@ async function recordSessionCompletion(
   const next = addSessionCompletion(sessionNotifications, {
     id: `${sessionId}:${completedAt}:${sessionNotificationSequence++}`,
     sessionId,
-    title: session.alias || "Untitled session",
-    projectId: session.project_id ?? null,
+    title: title || "Untitled session",
+    projectId: projectId ?? null,
     completedAt,
     read: sessionState.activeSessionId === sessionId,
   });
@@ -156,8 +173,7 @@ export async function startNotificationListener(): Promise<() => void> {
           void recordSessionCompletion(session_id, completedAt);
         }
         if (session) {
-          session.phase = status;
-          session.is_running = status !== "idle" && status !== "closed";
+          setSessionPhase(session, status);
         }
         if (
           status === "idle" &&
@@ -324,7 +340,7 @@ export interface SessionState {
   messages: Message[];
   message_rewrite_revision: number;
   phase: string;
-  is_running: boolean;
+  phase_revision: number;
   checkpoints: Checkpoint[];
   tabs: Tab[];
   active_tab_id: string;
