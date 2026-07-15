@@ -47,11 +47,10 @@ impl SessionStore for SqliteSessionStore {
     async fn fork(&self, parent_id: &SessionId) -> Result<SessionId> {
         let new_id = SessionId::new();
         sqlx::query(
-            "INSERT INTO sessions (id, parent_id, project_id, working_dir, auto_approve_level, model_key)
-             SELECT ?, ?, project_id, working_dir, auto_approve_level, model_key FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, project_id, working_dir, auto_approve_level, model_key)
+             SELECT ?, project_id, working_dir, auto_approve_level, model_key FROM sessions WHERE id = ?",
         )
         .bind(&*new_id.0)
-        .bind(&*parent_id.0)
         .bind(&*parent_id.0)
         .execute(&self.pool)
         .await

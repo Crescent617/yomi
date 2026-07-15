@@ -16,7 +16,7 @@
     getActiveSession,
     showNotification,
   } from "../../state.svelte";
-  import { refreshSessions, textFromBlocks } from "../../session";
+  import { forkSession, textFromBlocks } from "../../session";
   import { SLASH_COMMANDS } from "../../commands";
   import type { FileEntry } from "../../fs/provider";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -370,16 +370,9 @@
           break;
         case "/fork":
           {
-            const parent_id = session_id;
             try {
-              const newId = await api.forkSession(
-                parent_id,
-                sessionState.sessions.find((s) => s.id === parent_id)
-                  ?.permission_level ?? "safe",
-              );
-              showNotification(`Forked session: ${newId}`, "success");
-              // Refresh sessions list so new fork appears in sidebar
-              refreshSessions();
+              const fork = await forkSession(session_id);
+              showNotification(`Forked session: ${fork.id}`, "success");
             } catch (e) {
               showNotification(
                 `Fork failed: ${e instanceof Error ? e.message : String(e)}`,

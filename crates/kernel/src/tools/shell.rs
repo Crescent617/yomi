@@ -341,31 +341,7 @@ impl ShellTool {
             )
             .await;
 
-            let text = match result {
-                Ok((code, timed_out, cancelled)) => {
-                    if cancelled {
-                        format!(
-                            "[Task {task_id_clone} (PID: {pid}) cancelled] · Partial output: {}",
-                            output_path_clone.display()
-                        )
-                    } else if timed_out {
-                        format!(
-                            "[Task {task_id_clone} (PID: {pid}) timed out] · Partial output: {}",
-                            output_path_clone.display()
-                        )
-                    } else {
-                        format!(
-                            "[Task {task_id_clone} (PID: {pid}) completed] · Exit code: {code} · Output: {}",
-                            output_path_clone.display()
-                        )
-                    }
-                }
-                Err(e) => format!(
-                    "[Task {task_id_clone} (PID: {pid}) failed] · Error: {e} · Output: {}",
-                    output_path_clone.display()
-                ),
-            };
-
+            let text = format_background_result(result, &output_path_clone);
             let text = crate::tools::format_shell_message(task_id_clone, text);
 
             drop(tracker_guard);
@@ -381,6 +357,34 @@ impl ShellTool {
             "Task {task_id} started (PID: {pid}).\nOutput file: {output_path_str}\n{}\nYou will be notified when it completes.",
             crate::tools::ASYNC_LAUNCH_GUIDE
         )))
+    }
+}
+
+fn format_background_result<E: std::fmt::Display>(
+    result: std::result::Result<(i32, bool, bool), E>,
+    output_path: &std::path::Path,
+) -> String {
+    match result {
+        Ok((_code, _timed_out, true)) => {
+            format!("[Task cancelled] Partial output: {}", output_path.display())
+        }
+        Ok((_code, true, _cancelled)) => {
+            format!("[Task timed_out] Partial output: {}", output_path.display())
+        }
+        Ok((0, false, false)) => {
+            format!(
+                "[Task completed] Exit code: 0 · Output: {}",
+                output_path.display()
+            )
+        }
+        Ok((code, false, false)) => format!(
+            "[Task failed] Exit code: {code} · Output: {}",
+            output_path.display()
+        ),
+        Err(error) => format!(
+            "[Task failed] Error: {error} · Output: {}",
+            output_path.display()
+        ),
     }
 }
 
