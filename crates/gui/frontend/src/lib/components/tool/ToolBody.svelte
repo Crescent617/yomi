@@ -14,7 +14,7 @@
   const editArgs = $derived(parseEditArgs(tool.arguments ?? ""));
   const writeArgs = $derived(parseWriteArgs(tool.arguments ?? ""));
   const postMessageArgs = $derived(
-    tool.tool_name === "postMessage"
+    tool.tool_name.toLowerCase().replace(/[_-]/g, "") === "postmessage"
       ? parsePostMessageArgs(tool.arguments ?? "")
       : null,
   );

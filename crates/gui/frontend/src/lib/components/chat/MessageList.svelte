@@ -9,6 +9,7 @@
   import { guiPreferences } from "../../settings.svelte";
   import QueryNavigator from "./QueryNavigator.svelte";
   import { userQueryMarkers } from "./query-navigator";
+  import type { ActivityGroupOverride } from "./activity-expansion";
 
   const activeSession = $derived(getActiveSession());
   const displayItemProjection = new DisplayItemProjection();
@@ -28,6 +29,12 @@
     );
   });
   const displayMessages = $derived(displaySections.tailMessages);
+  let activityExpansionOverrides = $state<
+    Record<string, ActivityGroupOverride>
+  >({});
+  const dynamicHasActivityGroup = $derived(
+    displaySections.dynamicItems.some((item) => item.type === "action_group"),
+  );
   const queryMarkers = $derived(
     userQueryMarkers(activeSession?.messages ?? []),
   );
@@ -155,10 +162,13 @@
           <DisplayItemList
             items={displaySections.stableItems}
             session_id={activeSession.id}
+            markLatest={!dynamicHasActivityGroup}
+            expansionOverrides={activityExpansionOverrides}
           />
           <DisplayItemList
             items={displaySections.dynamicItems}
             session_id={activeSession.id}
+            expansionOverrides={activityExpansionOverrides}
           />
           {#if activeSession.is_running}
             <InlineStreamStatus

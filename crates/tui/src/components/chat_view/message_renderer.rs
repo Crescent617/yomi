@@ -15,15 +15,6 @@ use crate::markdown_stream::StreamingMarkdownRenderer;
 use crate::theme::{chars, colors};
 use crate::utils::text::{preprocess, truncate_by_chars, truncate_by_width};
 
-use kernel::tools::{
-    task::{TASK_CREATE_TOOL_NAME, TASK_GET_TOOL_NAME, TASK_LIST_TOOL_NAME, TASK_UPDATE_TOOL_NAME},
-    ASK_USER_TOOL_NAME,
-};
-use kernel::tools::{
-    EDIT_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME, POST_MESSAGE_TOOL_NAME, READ_TOOL_NAME,
-    REMINDER_TOOL_NAME, SHELL_TOOL_NAME, SKILL_FILENAME, SKILL_TOOL_NAME, SLEEP_TOOL_NAME,
-    SUBAGENT_TOOL_NAME, TODO_TOOL_NAME, WEBFETCH_TOOL_NAME, WEBSEARCH_TOOL_NAME, WRITE_TOOL_NAME,
-};
 use kernel::types::{ContentBlock, ToolOutputBlock};
 use kernel::utils::tokens;
 
@@ -89,7 +80,6 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             error,
             folded,
             arguments,
-            parsed_args,
             elapsed_ms,
             content_blocks,
             subagent,
@@ -100,7 +90,6 @@ pub fn render_message(msg: &HistoryMessage, width: usize) -> Vec<Arc<Line<'stati
             error.as_deref(),
             *folded,
             arguments.as_deref(),
-            parsed_args.as_ref(),
             *elapsed_ms,
             content_blocks,
             subagent.as_ref(),
@@ -239,7 +228,6 @@ fn render_tool(
     error: Option<&str>,
     folded: bool,
     arguments: Option<&str>,
-    parsed_args: Option<&serde_json::Value>,
     elapsed_ms: Option<u64>,
     content_blocks: &[ToolOutputBlock],
     subagent: Option<&SubagentState>,
@@ -276,21 +264,19 @@ fn render_tool(
         None
     };
 
-    // Build header line with tool name and target (e.g. "Read src/main.rs")
-    let tool_name_display = to_camel_case(tool_name);
-    let target = extract_tool_target(tool_name, arguments);
+    let summary = tool_header_summary(tool_name, arguments);
 
     // Tool name with status color
-    let tool_part = format!("{icon}{tool_name_display}{time_str}");
+    let tool_part = format!("{icon}{}{time_str}", summary.label);
     let mut header_spans = vec![Span::styled(
         tool_part,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )];
 
     // Target/args with text_primary color (no bold)
-    if let Some(t) = target {
+    if let Some(target) = summary.target {
         header_spans.push(Span::styled(
-            format!(" {t}"),
+            format!(" {target}"),
             Style::default().fg(colors::text_primary()),
         ));
     } else if let Some(peek) = peek_args {
@@ -301,52 +287,11 @@ fn render_tool(
         ));
     }
 
-    // For bash commands, add timeout/async info with text_secondary style
-    if tool_name == SHELL_TOOL_NAME {
-        if let Some(value) = parsed_args {
-            let timeout_secs = value["timeout"].as_u64();
-            let background = value["background"].as_bool().unwrap_or(false);
-
-            // Show async badge when background mode is enabled
-            if background {
-                header_spans.push(Span::styled(
-                    " async".to_string(),
-                    Style::default().fg(colors::text_secondary()),
-                ));
-            }
-
-            // Show timeout if explicitly set (or non-default for sync mode)
-            if let Some(t) = timeout_secs {
-                if background || t != 60 {
-                    header_spans.push(Span::styled(
-                        format!(" timeout {t}s"),
-                        Style::default().fg(colors::text_secondary()),
-                    ));
-                }
-            }
-        }
-    }
-
-    // For grep, show output mode with text_secondary style
-    if tool_name == GREP_TOOL_NAME {
-        if let Some(value) = parsed_args {
-            let mode = value["output_mode"].as_str().unwrap_or("filename");
-            header_spans.push(Span::styled(
-                format!(" {mode}"),
-                Style::default().fg(colors::text_secondary()),
-            ));
-        }
-    }
-
-    // For subagent, show preset with text_secondary style
-    if tool_name == SUBAGENT_TOOL_NAME {
-        if let Some(value) = parsed_args {
-            let preset = value["preset"].as_str().unwrap_or("general-purpose");
-            header_spans.push(Span::styled(
-                format!(" {preset}"),
-                Style::default().fg(colors::text_secondary()),
-            ));
-        }
+    if let Some(metadata) = summary.metadata {
+        header_spans.push(Span::styled(
+            format!(" {metadata}"),
+            Style::default().fg(colors::text_secondary()),
+        ));
     }
 
     lines.push(Arc::new(Line::from(header_spans)));
@@ -372,7 +317,7 @@ fn render_tool(
         // Show tool arguments if available
         if let Some(args) = arguments {
             if !args.is_empty() {
-                if tool_name == EDIT_TOOL_NAME {
+                if tool_kind(tool_name) == ToolKind::Edit {
                     // Special diff view for edit tool
                     let mut diff_rendered = false;
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
@@ -423,7 +368,7 @@ fn render_tool(
                             ])));
                         }
                     }
-                } else if tool_name == POST_MESSAGE_TOOL_NAME {
+                } else if tool_kind(tool_name) == ToolKind::PostMessage {
                     let mut rendered = false;
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args) {
                         if let (Some(agent_id), Some(title), Some(content)) = (
@@ -981,27 +926,306 @@ pub fn to_camel_case(s: &str) -> String {
         .unwrap_or_default()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolKind {
+    Read,
+    Write,
+    Edit,
+    Shell,
+    Glob,
+    Grep,
+    WebFetch,
+    WebSearch,
+    Skill,
+    Agent,
+    PostMessage,
+    AskUser,
+    Todo,
+    Reminder,
+    Sleep,
+    UpdateGoal,
+    SendMessage,
+    TaskCreate,
+    TaskGet,
+    TaskList,
+    TaskUpdate,
+    Other,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ToolHeaderSummary {
+    label: String,
+    target: Option<String>,
+    metadata: Option<String>,
+}
+
+fn normalized_tool_name(tool_name: &str) -> String {
+    tool_name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn tool_kind(tool_name: &str) -> ToolKind {
+    match normalized_tool_name(tool_name).as_str() {
+        "read" | "readfile" => ToolKind::Read,
+        "write" | "writefile" => ToolKind::Write,
+        "edit" | "editfile" => ToolKind::Edit,
+        "shell" | "bash" | "command" => ToolKind::Shell,
+        "glob" | "globsearch" => ToolKind::Glob,
+        "grep" | "grepsearch" => ToolKind::Grep,
+        "webfetch" => ToolKind::WebFetch,
+        "websearch" => ToolKind::WebSearch,
+        "skill" => ToolKind::Skill,
+        "agent" | "subagent" => ToolKind::Agent,
+        "postmessage" => ToolKind::PostMessage,
+        "askuser" | "ask" => ToolKind::AskUser,
+        "todo" | "task" => ToolKind::Todo,
+        "reminder" => ToolKind::Reminder,
+        "sleep" => ToolKind::Sleep,
+        "updategoal" => ToolKind::UpdateGoal,
+        "sendmessage" | "message" => ToolKind::SendMessage,
+        "taskcreate" => ToolKind::TaskCreate,
+        "taskget" => ToolKind::TaskGet,
+        "tasklist" => ToolKind::TaskList,
+        "taskupdate" => ToolKind::TaskUpdate,
+        _ => ToolKind::Other,
+    }
+}
+
+fn tool_header_summary(tool_name: &str, args: Option<&str>) -> ToolHeaderSummary {
+    let kind = tool_kind(tool_name);
+    let label = tool_label(tool_name);
+    let value = args.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let text = |key: &str| value.as_ref()?.get(key)?.as_str();
+    let compact = |s: &str| truncate_by_chars(&sanitize_single_line(s), 100);
+    let target = match kind {
+        ToolKind::Read | ToolKind::Edit => text("path").map(compact),
+        ToolKind::Write => text("file_path").map(compact),
+        ToolKind::Shell => text("command").map(compact),
+        ToolKind::Glob | ToolKind::Grep => text("pattern").map(compact),
+        ToolKind::WebFetch => text("url").map(compact),
+        ToolKind::WebSearch => text("query").map(compact),
+        ToolKind::Skill => text("name").or_else(|| text("path")).map(compact),
+        ToolKind::Agent => text("description").map(compact),
+        ToolKind::PostMessage => text("agent_id").map(compact),
+        ToolKind::AskUser => value
+            .as_ref()
+            .and_then(|v| v["questions"].as_array())
+            .and_then(|questions| questions.first())
+            .and_then(|question| question["question"].as_str())
+            .map(compact),
+        ToolKind::Todo => text("action").map(compact),
+        ToolKind::Reminder => text("message").map(compact),
+        ToolKind::Sleep => value
+            .as_ref()
+            .and_then(|v| v["seconds"].as_u64())
+            .map(|seconds| format!("{seconds}s")),
+        ToolKind::UpdateGoal => text("status").map(compact),
+        ToolKind::SendMessage => text("content")
+            .or_else(|| {
+                value
+                    .as_ref()
+                    .and_then(|v| v["files"].as_array())
+                    .and_then(|files| files.first())
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(compact),
+        ToolKind::TaskCreate => text("subject").map(compact),
+        ToolKind::TaskGet | ToolKind::TaskUpdate => text("taskId").map(compact),
+        ToolKind::TaskList | ToolKind::Other => None,
+    };
+
+    let mut metadata = Vec::new();
+    match kind {
+        ToolKind::Read => {
+            let offset = value.as_ref().and_then(|v| v["offset"].as_u64());
+            let limit = value.as_ref().and_then(|v| v["limit"].as_u64());
+            if offset.is_some() || limit.is_some() {
+                let start = offset.unwrap_or(1);
+                metadata.push(match limit {
+                    Some(limit) => format!(
+                        "lines {start}-{}",
+                        start.saturating_add(limit).saturating_sub(1)
+                    ),
+                    None => format!("from line {start}"),
+                });
+            }
+        }
+        ToolKind::Write => {
+            if text("mode") == Some("append") {
+                metadata.push("append".to_string());
+            }
+        }
+        ToolKind::Edit => {
+            if value.as_ref().and_then(|v| v["replace_all"].as_bool()) == Some(true) {
+                metadata.push("replace all".to_string());
+            }
+        }
+        ToolKind::Shell => {
+            let background = value
+                .as_ref()
+                .and_then(|v| v["background"].as_bool())
+                .unwrap_or(false);
+            if background {
+                metadata.push("async".to_string());
+            }
+            if let Some(timeout) = value.as_ref().and_then(|v| v["timeout"].as_u64()) {
+                if background || timeout != 60 {
+                    metadata.push(format!("timeout {timeout}s"));
+                }
+            }
+        }
+        ToolKind::Glob => {
+            if let Some(path) = text("path") {
+                metadata.push(compact(path));
+            }
+        }
+        ToolKind::Grep => {
+            let mode = value
+                .as_ref()
+                .and_then(|v| v["output_mode"].as_str())
+                .unwrap_or("filename");
+            if mode != "filename" {
+                metadata.push(mode.to_string());
+            }
+            for key in ["path", "glob", "type"] {
+                if let Some(item) = text(key) {
+                    metadata.push(compact(item));
+                }
+            }
+            if let Some(context) = value
+                .as_ref()
+                .and_then(|v| v["context"].as_u64().or_else(|| v["-C"].as_u64()))
+            {
+                metadata.push(format!("context {context}"));
+            }
+        }
+        ToolKind::WebSearch => {
+            if let Some(count) = value.as_ref().and_then(|v| v["num_results"].as_u64()) {
+                metadata.push(format!("{count} results"));
+            }
+        }
+        ToolKind::Agent => {
+            if value
+                .as_ref()
+                .and_then(|v| v["wait_for_completion"].as_bool())
+                == Some(false)
+            {
+                metadata.push("async".to_string());
+            }
+        }
+        ToolKind::PostMessage => {
+            if let Some(title) = text("title") {
+                metadata.push(compact(title));
+            }
+        }
+        ToolKind::AskUser => {
+            if let Some(questions) = value.as_ref().and_then(|v| v["questions"].as_array()) {
+                if let Some(header) = questions
+                    .first()
+                    .and_then(|question| question["header"].as_str())
+                {
+                    metadata.push(compact(header));
+                }
+                if questions.len() > 1 {
+                    metadata.push(format!("{} questions", questions.len()));
+                }
+            }
+        }
+        ToolKind::Todo => {
+            if let Some(items) = value.as_ref().and_then(|v| v["todos"].as_array()) {
+                metadata.push(format!("{} items", items.len()));
+            }
+        }
+        ToolKind::Reminder => {
+            if let Some(delay) = value.as_ref().and_then(|v| v["delay_seconds"].as_u64()) {
+                metadata.push(format!("{delay}s"));
+            }
+        }
+        ToolKind::SendMessage => {
+            if let Some(files) = value.as_ref().and_then(|v| v["files"].as_array()) {
+                if !files.is_empty() {
+                    metadata.push(format!("{} files", files.len()));
+                }
+            }
+        }
+        ToolKind::TaskList => {
+            if value.as_ref().and_then(|v| v["includeCompleted"].as_bool()) == Some(true) {
+                metadata.push("include completed".to_string());
+            }
+        }
+        ToolKind::TaskUpdate => {
+            for key in ["status", "subject"] {
+                if let Some(item) = text(key) {
+                    metadata.push(compact(item));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    ToolHeaderSummary {
+        label,
+        target,
+        metadata: (!metadata.is_empty()).then(|| metadata.join(" · ")),
+    }
+}
+
+/// Extract the primary target from tool arguments for inline activity rendering.
+pub fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
+    tool_header_summary(tool_name, args).target
+}
+
+fn tool_label(tool_name: &str) -> String {
+    match tool_kind(tool_name) {
+        ToolKind::Read => "Read",
+        ToolKind::Write => "Write",
+        ToolKind::Edit => "Edit",
+        ToolKind::Shell => "Shell",
+        ToolKind::Glob => "Glob",
+        ToolKind::Grep => "Grep",
+        ToolKind::WebFetch => "Web fetch",
+        ToolKind::WebSearch => "Web search",
+        ToolKind::Skill => "Skill",
+        ToolKind::Agent => "Agent",
+        ToolKind::PostMessage => "Post message",
+        ToolKind::AskUser => "Ask user",
+        ToolKind::Todo => "Todo",
+        ToolKind::Reminder => "Reminder",
+        ToolKind::Sleep => "Sleep",
+        ToolKind::UpdateGoal => "Update goal",
+        ToolKind::SendMessage => "Send message",
+        ToolKind::TaskCreate => "Create task",
+        ToolKind::TaskGet => "Get task",
+        ToolKind::TaskList => "List tasks",
+        ToolKind::TaskUpdate => "Update task",
+        ToolKind::Other => return to_camel_case(tool_name),
+    }
+    .to_string()
+}
+
 pub fn tool_icon(tool_name: &str) -> &'static str {
-    match tool_name {
-        SUBAGENT_TOOL_NAME => "󰚩 ",
-        READ_TOOL_NAME => " ",
-        WRITE_TOOL_NAME | EDIT_TOOL_NAME => " ",
-        SHELL_TOOL_NAME => " ",
-        GLOB_TOOL_NAME => "󰱼 ",
-        GREP_TOOL_NAME => "󰑑 ",
-        SKILL_TOOL_NAME => "⚡",
-        WEBFETCH_TOOL_NAME => "󰖟 ",
-        WEBSEARCH_TOOL_NAME => " ",
-        POST_MESSAGE_TOOL_NAME => "󰍩 ",
-        REMINDER_TOOL_NAME => "󰀠 ",
-        SLEEP_TOOL_NAME => "󰒲 ",
-        // Task tools
-        TASK_CREATE_TOOL_NAME
-        | TASK_GET_TOOL_NAME
-        | TASK_LIST_TOOL_NAME
-        | TASK_UPDATE_TOOL_NAME
-        | TODO_TOOL_NAME => " ",
-        ASK_USER_TOOL_NAME => " ",
+    match tool_kind(tool_name) {
+        ToolKind::Agent => "󰚩 ",
+        ToolKind::Read => " ",
+        ToolKind::Write | ToolKind::Edit => " ",
+        ToolKind::Shell => " ",
+        ToolKind::Glob => "󰱼 ",
+        ToolKind::Grep => "󰑑 ",
+        ToolKind::Skill => "⚡",
+        ToolKind::WebFetch => "󰖟 ",
+        ToolKind::WebSearch => " ",
+        ToolKind::PostMessage | ToolKind::SendMessage => "󰍩 ",
+        ToolKind::Reminder => "󰀠 ",
+        ToolKind::Sleep => "󰒲 ",
+        ToolKind::TaskCreate
+        | ToolKind::TaskGet
+        | ToolKind::TaskList
+        | ToolKind::TaskUpdate
+        | ToolKind::Todo => " ",
+        ToolKind::AskUser => " ",
         _ => " ",
     }
 }
@@ -1036,47 +1260,6 @@ fn render_raw_tool_arguments(lines: &mut Vec<Arc<Line<'static>>>, args: &str) {
 /// Sanitize text for single-line display by replacing newlines/tabs with spaces.
 pub fn sanitize_single_line(s: &str) -> String {
     s.replace(['\n', '\r', '\t'], " ")
-}
-
-/// Extract a concise description from tool arguments for the title
-/// e.g., Read "src/main.rs", Edit "crates/tui/src/lib.rs"
-/// Results are truncated to 100 characters (Unicode-safe).
-pub fn extract_tool_target(tool_name: &str, args: Option<&str>) -> Option<String> {
-    const MAX_LEN: usize = 100;
-    let args = args?;
-    let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
-
-    let f = |s: &str| truncate_by_chars(&sanitize_single_line(s), MAX_LEN);
-
-    let target = match tool_name {
-        READ_TOOL_NAME | EDIT_TOOL_NAME => {
-            value["path"].as_str().map(|path| {
-                // For skill files, show the parent directory name
-                if path.ends_with(SKILL_FILENAME) {
-                    std::path::Path::new(path)
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        .map_or_else(|| f(path), |s| format!("{s}/{SKILL_FILENAME}"))
-                } else {
-                    f(path)
-                }
-            })
-        }
-        WRITE_TOOL_NAME => value["file_path"].as_str().map(f),
-        SHELL_TOOL_NAME => value["command"].as_str().map(f),
-        GLOB_TOOL_NAME | GREP_TOOL_NAME => value["pattern"].as_str().map(f),
-        WEBFETCH_TOOL_NAME => value["url"].as_str().map(f),
-        SKILL_TOOL_NAME => value["name"]
-            .as_str()
-            .map(f)
-            .or_else(|| value["path"].as_str().map(f)),
-        SUBAGENT_TOOL_NAME => value["description"].as_str().map(f),
-        POST_MESSAGE_TOOL_NAME => value["agent_id"].as_str().map(f),
-        _ => None,
-    };
-
-    target.map(|t| truncate_by_chars(&sanitize_single_line(&t), MAX_LEN))
 }
 
 #[cfg(test)]

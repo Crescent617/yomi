@@ -31,68 +31,181 @@ export function compactArgs(args: string, maxLen = 120): string {
   }
 }
 
-export function extractTarget(tool_name: string, args: string): string {
-  if (!args) return "";
+function normalizeToolName(toolName: string): string {
+  const name = toolName.toLowerCase().replace(/[_-]/g, "");
+  const aliases: Record<string, string> = {
+    readfile: "read",
+    writefile: "write",
+    editfile: "edit",
+    globsearch: "glob",
+    grepsearch: "grep",
+    bash: "shell",
+    command: "shell",
+    subagent: "agent",
+    ask: "askuser",
+    task: "todo",
+    message: "postmessage",
+  };
+  return aliases[name] ?? name;
+}
+
+export function toolLabel(toolName: string, isSubagent = false): string {
+  if (isSubagent || normalizeToolName(toolName) === "agent") {
+    return "Agent";
+  }
+  const labels: Record<string, string> = {
+    read: "Read",
+    write: "Write",
+    edit: "Edit",
+    shell: "Shell",
+    bash: "Shell",
+    command: "Shell",
+    glob: "Glob",
+    grep: "Grep",
+    webfetch: "Web fetch",
+    websearch: "Web search",
+    skill: "Skill",
+    postmessage: "Post message",
+    askuser: "Ask user",
+    todo: "Todo",
+    reminder: "Reminder",
+    sleep: "Sleep",
+    updategoal: "Update goal",
+    sendmessage: "Send message",
+    taskcreate: "Create task",
+    taskget: "Get task",
+    tasklist: "List tasks",
+    taskupdate: "Update task",
+  };
+  return (
+    labels[normalizeToolName(toolName)] ??
+    (toolName ? toolName.charAt(0).toUpperCase() + toolName.slice(1) : "Tool")
+  );
+}
+
+function parseArgs(args: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(args);
-    switch (tool_name.toLowerCase()) {
-      case "read":
-      case "edit":
-        return parsed.path ?? "";
-      case "write":
-        return parsed.file_path ?? "";
-      case "shell":
-        return parsed.command ?? "";
-      case "glob":
-      case "grep":
-        return parsed.pattern ?? "";
-      case "webfetch":
-        return parsed.url ?? "";
-      case "skill":
-        return parsed.name ?? parsed.path ?? "";
-      case "agent":
-      case "subagent":
-        return parsed.description ?? "";
-      case "postmessage":
-        return parsed.agent_id ?? "";
-      default:
-        return "";
-    }
+    const value = JSON.parse(args);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : null;
   } catch {
-    return "";
+    return null;
+  }
+}
+
+function firstText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+export function extractTarget(tool_name: string, args: string): string {
+  const parsed = parseArgs(args);
+  if (!parsed) return "";
+  const name = normalizeToolName(tool_name);
+  switch (name) {
+    case "read":
+    case "edit":
+      return firstText(parsed.path);
+    case "write":
+      return firstText(parsed.file_path);
+    case "shell":
+    case "glob":
+    case "grep":
+      return firstText(name === "shell" ? parsed.command : parsed.pattern);
+    case "webfetch":
+      return firstText(parsed.url);
+    case "websearch":
+      return firstText(parsed.query);
+    case "skill":
+      return firstText(parsed.name) || firstText(parsed.path);
+    case "agent":
+      return firstText(parsed.description) || firstText(parsed.prompt);
+    case "postmessage":
+      return firstText(parsed.agent_id);
+    case "askuser": {
+      const question = Array.isArray(parsed.questions)
+        ? parsed.questions[0]
+        : null;
+      return firstText(question?.question) || firstText(question?.header);
+    }
+    case "todo":
+      return firstText(parsed.action);
+    case "reminder":
+      return firstText(parsed.message);
+    case "sendmessage": {
+      const files = Array.isArray(parsed.files) ? parsed.files : [];
+      return firstText(parsed.content) || firstText(files[0]);
+    }
+    case "sleep":
+      return parsed.seconds == null ? "" : `${parsed.seconds}s`;
+    case "updategoal":
+      return firstText(parsed.status);
+    case "taskcreate":
+      return firstText(parsed.subject);
+    case "tasklist":
+      return "";
+    case "taskget":
+    case "taskupdate":
+      return firstText(parsed.taskId) || firstText(parsed.task_id);
+    default:
+      return "";
   }
 }
 
 export function extraMeta(tool_name: string, args: string): string {
-  if (!args) return "";
-  try {
-    const parsed = JSON.parse(args);
-    const extras: string[] = [];
-    switch (tool_name.toLowerCase()) {
-      case "shell": {
-        if (parsed.background) extras.push("async");
-        const timeout = parsed.timeout;
-        if (timeout != null && (parsed.background || timeout !== 60)) {
-          extras.push(`timeout ${timeout}s`);
-        }
-        break;
-      }
-      case "grep": {
-        const mode = parsed.output_mode || "filename";
-        if (mode !== "filename") extras.push(mode);
-        break;
-      }
-      case "agent":
-      case "subagent": {
-        const preset = parsed.preset || "general-purpose";
-        if (preset !== "general-purpose") extras.push(preset);
-        break;
-      }
+  const parsed = parseArgs(args);
+  if (!parsed) return "";
+  const name = normalizeToolName(tool_name);
+  const extras: string[] = [];
+  if (name === "shell") {
+    if (parsed.background) extras.push("async");
+    if (
+      parsed.timeout != null &&
+      (parsed.background || parsed.timeout !== 60)
+    ) {
+      extras.push(`timeout ${parsed.timeout}s`);
     }
-    return extras.join(" · ");
-  } catch {
-    return "";
+  } else if (name === "glob") {
+    if (parsed.path) extras.push(firstText(parsed.path));
+  } else if (name === "grep") {
+    if (parsed.output_mode && parsed.output_mode !== "filename") {
+      extras.push(String(parsed.output_mode));
+    }
+    const scope =
+      firstText(parsed.path) ||
+      firstText(parsed.glob) ||
+      firstText(parsed.type);
+    if (scope) extras.push(scope);
+    const context = parsed.context ?? parsed["-C"];
+    if (context != null) extras.push(`context ${context}`);
+  } else if (name === "write" && parsed.mode === "append") {
+    extras.push("append");
+  } else if (name === "edit" && parsed.replace_all) {
+    extras.push("replace all");
+  } else if (name === "websearch") {
+    if (parsed.num_results != null)
+      extras.push(`${parsed.num_results} results`);
+  } else if (name === "askuser" && Array.isArray(parsed.questions)) {
+    if (parsed.questions.length > 1) {
+      extras.push(`${parsed.questions.length} questions`);
+    }
+  } else if (name === "todo" && Array.isArray(parsed.todos)) {
+    extras.push(`${parsed.todos.length} items`);
+  } else if (name === "agent" && parsed.wait_for_completion === false) {
+    extras.push("async");
+  } else if (name === "sendmessage" && Array.isArray(parsed.files)) {
+    extras.push(`${parsed.files.length} files`);
+  } else if (name === "postmessage" && parsed.title) {
+    extras.push(firstText(parsed.title));
+  } else if (name === "reminder" && parsed.delay_seconds != null) {
+    extras.push(`${parsed.delay_seconds}s`);
+  } else if (name === "tasklist" && parsed.includeCompleted) {
+    extras.push("including completed");
+  } else if (name === "taskupdate") {
+    const update = firstText(parsed.status) || firstText(parsed.subject);
+    if (update) extras.push(update);
   }
+  return extras.join(" · ");
 }
 
 export interface PostMessageArgs {
@@ -121,7 +234,8 @@ export function postMessageSessionTarget(
   toolName: string,
   args: string,
 ): string | null {
-  if (toolName.toLowerCase() !== "postmessage") return null;
+  if (toolName.toLowerCase().replace(/[_-]/g, "") !== "postmessage")
+    return null;
   return parsePostMessageArgs(args)?.agent_id || null;
 }
 
