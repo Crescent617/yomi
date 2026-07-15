@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.23] - 2026-07-15
+
+### Added
+- Session 侧边栏菜单支持 Fork，并在创建后直接打开新 Session。
+- Status Bar 汇总运行中的 Session 与后台 Shell，可快速跳转或复制日志路径。
+- Project 标识色统一为主题感知的组件，Thinking 与 Steer 消息提供更清晰的紧凑预览和展开交互。
+
+### Changed
+- 普通 Fork Session 作为独立顶层 Session 保存，不再复用 Subagent 的父子关系。
+- 后台 Agent 消息发送提示统一要求等待异步结果，避免重复轮询。
+
+### Fixed
+- 后台 Shell 完成通知明确区分 completed、failed、cancelled 与 timed_out，并避免重复 Task ID。
+- Fork 前端状态会继承权限级别，并在加载失败时清理临时 Session。
+
 ## [0.5.20] - 2026-07-14
 
 ### Added
