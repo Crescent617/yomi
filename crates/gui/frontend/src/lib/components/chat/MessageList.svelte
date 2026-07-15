@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { ArrowDown } from "lucide-svelte";
   import TaskDock from "./TaskDock.svelte";
+  import { isActiveSessionPhase } from "../../session-phase";
   import InlineStreamStatus from "./InlineStreamStatus.svelte";
   import DisplayItemList from "./DisplayItemList.svelte";
   import { DisplayItemProjection } from "./display-items";
@@ -23,9 +24,7 @@
       activeSession.message_rewrite_revision,
       streamingMessages[activeSession.id] ?? [],
       activeSession.phase === "streaming",
-      activeSession.is_running &&
-        (activeSession.phase === "streaming" ||
-          activeSession.phase === "executing_tool"),
+      isActiveSessionPhase(activeSession.phase),
     );
   });
   const displayMessages = $derived(displaySections.tailMessages);
@@ -170,7 +169,7 @@
             session_id={activeSession.id}
             expansionOverrides={activityExpansionOverrides}
           />
-          {#if activeSession.is_running}
+          {#if isActiveSessionPhase(activeSession.phase)}
             <InlineStreamStatus
               session={activeSession}
               messages={displayMessages}

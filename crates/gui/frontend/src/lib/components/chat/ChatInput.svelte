@@ -17,6 +17,7 @@
     showNotification,
   } from "../../state.svelte";
   import { forkSession, textFromBlocks } from "../../session";
+  import { isActiveSessionPhase } from "../../session-phase";
   import { SLASH_COMMANDS } from "../../commands";
   import type { FileEntry } from "../../fs/provider";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -66,8 +67,7 @@
 
   const activeSession = $derived(getActiveSession());
   const isStreaming = $derived(
-    activeSession?.phase === "streaming" ||
-      activeSession?.phase === "executing_tool",
+    activeSession ? isActiveSessionPhase(activeSession.phase) : false,
   );
 
   let context_window = $state(0);

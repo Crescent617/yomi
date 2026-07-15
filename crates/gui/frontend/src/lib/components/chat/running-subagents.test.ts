@@ -12,7 +12,6 @@ function subagent(partial: Partial<SubagentInfo>): SubagentInfo {
     parent_session_id: "parent",
     alias: null,
     phase: "streaming",
-    is_running: true,
     created_at: "2026-07-12T00:00:00Z",
     model_key: null,
     ...partial,
@@ -24,9 +23,19 @@ describe("running subagents", () => {
     expect(
       runningSubagents([
         subagent({ id: "running" }),
-        subagent({ id: "finished", phase: "idle", is_running: false }),
+        subagent({ id: "finished", phase: "idle" }),
       ]).map((item) => item.id),
     ).toEqual(["running"]);
+  });
+
+  test("filters by active phase rather than the legacy running flag", () => {
+    expect(
+      runningSubagents([
+        subagent({ id: "active", phase: "executing_tool" }),
+        subagent({ id: "error", phase: "error" }),
+        subagent({ id: "closed", phase: "closed" }),
+      ]).map((item) => item.id),
+    ).toEqual(["active"]);
   });
 
   test("summarizes one agent by description and multiple agents by count", () => {

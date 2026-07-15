@@ -4,8 +4,7 @@ import { findThinking } from "../../session";
 export function isAgentActivity(message: Message): boolean {
   return (
     message.type === "tool" &&
-    (message.tool_name?.trim().toLowerCase() === "agent" ||
-      Boolean(message.subagent_session_id))
+    message.tool_name?.trim().toLowerCase() === "agent"
   );
 }
 

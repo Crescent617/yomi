@@ -16,6 +16,7 @@
     showNotification,
   } from "../../state.svelte";
   import { activateSession } from "../../session";
+  import { isActiveSessionPhase } from "../../session-phase";
   import { errorMessage, openDefault } from "../../api";
   import { clock } from "../../clock.svelte";
   import { elapsedLabel, shellActivitySummary } from "./status-activity";
@@ -47,12 +48,7 @@
   const shellCount = $derived(runningShells.length);
   const summary = $derived(shellActivitySummary(shellCount));
   const streamingSessions = $derived(
-    runningSessions.filter(
-      (session) =>
-        session.phase === "streaming" ||
-        session.phase === "executing_tool" ||
-        session.phase === "compacting",
-    ),
+    runningSessions.filter((session) => isActiveSessionPhase(session.phase)),
   );
   const streamingCount = $derived(streamingSessions.length);
 

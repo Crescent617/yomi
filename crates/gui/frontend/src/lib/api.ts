@@ -182,7 +182,6 @@ export interface SubagentInfo {
   parent_session_id: string;
   alias: string | null;
   phase: string;
-  is_running: boolean;
   created_at: string;
   model_key: string | null;
 }

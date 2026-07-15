@@ -146,7 +146,7 @@ export function highlightCodeTokens(
     .then(async (highlighter) => {
       await ensureLanguage(highlighter, normalizedLanguage);
       return highlighter.codeToTokens(code, {
-        lang: normalizedLanguage,
+        lang: normalizedLanguage as BundledLanguage,
         themes: {
           light: "github-light",
           dark: "github-dark",

@@ -1,7 +1,8 @@
+import { isActiveSessionPhase } from "../../session-phase";
 import type { SubagentInfo } from "../../api";
 
 export function runningSubagents(subagents: SubagentInfo[]): SubagentInfo[] {
-  return subagents.filter((subagent) => subagent.is_running);
+  return subagents.filter((subagent) => isActiveSessionPhase(subagent.phase));
 }
 
 export function subagentDescription(subagent: SubagentInfo): string {
