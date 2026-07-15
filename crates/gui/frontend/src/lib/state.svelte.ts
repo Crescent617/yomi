@@ -13,6 +13,12 @@ import type { TaggedContentBlock } from "./types";
 import { listen } from "@tauri-apps/api/event";
 import { pushToast } from "./toast.svelte";
 import { guiPreferences } from "./settings.svelte";
+import {
+  addSessionCompletion,
+  didSessionComplete,
+  seedRunningSessionStatuses,
+  type SessionCompletionNotification,
+} from "./notification-center";
 
 // ── Kernel notification listener ─────────────────────────────────────────
 
@@ -20,6 +26,8 @@ const subagentRefreshes = new Map<string, Promise<void>>();
 const dirtySubagentParents = new Set<string>();
 let runningSessionsRefresh: Promise<void> | null = null;
 let runningSessionsDirty = false;
+let sessionNotificationSequence = 0;
+const lastKnownSessionStatus = new Map<string, string>();
 
 export const runningSessions = $state<RunningSessionInfo[]>([]);
 
@@ -33,6 +41,10 @@ export function refreshRunningSessions(): Promise<void> {
         runningSessionsDirty = false;
         const sessions = await fetchRunningSessions();
         runningSessions.splice(0, runningSessions.length, ...sessions);
+        seedRunningSessionStatuses(
+          lastKnownSessionStatus,
+          sessions.map((session) => session.session_id),
+        );
       }
     } catch {
       // Keep the last authoritative snapshot; the next status change retries.
@@ -83,6 +95,39 @@ function refreshSubagentParent(session_id: string) {
     });
 }
 
+async function recordSessionCompletion(
+  sessionId: string,
+  completedAt: string,
+): Promise<void> {
+  let session = getSession(sessionId);
+  if (!session) {
+    try {
+      const info = await fetchSession(sessionId);
+      session = createSessionState({
+        id: info.id,
+        project_path: info.working_dir ?? "",
+        project_id: info.project_id ?? undefined,
+        alias: info.title ?? "Untitled session",
+        permission_level: info.auto_approve_level ?? "caution",
+        model_key: info.model_key ?? undefined,
+      });
+    } catch {
+      // The session may have been deleted before its completion event arrived.
+      return;
+    }
+  }
+
+  const next = addSessionCompletion(sessionNotifications, {
+    id: `${sessionId}:${completedAt}:${sessionNotificationSequence++}`,
+    sessionId,
+    title: session.alias || "Untitled session",
+    projectId: session.project_id ?? null,
+    completedAt,
+    read: sessionState.activeSessionId === sessionId,
+  });
+  sessionNotifications.splice(0, sessionNotifications.length, ...next);
+}
+
 export async function startNotificationListener(): Promise<() => void> {
   const unlisten = await listen(
     "kernel:noti",
@@ -100,7 +145,16 @@ export async function startNotificationListener(): Promise<() => void> {
       const payload = e.payload;
       if (payload.state_changed) {
         const { session_id, status } = payload.state_changed;
+        const previousStatus = lastKnownSessionStatus.get(session_id);
+        lastKnownSessionStatus.set(session_id, status);
         const session = getSession(session_id);
+        if (
+          !session_id.startsWith("sub_") &&
+          didSessionComplete(previousStatus, status)
+        ) {
+          const completedAt = new Date().toISOString();
+          void recordSessionCompletion(session_id, completedAt);
+        }
         if (session) {
           session.phase = status;
           session.is_running = status !== "idle" && status !== "closed";
@@ -125,11 +179,17 @@ export async function startNotificationListener(): Promise<() => void> {
         void refreshRunningSessions();
       }
       if (payload.connection_lost) {
+        lastKnownSessionStatus.clear();
         runningSessions.splice(0, runningSessions.length);
         showNotification("Connection lost", "warning");
       }
     },
   );
+  for (const session of sessionState.sessions) {
+    if (!lastKnownSessionStatus.has(session.id)) {
+      lastKnownSessionStatus.set(session.id, session.phase);
+    }
+  }
   await refreshRunningSessions();
   return unlisten;
 }
@@ -465,7 +525,36 @@ export const sessionState = $state({
   activeSessionId: null as string | null,
 });
 
+export const sessionNotifications = $state<SessionCompletionNotification[]>([]);
 export const unreadSessions = $state<Record<string, boolean>>({});
+
+export function markSessionNotificationRead(id: string): void {
+  const notification = sessionNotifications.find((item) => item.id === id);
+  if (notification) notification.read = true;
+}
+
+export function removeProjectNotifications(
+  projectId: string,
+  sessionIds: Set<string>,
+): void {
+  const kept = sessionNotifications.filter(
+    (notification) =>
+      notification.projectId !== projectId &&
+      !sessionIds.has(notification.sessionId),
+  );
+  sessionNotifications.splice(0, sessionNotifications.length, ...kept);
+}
+
+export function removeSessionNotifications(sessionIds: Set<string>): void {
+  const kept = sessionNotifications.filter(
+    (notification) => !sessionIds.has(notification.sessionId),
+  );
+  sessionNotifications.splice(0, sessionNotifications.length, ...kept);
+}
+
+export function markAllSessionNotificationsRead(): void {
+  for (const notification of sessionNotifications) notification.read = true;
+}
 
 export const pinnedSessionMeta = $state(
   {} as Record<string, { pinned_at: string }>,

@@ -19,6 +19,7 @@
   import { errorMessage, openDefault } from "../../api";
   import { clock } from "../../clock.svelte";
   import { elapsedLabel, shellActivitySummary } from "./status-activity";
+  import NotificationCenter from "./NotificationCenter.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { onMount } from "svelte";
 
@@ -261,5 +262,6 @@
         <span>v{version}</span>
       </a>
     {/if}
+    <NotificationCenter />
   </div>
 </div>

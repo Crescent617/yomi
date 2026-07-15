@@ -32,6 +32,20 @@ function localDayOffset(now: Date, days: number): number {
   return date.getTime();
 }
 
+export interface ProjectSessionListItem {
+  project_id?: string | null;
+  parent_session_id?: string | null;
+}
+
+/** Keep only top-level sessions that belong to an explicit project. */
+export function projectSessionsForList<T extends ProjectSessionListItem>(
+  sessions: T[],
+): T[] {
+  return sessions.filter(
+    (session) => Boolean(session.project_id) && !session.parent_session_id,
+  );
+}
+
 export function groupSessionsByTime<T extends { updated_at?: string }>(
   sessions: T[],
   nowMs: number = Date.now(),

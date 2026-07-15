@@ -7,6 +7,7 @@ import {
   refreshSubagents,
   requestActivePanel,
   sessionState,
+  sessionNotifications,
   showNotification,
   streamingMessages,
   unreadSessions,
@@ -149,7 +150,12 @@ export function setActiveSession(id: string | null) {
     }
   }
   sessionState.activeSessionId = id;
-  if (id) delete unreadSessions[id];
+  if (id) {
+    delete unreadSessions[id];
+    for (const notification of sessionNotifications) {
+      if (notification.sessionId === id) notification.read = true;
+    }
+  }
 }
 
 export function upsertSession(session: SessionState) {
