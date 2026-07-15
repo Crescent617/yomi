@@ -62,7 +62,7 @@ export const defaultGuiPreferences: GuiPreferences = {
     homeModel: null,
     autoScroll: true,
     auto_approve_level: null,
-    activityGroupExpansion: "collapsed",
+    activityGroupExpansion: "while_running",
   },
 };
 
