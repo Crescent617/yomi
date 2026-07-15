@@ -140,8 +140,8 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -167,6 +167,11 @@ body {
 
 .scrollbar-hidden::-webkit-scrollbar {
   display: none;
+}
+
+/* Shared interaction feedback for clickable rows inside popovers. */
+@utility popover-list-item {
+  @apply transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-within:bg-accent focus-within:text-accent-foreground;
 }
 
 /* Respect OS motion preferences while preserving visible state changes. */

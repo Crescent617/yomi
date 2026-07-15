@@ -152,7 +152,7 @@
             {@const project = projectName(session.project_id)}
             <button
               type="button"
-              class="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-secondary/50"
+              class="popover-list-item flex w-full items-start gap-2 px-3 py-2 text-left"
               onclick={() => openSession(session.id)}
               title="Open session"
             >
@@ -176,7 +176,7 @@
           {#each runningShells as item (item.shell.task_id)}
             {@const project = projectName(item.session.project_id)}
             <div
-              class="flex w-full items-start gap-2 px-3 py-2 transition-colors hover:bg-secondary/50"
+              class="popover-list-item flex w-full items-start gap-2 px-3 py-2"
             >
               <button
                 type="button"

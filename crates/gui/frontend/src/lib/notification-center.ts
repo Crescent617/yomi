@@ -31,7 +31,12 @@ export function addSessionCompletion(
   notifications: SessionCompletionNotification[],
   notification: SessionCompletionNotification,
 ): SessionCompletionNotification[] {
-  return [notification, ...notifications].slice(0, MAX_SESSION_NOTIFICATIONS);
+  return [
+    notification,
+    ...notifications.filter(
+      (item) => item.sessionId !== notification.sessionId,
+    ),
+  ].slice(0, MAX_SESSION_NOTIFICATIONS);
 }
 
 export function relativeNotificationTime(iso: string, now: number): string {

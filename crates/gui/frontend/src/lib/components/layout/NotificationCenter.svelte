@@ -136,7 +136,7 @@
             {@const project = projectName(notification.projectId)}
             <button
               type="button"
-              class="group flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+              class="popover-list-item flex w-full items-start gap-2 px-3 py-2 text-left"
               onclick={() =>
                 void openNotification(notification.id, notification.sessionId)}
             >
