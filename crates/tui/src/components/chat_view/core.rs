@@ -100,8 +100,6 @@ pub enum HistoryMessage {
         error: Option<String>,
         folded: bool,
         arguments: Option<String>,
-        /// Pre-parsed JSON arguments to avoid re-parsing on every render.
-        parsed_args: Option<serde_json::Value>,
         elapsed_ms: Option<u64>,
         content_blocks: Vec<ToolOutputBlock>,
         /// Real-time subagent progress, if this tool is an `agent` call.
@@ -350,9 +348,6 @@ impl ChatView {
         // Flush any pending streaming content before starting tool
         self.flush_streaming();
 
-        let parsed_args = arguments
-            .as_deref()
-            .and_then(|a| serde_json::from_str(a).ok());
         self.messages.push(HistoryMessage::Tool {
             tool_name,
             tool_id,
@@ -361,7 +356,6 @@ impl ChatView {
             error: None,
             folded: !self.expand_all,
             arguments,
-            parsed_args,
             elapsed_ms: None,
             content_blocks: Vec::new(),
             subagent: None,

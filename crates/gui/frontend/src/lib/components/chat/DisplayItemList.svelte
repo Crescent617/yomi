@@ -10,15 +10,26 @@
   import TextBlock from "./TextBlock.svelte";
   import { formatMessageTime } from "../../utils";
 
+  import type { ActivityGroupOverride } from "./activity-expansion";
+
   let {
     items,
     session_id,
+    markLatest = true,
+    expansionOverrides,
   }: {
     items: DisplayItem[];
     session_id: string;
+    markLatest?: boolean;
+    expansionOverrides: Record<string, ActivityGroupOverride>;
   } = $props();
 
   const keyedItems = $derived(keyDisplayItems(items));
+  const lastActivityIndex = $derived(
+    markLatest
+      ? keyedItems.findLastIndex((item) => item.type === "action_group")
+      : -1,
+  );
 </script>
 
 {#snippet messageTimestamp(createdAt: string | undefined, isStreaming: boolean)}
@@ -31,7 +42,7 @@
   {/if}
 {/snippet}
 
-{#each keyedItems as item (item.key)}
+{#each keyedItems as item, itemIndex (item.key)}
   {#if item.type === "error_group"}
     <div class="group relative">
       <ErrorBubble messages={item.messages} />
@@ -62,6 +73,10 @@
       <ActivityGroup
         messages={item.messages}
         isActiveActivity={item.isActiveActivity}
+        isLatestActivity={itemIndex === lastActivityIndex}
+        expansionOverride={expansionOverrides[item.key] ?? null}
+        onExpansionOverride={(override) =>
+          (expansionOverrides[item.key] = override)}
       />
       {#each item.messages as m, messageIndex (`${m.type}-${m.id}-${messageIndex}`)}
         {#if m.type === "assistant" && hasText(m.content)}

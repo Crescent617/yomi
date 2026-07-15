@@ -9,6 +9,11 @@ const LEGACY_HOME_MODEL_KEY = "home_model";
 export type ThemePreference = "light" | "dark" | "system";
 export type FontSizePreference = "xs" | "sm" | "base" | "lg" | "xl";
 export type SidebarViewPreference = "sessions" | "projects";
+export type ActivityGroupExpansionPreference =
+  | "collapsed"
+  | "expanded"
+  | "latest"
+  | "while_running";
 
 export interface GuiPreferences {
   schemaVersion: 1;
@@ -28,6 +33,7 @@ export interface GuiPreferences {
     homeModel: string | null;
     autoScroll: boolean;
     auto_approve_level: PermissionLevel | null;
+    activityGroupExpansion: ActivityGroupExpansionPreference;
   };
 }
 
@@ -56,6 +62,7 @@ export const defaultGuiPreferences: GuiPreferences = {
     homeModel: null,
     autoScroll: true,
     auto_approve_level: null,
+    activityGroupExpansion: "collapsed",
   },
 };
 
@@ -86,6 +93,17 @@ function normalizePermissionLevel(value: unknown): PermissionLevel | null {
   return value === "safe" || value === "caution" || value === "dangerous"
     ? value
     : null;
+}
+
+function normalizeActivityGroupExpansion(
+  value: unknown,
+): ActivityGroupExpansionPreference {
+  return value === "collapsed" ||
+    value === "expanded" ||
+    value === "latest" ||
+    value === "while_running"
+    ? value
+    : defaultGuiPreferences.chat.activityGroupExpansion;
 }
 
 function normalizeGuiPreferences(
@@ -121,6 +139,9 @@ function normalizeGuiPreferences(
         value?.chat?.autoScroll ?? defaultGuiPreferences.chat.autoScroll,
       auto_approve_level: normalizePermissionLevel(
         value?.chat?.auto_approve_level,
+      ),
+      activityGroupExpansion: normalizeActivityGroupExpansion(
+        value?.chat?.activityGroupExpansion,
       ),
     },
   };
@@ -166,6 +187,7 @@ async function loadLegacyPreferences(s: Store): Promise<GuiPreferences> {
       homeModel: legacyHomeModel,
       autoScroll: defaultGuiPreferences.chat.autoScroll,
       auto_approve_level: defaultGuiPreferences.chat.auto_approve_level,
+      activityGroupExpansion: defaultGuiPreferences.chat.activityGroupExpansion,
     },
   });
 }

@@ -10,7 +10,6 @@ fn make_tool_msg(tool_id: &str, tool_name: &str) -> HistoryMessage {
         error: None,
         folded: true,
         arguments: None,
-        parsed_args: None,
         elapsed_ms: None,
         content_blocks: Vec::new(),
         subagent: None,

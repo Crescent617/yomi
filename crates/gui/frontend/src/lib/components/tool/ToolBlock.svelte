@@ -8,6 +8,7 @@
     formatElapsed,
     handleJumpToSession,
     postMessageSessionTarget,
+    toolLabel,
   } from "./tool-utils";
   import ToolIcon from "./ToolIcon.svelte";
   import ToolBody from "./ToolBody.svelte";
@@ -30,15 +31,7 @@
   );
   const sessionTarget = $derived(tool.subagent_session_id ?? postMessageTarget);
   const isSubagent = $derived(Boolean(tool.subagent_session_id));
-  const label = $derived(
-    isSubagent
-      ? "Agent"
-      : tool.tool_name === "postMessage"
-        ? "Post message"
-        : tool.tool_name
-          ? tool.tool_name.charAt(0).toUpperCase() + tool.tool_name.slice(1)
-          : "Tool",
-  );
+  const label = $derived(toolLabel(tool.tool_name, isSubagent));
 
   function statusDotClass(status: string): string {
     switch (status) {

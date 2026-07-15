@@ -20,6 +20,7 @@
     type FontSizePreference,
     type GuiPreferences,
     type ThemePreference,
+    type ActivityGroupExpansionPreference,
   } from "../../settings.svelte";
   import { showNotification } from "../../state.svelte";
 
@@ -50,6 +51,16 @@
     { id: "base", label: "Medium" },
     { id: "lg", label: "Large" },
     { id: "xl", label: "Extra large" },
+  ];
+
+  const activityGroupOptions: Array<{
+    id: ActivityGroupExpansionPreference;
+    label: string;
+  }> = [
+    { id: "collapsed", label: "Collapsed" },
+    { id: "expanded", label: "Expanded" },
+    { id: "latest", label: "Latest" },
+    { id: "while_running", label: "While running" },
   ];
 
   const dirty = $derived(
@@ -316,6 +327,31 @@
               class="h-4 w-4 accent-primary"
             />
           </label>
+          <div
+            class="flex flex-col gap-3 border-t border-border px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <div class="text-sm text-foreground">Activity details</div>
+              <div class="text-xs text-muted-foreground">
+                Choose which tool and thinking groups open automatically.
+              </div>
+            </div>
+            <select
+              value={draft.chat.activityGroupExpansion}
+              onchange={(event) =>
+                preview(
+                  (value) =>
+                    (value.chat.activityGroupExpansion = event.currentTarget
+                      .value as ActivityGroupExpansionPreference),
+                )}
+              class="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring"
+              aria-label="Activity group expansion"
+            >
+              {#each activityGroupOptions as option (option.id)}
+                <option value={option.id}>{option.label}</option>
+              {/each}
+            </select>
+          </div>
         </div>
       </section>
 

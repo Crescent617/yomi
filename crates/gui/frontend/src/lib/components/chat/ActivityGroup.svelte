@@ -13,40 +13,59 @@
   import type { Message } from "../../state.svelte";
   import { findThinking, textFromBlocks } from "../../session";
   import { formatElapsed } from "../../utils";
+  import { guiPreferences } from "../../settings.svelte";
+  import {
+    activityGroupExpanded,
+    type ActivityGroupOverride,
+  } from "./activity-expansion";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "../tool/ToolBlock.svelte";
 
   let {
     messages,
     isActiveActivity = false,
+    isLatestActivity = false,
+    expansionOverride = null,
+    onExpansionOverride,
   }: {
     messages: Message[];
     isActiveActivity?: boolean;
+    isLatestActivity?: boolean;
+    expansionOverride?: ActivityGroupOverride;
+    onExpansionOverride: (override: ActivityGroupOverride) => void;
   } = $props();
 
-  type ExpansionMode = "auto" | "user_open" | "user_closed";
-
-  let expansionMode = $state<ExpansionMode>("auto");
+  let lastPreference = $state(guiPreferences.chat.activityGroupExpansion);
   const expanded = $derived(
-    expansionMode === "user_open" ||
-      (expansionMode === "auto" && isActiveActivity),
+    activityGroupExpanded(
+      guiPreferences.chat.activityGroupExpansion,
+      isLatestActivity,
+      isActiveActivity,
+      expansionOverride,
+    ),
   );
 
+  $effect(() => {
+    const preference = guiPreferences.chat.activityGroupExpansion;
+    if (preference !== lastPreference) {
+      lastPreference = preference;
+      onExpansionOverride(null);
+    }
+  });
+
   function toggleExpanded() {
-    expansionMode = expanded ? "user_closed" : "user_open";
+    onExpansionOverride(expanded ? "closed" : "open");
   }
 
   const SEARCH_READ_TOOLS = new Set([
     "read",
-    "read_file",
+    "readfile",
     "grep",
-    "grep_search",
+    "grepsearch",
     "glob",
-    "glob_search",
+    "globsearch",
     "websearch",
-    "web_search",
     "webfetch",
-    "web_fetch",
   ]);
 
   interface Badge {
@@ -56,6 +75,11 @@
   }
 
   const stats = $derived.by(() => {
+    const materializedToolIds = new Set(
+      messages
+        .filter((message) => message.type === "tool")
+        .map((message) => message.tool_call_id),
+    );
     let subagentCount = 0;
     let editWriteCount = 0;
     let shellCount = 0;
@@ -72,17 +96,22 @@
           thinkingCount += 1;
           elapsedMs += thinking.elapsed_ms ?? 0;
         }
+        if (message.tool_calls?.length) {
+          otherToolCount += message.tool_calls.filter(
+            (call) => !materializedToolIds.has(call.id),
+          ).length;
+        }
         continue;
       }
       if (message.type !== "tool") continue;
       elapsedMs += message.elapsed_ms ?? 0;
       if (message.status === "failed") failedCount += 1;
+      const name = message.tool_name.toLowerCase().replace(/[_-]/g, "");
       if (message.subagent_session_id) subagentCount += 1;
-      else if (message.tool_name === "write" || message.tool_name === "edit")
+      else if (["write", "writefile", "edit", "editfile"].includes(name))
         editWriteCount += 1;
-      else if (["shell", "bash", "command"].includes(message.tool_name))
-        shellCount += 1;
-      else if (SEARCH_READ_TOOLS.has(message.tool_name)) searchReadCount += 1;
+      else if (["shell", "bash", "command"].includes(name)) shellCount += 1;
+      else if (SEARCH_READ_TOOLS.has(name)) searchReadCount += 1;
       else otherToolCount += 1;
     }
 
