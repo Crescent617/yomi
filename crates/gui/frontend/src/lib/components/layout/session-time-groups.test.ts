@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { groupSessionsByTime } from "./session-time-groups";
+import {
+  groupSessionsByTime,
+  projectSessionsForList,
+} from "./session-time-groups";
 
 const NOW = new Date(2026, 6, 13, 12).getTime();
 
@@ -10,6 +13,24 @@ function session(id: string, updated_at?: string) {
 function minutesAgo(minutes: number): string {
   return new Date(NOW - minutes * 60 * 1000).toISOString();
 }
+
+describe("projectSessionsForList", () => {
+  test("keeps only top-level sessions assigned to a project", () => {
+    const projectSession = { id: "project", project_id: "project_1" };
+
+    expect(
+      projectSessionsForList([
+        projectSession,
+        { id: "default", project_id: null },
+        {
+          id: "subagent",
+          project_id: "project_1",
+          parent_session_id: "project",
+        },
+      ]),
+    ).toEqual([projectSession]);
+  });
+});
 
 describe("session time groups", () => {
   test("groups recent sessions into fine-grained time windows", () => {

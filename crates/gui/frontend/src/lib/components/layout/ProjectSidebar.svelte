@@ -27,6 +27,8 @@
   import SessionForkMenuItem from "./SessionForkMenuItem.svelte";
   import {
     sessionState,
+    removeProjectNotifications,
+    removeSessionNotifications,
     unreadSessions,
     projectState,
     sessionCursors,
@@ -44,8 +46,11 @@
     activateSession as stateActivateSession,
   } from "../../session";
   import { formatTimeAgo } from "../../utils";
-  import ProjectDot from "../ui/ProjectDot.svelte";
-  import { groupSessionsByTime } from "./session-time-groups";
+  import {
+    groupSessionsByTime,
+    projectSessionsForList,
+  } from "./session-time-groups";
+  import { createFromSessionParams } from "./session-create";
   import { clock } from "../../clock.svelte";
   import {
     guiPreferences,
@@ -137,9 +142,9 @@
   }
 
   const allSessions = $derived(
-    sessionState.sessions
-      .filter((session) => !session.parent_session_id)
-      .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? "")),
+    projectSessionsForList(sessionState.sessions).sort((a, b) =>
+      (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+    ),
   );
 
   const sessionTimeGroups = $derived(
@@ -350,6 +355,7 @@
       await api.unsubscribe(id);
       await api.deleteSession(id);
       sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id);
+      removeSessionNotifications(new Set([id]));
       delete unreadSessions[id];
       delete pinnedSessionMeta[id];
       loadPinnedSessions();
@@ -395,6 +401,7 @@
       sessionState.sessions = sessionState.sessions.filter(
         (s) => s.project_id !== id,
       );
+      removeProjectNotifications(id, removedIds);
       for (const sid of removedIds) {
         delete unreadSessions[sid];
         delete pinnedSessionMeta[sid];
@@ -457,6 +464,41 @@
     } catch (e: unknown) {
       console.error(
         "Failed to create session:",
+        e instanceof Error ? e.message : e,
+      );
+      showNotification("Failed to create session", "error");
+    }
+  }
+
+  async function createFromSession(session_id: string) {
+    projectMenu = null;
+    pinnedMenu = null;
+    try {
+      const source = await api.getSession(session_id);
+      const project = source.project_id
+        ? projectState.projects.find((item) => item.id === source.project_id)
+        : undefined;
+      const params = createFromSessionParams(source, project?.dir);
+      const id = await api.createSession(
+        params.working_dir,
+        params.permission_level,
+        params.project_id,
+        params.model_key,
+      );
+      sessionState.sessions.push(
+        createSessionState({
+          id,
+          project_path: params.working_dir,
+          project_id: params.project_id,
+          alias: "Untitled",
+          permission_level: params.permission_level,
+          model_key: params.model_key,
+        }),
+      );
+      await activateSession(id);
+    } catch (e: unknown) {
+      console.error(
+        "Failed to create session from existing session:",
         e instanceof Error ? e.message : e,
       );
       showNotification("Failed to create session", "error");
@@ -702,7 +744,7 @@
                     style="top: {pinnedMenu.y}px; left: {pinnedMenu.x}px; transform: translateX(-100%);"
                   >
                     <button
-                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
                       onclick={(e: Event) => {
                         e.stopPropagation();
                         togglePin(session_id);
@@ -717,7 +759,7 @@
                       onfork={(id) => void forkSession(id)}
                     />
                     <button
-                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
                       onclick={(e: Event) => {
                         e.stopPropagation();
                         copySessionId(session_id);
@@ -727,7 +769,16 @@
                       <Copy size={12} /> Copy ID
                     </button>
                     <button
-                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
+                      onclick={(e: Event) => {
+                        e.stopPropagation();
+                        void createFromSession(session_id);
+                      }}
+                    >
+                      <MessageSquarePlus size={12} /> Create from
+                    </button>
+                    <button
+                      class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none text-left"
                       onclick={(e: Event) => {
                         e.stopPropagation();
                         requestDeleteSession(session_id);
@@ -845,9 +896,6 @@
             {/if}
             <div class="space-y-0.5">
               {#each group.sessions as session (session.id)}
-                {@const project = projectState.projects.find(
-                  (item) => item.id === session.project_id,
-                )}
                 <div
                   class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
@@ -886,12 +934,6 @@
                           class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
                         >
                           {#if session.project_id}
-                            {#if project}
-                              <ProjectDot
-                                name={project.name}
-                                dir={project.dir}
-                              />
-                            {/if}
                             <span class="truncate"
                               >{projectName(session.project_id)}</span
                             >
@@ -949,7 +991,7 @@
                       style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
                     >
                       <button
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-secondary/50"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
                         onclick={(e: Event) => {
                           e.stopPropagation();
                           togglePin(session.id);
@@ -963,7 +1005,7 @@
                         {/if}
                       </button>
                       <button
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-secondary/50"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
                         onclick={(e: Event) => {
                           e.stopPropagation();
                           renamingSessionId = session.id;
@@ -979,7 +1021,7 @@
                         onfork={(id) => void forkSession(id)}
                       />
                       <button
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-secondary/50"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
                         onclick={(e: Event) => {
                           e.stopPropagation();
                           copySessionId(session.id);
@@ -989,7 +1031,16 @@
                         <Copy size={12} /> Copy ID
                       </button>
                       <button
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-destructive hover:bg-destructive/10"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none"
+                        onclick={(e: Event) => {
+                          e.stopPropagation();
+                          void createFromSession(session.id);
+                        }}
+                      >
+                        <MessageSquarePlus size={12} /> Create from
+                      </button>
+                      <button
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none"
                         onclick={(e: Event) => {
                           e.stopPropagation();
                           requestDeleteSession(session.id);
@@ -1249,7 +1300,7 @@
                           style="top: {projectMenu.y}px; left: {projectMenu.x}px; transform: translateX(-100%);"
                         >
                           <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               togglePin(session.id);
@@ -1263,7 +1314,7 @@
                             {/if}
                           </button>
                           <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               renamingSessionId = session.id;
@@ -1279,7 +1330,7 @@
                             onfork={(id) => void forkSession(id)}
                           />
                           <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               copySessionId(session.id);
@@ -1289,7 +1340,16 @@
                             <Copy size={12} /> Copy ID
                           </button>
                           <button
-                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 text-left"
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none text-left"
+                            onclick={(e: Event) => {
+                              e.stopPropagation();
+                              void createFromSession(session.id);
+                            }}
+                          >
+                            <MessageSquarePlus size={12} /> Create from
+                          </button>
+                          <button
+                            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground focus-visible:bg-destructive focus-visible:text-destructive-foreground focus-visible:outline-none text-left"
                             onclick={(e: Event) => {
                               e.stopPropagation();
                               requestDeleteSession(session.id);

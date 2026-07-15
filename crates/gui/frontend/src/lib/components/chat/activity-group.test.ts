@@ -1,5 +1,50 @@
 import { describe, expect, test } from "vitest";
-import { isActivityTail } from "./activity-group";
+import { isActivityTail, isAgentActivity } from "./activity-group";
+
+describe("isAgentActivity", () => {
+  test("recognizes an agent tool before subagent metadata arrives", () => {
+    expect(
+      isAgentActivity({
+        id: "tool-agent",
+        type: "tool",
+        tool_call_id: "call-agent",
+        tool_name: "agent",
+        status: "executing",
+        arguments: "{}",
+        result: [],
+      }),
+    ).toBe(true);
+  });
+
+  test("recognizes legacy agent activity by subagent session metadata", () => {
+    expect(
+      isAgentActivity({
+        id: "tool-legacy",
+        type: "tool",
+        tool_call_id: "call-legacy",
+        tool_name: "sub_agent",
+        status: "completed",
+        arguments: "{}",
+        result: [],
+        subagent_session_id: "sess_child",
+      }),
+    ).toBe(true);
+  });
+
+  test("does not classify regular tools as agents", () => {
+    expect(
+      isAgentActivity({
+        id: "tool-shell",
+        type: "tool",
+        tool_call_id: "call-shell",
+        tool_name: "shell",
+        status: "completed",
+        arguments: "{}",
+        result: [],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("activity group state", () => {
   test("keeps a tool-calling assistant active after text arrives", () => {

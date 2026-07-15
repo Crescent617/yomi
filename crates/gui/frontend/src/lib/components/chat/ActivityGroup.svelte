@@ -13,6 +13,7 @@
   import type { Message } from "../../state.svelte";
   import { findThinking, textFromBlocks } from "../../session";
   import { formatElapsed } from "../../utils";
+  import { isAgentActivity } from "./activity-group";
   import { guiPreferences } from "../../settings.svelte";
   import {
     activityGroupExpanded,
@@ -107,7 +108,7 @@
       elapsedMs += message.elapsed_ms ?? 0;
       if (message.status === "failed") failedCount += 1;
       const name = message.tool_name.toLowerCase().replace(/[_-]/g, "");
-      if (message.subagent_session_id) subagentCount += 1;
+      if (isAgentActivity(message)) subagentCount += 1;
       else if (["write", "writefile", "edit", "editfile"].includes(name))
         editWriteCount += 1;
       else if (["shell", "bash", "command"].includes(name)) shellCount += 1;
