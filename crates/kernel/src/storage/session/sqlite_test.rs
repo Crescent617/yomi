@@ -54,7 +54,7 @@ async fn test_fork() {
     let child = store.fork(&parent).await.unwrap();
 
     let child_info = store.get(&child).await.unwrap().unwrap();
-    assert_eq!(child_info.parent_id.unwrap().0, parent.0);
+    assert_eq!(child_info.parent_id, None);
     assert_eq!(child_info.working_dir, Some("/parent/dir".to_string()));
 }
 

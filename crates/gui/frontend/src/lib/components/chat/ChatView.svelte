@@ -54,7 +54,8 @@
   import { pickGreeting } from "../home/greeting";
   import TodayUsageCard from "../home/TodayUsageCard.svelte";
   import RecentSessions from "../home/RecentSessions.svelte";
-  import { projectColor, formatTimeAgo } from "../../utils";
+  import { formatTimeAgo } from "../../utils";
+  import ProjectDot from "../ui/ProjectDot.svelte";
   import { clock } from "../../clock.svelte";
   import { Search, Plus, Check } from "lucide-svelte";
   import ChangesWorkspace from "../layout/ChangesWorkspace.svelte";
@@ -1181,10 +1182,11 @@
                       class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
                     >
                       {#if sel}
-                        <span
-                          class="w-2 h-2 rounded-full shrink-0"
-                          style="background: {projectColor(sel.name + sel.dir)}"
-                        ></span>
+                        <ProjectDot
+                          name={sel.name}
+                          dir={sel.dir}
+                          class="size-2"
+                        />
                       {:else}
                         <FolderOpen class="w-4 h-4" />
                       {/if}
@@ -1254,12 +1256,11 @@
                               ? 'bg-accent/50'
                               : ''}"
                           >
-                            <span
-                              class="w-2 h-2 rounded-full shrink-0"
-                              style="background: {projectColor(
-                                project.name + project.dir,
-                              )}"
-                            ></span>
+                            <ProjectDot
+                              name={project.name}
+                              dir={project.dir}
+                              class="size-2"
+                            />
                             <span class="flex-1 min-w-0">
                               <span class="flex items-center gap-2 min-w-0">
                                 <span class="font-medium truncate"

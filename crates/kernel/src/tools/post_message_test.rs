@@ -35,6 +35,7 @@ async fn test_definition() {
     assert!(tool
         .desc()
         .contains("set `agent_id` to the sender ID from that prefix"));
+    assert!(tool.desc().contains(crate::tools::ASYNC_LAUNCH_GUIDE));
     assert_eq!(
         tool.schema()["required"],
         json!(["agent_id", "title", "content"])

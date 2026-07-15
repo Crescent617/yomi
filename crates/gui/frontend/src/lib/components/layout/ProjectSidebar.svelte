@@ -24,6 +24,7 @@
   import * as api from "../../api";
   import ConfirmDialog from "../ui/ConfirmDialog.svelte";
   import StatusDot from "./StatusDot.svelte";
+  import SessionForkMenuItem from "./SessionForkMenuItem.svelte";
   import {
     sessionState,
     unreadSessions,
@@ -39,9 +40,11 @@
     loadPinnedSessions,
     refreshCheckpoints,
     createSessionState,
+    forkSession as forkSessionState,
     activateSession as stateActivateSession,
   } from "../../session";
   import { formatTimeAgo } from "../../utils";
+  import ProjectDot from "../ui/ProjectDot.svelte";
   import { groupSessionsByTime } from "./session-time-groups";
   import { clock } from "../../clock.svelte";
   import {
@@ -78,6 +81,7 @@
   );
   let renamingProjectId = $state<string | null>(null);
   let renamingSessionId = $state<string | null>(null);
+  let forkingSessionId = $state<string | null>(null);
   let renameValue = $state("");
   let deletingProject = $state<{ id: string; name: string } | null>(null);
   let deletingSession = $state<{ id: string; title: string } | null>(null);
@@ -501,6 +505,25 @@
     renamingSessionId = null;
   }
 
+  async function forkSession(session_id: string) {
+    if (forkingSessionId) return;
+    forkingSessionId = session_id;
+    closeMenus();
+    try {
+      const session = await forkSessionState(session_id);
+      showNotification("Session forked", "success");
+      await activateSession(session.id);
+    } catch (e: unknown) {
+      console.error(
+        "Failed to fork session:",
+        e instanceof Error ? e.message : e,
+      );
+      showNotification("Failed to fork session", "error");
+    } finally {
+      forkingSessionId = null;
+    }
+  }
+
   async function copySessionId(id: string) {
     try {
       await navigator.clipboard.writeText(id);
@@ -636,10 +659,12 @@
                 >
                   {session?.alias ?? "Untitled"}
                 </span>
-                <span
-                  class="max-w-[6rem] shrink-0 truncate text-[10px] text-muted-foreground"
-                  >{projectName(session?.project_id)}</span
-                >
+                {#if session?.project_id}
+                  <span
+                    class="max-w-[6rem] shrink-0 truncate text-[10px] text-muted-foreground"
+                    >{projectName(session.project_id)}</span
+                  >
+                {/if}
               </button>
               <div class="relative h-5 w-5 shrink-0">
                 <div
@@ -686,6 +711,11 @@
                     >
                       <PinOff size={12} /> Unpin
                     </button>
+                    <SessionForkMenuItem
+                      {session_id}
+                      disabled={forkingSessionId !== null}
+                      onfork={(id) => void forkSession(id)}
+                    />
                     <button
                       class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
                       onclick={(e: Event) => {
@@ -815,6 +845,9 @@
             {/if}
             <div class="space-y-0.5">
               {#each group.sessions as session (session.id)}
+                {@const project = projectState.projects.find(
+                  (item) => item.id === session.project_id,
+                )}
                 <div
                   class="group relative flex min-h-11 w-full items-center gap-2 rounded-sm border-l-2 py-1.5 pl-2 pr-0.5 transition-colors {session.id ===
                   sessionState.activeSessionId
@@ -852,11 +885,21 @@
                         <span
                           class="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
                         >
-                          <span class="truncate"
-                            >{projectName(session.project_id)}</span
-                          >
+                          {#if session.project_id}
+                            {#if project}
+                              <ProjectDot
+                                name={project.name}
+                                dir={project.dir}
+                              />
+                            {/if}
+                            <span class="truncate"
+                              >{projectName(session.project_id)}</span
+                            >
+                            {#if session.updated_at}
+                              <span aria-hidden="true">·</span>
+                            {/if}
+                          {/if}
                           {#if session.updated_at}
-                            <span aria-hidden="true">·</span>
                             <span
                               class="shrink-0"
                               title={new Date(
@@ -930,6 +973,11 @@
                       >
                         <Pencil size={12} /> Rename
                       </button>
+                      <SessionForkMenuItem
+                        session_id={session.id}
+                        disabled={forkingSessionId !== null}
+                        onfork={(id) => void forkSession(id)}
+                      />
                       <button
                         class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground hover:bg-secondary/50"
                         onclick={(e: Event) => {
@@ -1225,6 +1273,11 @@
                           >
                             <Pencil size={12} /> Rename
                           </button>
+                          <SessionForkMenuItem
+                            session_id={session.id}
+                            disabled={forkingSessionId !== null}
+                            onfork={(id) => void forkSession(id)}
+                          />
                           <button
                             class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-secondary/50 text-left"
                             onclick={(e: Event) => {

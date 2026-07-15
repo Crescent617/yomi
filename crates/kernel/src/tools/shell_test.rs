@@ -1,11 +1,51 @@
-use super::strip_ansi;
+use super::{format_background_result, strip_ansi};
 use crate::tools::format_shell_message;
+use std::path::Path;
 
 #[test]
-fn background_shell_messages_use_shell_source_prefix() {
+fn background_shell_messages_include_task_id_once() {
+    let result =
+        format_background_result(Ok::<_, &str>((0, false, false)), Path::new("/tmp/task.log"));
+
     assert_eq!(
-        format_shell_message("sh_123", "[Task sh_123 completed]"),
-        "[From Shell: sh_123] [Task sh_123 completed]"
+        format_shell_message("sh_123", result),
+        "[From Shell: sh_123] [Task completed] Exit code: 0 · Output: /tmp/task.log"
+    );
+}
+
+#[test]
+fn format_background_success_result() {
+    assert_eq!(
+        format_background_result(Ok::<_, &str>((0, false, false)), Path::new("task.log")),
+        "[Task completed] Exit code: 0 · Output: task.log"
+    );
+    assert_eq!(
+        format_background_result(Ok::<_, &str>((7, false, false)), Path::new("task.log")),
+        "[Task failed] Exit code: 7 · Output: task.log"
+    );
+}
+
+#[test]
+fn format_background_cancelled_result() {
+    assert_eq!(
+        format_background_result(Ok::<_, &str>((-1, false, true)), Path::new("task.log")),
+        "[Task cancelled] Partial output: task.log"
+    );
+}
+
+#[test]
+fn format_background_timeout_result() {
+    assert_eq!(
+        format_background_result(Ok::<_, &str>((-1, true, false)), Path::new("task.log")),
+        "[Task timed_out] Partial output: task.log"
+    );
+}
+
+#[test]
+fn format_background_error_result() {
+    assert_eq!(
+        format_background_result(Err("process unavailable"), Path::new("task.log")),
+        "[Task failed] Error: process unavailable · Output: task.log"
     );
 }
 

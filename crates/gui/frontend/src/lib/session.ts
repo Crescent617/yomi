@@ -194,6 +194,26 @@ export async function loadSessionData(sessionId: string) {
   return session;
 }
 
+export async function forkSession(
+  parentId: string,
+  permissionLevel?: string,
+): Promise<SessionState> {
+  const parent = getSession(parentId);
+  const newId = await api.forkSession(
+    parentId,
+    permissionLevel ?? parent?.permission_level ?? "safe",
+  );
+
+  try {
+    return await loadSessionData(newId);
+  } catch (error) {
+    sessionState.sessions = sessionState.sessions.filter(
+      (session) => session.id !== newId,
+    );
+    throw error;
+  }
+}
+
 export async function activateSession(sessionId: string) {
   if (!sessionId) return;
   const existing = inFlightActivations.get(sessionId);

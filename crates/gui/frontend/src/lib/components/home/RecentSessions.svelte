@@ -12,7 +12,8 @@
     refreshCheckpoints,
     createSessionState,
   } from "../../session";
-  import { formatTimeAgo, projectColor } from "../../utils";
+  import { formatTimeAgo } from "../../utils";
+  import ProjectDot from "../ui/ProjectDot.svelte";
   import { clock } from "../../clock.svelte";
   import { MessageSquare, History } from "lucide-svelte";
 
@@ -113,10 +114,7 @@
             class="flex items-center gap-1.5 text-[10px] text-muted-foreground min-w-0"
           >
             {#if project}
-              <span
-                class="w-1.5 h-1.5 rounded-full shrink-0"
-                style="background: {projectColor(project.name + project.dir)}"
-              ></span>
+              <ProjectDot name={project.name} dir={project.dir} />
               <span class="truncate min-w-0">{project.name}</span>
               <span>·</span>
             {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ChevronDown, ChevronRight, Lightbulb } from "lucide-svelte";
   import { formatElapsed, tokenEstimate } from "../../utils";
+  import { thinkingPreview } from "./thinking-block";
 
   let {
     content,
@@ -17,6 +18,7 @@
   } = $props();
 
   let expanded = $state(false);
+  const preview = $derived(thinkingPreview(content));
 </script>
 
 <div class="relative flex gap-1">
@@ -56,7 +58,13 @@
     >
       <Lightbulb class="size-3.5 shrink-0 text-muted-foreground" />
       <span class="shrink-0 text-xs font-medium text-foreground">Thought</span>
-      <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+      <span
+        class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
+        title={preview}
+      >
+        {preview}
+      </span>
+      <span class="shrink-0 text-[10px] text-muted-foreground/70">
         {tokenEstimate(content)} tokens
       </span>
       {#if elapsed_ms > 0}

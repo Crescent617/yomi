@@ -4,14 +4,14 @@ export function formatShortId(id: string): string {
   return id.slice(-8);
 }
 
-/** Deterministic accent color for a project (hash of name+dir → hue). */
+/** Deterministic, theme-aware accent color for a project (hash of name+dir → hue). */
 export function projectColor(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) {
     h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   }
   const hue = h % 360;
-  return `hsl(${hue}, 65%, 55%)`;
+  return `color-mix(in oklab, hsl(${hue} 55% 55%) 45%, hsl(var(--muted-foreground)))`;
 }
 
 export function formatTimeAgo(
