@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.24] - 2026-07-15
+
+### Added
+- Session 菜单支持 `Create from`，复制 Project、Model Key 和 Approval Level 创建空白 Session。
+- GUI 增加 Session 完成通知中心，支持未读状态、跳转和批量已读。
+
+### Changed
+- 纯 Session List 仅显示顶层 Project Session，并移除 Project Dot。
+- Session 菜单使用更明确的 Hover / Focus 状态。
+- Notification Center 使用更紧凑的单行 Header 和未读 Dot 列表。
+
+### Fixed
+- Activity Group Header 在 Agent metadata 尚未到达时也能正确显示 Agent。
+- 修复重连后已运行 Session 可能不产生完成通知的问题。
+- 修复删除 Project 后可能残留通知，以及跳转失败时通知被提前标记已读的问题。
+
 ## [0.5.23] - 2026-07-15
 
 ### Added
