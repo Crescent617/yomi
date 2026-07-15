@@ -37,6 +37,21 @@ describe("session completion notifications", () => {
     expect(didSessionComplete(statuses.get("reconnected"), "idle")).toBe(true);
   });
 
+  test("keeps only the latest notification for each session", () => {
+    const older = notification(1);
+    const other = notification(2);
+    const latest = {
+      ...notification(3),
+      sessionId: older.sessionId,
+      title: "Latest completion",
+      read: true,
+    };
+
+    const items = addSessionCompletion([other, older], latest);
+
+    expect(items).toEqual([latest, other]);
+  });
+
   test("keeps newest notifications first and caps history", () => {
     let items: SessionCompletionNotification[] = [];
     for (let index = 0; index < MAX_SESSION_NOTIFICATIONS + 5; index += 1) {
