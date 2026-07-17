@@ -1,5 +1,5 @@
 use crate::event::ContentChunk;
-use crate::types::{FinishReason, Message, Role, ToolDefinition};
+use crate::types::{FinishReason, Message, ToolDefinition};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,102 +19,13 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
 /// Headroom for provider formatting and local token-estimation error.
 pub const CONTEXT_SAFETY_BUFFER_TOKENS: u32 = 4_096;
 
-fn estimate_text_tokens(text: &str) -> u32 {
-    crate::utils::tokens::estimate_tokens(text) as u32
-}
-
-fn estimate_json_tokens(value: &serde_json::Value) -> u32 {
-    crate::utils::tokens::estimate_tokens_for_json(&value.to_string()) as u32
-}
-
-fn estimate_message_tokens(message: &Message) -> u32 {
-    let content_tokens = message.content.iter().fold(0u32, |total, block| {
-        let tokens = match block {
-            crate::types::ContentBlock::Text { text } => estimate_text_tokens(text),
-            crate::types::ContentBlock::Thinking {
-                thinking,
-                signature,
-            } => estimate_text_tokens(thinking)
-                .saturating_add(signature.as_deref().map_or(0, estimate_text_tokens)),
-            crate::types::ContentBlock::RedactedThinking { data } => estimate_text_tokens(data),
-            crate::types::ContentBlock::ImageUrl { image_url } => {
-                // Provider image tokenization depends on decoded dimensions. Use a
-                // conservative per-image floor and charge inline data by encoded
-                // size so large payloads cannot hide behind a fixed estimate.
-                4_096u32.max(estimate_text_tokens(&image_url.url))
-            }
-            // No current provider serializes Audio blocks; do not budget content
-            // that is omitted from the actual request.
-            crate::types::ContentBlock::Audio { .. } => 0,
-        };
-        total.saturating_add(tokens)
-    });
-    let tool_call_tokens = message
-        .tool_calls
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .fold(0u32, |total, call| {
-            total
-                .saturating_add(estimate_text_tokens(&call.id))
-                .saturating_add(estimate_text_tokens(&call.name))
-                .saturating_add(estimate_json_tokens(&call.arguments))
-                .saturating_add(8)
-        });
-
-    content_tokens
-        .saturating_add(tool_call_tokens)
-        .saturating_add(
-            message
-                .tool_call_id
-                .as_deref()
-                .map_or(0, estimate_text_tokens),
-        )
-        .saturating_add(10)
-}
-
-/// Estimate the input tokens for a request using only messages providers serialize.
+/// Estimate request input tokens using the shared token utilities.
 pub fn estimate_request_input_tokens(
     messages: &[Arc<Message>],
     tools: &[Arc<ToolDefinition>],
     _config: &ModelConfig,
 ) -> u32 {
-    let last_assistant_usage = messages
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, message)| {
-            (message.role == Role::Assistant)
-                .then(|| message.token_usage.as_ref().map(|usage| (index, usage)))
-                .flatten()
-        });
-
-    if let Some((index, usage)) = last_assistant_usage {
-        return messages[index + 1..]
-            .iter()
-            .filter(|message| message.role != Role::Internal)
-            .fold(usage.total_tokens, |total, message| {
-                total.saturating_add(estimate_message_tokens(message))
-            });
-    }
-
-    let message_tokens = messages
-        .iter()
-        .filter(|message| message.role != Role::Internal)
-        .fold(0u32, |total, message| {
-            total.saturating_add(estimate_message_tokens(message))
-        });
-    message_tokens.saturating_add(estimate_tools_tokens(tools))
-}
-
-fn estimate_tools_tokens(tools: &[Arc<ToolDefinition>]) -> u32 {
-    tools.iter().fold(0u32, |total, tool| {
-        total.saturating_add(if tool.estimated_tokens > 0 {
-            tool.estimated_tokens
-        } else {
-            tool.estimated_tokens()
-        })
-    })
+    crate::utils::tokens::estimate_request_input_tokens(messages, tools)
 }
 
 /// Resolve a request-specific model config at the call site.

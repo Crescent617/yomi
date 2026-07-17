@@ -4,22 +4,18 @@
 //! 1. Micro-compaction: Clear old tool result content (fast, no API call)
 //! 2. Full summarization: Use API to generate conversation summary
 
-use crate::provider::{
-    estimate_request_input_tokens, ModelConfig, ModelStreamItem, Provider,
-    CONTEXT_SAFETY_BUFFER_TOKENS,
-};
+use crate::provider::{ModelConfig, ModelStreamItem, Provider, CONTEXT_SAFETY_BUFFER_TOKENS};
 use crate::types::{ContentBlock, FinishReason, Message, Role};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// Default threshold ratio to trigger compaction (80% of context window)
+/// Default threshold ratio to trigger compaction (90% of context window)
 pub const DEFAULT_THRESHOLD_RATIO: f32 = 0.9;
 
-/// Hard upper bound for the message-token threshold. Either this cap or the
-/// user-configured ratio can trigger compaction; the earlier threshold wins.
-pub const DEFAULT_THRESHOLD_TOKENS: u32 = 110_000;
+/// Default number of context-window tokens to keep available before compaction.
+pub const DEFAULT_COMPACTION_REMAINING_TOKENS: u32 = 33_000;
 /// Default context window size
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 131_072; // 128k
 const KEEP_RECENT_MESSAGES: usize = 0;
@@ -173,22 +169,30 @@ impl Compactor {
         }
     }
 
-    /// The reserve-based threshold is applied only when the context window can
-    /// actually fit that reserve; smaller windows retain the ratio/hard-cap
-    /// policy and let request budgeting report insufficient context explicitly.
+    fn summary_reserve(&self) -> u32 {
+        CONTEXT_SAFETY_BUFFER_TOKENS
+            .saturating_add(crate::utils::tokens::estimate_tokens(SUMMARY_PROMPT) as u32)
+            .saturating_add(MIN_SUMMARY_OUTPUT_TOKENS.min(self.summary_max_tokens))
+    }
+
+    /// The fixed remaining-token and summary reserves are applied only when the
+    /// context window can fit them. Smaller windows retain the ratio policy and
+    /// let request budgeting report insufficient context explicitly.
     #[allow(clippy::cast_precision_loss)]
     pub fn threshold(&self, context_window: u32) -> u32 {
         let ratio_threshold = (context_window as f32 * self.threshold_ratio) as u32;
-        let summary_reserve = CONTEXT_SAFETY_BUFFER_TOKENS
-            .saturating_add(crate::utils::tokens::estimate_tokens(SUMMARY_PROMPT) as u32)
-            .saturating_add(MIN_SUMMARY_OUTPUT_TOKENS.min(self.summary_max_tokens));
-        let base_threshold = ratio_threshold.min(DEFAULT_THRESHOLD_TOKENS);
-        let summary_threshold = context_window.saturating_sub(summary_reserve);
-        if summary_threshold == 0 {
-            base_threshold
-        } else {
-            base_threshold.min(summary_threshold)
-        }
+        let remaining_tokens_threshold = context_window
+            .checked_sub(DEFAULT_COMPACTION_REMAINING_TOKENS)
+            .filter(|&threshold| threshold > 0)
+            .unwrap_or(u32::MAX);
+        let summary_threshold = context_window
+            .checked_sub(self.summary_reserve())
+            .filter(|&threshold| threshold > 0)
+            .unwrap_or(u32::MAX);
+
+        ratio_threshold
+            .min(remaining_tokens_threshold)
+            .min(summary_threshold)
     }
 
     /// Calculate total tokens from message history and, when no real assistant
@@ -198,17 +202,17 @@ impl Compactor {
     pub fn calculate_tokens(
         messages: &[Arc<Message>],
         tools: &[Arc<crate::types::ToolDefinition>],
-        model_config: &ModelConfig,
+        _model_config: &ModelConfig,
     ) -> u32 {
-        estimate_request_input_tokens(messages, tools, model_config)
+        crate::utils::tokens::estimate_request_input_tokens(messages, tools)
     }
 
     /// Check whether compaction is needed using the exact provider-facing view.
     ///
     /// Internal metadata and incomplete tool groups are removed before token
     /// estimation, so callers do not need to duplicate request sanitization.
-    /// The threshold is the earliest of the configured ratio, hard token cap,
-    /// and the reserve required for a usable summary request.
+    /// The threshold is the earliest of the configured ratio, fixed remaining
+    /// context reserve, and the reserve required for a usable summary request.
     pub fn should_compact(
         &self,
         messages: &[Arc<Message>],
@@ -216,8 +220,21 @@ impl Compactor {
         model_config: &ModelConfig,
     ) -> bool {
         let provider_messages = crate::agent::MessageBuffer::sanitized_model_messages(messages);
-        Self::calculate_tokens(&provider_messages, tools, model_config)
-            >= self.threshold(model_config.context_window)
+        let estimated_tokens = Self::calculate_tokens(&provider_messages, tools, model_config);
+        let threshold = self.threshold(model_config.context_window);
+        let should_compact = estimated_tokens >= threshold;
+        if should_compact {
+            tracing::info!(
+                estimated_tokens,
+                threshold,
+                context_window = model_config.context_window,
+                threshold_ratio = self.threshold_ratio,
+                remaining_tokens_reserve = DEFAULT_COMPACTION_REMAINING_TOKENS,
+                summary_reserve = self.summary_reserve(),
+                "auto-compaction threshold reached"
+            );
+        }
+        should_compact
     }
 
     /// Try micro-compaction: clear old tool results

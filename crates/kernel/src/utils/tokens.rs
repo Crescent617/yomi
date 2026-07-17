@@ -4,6 +4,9 @@
 //! - 1 token ≈ 4 characters (for all text)
 //! - JSON is denser: 1 token ≈ 2 characters
 
+use crate::types::{ContentBlock, Message, Role, ToolDefinition};
+use std::sync::Arc;
+
 /// Estimate tokens from UTF-8 byte length, rounding up conservatively.
 /// Rough approximation: 1 token ≈ 4 bytes.
 ///
@@ -22,6 +25,98 @@ pub const fn estimate_tokens(text: &str) -> usize {
 /// JSON is denser due to punctuation, so it uses approximately 2 bytes/token.
 pub const fn estimate_tokens_for_json(text: &str) -> usize {
     text.len().div_ceil(2)
+}
+
+fn estimate_message_tokens(message: &Message) -> u32 {
+    let content_tokens = message.content.iter().fold(0u32, |total, block| {
+        let tokens = match block {
+            ContentBlock::Text { text } => estimate_tokens(text) as u32,
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => (estimate_tokens(thinking) as u32).saturating_add(
+                signature
+                    .as_deref()
+                    .map_or(0, |text| estimate_tokens(text) as u32),
+            ),
+            ContentBlock::RedactedThinking { data } => estimate_tokens(data) as u32,
+            ContentBlock::ImageUrl { image_url } => {
+                // Provider image tokenization depends on decoded dimensions. Use a
+                // conservative per-image floor and charge inline data by encoded
+                // size so large payloads cannot hide behind a fixed estimate.
+                4_096u32.max(estimate_tokens(&image_url.url) as u32)
+            }
+            // No current provider serializes Audio blocks; do not budget content
+            // that is omitted from the actual request.
+            ContentBlock::Audio { .. } => 0,
+        };
+        total.saturating_add(tokens)
+    });
+    let tool_call_tokens = message
+        .tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .fold(0u32, |total, call| {
+            total
+                .saturating_add(estimate_tokens(&call.id) as u32)
+                .saturating_add(estimate_tokens(&call.name) as u32)
+                .saturating_add(estimate_tokens_for_json(&call.arguments.to_string()) as u32)
+                .saturating_add(8)
+        });
+
+    content_tokens
+        .saturating_add(tool_call_tokens)
+        .saturating_add(
+            message
+                .tool_call_id
+                .as_deref()
+                .map_or(0, |text| estimate_tokens(text) as u32),
+        )
+        .saturating_add(10)
+}
+
+fn estimate_tools_tokens(tools: &[Arc<ToolDefinition>]) -> u32 {
+    tools.iter().fold(0u32, |total, tool| {
+        total.saturating_add(if tool.estimated_tokens > 0 {
+            tool.estimated_tokens
+        } else {
+            tool.estimated_tokens()
+        })
+    })
+}
+
+/// Estimate the input tokens for a request using only messages providers serialize.
+pub fn estimate_request_input_tokens(
+    messages: &[Arc<Message>],
+    tools: &[Arc<ToolDefinition>],
+) -> u32 {
+    let last_assistant_usage = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, message)| {
+            (message.role == Role::Assistant)
+                .then(|| message.token_usage.as_ref().map(|usage| (index, usage)))
+                .flatten()
+        });
+
+    if let Some((index, usage)) = last_assistant_usage {
+        return messages[index + 1..]
+            .iter()
+            .filter(|message| message.role != Role::Internal)
+            .fold(usage.total_tokens, |total, message| {
+                total.saturating_add(estimate_message_tokens(message))
+            });
+    }
+
+    let message_tokens = messages
+        .iter()
+        .filter(|message| message.role != Role::Internal)
+        .fold(0u32, |total, message| {
+            total.saturating_add(estimate_message_tokens(message))
+        });
+    message_tokens.saturating_add(estimate_tools_tokens(tools))
 }
 
 /// Estimate tokens as f64 for accurate accumulation
