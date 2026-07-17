@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump version across Cargo workspace, Tauri config, and package.json files."""
+"""Bump version across Cargo workspace, Cargo.lock, Tauri config, and package.json files."""
 
 import argparse
 import json
@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FILES = {
     "cargo": ROOT / "Cargo.toml",
+    "cargo_lock": ROOT / "Cargo.lock",
     "tauri": ROOT / "crates" / "gui" / "tauri.conf.json",
     "gui_pkg": ROOT / "crates" / "gui" / "package.json",
     "gui_lock": ROOT / "crates" / "gui" / "package-lock.json",
@@ -54,6 +55,25 @@ def set_cargo_version(path: Path, new: str):
     print(f"  {path.relative_to(ROOT)} → {new}")
 
 
+def set_cargo_lock_version(path: Path, current: str, new: str):
+    text = path.read_text()
+    workspace_packages = ("cli", "kernel", "tui", "yomi-gui")
+    replacements = 0
+    for package in workspace_packages:
+        pattern = (
+            rf'(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = )'
+            rf'"{re.escape(current)}"'
+        )
+        text, count = re.subn(pattern, rf'\g<1>"{new}"', text, count=1)
+        if count != 1:
+            raise ValueError(
+                f"Expected package {package!r} at version {current} in {path}"
+            )
+        replacements += count
+    path.write_text(text)
+    print(f"  {path.relative_to(ROOT)} → {new} ({replacements} workspace packages)")
+
+
 def set_json_version(path: Path, new: str):
     text = path.read_text()
     text = re.sub(r'"version":\s*"[0-9]+\.[0-9]+\.[0-9]+"', f'"version": "{new}"', text, count=1)
@@ -83,6 +103,7 @@ def main():
 
     print(f"Bumping {current} → {new}")
     set_cargo_version(FILES["cargo"], new)
+    set_cargo_lock_version(FILES["cargo_lock"], current, new)
     set_json_version(FILES["tauri"], new)
     set_json_version(FILES["gui_pkg"], new)
     set_package_lock_version(FILES["gui_lock"], new)
